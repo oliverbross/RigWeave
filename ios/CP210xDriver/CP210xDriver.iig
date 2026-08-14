@@ -2,12 +2,15 @@
 #define CP210xDriver_h
 
 #include <USBSerialDriverKit/IOUserUSBSerial.iig>
+#include <USBDriverKit/IOUSBHostInterface.iig>
 
 class CP210xDriver: public IOUserUSBSerial
 {
 public:
 	virtual kern_return_t Start(IOService* provider) override;
 	virtual kern_return_t Stop(IOService* provider) override;
+	virtual kern_return_t HwActivate() override;
+	virtual kern_return_t HwDeactivate() override;
 
 	virtual kern_return_t HwResetFIFO(bool tx, bool rx) override;
 	virtual kern_return_t HwSendBreak(bool sendBreak) override;
@@ -20,6 +23,12 @@ public:
 
 	virtual void handleRxPacket(uint8_t*& packet, uint32_t& size) override;
 	virtual void handleInterruptPacket(const uint8_t* packet, uint32_t size) override;
+
+private:
+	IOUSBHostInterface* usbInterface;
+	kern_return_t writeValue(uint8_t request, uint16_t value) LOCALONLY;
+	kern_return_t writeBytes(uint8_t request, const void* bytes, uint16_t length) LOCALONLY;
+	kern_return_t readBytes(uint8_t request, void* bytes, uint16_t length) LOCALONLY;
 };
 
 #endif
