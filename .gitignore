@@ -1,0 +1,9 @@
+.DS_Store
+build/
+core/build/
+ios/DerivedData/
+android/.gradle/
+android/local.properties
+android/app/build/
+*.xcuserstate
+xcuserdata/

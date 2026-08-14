@@ -1,0 +1,197 @@
+#include "rigweave/core.h"
+
+#include <algorithm>
+#include <array>
+#include <cctype>
+#include <cstdio>
+#include <cstring>
+#include <iomanip>
+#include <sstream>
+#include <string>
+#include <string_view>
+
+namespace {
+constexpr size_t kMaxBufferedBytes = 512;
+constexpr size_t kMaxFrameBytes = 128;
+
+struct CoreContext {
+    rw_radio_state state{};
+    std::string pending;
+};
+
+void copy_text(char *destination, size_t size, std::string_view value) {
+    if (size == 0) return;
+    const size_t count = std::min(size - 1, value.size());
+    std::memcpy(destination, value.data(), count);
+    destination[count] = '\0';
+}
+
+std::string upper(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return value;
+}
+
+bool all_digits(std::string_view value) {
+    return !value.empty() && std::all_of(value.begin(), value.end(),
+        [](unsigned char c) { return std::isdigit(c) != 0; });
+}
+
+const char *mode_name(int code) {
+    switch (code) {
+        case 1: return "LSB";
+        case 2: return "USB";
+        case 3: return "CW";
+        case 4: return "FM";
+        case 5: return "AM";
+        case 6: return "DATA";
+        case 7: return "CW-R";
+        case 9: return "DATA-R";
+        default: return "UNKNOWN";
+    }
+}
+
+bool apply_frame(CoreContext &context, const std::string &raw) {
+    if (raw.size() < 2 || raw.size() > kMaxFrameBytes) return false;
+    const std::string frame = upper(raw);
+    auto next = context.state;
+    bool recognized = false;
+
+    if (frame.rfind("ID", 0) == 0) {
+        copy_text(next.identity, sizeof(next.identity), frame.substr(2));
+        if (frame.find("KX3") != std::string::npos) copy_text(next.model, sizeof(next.model), "KX3");
+        else if (frame.find("KX2") != std::string::npos) copy_text(next.model, sizeof(next.model), "KX2");
+        else if (std::strlen(next.model) == 0) copy_text(next.model, sizeof(next.model), "ELECRAFT");
+        next.connected = 1;
+        recognized = true;
+    } else if (frame.rfind("FA", 0) == 0 && frame.size() >= 13 && all_digits(std::string_view(frame).substr(2, 11))) {
+        next.vfo_a_hz = std::stoull(frame.substr(2, 11));
+        recognized = true;
+    } else if (frame.rfind("MD", 0) == 0 && frame.size() >= 3 && std::isdigit(static_cast<unsigned char>(frame[2]))) {
+        copy_text(next.mode, sizeof(next.mode), mode_name(frame[2] - '0'));
+        recognized = true;
+    } else if (frame.rfind("IF", 0) == 0) {
+        for (size_t i = 2; i + 11 <= frame.size(); ++i) {
+            const auto candidate = std::string_view(frame).substr(i, 11);
+            if (all_digits(candidate)) {
+                next.vfo_a_hz = std::stoull(std::string(candidate));
+                recognized = true;
+                break;
+            }
+        }
+    } else if (frame.rfind("TQ", 0) == 0 && frame.size() >= 3 && (frame[2] == '0' || frame[2] == '1')) {
+        next.transmitting = frame[2] == '1' ? 1 : 0;
+        recognized = true;
+    }
+
+    if (recognized) {
+        next.revision = context.state.revision + 1;
+        context.state = next;
+    }
+    return recognized;
+}
+
+std::string normalized(std::string value) {
+    value.erase(std::remove_if(value.begin(), value.end(),
+        [](unsigned char c) { return std::isspace(c) != 0; }), value.end());
+    return upper(value);
+}
+
+uint64_t fnv1a(std::string_view value) {
+    uint64_t hash = 1469598103934665603ULL;
+    for (unsigned char byte : value) {
+        hash ^= byte;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+std::string adif_field(std::string_view name, std::string_view value) {
+    return "<" + std::string(name) + ":" + std::to_string(value.size()) + ">" + std::string(value);
+}
+}  // namespace
+
+struct rw_context { CoreContext core; };
+
+rw_context *rw_context_create(void) {
+    auto *context = new rw_context{};
+    rw_context_reset(context);
+    return context;
+}
+
+void rw_context_destroy(rw_context *context) { delete context; }
+
+void rw_context_reset(rw_context *context) {
+    if (!context) return;
+    context->core = {};
+    copy_text(context->core.state.identity, sizeof(context->core.state.identity), "UNAVAILABLE");
+    copy_text(context->core.state.model, sizeof(context->core.state.model), "UNIDENTIFIED");
+    copy_text(context->core.state.mode, sizeof(context->core.state.mode), "--");
+    context->core.state.vfo_a_hz = 0;
+    context->core.state.connected = 0;
+    context->core.state.transmitting = 0;
+    context->core.state.meter = 0;
+    context->core.state.revision = 0;
+}
+
+int rw_context_feed(rw_context *context, const char *bytes, size_t length) {
+    if (!context || !bytes || length == 0 || length > kMaxBufferedBytes) return 0;
+    if (context->core.pending.size() + length > kMaxBufferedBytes) context->core.pending.clear();
+    context->core.pending.append(bytes, length);
+    int applied = 0;
+    size_t end = 0;
+    while ((end = context->core.pending.find(';')) != std::string::npos) {
+        const std::string frame = context->core.pending.substr(0, end);
+        context->core.pending.erase(0, end + 1);
+        if (apply_frame(context->core, frame)) ++applied;
+    }
+    return applied;
+}
+
+rw_radio_state rw_context_state(const rw_context *context) {
+    return context ? context->core.state : rw_radio_state{};
+}
+
+rw_command_class rw_classify_command(const char *command) {
+    if (!command) return RW_COMMAND_UNKNOWN;
+    const std::string value = upper(command);
+    static constexpr std::array<std::string_view, 5> safe{"ID;", "FA;", "MD;", "IF;", "TQ;"};
+    if (std::find(safe.begin(), safe.end(), value) != safe.end()) return RW_COMMAND_READ_ONLY;
+    if (value.rfind("TX", 0) == 0 || value.rfind("RX", 0) == 0 ||
+        value.rfind("SWT", 0) == 0 || value.rfind("SWH", 0) == 0 ||
+        value.rfind("KY", 0) == 0) return RW_COMMAND_TRANSMIT;
+    if (value.size() > 3 && value.back() == ';') return RW_COMMAND_MUTATION;
+    return RW_COMMAND_UNKNOWN;
+}
+
+size_t rw_startup_command_count(void) { return 0; }
+
+int rw_qso_identity(char *output, size_t output_size, const char *callsign,
+                    const char *utc_iso8601, uint64_t frequency_hz, const char *mode) {
+    if (!output || output_size < 20 || !callsign || !utc_iso8601 || !mode) return 0;
+    const std::string key = normalized(callsign) + "|" + utc_iso8601 + "|" +
+                            std::to_string(frequency_hz) + "|" + normalized(mode);
+    std::ostringstream stream;
+    stream << "rw-" << std::hex << std::setfill('0') << std::setw(16) << fnv1a(key);
+    return std::snprintf(output, output_size, "%s", stream.str().c_str()) > 0 ? 1 : 0;
+}
+
+int rw_adif_serialize(char *output, size_t output_size, const char *identity,
+                      const char *callsign, const char *date_yyyymmdd,
+                      const char *time_hhmmss, uint64_t frequency_hz,
+                      const char *mode, const char *rst_sent, const char *rst_received) {
+    if (!output || !identity || !callsign || !date_yyyymmdd || !time_hhmmss || !mode) return 0;
+    std::ostringstream mhz;
+    mhz << std::fixed << std::setprecision(6) << static_cast<double>(frequency_hz) / 1000000.0;
+    std::string record = adif_field("CALL", normalized(callsign)) +
+        adif_field("QSO_DATE", date_yyyymmdd) + adif_field("TIME_ON", time_hhmmss) +
+        adif_field("FREQ", mhz.str()) + adif_field("MODE", normalized(mode));
+    if (rst_sent && *rst_sent) record += adif_field("RST_SENT", rst_sent);
+    if (rst_received && *rst_received) record += adif_field("RST_RCVD", rst_received);
+    record += adif_field("APP_RIGWEAVE_UUID", identity) + "<EOR>\n";
+    if (record.size() + 1 > output_size) return 0;
+    std::memcpy(output, record.c_str(), record.size() + 1);
+    return static_cast<int>(record.size());
+}
+
+const char *rw_core_version(void) { return "0.1.0"; }
