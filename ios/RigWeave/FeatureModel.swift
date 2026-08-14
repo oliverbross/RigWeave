@@ -325,6 +325,7 @@ final class FeatureModel: ObservableObject {
     @Published private(set) var audioPeak: Float = -120
     @Published private(set) var audioNoiseFloor: Float = -120
     @Published private(set) var audioSampleRate: Double = 48_000
+    @Published private(set) var audioCapturedFrames: UInt64 = 0
     @Published var panRangeDb: Double { didSet { defaults.set(panRangeDb, forKey: "panRangeDb"); rebuildWaterfallImage() } }
     @Published var panFloorOffsetDb: Double { didSet { defaults.set(panFloorOffsetDb, forKey: "panFloorOffsetDb"); rebuildWaterfallImage() } }
     @Published var panPalette: PanPalette { didSet { defaults.set(panPalette.rawValue, forKey: "panPalette"); rebuildWaterfallImage() } }
@@ -340,6 +341,7 @@ final class FeatureModel: ObservableObject {
     private let waterfallWidth = 512
     private let waterfallDepth = 240
     private var noiseFloorSeeded = false
+    private var audioTapInstalled = false
 
     init() {
         clusterHost = defaults.string(forKey: "clusterHost") ?? "dxc.ve7cc.net"
@@ -401,9 +403,19 @@ final class FeatureModel: ObservableObject {
     }
 
     func refreshAudioInputs() async {
+        let granted = await AVAudioApplication.requestRecordPermission()
+        guard granted else {
+            audioInputs = []
+            selectedAudioInputUID = ""
+            audioStatus = "Microphone / USB audio permission denied. Enable Microphone for RigWeave in iPad Settings."
+            return
+        }
         do {
+            let wasCapturing = audioEngine.isRunning
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.record, mode: .measurement)
+            try session.setPreferredSampleRate(48_000)
+            try session.setPreferredIOBufferDuration(2048.0 / 48_000.0)
             try session.setActive(true)
             let inputs = session.availableInputs ?? []
             audioInputs = inputs.map { AudioInputChoice(id: $0.uid, name: $0.portName, type: $0.portType.rawValue) }
@@ -413,10 +425,12 @@ final class FeatureModel: ObservableObject {
             audioStatus = audioInputs.isEmpty
                 ? "No physical audio inputs reported by iPadOS"
                 : "Found \(audioInputs.count) input(s): \(audioInputs.map(\.name).joined(separator: ", "))"
+            if !wasCapturing { deactivateAudioSession() }
         } catch {
             audioInputs = []
             selectedAudioInputUID = ""
             audioStatus = "Audio discovery failed: \(error.localizedDescription)"
+            deactivateAudioSession()
         }
     }
 
@@ -426,34 +440,62 @@ final class FeatureModel: ObservableObject {
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.record, mode: .measurement)
+            try session.setPreferredSampleRate(48_000)
+            try session.setPreferredIOBufferDuration(2048.0 / 48_000.0)
             try session.setActive(true)
             let inputs = session.availableInputs ?? []
             audioInputs = inputs.map { AudioInputChoice(id: $0.uid, name: $0.portName, type: $0.portType.rawValue) }
-            let selected = inputs.first(where: { $0.uid == selectedAudioInputUID })
+            guard let selected = inputs.first(where: { $0.uid == selectedAudioInputUID })
                 ?? inputs.first(where: { $0.portType == .usbAudio })
-                ?? inputs.first
-            if let selected {
-                selectedAudioInputUID = selected.uid
-                try session.setPreferredInput(selected)
+                ?? inputs.first else {
+                audioStatus = "No physical audio input is available after route activation."
+                deactivateAudioSession()
+                return
             }
+            selectedAudioInputUID = selected.uid
+            try session.setPreferredInput(selected)
+            if audioEngine.isRunning { audioEngine.stop() }
             let input = audioEngine.inputNode
-            let format = input.inputFormat(forBus: 0)
+            if audioTapInstalled {
+                input.removeTap(onBus: 0)
+                audioTapInstalled = false
+            }
+            let format = input.outputFormat(forBus: 0)
             guard format.channelCount >= 2 else {
-                audioStatus = "The selected input is mono. Panadapter requires physical stereo I/Q."
+                audioStatus = "\(selected.portName) exposes \(format.channelCount) input channel(s). Panadapter requires stereo I/Q."
+                deactivateAudioSession()
                 return
             }
             audioSampleRate = format.sampleRate
-            input.removeTap(onBus: 0)
+            audioCapturedFrames = 0
             input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in self?.acceptAudio(buffer) }
+            audioTapInstalled = true
             audioEngine.prepare(); try audioEngine.start()
-            audioStatus = "Capturing \(session.currentRoute.inputs.first?.portName ?? "physical input") · \(Int(format.sampleRate)) Hz"
-        } catch { audioStatus = "Audio capture failed: \(error.localizedDescription)" }
+            audioStatus = "Capturing \(session.currentRoute.inputs.first?.portName ?? selected.portName) · \(format.channelCount) ch · \(Int(format.sampleRate)) Hz"
+        } catch {
+            if audioTapInstalled {
+                audioEngine.inputNode.removeTap(onBus: 0)
+                audioTapInstalled = false
+            }
+            audioEngine.stop()
+            deactivateAudioSession()
+            audioStatus = "Audio capture failed: \(error.localizedDescription)"
+        }
     }
 
     func stopAudioCapture() {
-        audioEngine.inputNode.removeTap(onBus: 0); audioEngine.stop()
+        if audioTapInstalled {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            audioTapInstalled = false
+        }
+        audioEngine.stop()
+        deactivateAudioSession()
         spectrumDb = []; waterfallRows.removeAll(); waterfallImage = nil; noiseFloorSeeded = false
         audioStatus = "Audio capture stopped"
+    }
+
+    private func deactivateAudioSession() {
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     nonisolated private func acceptAudio(_ buffer: AVAudioPCMBuffer) {
@@ -469,6 +511,7 @@ final class FeatureModel: ObservableObject {
         let data = samples.withUnsafeBytes { Data($0) }
         Task { @MainActor [weak self] in
             guard let self else { return }
+            self.audioCapturedFrames += UInt64(frameCount)
             var bins = self.core.pushAudio(data, channels: UInt32(channelCount), bytesPerSample: 2, bits: 16)
             if self.reverseSpectrum { bins.reverse() }
             if !bins.isEmpty { self.acceptSpectrum(bins) }

@@ -92,8 +92,10 @@ bool CtyResolver::load_file(const std::string& path) {
     if (file == nullptr) return false;
     std::string text;
     std::array<char, 4096> chunk{};
-    while (const std::size_t count = std::fread(chunk.data(), 1U, chunk.size(), file))
-        text.append(chunk.data(), count);
+    while (std::feof(file) == 0 && std::ferror(file) == 0) {
+        const std::size_t count = std::fread(chunk.data(), 1U, chunk.size(), file);
+        if (count > 0U) text.append(chunk.data(), count);
+    }
     const bool read_ok = std::ferror(file) == 0;
     std::fclose(file);
     return read_ok && load_lines(text);

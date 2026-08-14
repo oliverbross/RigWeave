@@ -4,6 +4,9 @@
 #include <DriverKit/IOLib.h>
 #include <DriverKit/IOUserServer.h>
 #include <DriverKit/IOBufferMemoryDescriptor.h>
+#include <DriverKit/OSDictionary.h>
+#include <DriverKit/OSString.h>
+#include <SerialDriverKit/SerialDriverKit.h>
 #include <USBDriverKit/IOUSBHostInterface.h>
 
 #define CP210xDriver_DECLARE_IVARS IOUSBHostInterface* usbInterface;
@@ -29,6 +32,39 @@ constexpr uint16_t kWriteRts = 0x0200;
 constexpr uint16_t kDtrOn = 0x0001;
 constexpr uint16_t kRtsOn = 0x0002;
 constexpr uint32_t kControlTimeoutMs = 1000;
+
+kern_return_t publishTTYIdentity(IOService* service)
+{
+	if (service == nullptr) return kIOReturnBadArgument;
+
+	OSDictionary* properties = OSDictionary::withCapacity(3);
+	OSString* streamType = OSString::withCString("IOSerialStream");
+	OSString* baseName = OSString::withCString("rigweave");
+	OSString* suffix = OSString::withCString("cp210x");
+	if (properties == nullptr || streamType == nullptr || baseName == nullptr || suffix == nullptr) {
+		if (properties != nullptr) properties->release();
+		if (streamType != nullptr) streamType->release();
+		if (baseName != nullptr) baseName->release();
+		if (suffix != nullptr) suffix->release();
+		return kIOReturnNoMemory;
+	}
+
+	const bool stored = properties->setObject("IOSerialBSDClientType", streamType) &&
+		properties->setObject(kIOTTYBaseNameKey, baseName) &&
+		properties->setObject(kIOTTYSuffixKey, suffix);
+	streamType->release();
+	baseName->release();
+	suffix->release();
+	if (!stored) {
+		properties->release();
+		return kIOReturnNoMemory;
+	}
+
+	(void)service->SetName("RigWeaveCP210x");
+	const kern_return_t ret = service->SetProperties(properties);
+	properties->release();
+	return ret;
+}
 
 uint16_t lineControl(uint8_t dataBits, uint8_t halfStopBits, uint8_t parity)
 {
@@ -61,8 +97,20 @@ IMPL(CP210xDriver, Start)
 		return ret;
 	}
 
+	ret = publishTTYIdentity(this);
+	if (ret != kIOReturnSuccess) {
+		os_log(OS_LOG_DEFAULT, "RigWeave CP210x TTY identity failed: 0x%08x", ret);
+		(void)Stop(provider, SUPERDISPATCH);
+		usbInterface = nullptr;
+		return ret;
+	}
+
 	ret = RegisterService();
 	os_log(OS_LOG_DEFAULT, "RigWeave CP210x matched VID 0x10C4 PID 0xEA60: 0x%08x", ret);
+	if (ret != kIOReturnSuccess) {
+		(void)Stop(provider, SUPERDISPATCH);
+		usbInterface = nullptr;
+	}
 	return ret;
 }
 
@@ -78,13 +126,30 @@ IMPL(CP210xDriver, Stop)
 kern_return_t
 IMPL(CP210xDriver, HwActivate)
 {
-	return writeValue(kInterfaceEnable, kUartEnable);
+	kern_return_t ret = HwActivate(SUPERDISPATCH);
+	if (ret != kIOReturnSuccess) {
+		os_log(OS_LOG_DEFAULT, "RigWeave CP210x HwActivate super failed: 0x%08x", ret);
+		return ret;
+	}
+
+	ret = writeValue(kInterfaceEnable, kUartEnable);
+	if (ret != kIOReturnSuccess) {
+		os_log(OS_LOG_DEFAULT, "RigWeave CP210x UART enable failed: 0x%08x", ret);
+		HwDeactivate(SUPERDISPATCH);
+	}
+	return ret;
 }
 
 kern_return_t
 IMPL(CP210xDriver, HwDeactivate)
 {
-	return writeValue(kInterfaceEnable, 0);
+	const kern_return_t hardwareRet = writeValue(kInterfaceEnable, 0);
+	const kern_return_t superRet = HwDeactivate(SUPERDISPATCH);
+	if (hardwareRet != kIOReturnSuccess) {
+		os_log(OS_LOG_DEFAULT, "RigWeave CP210x UART disable failed: 0x%08x", hardwareRet);
+		return hardwareRet;
+	}
+	return superRet;
 }
 
 kern_return_t

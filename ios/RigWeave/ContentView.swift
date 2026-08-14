@@ -135,7 +135,9 @@ struct RadioView: View {
                         Button("Disconnect") { radio.disconnect() }.buttonStyle(.bordered)
                     }
                     LabeledContent("Transport", value: radio.transportStatus)
+                        .accessibilityIdentifier("serialStatus")
                     LabeledContent("Radio", value: radio.snapshot.model)
+                        .accessibilityIdentifier("radioModel")
                     LabeledContent("CAT polling", value: "ID · FA · FB · MD · IF · TQ · meters · gains · flags")
                 }
             }
@@ -189,6 +191,7 @@ private struct KX3ControlDeck: View {
                         Text("VFO A").font(.caption.weight(.bold)).foregroundStyle(RigTheme.amber)
                         Text(state.connected ? state.frequencyText : "—.——— MHz")
                             .font(.system(.largeTitle, design: .monospaced).weight(.semibold)).minimumScaleFactor(0.55)
+                            .accessibilityIdentifier("frequencyDisplay")
                         Text(state.frequencyBHz > 0 ? String(format: "VFO B  %.3f MHz", Double(state.frequencyBHz) / 1_000_000) : "VFO B  —.——— MHz")
                             .font(.system(.subheadline, design: .monospaced)).foregroundStyle(state.split ? Color.red : .secondary)
                     }
@@ -375,6 +378,7 @@ struct PanadapterView: View {
                 HStack(spacing: 12) {
                     StatusBadge(status: features.spectrumDb.isEmpty ? "OFFLINE" : "LIVE")
                     Text(features.audioStatus).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        .accessibilityIdentifier("audioStatus")
                     Spacer()
                     if !features.spectrumDb.isEmpty {
                         Text(String(format: "%.0f kHz I/Q", features.audioSampleRate / 1_000))
@@ -396,6 +400,7 @@ struct PanadapterView: View {
                     measurement("PEAK", String(format: "%.1f dBFS", features.audioPeak))
                     measurement("FLOOR", String(format: "%.1f dBFS", features.audioNoiseFloor))
                     measurement("SPAN", String(format: "±%.0f kHz", features.audioSampleRate / 2_000))
+                    measurement("FRAMES", features.audioCapturedFrames.formatted())
                     Spacer()
                 }.padding(.horizontal, 4)
             }
@@ -436,7 +441,7 @@ struct PanadapterView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
             Text(value).font(.system(.callout, design: .monospaced).weight(.medium))
-        }
+        }.accessibilityIdentifier("metric.\(label.lowercased())")
     }
 }
 
