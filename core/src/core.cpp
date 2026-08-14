@@ -107,14 +107,18 @@ bool apply_frame(CoreContext &context, const std::string &raw) {
     } else if (frame.rfind("MD", 0) == 0 && frame.size() >= 3 && std::isdigit(static_cast<unsigned char>(frame[2]))) {
         copy_text(next.mode, sizeof(next.mode), mode_name(frame[2] - '0'));
         recognized = true;
-    } else if (frame.rfind("IF", 0) == 0) {
-        for (size_t i = 2; i + 11 <= frame.size(); ++i) {
-            const auto candidate = std::string_view(frame).substr(i, 11);
-            if (all_digits(candidate)) {
-                next.vfo_a_hz = std::stoull(std::string(candidate));
-                recognized = true;
-                break;
-            }
+    } else if (frame.rfind("IF", 0) == 0 && frame.size() >= 36) {
+        const auto payload = std::string_view(frame).substr(2);
+        if (all_digits(payload.substr(0, 11))) {
+            next.vfo_a_hz = std::stoull(std::string(payload.substr(0, 11)));
+            if (payload[21] == '0' || payload[21] == '1') next.rit = payload[21] - '0';
+            if (payload[22] == '0' || payload[22] == '1') next.xit = payload[22] - '0';
+            if (payload[26] == '0' || payload[26] == '1') next.transmitting = payload[26] - '0';
+            if (std::isdigit(static_cast<unsigned char>(payload[27])))
+                copy_text(next.mode, sizeof(next.mode), mode_name(payload[27] - '0'));
+            if (payload[28] == '0' || payload[28] == '1') next.rx_vfo = payload[28] - '0';
+            if (payload[30] == '0' || payload[30] == '1') next.split = payload[30] - '0';
+            recognized = true;
         }
     } else if (frame.rfind("TQ", 0) == 0 && frame.size() >= 3 && (frame[2] == '0' || frame[2] == '1')) {
         next.transmitting = frame[2] == '1' ? 1 : 0;
@@ -129,8 +133,8 @@ bool apply_frame(CoreContext &context, const std::string &raw) {
         next.af_gain = std::clamp(next.af_gain, 0, 255); recognized = true;
     } else if (unsigned_payload(frame, "RG", next.rf_gain)) {
         next.rf_gain = std::clamp(next.rf_gain, 0, 250); recognized = true;
-    } else if (unsigned_payload(frame, "BW", next.bandwidth_hz)) {
-        next.bandwidth_hz = std::clamp(next.bandwidth_hz, 0, 9999); recognized = true;
+    } else if (int bandwidth_units = 0; unsigned_payload(frame, "BW", bandwidth_units)) {
+        next.bandwidth_hz = std::clamp(bandwidth_units, 0, 9999) * 10; recognized = true;
     } else if (unsigned_payload(frame, "PC", next.power_w)) {
         next.power_w = std::clamp(next.power_w, 0, 100); recognized = true;
     } else if (bool_payload(frame, "PA", next.preamp)) {

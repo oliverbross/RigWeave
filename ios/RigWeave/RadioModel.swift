@@ -69,6 +69,11 @@ final class RadioCore {
         }
     }
 
+    func reset() -> RadioSnapshot {
+        rw_context_reset(context)
+        return snapshot()
+    }
+
     func identity(callsign: String, date: Date, frequencyHz: UInt64, mode: String) -> String {
         var output = [CChar](repeating: 0, count: 32)
         let iso = ISO8601DateFormatter().string(from: date)
@@ -156,6 +161,7 @@ final class RadioModel: ObservableObject {
     }
 
     func connect() {
+        snapshot = core.reset()
         do {
             try transport.connect(path: selectedPort)
         } catch {
@@ -165,6 +171,7 @@ final class RadioModel: ObservableObject {
 
     func disconnect() {
         transport.disconnect()
+        snapshot = core.reset()
         transportStatus = "Disconnected"
     }
 

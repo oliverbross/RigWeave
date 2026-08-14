@@ -15,12 +15,13 @@ int main() {
     assert(state.connected == 0 && state.transmitting == 0);
     assert(state.vfo_a_hz == 0 && std::string(state.model) == "UNIDENTIFIED");
 
-    const char *frames = "ID017;K30;OM A-F-------02;FA00014074000;MD2;IF00014075000ABCDEFGHI;TQ0;";
+    const char *frames = "ID017;K30;OM A-F-------02;FA00014074000;MD2;IF00014075000     +000010 0002001001 ;TQ0;";
     assert(rw_context_feed(context, frames, std::strlen(frames)) == 7);
     state = rw_context_state(context);
     assert(state.connected == 1);
     assert(std::string(state.model) == "KX3" && std::string(state.mode) == "USB");
     assert(state.vfo_a_hz == 14075000 && state.transmitting == 0);
+    assert(state.rit == 1 && state.xit == 0 && state.split == 1);
 
     rw_context *kx2_context = rw_context_create();
     const char *kx2_identity = "ID017;K30;OM A-F-------01;";
@@ -33,9 +34,13 @@ int main() {
     state = rw_context_state(context);
     assert(state.vfo_b_hz == 7030000 && state.meter == 18);
     assert(state.swr_tenths == 14 && state.rf_output_tenths == 37);
-    assert(state.af_gain == 190 && state.rf_gain == 210 && state.bandwidth_hz == 270);
+    assert(state.af_gain == 190 && state.rf_gain == 210 && state.bandwidth_hz == 2700);
     assert(state.power_w == 10 && state.preamp == 1 && state.attenuator == 1);
     assert(state.rit == 1 && state.xit == 0 && state.split == 1);
+
+    rw_context_reset(context);
+    state = rw_context_state(context);
+    assert(state.connected == 0 && std::string(state.model) == "UNIDENTIFIED");
 
     std::string oversized(600, 'A');
     assert(rw_context_feed(context, oversized.data(), oversized.size()) == 0);
