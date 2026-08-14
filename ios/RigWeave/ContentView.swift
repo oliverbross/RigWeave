@@ -396,13 +396,18 @@ struct PanadapterView: View {
                     rangeDb: Float(features.panRangeDb))
                     .frame(maxWidth: .infinity, minHeight: 500)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
-                HStack(spacing: 22) {
-                    measurement("PEAK", String(format: "%.1f dBFS", features.audioPeak))
-                    measurement("FLOOR", String(format: "%.1f dBFS", features.audioNoiseFloor))
-                    measurement("SPAN", String(format: "±%.0f kHz", features.audioSampleRate / 2_000))
-                    measurement("FRAMES", features.audioCapturedFrames.formatted())
-                    Spacer()
-                }.padding(.horizontal, 4)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 22) {
+                        measurement("PEAK", String(format: "%.1f dBFS", features.audioPeak))
+                        measurement("FLOOR", String(format: "%.1f dBFS", features.audioNoiseFloor))
+                        measurement("I RMS", String(format: "%.1f dBFS", features.audioIRms))
+                        measurement("Q RMS", String(format: "%.1f dBFS", features.audioQRms))
+                        measurement("I/Q CORR", String(format: "%+.3f", features.audioIQCorrelation))
+                        measurement("SPAN", String(format: "±%.0f kHz", features.audioSampleRate / 2_000))
+                        measurement("FRAMES", features.audioCapturedFrames.formatted())
+                    }
+                    .padding(.horizontal, 4)
+                }
             }
                 GroupBox("Display") {
                     VStack(spacing: 12) {

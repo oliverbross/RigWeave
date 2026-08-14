@@ -65,12 +65,16 @@ private enum HardwareSelfTest {
                 try? await Task.sleep(for: .milliseconds(500))
             }
         }
-        report("IQ frames=\(features.audioCapturedFrames) bins=\(features.spectrumDb.count) rate=\(Int(features.audioSampleRate)) peak=\(features.audioPeak) floor=\(features.audioNoiseFloor) status=\(features.audioStatus)")
+        report("IQ frames=\(features.audioCapturedFrames) bins=\(features.spectrumDb.count) rate=\(Int(features.audioSampleRate)) peak=\(features.audioPeak) i=\(features.audioIRms) q=\(features.audioQRms) correlation=\(features.audioIQCorrelation) floor=\(features.audioNoiseFloor) status=\(features.audioStatus)")
 
         let catPassed = radio.snapshot.connected &&
             radio.snapshot.model.localizedCaseInsensitiveContains("KX") &&
             radio.snapshot.frequencyHz > 0
-        let iqPassed = iqInput != nil && features.audioCapturedFrames > 0 && !features.spectrumDb.isEmpty
+        let iqLevelsValid = features.audioIRms.isFinite && features.audioQRms.isFinite &&
+            features.audioIRms > -118 && features.audioQRms > -118
+        let iqPairValid = features.audioIQCorrelation.isFinite && abs(features.audioIQCorrelation) < 0.999
+        let iqPassed = iqInput != nil && features.audioCapturedFrames > 0 &&
+            !features.spectrumDb.isEmpty && iqLevelsValid && iqPairValid
         report("RESULT cat=\(catPassed ? "PASS" : "FAIL") iq=\(iqPassed ? "PASS" : "FAIL") overall=\(catPassed && iqPassed ? "PASS" : "FAIL")")
         features.stopAudioCapture()
         radio.disconnect()

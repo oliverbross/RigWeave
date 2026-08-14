@@ -323,6 +323,9 @@ final class FeatureModel: ObservableObject {
     @Published private(set) var audioInputs: [AudioInputChoice] = []
     @Published var selectedAudioInputUID = ""
     @Published private(set) var audioPeak: Float = -120
+    @Published private(set) var audioIRms: Float = -120
+    @Published private(set) var audioQRms: Float = -120
+    @Published private(set) var audioIQCorrelation: Float = 1
     @Published private(set) var audioNoiseFloor: Float = -120
     @Published private(set) var audioSampleRate: Double = 48_000
     @Published private(set) var audioCapturedFrames: UInt64 = 0
@@ -491,6 +494,7 @@ final class FeatureModel: ObservableObject {
         audioEngine.stop()
         deactivateAudioSession()
         spectrumDb = []; waterfallRows.removeAll(); waterfallImage = nil; noiseFloorSeeded = false
+        audioPeak = -120; audioIRms = -120; audioQRms = -120; audioIQCorrelation = 1
         audioStatus = "Audio capture stopped"
     }
 
@@ -520,7 +524,11 @@ final class FeatureModel: ObservableObject {
 
     private func acceptSpectrum(_ bins: [Float]) {
         spectrumDb = bins
-        audioPeak = core.audioMetrics.peak
+        let metrics = core.audioMetrics
+        audioPeak = metrics.peak
+        audioIRms = metrics.i
+        audioQRms = metrics.q
+        audioIQCorrelation = metrics.correlation
         let centre = bins.count / 2
         let usable = bins.enumerated().compactMap { index, value in
             abs(index - centre) <= 4 || !value.isFinite ? nil : value
