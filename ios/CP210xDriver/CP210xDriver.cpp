@@ -237,7 +237,8 @@ CP210xDriver::writeBytes(uint8_t request, const void* bytes, uint16_t length)
 	if (usbInterface == nullptr || bytes == nullptr || length == 0) return kIOReturnBadArgument;
 	IOBufferMemoryDescriptor* buffer = nullptr;
 	kern_return_t ret = IOBufferMemoryDescriptor::Create(kIOMemoryDirectionOut, length, 0, &buffer);
-	if (ret != kIOReturnSuccess || buffer == nullptr) return ret;
+	if (ret != kIOReturnSuccess) return ret;
+	if (buffer == nullptr) return kIOReturnNoMemory;
 	IOAddressSegment range = {};
 	ret = buffer->GetAddressRange(&range);
 	if (ret == kIOReturnSuccess) {
@@ -248,6 +249,7 @@ CP210xDriver::writeBytes(uint8_t request, const void* bytes, uint16_t length)
 	if (ret == kIOReturnSuccess) {
 		ret = usbInterface->DeviceRequest(kRequestOut, request, 0, 0, length, buffer, &transferred, kControlTimeoutMs);
 	}
+	if (ret == kIOReturnSuccess && transferred != length) ret = kIOReturnUnderrun;
 	buffer->release();
 	return ret;
 }
@@ -258,13 +260,16 @@ CP210xDriver::readBytes(uint8_t request, void* bytes, uint16_t length)
 	if (usbInterface == nullptr || bytes == nullptr || length == 0) return kIOReturnBadArgument;
 	IOBufferMemoryDescriptor* buffer = nullptr;
 	kern_return_t ret = IOBufferMemoryDescriptor::Create(kIOMemoryDirectionIn, length, 0, &buffer);
-	if (ret != kIOReturnSuccess || buffer == nullptr) return ret;
+	if (ret != kIOReturnSuccess) return ret;
+	if (buffer == nullptr) return kIOReturnNoMemory;
 	ret = buffer->SetLength(length);
 	uint16_t transferred = 0;
 	if (ret == kIOReturnSuccess) {
 		ret = usbInterface->DeviceRequest(kRequestIn, request, 0, 0, length, buffer, &transferred, kControlTimeoutMs);
 	}
-	if (ret == kIOReturnSuccess && transferred >= length) {
+	if (ret == kIOReturnSuccess && transferred < length) {
+		ret = kIOReturnUnderrun;
+	} else if (ret == kIOReturnSuccess) {
 		IOAddressSegment range = {};
 		ret = buffer->GetAddressRange(&range);
 		if (ret == kIOReturnSuccess) memcpy(bytes, reinterpret_cast<const void*>(range.address), length);
