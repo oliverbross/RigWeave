@@ -11,6 +11,8 @@
 | `/Users/oliver/Documents/M5Stack Core2/kx3-tab5-remote/components/sync_queue` | `core/portable/{include,src}/kx3/sync_queue.*` | Copied owner-authored portable code | HTTP outcome classification, URL normalization, and bounded retry policy. |
 | Portable modules above | `core/src/features.cpp`, `core/include/rigweave/core.h` | Adapted | Stable C ABI used directly by Swift and JNI without importing embedded platform glue. |
 | `/Users/oliver/Documents/Projects/OM0RX KX3 - Wavelog master/ios/CP210xDriver` | `ios/CP210xDriver` | Adapted | Existing owner DriverKit target and CP2102 match were rebundled under the RigWeave identifiers. |
-| Tab5 visual/radio-state behaviour | `ios/RigWeave`, `android/app/src/main` | Redesigned | Native SwiftUI and Compose interfaces replace LVGL and ESP-IDF orchestration. |
+| Tab5 KX3-style radio deck and full CAT state | `ios/RigWeave`, `android/app/src/main` | Native parity implementation | SwiftUI and Compose preserve the dual VFO, CWT scale, RX/TX meters, radio flags, gains, bandwidth, power, and command surface while replacing LVGL orchestration. |
+| Tab5 local/Wavelog logbook | iOS and Android QSO stores and Wavelog controllers | Native parity implementation | Local SQLite journals and whole-log ADIF export coexist with station discovery, durable uploads, and cursor-based remote-log caching. |
+| Tab5 Neural DX graphical views | shared `features.cpp` JSON plus native DX screens | Native parity implementation | LIVE, SMART, BANDMAP, PULSE, WORLD, and WATCH consume real cluster analysis, including timeline, region, world-grid, live, opportunity, and watch activity data. |
 
 No ESP-IDF USB host code, LVGL code, firmware output, credentials, personal logs, or managed third-party source was copied into this repository. TCP, UDP, HTTP, secure credential storage, audio capture, persistence, and UI are native platform implementations.

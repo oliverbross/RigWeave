@@ -121,7 +121,7 @@ struct RadioView: View {
     @State private var filterHz = ""
     var body: some View {
         ScrollView { VStack(alignment: .leading, spacing: 22) {
-            BrandHeader(); RadioSummary()
+            BrandHeader(); KX3ControlDeck(state: radio.snapshot, send: radio.sendCAT)
             GroupBox("Connection") {
                 LabeledContent("Transport", value: radio.transportStatus)
                 LabeledContent("Radio", value: radio.snapshot.model)
@@ -147,30 +147,6 @@ struct RadioView: View {
                     }
                 }
             }
-            GroupBox("KX3 front panel") {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Button("RIT") { radio.sendCAT("SWT18;") }
-                        Button("XIT") { radio.sendCAT("SWT26;") }
-                        Button("A/B") { radio.sendCAT("SWT24;") }
-                        Button("A→B") { radio.sendCAT("SWT25;") }
-                        Button("Split") { radio.sendCAT("SWH25;") }
-                    }
-                    HStack {
-                        Button("Rate") { radio.sendCAT("SWT12;") }
-                        Button("Mode") { radio.sendCAT("SWT14;") }
-                        Button("Data") { radio.sendCAT("SWT17;") }
-                        Button("PBT I/II") { radio.sendCAT("SWT33;") }
-                        Button("Clear offset") { radio.sendCAT("SWH35;") }
-                    }
-                    HStack {
-                        Button("ATU tune") { radio.sendCAT("SWT44;") }
-                        Button("ANT") { radio.sendCAT("SWH44;") }
-                        Button("VFO up") { radio.sendCAT("UP;") }
-                        Button("VFO down") { radio.sendCAT("DN;") }
-                    }
-                }.buttonStyle(.bordered)
-            }
             GroupBox("Power, filter and keyer") {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack { TextField("PC value", text: $power).keyboardType(.numberPad); Button("Set power") { radio.sendCAT("PC\(power);") } }
@@ -183,6 +159,91 @@ struct RadioView: View {
     }
 }
 
+private struct KX3ControlDeck: View {
+    let state: RadioSnapshot
+    let send: (String) -> Void
+    private let controls = [
+        ("RIT", "SWT18;"), ("XIT", "SWT26;"), ("A/B", "SWT24;"), ("A→B", "SWT25;"),
+        ("SPLIT", "SWH25;"), ("RATE", "SWT12;"), ("MODE", "SWT14;"), ("DATA", "SWT17;"),
+        ("PBT I/II", "SWT33;"), ("CLR", "SWH35;"), ("ATU", "SWT44;"), ("ANT", "SWH44;"),
+        ("VFO +", "UP;"), ("VFO −", "DN;"), ("CWT", "SWT28;")
+    ]
+
+    var body: some View {
+        VStack(spacing: 14) {
+            VStack(spacing: 10) {
+                HStack(alignment: .top, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("VFO A").font(.caption.weight(.bold)).foregroundStyle(RigTheme.amber)
+                        Text(state.connected ? state.frequencyText : "—.——— MHz")
+                            .font(.system(.largeTitle, design: .monospaced).weight(.semibold)).minimumScaleFactor(0.55)
+                        Text(state.frequencyBHz > 0 ? String(format: "VFO B  %.3f MHz", Double(state.frequencyBHz) / 1_000_000) : "VFO B  —.——— MHz")
+                            .font(.system(.subheadline, design: .monospaced)).foregroundStyle(state.split ? Color.red : .secondary)
+                    }
+                    Spacer(minLength: 4)
+                    VStack(spacing: 5) {
+                        Text("CWT").font(.caption.bold())
+                        HStack(alignment: .bottom, spacing: 3) {
+                            ForEach(0..<7, id: \.self) { index in
+                                Capsule().fill(index == 3 ? RigTheme.amber : Color.secondary.opacity(0.45))
+                                    .frame(width: 5, height: CGFloat(8 + (3 - abs(3 - index)) * 4))
+                            }
+                        }.accessibilityHidden(true)
+                    }.frame(minWidth: 88).padding(10).background(Color.black.opacity(0.28)).clipShape(RoundedRectangle(cornerRadius: 8))
+                    StatusBadge(status: state.status)
+                }
+                HStack(spacing: 12) {
+                    Text(state.transmitting ? "TX" : "RX").foregroundStyle(state.transmitting ? .red : RigTheme.green).fontWeight(.bold)
+                    Text(state.mode).font(.system(.body, design: .monospaced).bold())
+                    if state.split { flag("SPLIT", active: true) }
+                    flag("RIT", active: state.rit); flag("XIT", active: state.xit)
+                    flag("PRE", active: state.preamp); flag("ATT", active: state.attenuator)
+                    Spacer(); Text("BW \(state.bandwidthHz) Hz · PWR \(state.powerW) W").font(.caption).foregroundStyle(.secondary)
+                }
+                KX3Meter(label: state.transmitting ? "RF OUTPUT" : "S-METER", value: state.transmitting ? Double(max(0, state.rfOutputTenths)) : Double(state.meter),
+                    maximum: state.transmitting ? 120 : 30, annotation: state.transmitting && state.swrTenths >= 0 ? String(format: "SWR %.1f:1", Double(state.swrTenths) / 10) : "S 1  3  5  7  9  +10  +20  +30")
+                HStack { Text("AF \(state.afGain)"); Spacer(); Text("RF \(state.rfGain)") }.font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            .padding(18).background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 14))
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 86), spacing: 8)], spacing: 8) {
+                ForEach(controls, id: \.0) { control in
+                    Button(control.0) { send(control.1) }
+                        .buttonStyle(.bordered).frame(minHeight: 44)
+                }
+                Button(state.preamp ? "PRE OFF" : "PRE ON") { send(state.preamp ? "PA0;" : "PA1;") }.buttonStyle(.bordered).frame(minHeight: 44)
+                Button(state.attenuator ? "ATT OFF" : "ATT ON") { send(state.attenuator ? "RA00;" : "RA01;") }.buttonStyle(.bordered).frame(minHeight: 44)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Elecraft KX3 radio control deck")
+    }
+
+    private func flag(_ text: String, active: Bool) -> some View {
+        Text(text).font(.caption2.bold()).foregroundStyle(active ? RigTheme.amber : .secondary)
+    }
+}
+
+private struct KX3Meter: View {
+    let label: String
+    let value: Double
+    let maximum: Double
+    let annotation: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack { Text(label).font(.caption.bold()); Spacer(); Text(annotation).font(.caption2.monospacedDigit()).foregroundStyle(.secondary) }
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.09))
+                    Capsule().fill(RigTheme.amber).frame(width: geometry.size.width * max(0, min(1, value / maximum)))
+                }
+            }.frame(height: 10)
+        }.accessibilityElement(children: .ignore).accessibilityLabel(label).accessibilityValue("\(Int(value)) of \(Int(maximum))")
+    }
+}
+
+private enum LogScope: String, CaseIterable, Identifiable { case local = "Local ADIF", wavelog = "Wavelog"; var id: String { rawValue } }
+
 struct LogView: View {
     @EnvironmentObject private var radio: RadioModel
     @EnvironmentObject private var logbook: QSOStore
@@ -192,10 +253,21 @@ struct LogView: View {
     @State private var rstReceived = "59"
     @State private var frequencyMHz = ""
     @State private var mode = ""
+    @State private var scope: LogScope = .local
+    @State private var search = ""
+    @State private var exportURL: URL?
 
     var body: some View {
-        ScrollView { VStack(alignment: .leading, spacing: 18) {
+        ScrollView { LazyVStack(alignment: .leading, spacing: 18) {
             BrandHeader()
+            Picker("Log source", selection: $scope) { ForEach(LogScope.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
+            if scope == .local { localLog } else { wavelogLog }
+        }.padding() }.navigationTitle("Log")
+            .searchable(text: $search, prompt: "Callsign, band, mode or country")
+    }
+
+    private var localLog: some View {
+        Group {
             GroupBox("New local QSO") {
                 TextField("Callsign", text: $callsign).textInputAutocapitalization(.characters).autocorrectionDisabled()
                 HStack { TextField("RST sent", text: $rstSent); TextField("RST received", text: $rstReceived) }
@@ -204,16 +276,65 @@ struct LogView: View {
                 Button("Save QSO") { save() }.buttonStyle(.borderedProminent).disabled(callsign.trimmingCharacters(in: .whitespaces).isEmpty)
                 if !logbook.message.isEmpty { Text(logbook.message).font(.caption).foregroundStyle(.secondary) }
             }
-            Text("Recent QSOs").font(.headline)
-            if logbook.records.isEmpty { ContentUnavailableView("No QSOs yet", systemImage: "list.clipboard") }
-            ForEach(logbook.records) { qso in
+            HStack {
+                Text("Local log · \(logbook.records.count) recent").font(.headline)
+                Spacer()
+                Button("Build ADIF export") { exportURL = logbook.exportADIF(using: radio.adif) }
+                if let exportURL { ShareLink(item: exportURL) { Label("Share ADIF", systemImage: "square.and.arrow.up") } }
+            }
+            if filteredLocal.isEmpty { ContentUnavailableView("No matching local QSOs", systemImage: "list.clipboard") }
+            ForEach(filteredLocal) { qso in localRow(qso) }
+        }
+    }
+
+    private var wavelogLog: some View {
+        Group {
+            GroupBox("Wavelog station log") {
+                HStack { Text(features.wavelog.status).font(.subheadline); Spacer(); if features.wavelog.pendingCount > 0 { Text("\(features.wavelog.pendingCount) queued").foregroundStyle(RigTheme.amber) } }
+                HStack {
+                    Button("Load stations") { Task { await features.wavelog.loadStations() } }
+                    Button("Full log refresh") { Task { await features.wavelog.fullSync() } }.buttonStyle(.borderedProminent)
+                }
+                if !features.wavelog.stations.isEmpty {
+                    Picker("Station", selection: Binding(get: { features.wavelog.stationProfile }, set: features.wavelog.selectStation)) {
+                        ForEach(features.wavelog.stations) { Text($0.label).tag($0.id) }
+                    }
+                }
+                LabeledContent("Cached QSOs", value: "\(features.wavelog.contacts.count)")
+                LabeledContent("Sync pages", value: "\(features.wavelog.syncPages)")
+            }
+            if filteredWavelog.isEmpty {
+                ContentUnavailableView("No cached Wavelog QSOs", systemImage: "arrow.triangle.2.circlepath",
+                    description: Text("Load stations, select one, then run Full log refresh."))
+            }
+            ForEach(filteredWavelog) { contact in
                 VStack(alignment: .leading, spacing: 5) {
-                    HStack { Text(qso.callsign).font(.headline); Spacer(); Text(qso.mode) }
-                    Text(String(format: "%.3f MHz", Double(qso.frequencyHz) / 1_000_000)).foregroundStyle(.secondary)
-                    ShareLink(item: radio.adif(for: qso), preview: SharePreview("\(qso.callsign).adi")) { Label("Export ADIF", systemImage: "square.and.arrow.up") }.font(.caption)
+                    HStack { Text(contact.callsign).font(.headline); Spacer(); Text([contact.mode, contact.submode].filter { !$0.isEmpty }.joined(separator: " / ")) }
+                    Text([contact.band, contact.frequency, contact.country].filter { !$0.isEmpty }.joined(separator: " · ")).foregroundStyle(.secondary)
+                    Text("\(contact.date) \(contact.time) · RST \(contact.rstSent)/\(contact.rstReceived)").font(.caption).foregroundStyle(.secondary)
                 }.padding().background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 12))
             }
-        }.padding() }.navigationTitle("Log")
+        }
+    }
+
+    private var filteredLocal: [QSO] {
+        let term = search.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return term.isEmpty ? logbook.records : logbook.records.filter { $0.callsign.contains(term) || $0.mode.contains(term) }
+    }
+
+    private var filteredWavelog: [WavelogContact] {
+        let term = search.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return term.isEmpty ? features.wavelog.contacts : features.wavelog.contacts.filter {
+            [$0.callsign, $0.band, $0.mode, $0.submode, $0.country].contains { $0.uppercased().contains(term) }
+        }
+    }
+
+    private func localRow(_ qso: QSO) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack { Text(qso.callsign).font(.headline); Spacer(); Text(qso.mode) }
+            Text(String(format: "%.3f MHz", Double(qso.frequencyHz) / 1_000_000)).foregroundStyle(.secondary)
+            ShareLink(item: radio.adif(for: qso), preview: SharePreview("\(qso.callsign).adi")) { Label("Share record ADIF", systemImage: "square.and.arrow.up") }.font(.caption)
+        }.padding().background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private func save() {
@@ -383,8 +504,16 @@ struct SpotsView: View {
     }
 }
 
+private enum DXSurface: String, CaseIterable, Identifiable {
+    case live = "LIVE", smart = "SMART", bandmap = "BANDMAP", pulse = "PULSE", world = "WORLD", watch = "WATCH"
+    var id: String { rawValue }
+}
+
 struct DXView: View {
     @EnvironmentObject private var features: FeatureModel
+    @EnvironmentObject private var radio: RadioModel
+    @State private var surface: DXSurface = .smart
+    @State private var selected: DXOpportunity?
     var body: some View {
         ScrollView { VStack(alignment: .leading, spacing: 18) {
             BrandHeader()
@@ -400,17 +529,152 @@ struct DXView: View {
                 } else { Text("No current NOAA reading loaded").foregroundStyle(.secondary) }
                 Button("Refresh NOAA") { Task { await features.refreshSolar() } }
             }
-            Text("Band activity").font(.headline)
-            ForEach(features.dx.bands) { band in
-                HStack { Text(band.band).font(.system(.body, design: .monospaced).bold()); Spacer(); Text("\(band.spots5m) / 5m · \(band.spots60m) / 60m"); if band.surge { Text("SURGE").font(.caption.bold()).foregroundStyle(RigTheme.amber) } }
-                    .padding().background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 12))
-            }
-        }.padding() }.navigationTitle("DX")
+            Picker("DX view", selection: $surface) { ForEach(DXSurface.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
+            dxContent
+        }.padding() }.navigationTitle("DX Watcher")
+            .sheet(item: $selected) { opportunity in DXOpportunityDetail(opportunity: opportunity, tune: tune) }
     }
     private func metric(_ name: String, _ value: UInt) -> some View {
         VStack { Text("\(value)").font(.title2.bold()); Text(name).font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity).padding().background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 12))
     }
+
+    @ViewBuilder private var dxContent: some View {
+        switch surface {
+        case .live: opportunityList(features.dx.liveSpots)
+        case .smart: opportunityList(features.dx.opportunities)
+        case .watch: opportunityList(features.dx.watchActivity)
+        case .bandmap: DXBandmap(bands: features.dx.bands)
+        case .pulse: DXPulse(bands: features.dx.bands, timeline: features.dx.bandTimeline)
+        case .world: DXWorld(grid: features.dx.worldGrid, regions: features.dx.regions)
+        }
+    }
+
+    private func opportunityList(_ rows: [DXOpportunity]) -> some View {
+        LazyVStack(spacing: 8) {
+            if rows.isEmpty { ContentUnavailableView("Learning from live cluster history", systemImage: "scope", description: Text("Connect the DX cluster; no generated spots are displayed.")) }
+            ForEach(rows) { row in
+                Button { selected = row } label: {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack { Text(row.callsign).font(.headline); if row.watchlisted { Image(systemName: "star.fill").foregroundStyle(RigTheme.amber) }; Text(row.band).font(.caption.monospaced()).foregroundStyle(.secondary) }
+                            Text(String(format: "%.3f MHz · %@ · %@", Double(row.frequencyHz) / 1_000_000, row.mode, row.country)).foregroundStyle(.secondary)
+                            Text(row.reason).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing) { Text("\(row.score)").font(.title3.bold()); Text("\(row.confidence)%").font(.caption).foregroundStyle(.secondary) }
+                    }.contentShape(Rectangle())
+                }.buttonStyle(.plain).padding(12).background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+        }
+    }
+
+    private func tune(_ row: DXOpportunity) { radio.sendCAT(String(format: "FA%011llu;", row.frequencyHz)) }
 }
+
+private struct DXBandmap: View {
+    let bands: [DXBand]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Band activity · last 60 minutes").font(.headline)
+            let maximum = max(1, bands.map(\.spots60m).max() ?? 1)
+            ForEach(bands) { band in
+                HStack(spacing: 10) {
+                    Text(band.band).font(.system(.body, design: .monospaced).bold()).frame(width: 42, alignment: .leading)
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.secondary.opacity(0.12))
+                            Capsule().fill(band.surge ? Color.red : RigTheme.amber).frame(width: geometry.size.width * CGFloat(band.spots60m) / CGFloat(maximum))
+                        }
+                    }.frame(height: 12)
+                    Text("\(band.spots5m)/\(band.spots60m)").font(.caption.monospacedDigit()).frame(width: 58, alignment: .trailing)
+                    if band.surge { Text("SURGE").font(.caption2.bold()).foregroundStyle(.red) }
+                }.frame(minHeight: 30)
+            }
+        }.padding(16).background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+private struct DXPulse: View {
+    let bands: [DXBand]
+    let timeline: [[UInt]]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack { Text("Activity pulse").font(.headline); Spacer(); Text("60 min ago → now").font(.caption).foregroundStyle(.secondary) }
+            let maximum = max(1, timeline.flatMap { $0 }.max() ?? 1)
+            ForEach(Array(bands.enumerated()), id: \.element.id) { index, band in
+                HStack(spacing: 6) {
+                    Text(band.band).font(.caption.monospaced().bold()).frame(width: 38, alignment: .leading)
+                    let row = index < timeline.count ? timeline[index] : []
+                    ForEach(Array(row.enumerated()), id: \.offset) { _, value in
+                        RoundedRectangle(cornerRadius: 3).fill(heat(value, maximum: maximum)).frame(maxWidth: .infinity, minHeight: 26)
+                            .overlay(Text(value == 0 ? "" : "\(value)").font(.caption2).foregroundStyle(.white))
+                    }
+                }
+            }
+        }.padding(16).background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+    private func heat(_ value: UInt, maximum: UInt) -> Color {
+        let level = Double(value) / Double(maximum)
+        return level == 0 ? Color.white.opacity(0.04) : RigTheme.amber.opacity(0.25 + level * 0.75)
+    }
+}
+
+private struct DXWorld: View {
+    let grid: [[UInt]]
+    let regions: [DXRegion]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("World activity · 60 minutes · west → east").font(.headline)
+            let maximum = max(1, grid.flatMap { $0 }.max() ?? 1)
+            VStack(spacing: 5) {
+                ForEach(Array(grid.enumerated()), id: \.offset) { _, row in
+                    HStack(spacing: 5) {
+                        ForEach(Array(row.enumerated()), id: \.offset) { _, value in
+                            RoundedRectangle(cornerRadius: 4).fill(value == 0 ? Color.white.opacity(0.035) : RigTheme.amber.opacity(0.22 + 0.78 * Double(value) / Double(maximum)))
+                                .aspectRatio(1.25, contentMode: .fit).overlay(Text(value == 0 ? "" : "\(value)").font(.caption2))
+                        }
+                    }
+                }
+            }
+            Text("Region pulse · 15m : 60m").font(.headline)
+            ForEach(regions) { region in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack { Text(region.region).font(.subheadline.bold()); Spacer(); Text("\(region.spots15m) : \(region.spots60m) · \(region.uniqueCalls) calls").font(.caption.monospacedDigit()); if region.anomaly { Text("ANOMALY").font(.caption2.bold()).foregroundStyle(.red) } }
+                    ProgressView(value: Double(min(region.activityPercent, 300)), total: 300).tint(region.anomaly ? .red : RigTheme.amber)
+                }
+            }
+        }.padding(16).background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+private struct DXOpportunityDetail: View {
+    let opportunity: DXOpportunity
+    let tune: (DXOpportunity) -> Void
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Target") {
+                    LabeledContent("Callsign", value: opportunity.callsign)
+                    LabeledContent("Frequency", value: String(format: "%.3f MHz", Double(opportunity.frequencyHz) / 1_000_000))
+                    LabeledContent("Mode / band", value: "\(opportunity.mode) · \(opportunity.band)")
+                    LabeledContent("Entity", value: opportunity.country)
+                    LabeledContent("Path", value: opportunity.pathState.isEmpty ? "Unknown" : opportunity.pathState)
+                    LabeledContent("Bearing / distance", value: "\(opportunity.bearingDegrees)° · \(opportunity.distanceKm) km")
+                }
+                Section("Operator interpretation") {
+                    Text(opportunity.reason)
+                    LabeledContent("Score", value: "\(opportunity.score)")
+                    LabeledContent("Confidence", value: "\(opportunity.confidence)%")
+                    LabeledContent("Worked", value: [opportunity.workedCountry ? "entity" : nil, opportunity.workedCall ? "call" : nil, opportunity.workedBand ? "band" : nil, opportunity.workedMode ? "mode" : nil, opportunity.workedBandMode ? "band+mode" : nil].compactMap { $0 }.joined(separator: ", ").ifEmpty("No match"))
+                }
+                Button("Tune VFO A") { tune(opportunity); dismiss() }.buttonStyle(.borderedProminent)
+            }.navigationTitle(opportunity.callsign).toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+}
+
+private extension String { func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self } }
 
 struct DigitalView: View {
     @EnvironmentObject private var features: FeatureModel
@@ -500,9 +764,20 @@ struct SettingsView: View {
             Section("Wavelog sync") {
                 TextField("Wavelog base URL", text: Binding(get: { features.wavelog.baseURL }, set: { features.wavelog.baseURL = $0 })).textInputAutocapitalization(.never).autocorrectionDisabled()
                 SecureField("API key", text: Binding(get: { features.wavelog.apiKey }, set: { features.wavelog.apiKey = $0 }))
-                TextField("Station profile ID", text: Binding(get: { features.wavelog.stationProfile }, set: { features.wavelog.stationProfile = $0 })).textInputAutocapitalization(.never).autocorrectionDisabled()
-                Button("Sync queued QSOs") { Task { await features.wavelog.syncNow() } }
+                if features.wavelog.stations.isEmpty {
+                    TextField("Station profile ID", text: Binding(get: { features.wavelog.stationProfile }, set: { features.wavelog.stationProfile = $0 })).textInputAutocapitalization(.never).autocorrectionDisabled()
+                } else {
+                    Picker("Station", selection: Binding(get: { features.wavelog.stationProfile }, set: features.wavelog.selectStation)) {
+                        ForEach(features.wavelog.stations) { Text($0.label).tag($0.id) }
+                    }
+                }
+                HStack {
+                    Button("Load stations") { Task { await features.wavelog.loadStations() } }
+                    Button("Sync queue") { Task { await features.wavelog.syncNow() } }
+                    Button("Full log") { Task { await features.wavelog.fullSync() } }
+                }
                 LabeledContent("Pending", value: "\(features.wavelog.pendingCount)")
+                LabeledContent("Cached remote QSOs", value: "\(features.wavelog.contacts.count)")
                 Text(features.wavelog.status).font(.caption).foregroundStyle(.secondary)
             }
             Section("Callbook") {

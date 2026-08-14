@@ -25,8 +25,11 @@ class QsoDatabase(context: Context) : SQLiteOpenHelper(context, "rigweave.sqlite
         return true
     }
 
-    fun list(): List<Qso> = buildList {
-        readableDatabase.rawQuery("SELECT id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at FROM qso ORDER BY created_at DESC LIMIT 100", null).use { cursor ->
+    fun list(): List<Qso> = query(" LIMIT 100")
+    fun all(): List<Qso> = query("")
+
+    private fun query(limit: String): List<Qso> = buildList {
+        readableDatabase.rawQuery("SELECT id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at FROM qso ORDER BY created_at DESC" + limit, null).use { cursor ->
             while (cursor.moveToNext()) add(Qso(cursor.getString(0), cursor.getString(1), cursor.getLong(2), cursor.getString(3), cursor.getString(4), cursor.getString(5), cursor.getLong(6)))
         }
     }

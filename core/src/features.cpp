@@ -156,28 +156,74 @@ int rw_feature_dx_snapshot_json(const rw_feature_context *context, char *output,
              << ",\"spots60m\":" << band.spots_60m << ",\"uniqueCalls\":" << band.unique_calls_60m
              << ",\"surgePercent\":" << band.surge_percent << ",\"surge\":" << boolean(band.surge) << '}';
     }
-    json << "],\"opportunities\":[";
+    json << "],\"bandTimeline\":[";
+    for (std::size_t band = 0; band < snapshot.band_timeline.size(); ++band) {
+        if (band != 0) json << ',';
+        json << '[';
+        for (std::size_t bucket = 0; bucket < snapshot.band_timeline[band].size(); ++bucket) {
+            if (bucket != 0) json << ',';
+            json << snapshot.band_timeline[band][bucket];
+        }
+        json << ']';
+    }
+    json << "],\"regions\":[";
     first = true;
-    for (const auto& row : snapshot.opportunities) {
+    for (const auto& region : snapshot.regions) {
+        if (region.region.empty()) continue;
         if (!first) json << ',';
         first = false;
-        json << "{\"callsign\":" << quoted(row.spot.callsign)
-             << ",\"spotter\":" << quoted(row.spot.spotter)
-             << ",\"frequencyHz\":" << row.spot.frequency_hz
-             << ",\"receivedEpoch\":" << row.spot.received_epoch
-             << ",\"band\":" << quoted(row.spot.band)
-             << ",\"mode\":" << quoted(row.spot.mode)
-             << ",\"country\":" << quoted(row.spot.country)
-             << ",\"continent\":" << quoted(row.spot.continent)
-             << ",\"comment\":" << quoted(row.spot.comment)
-             << ",\"score\":" << row.score << ",\"confidence\":" << row.confidence
-             << ",\"watchlisted\":" << boolean(row.watchlisted)
-             << ",\"workedCountry\":" << boolean(row.worked_country)
-             << ",\"workedCall\":" << boolean(row.worked_call)
-             << ",\"recentDupe\":" << boolean(row.recent_dupe)
-             << ",\"reason\":" << quoted(row.reason) << '}';
+        json << "{\"region\":" << quoted(region.region)
+             << ",\"spots15m\":" << region.spots_15m
+             << ",\"spots60m\":" << region.spots_60m
+             << ",\"uniqueCalls\":" << region.unique_calls_60m
+             << ",\"activityPercent\":" << region.activity_percent
+             << ",\"anomaly\":" << boolean(region.anomaly) << '}';
     }
-    json << "]}";
+    json << "],\"worldGrid\":[";
+    for (std::size_t row = 0; row < snapshot.world_grid.size(); ++row) {
+        if (row != 0) json << ',';
+        json << '[';
+        for (std::size_t column = 0; column < snapshot.world_grid[row].size(); ++column) {
+            if (column != 0) json << ',';
+            json << snapshot.world_grid[row][column];
+        }
+        json << ']';
+    }
+    auto write_opportunities = [&](const char *name, const auto& rows) {
+        json << ",\"" << name << "\":[";
+        bool row_first = true;
+        for (const auto& row : rows) {
+            if (!row_first) json << ',';
+            row_first = false;
+            json << "{\"callsign\":" << quoted(row.spot.callsign)
+                 << ",\"spotter\":" << quoted(row.spot.spotter)
+                 << ",\"frequencyHz\":" << row.spot.frequency_hz
+                 << ",\"receivedEpoch\":" << row.spot.received_epoch
+                 << ",\"band\":" << quoted(row.spot.band)
+                 << ",\"mode\":" << quoted(row.spot.mode)
+                 << ",\"country\":" << quoted(row.spot.country)
+                 << ",\"continent\":" << quoted(row.spot.continent)
+                 << ",\"comment\":" << quoted(row.spot.comment)
+                 << ",\"score\":" << row.score << ",\"confidence\":" << row.confidence
+                 << ",\"samples\":" << row.samples
+                 << ",\"watchlisted\":" << boolean(row.watchlisted)
+                 << ",\"workedCountry\":" << boolean(row.worked_country)
+                 << ",\"workedCall\":" << boolean(row.worked_call)
+                 << ",\"workedBand\":" << boolean(row.worked_band)
+                 << ",\"workedMode\":" << boolean(row.worked_mode)
+                 << ",\"workedBandMode\":" << boolean(row.worked_band_mode)
+                 << ",\"recentDupe\":" << boolean(row.recent_dupe)
+                 << ",\"distanceKm\":" << row.distance_km
+                 << ",\"bearingDegrees\":" << row.bearing_degrees
+                 << ",\"pathState\":" << quoted(row.path_state)
+                 << ",\"reason\":" << quoted(row.reason) << '}';
+        }
+        json << ']';
+    };
+    write_opportunities("opportunities", snapshot.opportunities);
+    write_opportunities("liveSpots", snapshot.live_spots);
+    write_opportunities("watchActivity", snapshot.watch_activity);
+    json << '}';
     return write_output(output, output_size, json.str());
 }
 

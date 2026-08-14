@@ -5,9 +5,21 @@ data class RadioState(
     val model: String = "UNIDENTIFIED",
     val mode: String = "--",
     val frequencyHz: Long = 0,
+    val frequencyBHz: Long = 0,
     val connected: Boolean = false,
     val transmitting: Boolean = false,
     val meter: Int = 0,
+    val swrTenths: Int = -1,
+    val rfOutputTenths: Int = -1,
+    val afGain: Int = 0,
+    val rfGain: Int = 0,
+    val bandwidthHz: Int = 0,
+    val powerW: Int = 0,
+    val preamp: Boolean = false,
+    val attenuator: Boolean = false,
+    val rit: Boolean = false,
+    val xit: Boolean = false,
+    val split: Boolean = false,
     val revision: Long = 0,
 ) {
     val status get() = if (connected) "LIVE" else "OFFLINE"
@@ -35,8 +47,12 @@ object NativeCore {
 
     fun parseState(value: String): RadioState {
         val fields = value.split('|')
-        if (fields.size != 8) return RadioState()
+        if (fields.size != 20) return RadioState()
         return RadioState(fields[0], fields[1], fields[2], fields[3].toLongOrNull() ?: 0,
-            fields[4] == "1", fields[5] == "1", fields[6].toIntOrNull() ?: 0, fields[7].toLongOrNull() ?: 0)
+            fields[4].toLongOrNull() ?: 0, fields[5] == "1", fields[6] == "1",
+            fields[7].toIntOrNull() ?: 0, fields[8].toIntOrNull() ?: -1, fields[9].toIntOrNull() ?: -1,
+            fields[10].toIntOrNull() ?: 0, fields[11].toIntOrNull() ?: 0, fields[12].toIntOrNull() ?: 0,
+            fields[13].toIntOrNull() ?: 0, fields[14] == "1", fields[15] == "1", fields[16] == "1",
+            fields[17] == "1", fields[18] == "1", fields[19].toLongOrNull() ?: 0)
     }
 }

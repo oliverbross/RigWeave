@@ -37,7 +37,7 @@ xcrun devicectl device process launch \
   app.rigweave.mobile
 ```
 
-The host app embeds the signed DriverKit extension at `SystemExtensions/CP210xDriver.dext`. Connection begins only after tapping **Connect**, then the app polls `ID;`, `FA;`, `MD;`, `IF;`, and `TQ;`. Frequency, mode, and raw CAT controls pass commands to the real radio; there is no simulated fallback.
+The host app embeds the signed DriverKit extension at `SystemExtensions/CP210xDriver.dext`. Connection begins only after tapping **Connect**, then the app polls the real KX3 identity, dual-VFO, mode, TX, meter, gain, bandwidth, power, preamp, attenuator, RIT/XIT, and split state. The KX3-inspired control deck and every CAT button operate on those responses; there is no simulated fallback.
 
 The native iPad app also includes:
 
@@ -45,8 +45,9 @@ The native iPad app also includes:
 - live NOAA SFI/Kp retrieval;
 - real UDP WSJT-X datagram reception and parsing;
 - physical AVAudioSession input capture feeding the shared 1,024-bin panadapter DSP;
-- local SQLite QSO logging and ADIF export;
-- a durable Wavelog upload queue with Keychain credentials, acknowledgement, quarantine, and bounded retry/backoff;
+- local SQLite QSO logging, searchable journal, and whole-log ADIF export;
+- Wavelog station discovery, station selection, cursor-based full remote-log caching, and a durable upload queue with Keychain credentials, acknowledgement, quarantine, and bounded retry/backoff;
+- the Tab5-derived graphical DX suite: live opportunities, smart ranking, bandmap, 12-bucket band pulse, world heat grid with regional activity, and watchlist activity;
 - authenticated QRZ or HamQTH callbook lookup with credentials stored in the device Keychain.
 
 Each service remains explicitly offline until its real connection, credentials, or physical input is available. No fixture spots, generated spectrum, fake radio state, or automatic test QSO is injected.
@@ -76,7 +77,7 @@ adb shell am start -n app.rigweave.mobile/.MainActivity
 
 An emulator can validate navigation and local logging, but cannot prove USB serial or radio operation. The Android app uses `usb-serial-for-android` for PL2303, CP210x, FTDI, CH34x, and CDC-ACM adapters where supported by that library. It opens the selected adapter at 38,400 baud and exposes frequency, mode, and raw CAT controls without simulation.
 
-The Android source also binds the full portable feature engine through JNI and supplies real TCP DX-cluster, NOAA, UDP WSJT-X, and `AudioRecord` physical-input panadapter paths with matching Compose screens. Android SDK licences were accepted with the owner's explicit approval and NDK `28.2.13676358` is installed under the SDK used by Gradle.
+The Android source also binds the full portable feature engine through JNI and supplies the same KX3-style live CAT deck, local ADIF journal/export, Wavelog discovery/upload/full-log cache, six graphical DX views, real TCP DX-cluster, NOAA, UDP WSJT-X, and `AudioRecord` physical-input panadapter paths with matching Compose screens. Android SDK licences were accepted with the owner's explicit approval and NDK `28.2.13676358` is installed under the SDK used by Gradle.
 
 ## Panadapter architecture
 

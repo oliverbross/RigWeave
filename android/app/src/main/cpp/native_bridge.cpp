@@ -41,7 +41,10 @@ Java_app_rigweave_mobile_NativeCore_state(JNIEnv *env, jobject, jlong handle) {
     const auto state = rw_context_state(context(handle));
     std::ostringstream out;
     out << state.identity << '|' << state.model << '|' << state.mode << '|' << state.vfo_a_hz << '|'
-        << state.connected << '|' << state.transmitting << '|' << state.meter << '|' << state.revision;
+        << state.vfo_b_hz << '|' << state.connected << '|' << state.transmitting << '|' << state.meter << '|'
+        << state.swr_tenths << '|' << state.rf_output_tenths << '|' << state.af_gain << '|' << state.rf_gain << '|'
+        << state.bandwidth_hz << '|' << state.power_w << '|' << state.preamp << '|' << state.attenuator << '|'
+        << state.rit << '|' << state.xit << '|' << state.split << '|' << state.revision;
     return env->NewStringUTF(out.str().c_str());
 }
 

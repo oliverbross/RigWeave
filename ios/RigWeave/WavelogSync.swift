@@ -10,6 +10,32 @@ private struct WavelogQueueItem: Codable, Identifiable {
     var lastError: String
 }
 
+struct WavelogStation: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let callsign: String
+    let grid: String
+    let city: String
+    let country: String
+    let active: Bool
+    var label: String { [name, callsign, grid].filter { !$0.isEmpty }.joined(separator: " · ") }
+}
+
+struct WavelogContact: Codable, Identifiable {
+    let id: String
+    let callsign: String
+    let name: String
+    let band: String
+    let mode: String
+    let submode: String
+    let country: String
+    let date: String
+    let time: String
+    let frequency: String
+    let rstSent: String
+    let rstReceived: String
+}
+
 enum KeychainValue {
     static func load(_ account: String) -> String {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
@@ -40,11 +66,16 @@ final class WavelogSync: ObservableObject {
     @Published var apiKey: String { didSet { KeychainValue.save(apiKey, account: "wavelogApiKey") } }
     @Published private(set) var status = "Wavelog not configured"
     @Published private(set) var pendingCount = 0
+    @Published private(set) var stations: [WavelogStation] = []
+    @Published private(set) var contacts: [WavelogContact] = []
+    @Published private(set) var syncPages = 0
+    @Published private(set) var lastFullSync: Date?
 
     private var queue: [WavelogQueueItem] = []
     private weak var core: FeatureCore?
     private let defaults = UserDefaults.standard
     private let queueURL: URL
+    private let contactsURL: URL
     private var syncing = false
 
     init() {
@@ -54,9 +85,12 @@ final class WavelogSync: ObservableObject {
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         queueURL = directory.appendingPathComponent("wavelog-sync-queue.json")
+        contactsURL = directory.appendingPathComponent("wavelog-contacts.json")
         if let data = try? Data(contentsOf: queueURL), let decoded = try? JSONDecoder().decode([WavelogQueueItem].self, from: data) {
             queue = decoded; pendingCount = decoded.filter { $0.state == "pending" || $0.state == "retry" }.count
         }
+        if let data = try? Data(contentsOf: contactsURL),
+           let decoded = try? JSONDecoder().decode([WavelogContact].self, from: data) { contacts = decoded }
     }
 
     func bind(core: FeatureCore) { self.core = core; Task { await syncNow() } }
@@ -73,8 +107,7 @@ final class WavelogSync: ObservableObject {
             status = queue.isEmpty ? "Wavelog not configured" : "Wavelog credentials required; QSOs remain queued"
             return
         }
-        let normalized = core.normalizedWavelogURL(baseURL)
-        guard let endpoint = URL(string: normalized + "/index.php/api/qso") else { status = "Invalid Wavelog URL"; return }
+        guard let endpoint = endpoint("qso", core: core) else { status = "Invalid Wavelog URL"; return }
         syncing = true; defer { syncing = false; persist() }
         for index in queue.indices where ["pending", "retry"].contains(queue[index].state) && queue[index].nextAttempt <= Date() {
             guard let payload = core.wavelogPayload(key: apiKey, station: stationProfile, adif: queue[index].adif) else {
@@ -96,6 +129,74 @@ final class WavelogSync: ObservableObject {
         status = summary
     }
 
+    func loadStations() async {
+        guard let core, !apiKey.isEmpty,
+              let endpoint = endpoint("station_info", core: core)?.appendingPathComponent(apiKey) else {
+            status = "Wavelog URL and API key are required"
+            return
+        }
+        status = "Loading Wavelog stations…"
+        do {
+            let (data, response) = try await URLSession.shared.data(from: endpoint)
+            try Self.requireSuccess(response)
+            guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                throw WavelogError.invalidResponse
+            }
+            stations = rows.compactMap(Self.station)
+            if stations.isEmpty { status = "No Wavelog stations available to this API key" }
+            else {
+                if stationProfile.isEmpty, let preferred = stations.first(where: \.active) ?? stations.first {
+                    stationProfile = preferred.id
+                }
+                status = "\(stations.count) Wavelog stations loaded"
+            }
+        } catch { status = "Load stations failed: \(error.localizedDescription)" }
+    }
+
+    func fullSync() async {
+        guard !syncing else { return }
+        guard let core, !apiKey.isEmpty, let stationID = Int(stationProfile),
+              let endpoint = endpoint("get_contacts_adif", core: core) else {
+            status = "Wavelog URL, API key and station are required"
+            return
+        }
+        syncing = true; defer { syncing = false }
+        var cursor: Int64 = 0
+        var pages = 0
+        var loaded: [WavelogContact] = []
+        status = "Starting full Wavelog sync…"
+        do {
+            for page in 0..<256 {
+                let body: [String: Any] = ["key": apiKey, "station_id": stationID,
+                    "fetchfromid": cursor, "output_format": "json", "fields": Self.contactFields]
+                var request = URLRequest(url: endpoint); request.httpMethod = "POST"
+                request.httpBody = try JSONSerialization.data(withJSONObject: body)
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                let (data, response) = try await URLSession.shared.data(for: request)
+                try Self.requireSuccess(response)
+                let root = try JSONSerialization.jsonObject(with: data)
+                guard let exported = Self.integer(in: root, keys: ["exported_qsos", "exported_records", "exportedRecords"]),
+                      let next = Self.integer(in: root, keys: ["lastfetchedid", "lastFetchedId", "last_fetched_id"]) else {
+                    throw WavelogError.invalidCursor
+                }
+                if exported == 0 { break }
+                guard next > cursor else { throw WavelogError.invalidCursor }
+                loaded.append(contentsOf: Self.contactRows(in: root))
+                cursor = next; pages = page + 1; syncPages = pages
+                status = "Full sync page \(pages) · \(loaded.count) QSOs"
+            }
+            contacts = Self.deduplicated(loaded)
+            lastFullSync = Date()
+            if let data = try? JSONEncoder().encode(contacts) { try data.write(to: contactsURL, options: .atomic) }
+            status = "Full Wavelog sync complete · \(contacts.count) QSOs · \(pages) pages"
+        } catch { status = "Full Wavelog sync failed: \(error.localizedDescription)" }
+    }
+
+    func selectStation(_ id: String) {
+        stationProfile = id
+        if let station = stations.first(where: { $0.id == id }) { status = "Selected \(station.label)" }
+    }
+
     private func apply(action: Int, index: Int, retryAfter: UInt32?, core: FeatureCore) {
         switch action {
         case 0: queue[index].state = "acknowledged"; queue[index].lastError = ""
@@ -113,6 +214,95 @@ final class WavelogSync: ObservableObject {
         let acknowledged = queue.filter { $0.state == "acknowledged" }.count
         let pending = queue.filter { $0.state == "pending" || $0.state == "retry" }.count
         return "Wavelog: \(acknowledged) acknowledged · \(pending) pending"
+    }
+
+    private func endpoint(_ resource: String, core: FeatureCore) -> URL? {
+        var value = core.normalizedWavelogURL(baseURL)
+        guard !value.isEmpty else { return nil }
+        if !value.hasSuffix("/index.php/api") { value += "/index.php/api" }
+        return URL(string: value)?.appendingPathComponent(resource)
+    }
+
+    private static let contactFields = ["CALL", "NAME", "BAND", "MODE", "SUBMODE", "DXCC", "COUNTRY",
+        "QSO_DATE", "TIME_ON", "FREQ", "RST_SENT", "RST_RCVD", "GRIDSQUARE", "STATION_CALLSIGN",
+        "MY_GRIDSQUARE", "COMMENT"]
+
+    private static func station(_ row: [String: Any]) -> WavelogStation? {
+        let id = text(row["station_id"]); guard !id.isEmpty, Int(id) != nil else { return nil }
+        return WavelogStation(id: id, name: text(row["station_profile_name"]), callsign: text(row["station_callsign"]),
+            grid: text(row["station_gridsquare"]), city: text(row["station_city"]), country: text(row["station_country"]),
+            active: bool(row["station_active"]))
+    }
+
+    private static func contactRows(in value: Any) -> [WavelogContact] {
+        var result: [WavelogContact] = []
+        func visit(_ node: Any) {
+            if let rows = node as? [[String: Any]], rows.contains(where: { !$0.keys.filter { $0.uppercased() == "CALL" }.isEmpty }) {
+                result.append(contentsOf: rows.compactMap(contact)); return
+            }
+            if let array = node as? [Any] { array.forEach(visit) }
+            else if let object = node as? [String: Any] { object.values.forEach(visit) }
+        }
+        visit(value); return result
+    }
+
+    private static func contact(_ row: [String: Any]) -> WavelogContact? {
+        func field(_ name: String) -> String {
+            text(row.first(where: { $0.key.uppercased() == name })?.value)
+        }
+        let call = field("CALL").uppercased(); guard !call.isEmpty else { return nil }
+        let id = field("COL_PRIMARY_KEY").isEmpty
+            ? [call, field("QSO_DATE"), field("TIME_ON"), field("BAND"), field("MODE")].joined(separator: "-")
+            : field("COL_PRIMARY_KEY")
+        return WavelogContact(id: id, callsign: call, name: field("NAME"), band: field("BAND"), mode: field("MODE"),
+            submode: field("SUBMODE"), country: field("COUNTRY"), date: field("QSO_DATE"), time: field("TIME_ON"),
+            frequency: field("FREQ"), rstSent: field("RST_SENT"), rstReceived: field("RST_RCVD"))
+    }
+
+    private static func integer(in value: Any, keys: Set<String>) -> Int64? {
+        if let object = value as? [String: Any] {
+            for (key, item) in object where keys.contains(key) {
+                if let number = item as? NSNumber { return number.int64Value }
+                if let string = item as? String, let number = Int64(string) { return number }
+            }
+            for item in object.values { if let found = integer(in: item, keys: keys) { return found } }
+        } else if let array = value as? [Any] {
+            for item in array { if let found = integer(in: item, keys: keys) { return found } }
+        }
+        return nil
+    }
+
+    private static func deduplicated(_ rows: [WavelogContact]) -> [WavelogContact] {
+        var seen = Set<String>(); return rows.filter { seen.insert($0.id).inserted }
+    }
+
+    private static func text(_ value: Any?) -> String {
+        if let string = value as? String { return string }
+        if let number = value as? NSNumber { return number.stringValue }
+        return ""
+    }
+
+    private static func bool(_ value: Any?) -> Bool {
+        if let flag = value as? Bool { return flag }
+        if let number = value as? NSNumber { return number.boolValue }
+        return ["1", "true", "yes"].contains(text(value).lowercased())
+    }
+
+    private static func requireSuccess(_ response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode else {
+            throw WavelogError.http((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+    }
+
+    private enum WavelogError: LocalizedError {
+        case invalidResponse, invalidCursor, http(Int)
+        var errorDescription: String? {
+            switch self {
+            case .invalidResponse: "Invalid Wavelog response"
+            case .invalidCursor: "Invalid Wavelog pagination cursor"
+            case .http(let status): "Wavelog HTTP \(status)"
+            }
+        }
     }
 
     private func persist() {

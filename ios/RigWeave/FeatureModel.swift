@@ -25,12 +25,29 @@ struct DXOpportunity: Codable, Identifiable {
     let comment: String
     let score: UInt
     let confidence: UInt
+    let samples: UInt
     let watchlisted: Bool
     let workedCountry: Bool
     let workedCall: Bool
+    let workedBand: Bool
+    let workedMode: Bool
+    let workedBandMode: Bool
     let recentDupe: Bool
+    let distanceKm: UInt
+    let bearingDegrees: UInt
+    let pathState: String
     let reason: String
     var id: String { "\(callsign)-\(frequencyHz)-\(receivedEpoch)" }
+}
+
+struct DXRegion: Codable, Identifiable {
+    let region: String
+    let spots15m: UInt
+    let spots60m: UInt
+    let uniqueCalls: UInt
+    let activityPercent: UInt
+    let anomaly: Bool
+    var id: String { region }
 }
 
 struct DXSolar: Codable {
@@ -50,11 +67,17 @@ struct DXSnapshot: Codable {
     let newestSpotEpoch: Int64
     let solar: DXSolar
     let bands: [DXBand]
+    let bandTimeline: [[UInt]]
+    let regions: [DXRegion]
+    let worldGrid: [[UInt]]
     let opportunities: [DXOpportunity]
+    let liveSpots: [DXOpportunity]
+    let watchActivity: [DXOpportunity]
 
     static let empty = DXSnapshot(spots5m: 0, spots60m: 0, learnedSpots: 0,
         duplicateSpots: 0, watchlistHits: 0, surgingBands: 0, newestSpotEpoch: 0,
-        solar: DXSolar(valid: false, flux: 0, aIndex: 0, kpIndex: 0), bands: [], opportunities: [])
+        solar: DXSolar(valid: false, flux: 0, aIndex: 0, kpIndex: 0), bands: [],
+        bandTimeline: [], regions: [], worldGrid: [], opportunities: [], liveSpots: [], watchActivity: [])
 }
 
 struct WSJTXMessage: Codable {

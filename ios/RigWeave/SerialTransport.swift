@@ -18,7 +18,10 @@ final class SerialTransport {
         }
     }
 
-    static let readOnlyQueries = ["ID;", "FA;", "MD;", "IF;", "TQ;"]
+    static let readOnlyQueries = [
+        "ID;", "FA;", "FB;", "MD;", "IF;", "TQ;", "SM;", "SW;", "PO;",
+        "AG;", "RG;", "BW;", "PC;", "PA;", "RA;", "RT;", "XT;", "FR;", "FT;"
+    ]
     private let queue = DispatchQueue(label: "app.rigweave.serial", qos: .userInitiated)
     private var descriptor: Int32 = -1
     private var readSource: DispatchSourceRead?
@@ -101,7 +104,7 @@ final class SerialTransport {
 
     private func startPolling() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(450), leeway: .milliseconds(40))
+        timer.schedule(deadline: .now(), repeating: .milliseconds(180), leeway: .milliseconds(25))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             let command = Self.readOnlyQueries[self.queryIndex % Self.readOnlyQueries.count]

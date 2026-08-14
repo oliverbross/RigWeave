@@ -73,6 +73,36 @@ final class QSOStore: ObservableObject {
         sqlite3_finalize(statement); records = loaded
     }
 
+    func exportADIF(using serialize: (QSO) -> String) -> URL? {
+        let records = allRecords()
+        let content = records.map(serialize).joined()
+        guard !content.isEmpty else { message = "No local QSOs to export"; return nil }
+        let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("Exports", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let formatter = DateFormatter(); formatter.timeZone = .gmt; formatter.dateFormat = "yyyyMMdd-HHmmss"
+            let url = directory.appendingPathComponent("RIGWEAVE-LOCAL-\(formatter.string(from: Date())).adi")
+            try content.write(to: url, atomically: true, encoding: .utf8)
+            message = "Exported \(records.count) local QSOs"
+            return url
+        } catch { message = "ADIF export failed: \(error.localizedDescription)"; return nil }
+    }
+
+    private func allRecords() -> [QSO] {
+        guard database != nil else { return [] }
+        var statement: OpaquePointer?
+        sqlite3_prepare_v2(database, "SELECT id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at FROM qso ORDER BY created_at DESC", -1, &statement, nil)
+        var loaded: [QSO] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            loaded.append(QSO(id: text(statement, 0), callsign: text(statement, 1),
+                frequencyHz: UInt64(sqlite3_column_int64(statement, 2)), mode: text(statement, 3),
+                rstSent: text(statement, 4), rstReceived: text(statement, 5),
+                createdAt: Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(statement, 6)))))
+        }
+        sqlite3_finalize(statement); return loaded
+    }
+
     private func bind(_ value: String, to statement: OpaquePointer?, at index: Int32) {
         sqlite3_bind_text(statement, index, (value as NSString).utf8String, -1, nil)
     }

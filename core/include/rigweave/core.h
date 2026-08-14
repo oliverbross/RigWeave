@@ -23,9 +23,23 @@ typedef struct rw_radio_state {
     char model[16];
     char mode[12];
     uint64_t vfo_a_hz;
+    uint64_t vfo_b_hz;
     int connected;
     int transmitting;
     int meter;
+    int swr_tenths;
+    int rf_output_tenths;
+    int af_gain;
+    int rf_gain;
+    int bandwidth_hz;
+    int power_w;
+    int preamp;
+    int attenuator;
+    int rit;
+    int xit;
+    int rx_vfo;
+    int tx_vfo;
+    int split;
     uint64_t revision;
 } rw_radio_state;
 

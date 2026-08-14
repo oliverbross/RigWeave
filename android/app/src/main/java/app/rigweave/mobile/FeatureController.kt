@@ -32,6 +32,11 @@ data class AndroidDXSpot(
     val band: String, val mode: String, val country: String, val comment: String, val watchlisted: Boolean,
 )
 
+data class AndroidDXBand(val band: String, val spots5m: Int, val spots60m: Int, val uniqueCalls: Int,
+    val surgePercent: Int, val surge: Boolean)
+data class AndroidDXRegion(val region: String, val spots15m: Int, val spots60m: Int,
+    val uniqueCalls: Int, val activityPercent: Int, val anomaly: Boolean)
+
 class FeatureController(private val context: Context) {
     private val handle = NativeCore.featureCreate()
     private val scope = CoroutineScope(Job() + Dispatchers.IO)
@@ -41,6 +46,12 @@ class FeatureController(private val context: Context) {
 
     var clusterStatus by mutableStateOf("DX cluster disconnected"); private set
     var spots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
+    var liveSpots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
+    var watchSpots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
+    var dxBands by mutableStateOf(emptyList<AndroidDXBand>()); private set
+    var dxRegions by mutableStateOf(emptyList<AndroidDXRegion>()); private set
+    var dxTimeline by mutableStateOf(emptyList<List<Int>>()); private set
+    var dxWorld by mutableStateOf(emptyList<List<Int>>()); private set
     var dxSummary by mutableStateOf("No live DX data"); private set
     var wsjtxStatus by mutableStateOf("WSJT-X listener stopped"); private set
     var wsjtxMessage by mutableStateOf("No WSJT-X datagram received"); private set
@@ -158,8 +169,9 @@ class FeatureController(private val context: Context) {
 
     private suspend fun refreshDX() {
         val json = NativeCore.featureDxSnapshot(handle, Instant.now().epochSecond)
-        val root = JSONObject(json); val rows = root.optJSONArray("opportunities")
-        val loaded = buildList {
+        val root = JSONObject(json)
+        fun loadSpots(name: String) = buildList {
+            val rows = root.optJSONArray(name)
             if (rows != null) for (index in 0 until rows.length()) {
                 val row = rows.getJSONObject(index); val frequency = row.optLong("frequencyHz")
                 add(AndroidDXSpot("${row.optString("callsign")}-$frequency-${row.optLong("receivedEpoch")}",
@@ -167,8 +179,34 @@ class FeatureController(private val context: Context) {
                     row.optString("mode"), row.optString("country"), row.optString("comment"), row.optBoolean("watchlisted")))
             }
         }
+        val loaded = loadSpots("opportunities")
+        val live = loadSpots("liveSpots")
+        val watched = loadSpots("watchActivity")
+        val bands = buildList {
+            root.optJSONArray("bands")?.let { rows -> for (index in 0 until rows.length()) {
+                val row = rows.getJSONObject(index)
+                add(AndroidDXBand(row.optString("band"), row.optInt("spots5m"), row.optInt("spots60m"),
+                    row.optInt("uniqueCalls"), row.optInt("surgePercent"), row.optBoolean("surge")))
+            } }
+        }
+        val regions = buildList {
+            root.optJSONArray("regions")?.let { rows -> for (index in 0 until rows.length()) {
+                val row = rows.getJSONObject(index)
+                add(AndroidDXRegion(row.optString("region"), row.optInt("spots15m"), row.optInt("spots60m"),
+                    row.optInt("uniqueCalls"), row.optInt("activityPercent"), row.optBoolean("anomaly")))
+            } }
+        }
+        fun matrix(name: String) = buildList {
+            root.optJSONArray(name)?.let { rows -> for (rowIndex in 0 until rows.length()) {
+                val row = rows.getJSONArray(rowIndex)
+                add(List(row.length()) { column -> row.optInt(column) })
+            } }
+        }
         val summary = "${root.optInt("spots5m")} / 5m · ${root.optInt("spots60m")} / 60m · ${root.optInt("watchlistHits")} watch"
-        withContext(Dispatchers.Main) { spots = loaded; dxSummary = summary }
+        withContext(Dispatchers.Main) {
+            spots = loaded; liveSpots = live; watchSpots = watched; dxBands = bands; dxRegions = regions
+            dxTimeline = matrix("bandTimeline"); dxWorld = matrix("worldGrid"); dxSummary = summary
+        }
     }
 
     private fun summaryValue(url: String, keys: List<String>): Float {

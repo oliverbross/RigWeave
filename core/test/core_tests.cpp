@@ -22,6 +22,15 @@ int main() {
     assert(std::string(state.model) == "KX3" && std::string(state.mode) == "USB");
     assert(state.vfo_a_hz == 14075000 && state.transmitting == 0);
 
+    const char *instrument = "FB00007030000;SM18;SW14;PO37;AG190;RG210;BW0270;PC010;PA1;RA01;RT1;XT0;FR0;FT1;";
+    assert(rw_context_feed(context, instrument, std::strlen(instrument)) == 14);
+    state = rw_context_state(context);
+    assert(state.vfo_b_hz == 7030000 && state.meter == 18);
+    assert(state.swr_tenths == 14 && state.rf_output_tenths == 37);
+    assert(state.af_gain == 190 && state.rf_gain == 210 && state.bandwidth_hz == 270);
+    assert(state.power_w == 10 && state.preamp == 1 && state.attenuator == 1);
+    assert(state.rit == 1 && state.xit == 0 && state.split == 1);
+
     std::string oversized(600, 'A');
     assert(rw_context_feed(context, oversized.data(), oversized.size()) == 0);
     assert(rw_startup_command_count() == 0);
@@ -57,6 +66,9 @@ int main() {
     assert(rw_feature_dx_snapshot_json(features, dx_json, sizeof(dx_json), 1720000001) > 0);
     assert(std::string(dx_json).find("\"callsign\":\"JA1XYZ\"") != std::string::npos);
     assert(std::string(dx_json).find("\"watchlisted\":true") != std::string::npos);
+    assert(std::string(dx_json).find("\"bandTimeline\":[") != std::string::npos);
+    assert(std::string(dx_json).find("\"worldGrid\":[") != std::string::npos);
+    assert(std::string(dx_json).find("\"liveSpots\":[") != std::string::npos);
 
     assert(rw_feature_add_worked_qso(features, "JA1XYZ", "Japan", "20m", "FT8", "", 1719999900, 0) == 1);
     char worked_json[1024]{};

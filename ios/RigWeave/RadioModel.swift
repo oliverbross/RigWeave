@@ -5,9 +5,21 @@ struct RadioSnapshot: Equatable {
     let model: String
     let mode: String
     let frequencyHz: UInt64
+    let frequencyBHz: UInt64
     let connected: Bool
     let transmitting: Bool
     let meter: Int
+    let swrTenths: Int
+    let rfOutputTenths: Int
+    let afGain: Int
+    let rfGain: Int
+    let bandwidthHz: Int
+    let powerW: Int
+    let preamp: Bool
+    let attenuator: Bool
+    let rit: Bool
+    let xit: Bool
+    let split: Bool
 
     var status: String { connected ? "LIVE" : "OFFLINE" }
     var frequencyText: String {
@@ -32,9 +44,21 @@ final class RadioCore {
             model: Self.string(from: &state.model),
             mode: Self.string(from: &state.mode),
             frequencyHz: state.vfo_a_hz,
+            frequencyBHz: state.vfo_b_hz,
             connected: state.connected != 0,
             transmitting: state.transmitting != 0,
-            meter: Int(state.meter)
+            meter: Int(state.meter),
+            swrTenths: Int(state.swr_tenths),
+            rfOutputTenths: Int(state.rf_output_tenths),
+            afGain: Int(state.af_gain),
+            rfGain: Int(state.rf_gain),
+            bandwidthHz: Int(state.bandwidth_hz),
+            powerW: Int(state.power_w),
+            preamp: state.preamp != 0,
+            attenuator: state.attenuator != 0,
+            rit: state.rit != 0,
+            xit: state.xit != 0,
+            split: state.split != 0
         )
     }
 

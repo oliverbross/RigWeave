@@ -37,6 +37,21 @@ bool all_digits(std::string_view value) {
         [](unsigned char c) { return std::isdigit(c) != 0; });
 }
 
+bool unsigned_payload(std::string_view frame, std::string_view prefix, int& output) {
+    if (frame.rfind(prefix, 0) != 0) return false;
+    const auto payload = frame.substr(prefix.size());
+    if (!all_digits(payload)) return false;
+    output = std::stoi(std::string(payload));
+    return true;
+}
+
+bool bool_payload(std::string_view frame, std::string_view prefix, int& output) {
+    int value = 0;
+    if (!unsigned_payload(frame, prefix, value)) return false;
+    output = value != 0 ? 1 : 0;
+    return true;
+}
+
 const char *mode_name(int code) {
     switch (code) {
         case 1: return "LSB";
@@ -67,6 +82,9 @@ bool apply_frame(CoreContext &context, const std::string &raw) {
     } else if (frame.rfind("FA", 0) == 0 && frame.size() >= 13 && all_digits(std::string_view(frame).substr(2, 11))) {
         next.vfo_a_hz = std::stoull(frame.substr(2, 11));
         recognized = true;
+    } else if (frame.rfind("FB", 0) == 0 && frame.size() >= 13 && all_digits(std::string_view(frame).substr(2, 11))) {
+        next.vfo_b_hz = std::stoull(frame.substr(2, 11));
+        recognized = true;
     } else if (frame.rfind("MD", 0) == 0 && frame.size() >= 3 && std::isdigit(static_cast<unsigned char>(frame[2]))) {
         copy_text(next.mode, sizeof(next.mode), mode_name(frame[2] - '0'));
         recognized = true;
@@ -82,6 +100,32 @@ bool apply_frame(CoreContext &context, const std::string &raw) {
     } else if (frame.rfind("TQ", 0) == 0 && frame.size() >= 3 && (frame[2] == '0' || frame[2] == '1')) {
         next.transmitting = frame[2] == '1' ? 1 : 0;
         recognized = true;
+    } else if (unsigned_payload(frame, "SM", next.meter)) {
+        next.meter = std::clamp(next.meter, 0, 30); recognized = true;
+    } else if (unsigned_payload(frame, "SW", next.swr_tenths)) {
+        next.swr_tenths = std::clamp(next.swr_tenths, 0, 999); recognized = true;
+    } else if (unsigned_payload(frame, "PO", next.rf_output_tenths)) {
+        next.rf_output_tenths = std::clamp(next.rf_output_tenths, 0, 999); recognized = true;
+    } else if (unsigned_payload(frame, "AG", next.af_gain)) {
+        next.af_gain = std::clamp(next.af_gain, 0, 255); recognized = true;
+    } else if (unsigned_payload(frame, "RG", next.rf_gain)) {
+        next.rf_gain = std::clamp(next.rf_gain, 0, 250); recognized = true;
+    } else if (unsigned_payload(frame, "BW", next.bandwidth_hz)) {
+        next.bandwidth_hz = std::clamp(next.bandwidth_hz, 0, 9999); recognized = true;
+    } else if (unsigned_payload(frame, "PC", next.power_w)) {
+        next.power_w = std::clamp(next.power_w, 0, 100); recognized = true;
+    } else if (bool_payload(frame, "PA", next.preamp)) {
+        recognized = true;
+    } else if (unsigned_payload(frame, "RA", next.attenuator)) {
+        next.attenuator = next.attenuator != 0 ? 1 : 0; recognized = true;
+    } else if (bool_payload(frame, "RT", next.rit)) {
+        recognized = true;
+    } else if (bool_payload(frame, "XT", next.xit)) {
+        recognized = true;
+    } else if (unsigned_payload(frame, "FR", next.rx_vfo)) {
+        next.rx_vfo = std::clamp(next.rx_vfo, 0, 1); next.split = next.rx_vfo != next.tx_vfo; recognized = true;
+    } else if (unsigned_payload(frame, "FT", next.tx_vfo)) {
+        next.tx_vfo = std::clamp(next.tx_vfo, 0, 1); next.split = next.rx_vfo != next.tx_vfo; recognized = true;
     }
 
     if (recognized) {
@@ -128,9 +172,12 @@ void rw_context_reset(rw_context *context) {
     copy_text(context->core.state.model, sizeof(context->core.state.model), "UNIDENTIFIED");
     copy_text(context->core.state.mode, sizeof(context->core.state.mode), "--");
     context->core.state.vfo_a_hz = 0;
+    context->core.state.vfo_b_hz = 0;
     context->core.state.connected = 0;
     context->core.state.transmitting = 0;
     context->core.state.meter = 0;
+    context->core.state.swr_tenths = -1;
+    context->core.state.rf_output_tenths = -1;
     context->core.state.revision = 0;
 }
 
@@ -155,7 +202,10 @@ rw_radio_state rw_context_state(const rw_context *context) {
 rw_command_class rw_classify_command(const char *command) {
     if (!command) return RW_COMMAND_UNKNOWN;
     const std::string value = upper(command);
-    static constexpr std::array<std::string_view, 5> safe{"ID;", "FA;", "MD;", "IF;", "TQ;"};
+    static constexpr std::array<std::string_view, 19> safe{
+        "ID;", "FA;", "FB;", "MD;", "IF;", "TQ;", "SM;", "SW;", "PO;",
+        "AG;", "RG;", "BW;", "PC;", "PA;", "RA;", "RT;", "XT;", "FR;", "FT;"
+    };
     if (std::find(safe.begin(), safe.end(), value) != safe.end()) return RW_COMMAND_READ_ONLY;
     if (value.rfind("TX", 0) == 0 || value.rfind("RX", 0) == 0 ||
         value.rfind("SWT", 0) == 0 || value.rfind("SWH", 0) == 0 ||
