@@ -76,6 +76,8 @@ adb shell am start -n app.rigweave.mobile/.MainActivity
 
 An emulator can validate navigation and local logging, but cannot prove USB serial or radio operation. The Android app uses `usb-serial-for-android` for PL2303, CP210x, FTDI, CH34x, and CDC-ACM adapters where supported by that library. It opens the selected adapter at 38,400 baud and exposes frequency, mode, and raw CAT controls without simulation.
 
+The Android source also binds the full portable feature engine through JNI and supplies real TCP DX-cluster, NOAA, UDP WSJT-X, and `AudioRecord` physical-input panadapter paths with matching Compose screens. Android compilation on this Mac remains blocked before Kotlin compilation because NDK `28.2.13676358` is absent and its Android SDK licence has not been accepted; no licence was accepted automatically.
+
 ## Shared core tests
 
 ```sh
