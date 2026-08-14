@@ -25,7 +25,7 @@ constexpr uint8_t kPurge = 0x12;
 constexpr uint8_t kSetFlow = 0x13;
 constexpr uint8_t kSetBaudRate = 0x1E;
 constexpr uint16_t kUartEnable = 0x0001;
-constexpr uint16_t kPurgeTx = 0x0004;
+constexpr uint16_t kPurgeTx = 0x0005;
 constexpr uint16_t kPurgeRx = 0x000A;
 constexpr uint16_t kWriteDtr = 0x0100;
 constexpr uint16_t kWriteRts = 0x0200;
@@ -216,9 +216,15 @@ IMPL(CP210xDriver, HwProgramLatencyTimer)
 kern_return_t
 IMPL(CP210xDriver, HwProgramFlowControl)
 {
-	uint8_t flow[16] = {};
-	flow[8] = xon;
-	flow[12] = xoff;
+	// SerialTransport configures 38400 8N1 without hardware or software flow
+	// control. CP210x SET_FLOW still needs DTR/RTS asserted and 32-bit queue
+	// limits in its fixed 16-byte structure.
+	const uint8_t flow[16] = {
+		0x01, 0x00, 0x00, 0x00, // ulControlHandshake: DTR active
+		0x40, 0x00, 0x00, 0x00, // ulFlowReplace: RTS active
+		0x80, 0x00, 0x00, 0x00, // ulXonLimit: 128
+		0x80, 0x00, 0x00, 0x00  // ulXoffLimit: 128
+	};
 	os_log(OS_LOG_DEFAULT, "RigWeave CP210x flow=%{public}u xon=%{public}u xoff=%{public}u", arg, xon, xoff);
 	return writeBytes(kSetFlow, flow, sizeof(flow));
 }
