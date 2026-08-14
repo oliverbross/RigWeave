@@ -40,7 +40,7 @@ final class RigWeaveHardwareUITests: XCTestCase {
 
         let frequency = app.descendants(matching: .any)["frequencyDisplay"]
         XCTAssertTrue(frequency.waitForExistence(timeout: 5))
-        XCTAssertTrue(waitForTextToExclude(frequency, needle: "—", timeout: 8),
+        XCTAssertTrue(waitForPositiveFrequency(frequency, timeout: 15),
                       "No live CAT frequency was decoded: \(text(of: frequency))")
 
         openDestination("Panadapter")
@@ -93,10 +93,13 @@ final class RigWeaveHardwareUITests: XCTestCase {
         return false
     }
 
-    private func waitForTextToExclude(_ element: XCUIElement, needle: String, timeout: TimeInterval) -> Bool {
+    private func waitForPositiveFrequency(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
-            if !text(of: element).contains(needle) { return true }
+            let values = text(of: element)
+                .split(whereSeparator: { $0.isWhitespace })
+                .compactMap { Double($0) }
+            if values.contains(where: { $0 > 0 }) { return true }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         } while Date() < deadline
         return false

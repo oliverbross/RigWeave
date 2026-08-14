@@ -41,7 +41,9 @@ private enum HardwareSelfTest {
         if !radio.serialPorts.isEmpty {
             radio.connect()
             for _ in 0..<30 {
-                if radio.snapshot.connected { break }
+                if radio.snapshot.connected,
+                   radio.snapshot.model.localizedCaseInsensitiveContains("KX"),
+                   radio.snapshot.frequencyHz > 0 { break }
                 try? await Task.sleep(for: .milliseconds(500))
             }
         }
@@ -65,7 +67,9 @@ private enum HardwareSelfTest {
         }
         report("IQ frames=\(features.audioCapturedFrames) bins=\(features.spectrumDb.count) rate=\(Int(features.audioSampleRate)) peak=\(features.audioPeak) floor=\(features.audioNoiseFloor) status=\(features.audioStatus)")
 
-        let catPassed = radio.snapshot.connected && radio.snapshot.model.localizedCaseInsensitiveContains("KX")
+        let catPassed = radio.snapshot.connected &&
+            radio.snapshot.model.localizedCaseInsensitiveContains("KX") &&
+            radio.snapshot.frequencyHz > 0
         let iqPassed = iqInput != nil && features.audioCapturedFrames > 0 && !features.spectrumDb.isEmpty
         report("RESULT cat=\(catPassed ? "PASS" : "FAIL") iq=\(iqPassed ? "PASS" : "FAIL") overall=\(catPassed && iqPassed ? "PASS" : "FAIL")")
         features.stopAudioCapture()
