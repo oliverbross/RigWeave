@@ -33,7 +33,13 @@ final class SerialTransport {
 
     static func serialPorts() -> [String] {
         let entries = (try? FileManager.default.contentsOfDirectory(atPath: "/dev")) ?? []
-        return entries.filter(isCandidate).map { "/dev/\($0)" }.sorted()
+        return entries
+            .filter { $0.hasPrefix("cu.") || $0.hasPrefix("tty.") }
+            .sorted { left, right in
+                let leftPreferred = isCandidate(left), rightPreferred = isCandidate(right)
+                return leftPreferred == rightPreferred ? left < right : leftPreferred
+            }
+            .map { "/dev/\($0)" }
     }
 
     private static func isCandidate(_ name: String) -> Bool {

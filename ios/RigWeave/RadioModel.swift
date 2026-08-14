@@ -151,8 +151,8 @@ final class RadioModel: ObservableObject {
         serialPorts = SerialTransport.serialPorts()
         if !serialPorts.contains(selectedPort) { selectedPort = serialPorts.first ?? "" }
         transportStatus = serialPorts.isEmpty
-            ? "No CP210x port exposed. Enable the RigWeave driver, attach Digirig, then scan again."
-            : "Found \(serialPorts.count) physical serial endpoint(s)."
+            ? "No /dev/cu.* or /dev/tty.* endpoints are exposed. The driver is not active or the adapter is not attached."
+            : "Found \(serialPorts.count) physical serial endpoint(s): \(serialPorts.map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))"
     }
 
     func connect() {

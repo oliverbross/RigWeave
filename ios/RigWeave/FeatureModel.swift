@@ -3,6 +3,12 @@ import CoreGraphics
 import Foundation
 import Network
 
+struct AudioInputChoice: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let type: String
+}
+
 struct DXBand: Codable, Identifiable {
     let band: String
     let spots5m: UInt
@@ -314,6 +320,8 @@ final class FeatureModel: ObservableObject {
     @Published private(set) var spectrumDb: [Float] = []
     @Published private(set) var waterfallImage: CGImage?
     @Published private(set) var audioStatus = "No physical audio capture"
+    @Published private(set) var audioInputs: [AudioInputChoice] = []
+    @Published var selectedAudioInputUID = ""
     @Published private(set) var audioPeak: Float = -120
     @Published private(set) var audioNoiseFloor: Float = -120
     @Published private(set) var audioSampleRate: Double = 48_000
@@ -392,16 +400,42 @@ final class FeatureModel: ObservableObject {
         } catch { clusterStatus = "NOAA solar update failed: \(error.localizedDescription)" }
     }
 
+    func refreshAudioInputs() async {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.record, mode: .measurement)
+            try session.setActive(true)
+            let inputs = session.availableInputs ?? []
+            audioInputs = inputs.map { AudioInputChoice(id: $0.uid, name: $0.portName, type: $0.portType.rawValue) }
+            if !audioInputs.contains(where: { $0.id == selectedAudioInputUID }) {
+                selectedAudioInputUID = inputs.first(where: { $0.portType == .usbAudio })?.uid ?? inputs.first?.uid ?? ""
+            }
+            audioStatus = audioInputs.isEmpty
+                ? "No physical audio inputs reported by iPadOS"
+                : "Found \(audioInputs.count) input(s): \(audioInputs.map(\.name).joined(separator: ", "))"
+        } catch {
+            audioInputs = []
+            selectedAudioInputUID = ""
+            audioStatus = "Audio discovery failed: \(error.localizedDescription)"
+        }
+    }
+
     func startAudioCapture() async {
         let granted = await AVAudioApplication.requestRecordPermission()
         guard granted else { audioStatus = "Microphone / USB audio permission denied"; return }
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .measurement, options: [.allowBluetoothHFP])
-            if let usb = session.availableInputs?.first(where: { $0.portType == .usbAudio }) {
-                try session.setPreferredInput(usb)
-            }
+            try session.setCategory(.record, mode: .measurement)
             try session.setActive(true)
+            let inputs = session.availableInputs ?? []
+            audioInputs = inputs.map { AudioInputChoice(id: $0.uid, name: $0.portName, type: $0.portType.rawValue) }
+            let selected = inputs.first(where: { $0.uid == selectedAudioInputUID })
+                ?? inputs.first(where: { $0.portType == .usbAudio })
+                ?? inputs.first
+            if let selected {
+                selectedAudioInputUID = selected.uid
+                try session.setPreferredInput(selected)
+            }
             let input = audioEngine.inputNode
             let format = input.inputFormat(forBus: 0)
             guard format.channelCount >= 2 else {

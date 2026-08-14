@@ -123,9 +123,20 @@ struct RadioView: View {
         ScrollView { VStack(alignment: .leading, spacing: 22) {
             BrandHeader(); KX3ControlDeck(state: radio.snapshot, send: radio.sendCAT)
             GroupBox("Connection") {
-                LabeledContent("Transport", value: radio.transportStatus)
-                LabeledContent("Radio", value: radio.snapshot.model)
-                LabeledContent("CAT polling", value: "ID · FA · MD · IF · TQ")
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("Serial endpoint", selection: $radio.selectedPort) {
+                        if radio.serialPorts.isEmpty { Text("No serial endpoints").tag("") }
+                        ForEach(radio.serialPorts, id: \.self) { Text(($0 as NSString).lastPathComponent).tag($0) }
+                    }
+                    HStack {
+                        Button("Scan serial devices") { radio.refreshPorts() }
+                        Button("Connect KX3") { radio.connect() }.buttonStyle(.borderedProminent).disabled(radio.selectedPort.isEmpty)
+                        Button("Disconnect") { radio.disconnect() }.buttonStyle(.bordered)
+                    }
+                    LabeledContent("Transport", value: radio.transportStatus)
+                    LabeledContent("Radio", value: radio.snapshot.model)
+                    LabeledContent("CAT polling", value: "ID · FA · FB · MD · IF · TQ · meters · gains · flags")
+                }
             }
             GroupBox("CAT control") {
                 VStack(alignment: .leading, spacing: 12) {
@@ -155,7 +166,7 @@ struct RadioView: View {
                     Text("Values and switch commands are sent directly to the connected radio; the app does not clamp them.").font(.caption).foregroundStyle(.secondary)
                 }
             }
-        }.padding() }.navigationTitle("Radio")
+        }.padding() }.navigationTitle("Radio").task { radio.refreshPorts() }
     }
 }
 
@@ -399,13 +410,25 @@ struct PanadapterView: View {
                         Toggle("Reverse I/Q spectrum", isOn: $features.reverseSpectrum)
                     }
                 }
+                GroupBox("Physical I/Q input") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Picker("Audio input", selection: $features.selectedAudioInputUID) {
+                            if features.audioInputs.isEmpty { Text("No audio inputs").tag("") }
+                            ForEach(features.audioInputs) { input in
+                                Text("\(input.name) · \(input.type)").tag(input.id)
+                            }
+                        }
+                        Button("Scan audio devices") { Task { await features.refreshAudioInputs() } }
+                        Text(features.audioStatus).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 HStack {
                     Button("Start I/Q capture") { Task { await features.startAudioCapture() } }.buttonStyle(.borderedProminent)
                     Button("Stop capture") { features.stopAudioCapture() }.buttonStyle(.bordered)
                 }
             }
             .padding()
-        }.navigationTitle("Panadapter")
+        }.navigationTitle("Panadapter").task { await features.refreshAudioInputs() }
     }
 
     private func measurement(_ label: String, _ value: String) -> some View {
