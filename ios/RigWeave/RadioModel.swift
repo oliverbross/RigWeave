@@ -45,10 +45,6 @@ final class RadioCore {
         }
     }
 
-    func isAllowedReadQuery(_ query: String) -> Bool {
-        query.withCString { rw_classify_command($0) == RW_COMMAND_READ_ONLY }
-    }
-
     func identity(callsign: String, date: Date, frequencyHz: UInt64, mode: String) -> String {
         var output = [CChar](repeating: 0, count: 32)
         let iso = ISO8601DateFormatter().string(from: date)
@@ -105,14 +101,70 @@ final class RadioCore {
 @MainActor
 final class RadioModel: ObservableObject {
     private let core = RadioCore()
+    private let transport = SerialTransport()
     @Published private(set) var snapshot: RadioSnapshot
+    @Published private(set) var serialPorts: [String] = []
+    @Published private(set) var transportStatus = "Driver ready; no serial port scanned"
+    @Published var selectedPort = ""
 
     init() {
         snapshot = core.snapshot()
+        transport.onData = { [weak self] data in
+            Task { @MainActor in self?.acceptCAT(data) }
+        }
+        transport.onStatus = { [weak self] status in
+            Task { @MainActor in self?.transportStatus = status }
+        }
     }
+
+    deinit { transport.disconnect() }
 
     func acceptCAT(_ data: Data) {
         if core.feed(data) > 0 { snapshot = core.snapshot() }
+    }
+
+    func refreshPorts() {
+        serialPorts = SerialTransport.serialPorts()
+        if !serialPorts.contains(selectedPort) { selectedPort = serialPorts.first ?? "" }
+        transportStatus = serialPorts.isEmpty
+            ? "No CP210x port exposed. Enable the RigWeave driver, attach Digirig, then scan again."
+            : "Found \(serialPorts.count) physical serial endpoint(s)."
+    }
+
+    func connect() {
+        do {
+            try transport.connect(path: selectedPort)
+        } catch {
+            transportStatus = error.localizedDescription
+        }
+    }
+
+    func disconnect() {
+        transport.disconnect()
+        transportStatus = "Disconnected"
+    }
+
+    func sendCAT(_ command: String) {
+        let normalized = command.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        do {
+            try transport.send(normalized.hasSuffix(";") ? normalized : normalized + ";")
+            transportStatus = "Sent: \(normalized.hasSuffix(";") ? normalized : normalized + ";")"
+        } catch {
+            transportStatus = error.localizedDescription
+        }
+    }
+
+    func setFrequencyMHz(_ value: String) {
+        guard let mhz = Double(value), mhz > 0 else {
+            transportStatus = "Enter a valid frequency in MHz."
+            return
+        }
+        let hz = UInt64((mhz * 1_000_000).rounded())
+        sendCAT(String(format: "FA%011llu;", hz))
+    }
+
+    func setMode(code: String) {
+        sendCAT("MD\(code);")
     }
     func qsoIdentity(callsign: String, at date: Date, frequencyHz: UInt64, mode: String) -> String {
         core.identity(callsign: callsign, date: date, frequencyHz: frequencyHz, mode: mode)

@@ -100,7 +100,7 @@ struct HomeView: View {
     var body: some View {
         ScrollView { VStack(alignment: .leading, spacing: 22) {
             BrandHeader(); RadioSummary()
-            Text("Waiting for a real read-only radio connection. This build contains no demo radio state and no transmit path.")
+            Text("Waiting for a real KX3 connection. This build contains no demo or simulated radio state.")
                 .foregroundStyle(.secondary)
         }.padding() }.navigationTitle("Home")
     }
@@ -108,13 +108,36 @@ struct HomeView: View {
 
 struct RadioView: View {
     @EnvironmentObject private var radio: RadioModel
+    @State private var frequencyMHz = ""
+    @State private var modeCode = "2"
+    @State private var rawCAT = ""
     var body: some View {
         ScrollView { VStack(alignment: .leading, spacing: 22) {
             BrandHeader(); RadioSummary()
             GroupBox("Connection") {
-                LabeledContent("Transport", value: "No entitled Apple USB transport")
+                LabeledContent("Transport", value: radio.transportStatus)
                 LabeledContent("Radio", value: radio.snapshot.model)
-                LabeledContent("Safety", value: "Read-only milestone")
+                LabeledContent("CAT polling", value: "ID · FA · MD · IF · TQ")
+            }
+            GroupBox("CAT control") {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        TextField("Frequency MHz", text: $frequencyMHz).keyboardType(.decimalPad)
+                        Button("Set VFO A") { radio.setFrequencyMHz(frequencyMHz) }
+                    }
+                    HStack {
+                        Picker("Mode", selection: $modeCode) {
+                            Text("LSB").tag("1"); Text("USB").tag("2"); Text("CW").tag("3")
+                            Text("FM").tag("4"); Text("AM").tag("5"); Text("DATA").tag("6")
+                            Text("CW-REV").tag("7"); Text("DATA-REV").tag("9")
+                        }
+                        Button("Set Mode") { radio.setMode(code: modeCode) }
+                    }
+                    HStack {
+                        TextField("Raw KX3 CAT command", text: $rawCAT).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                        Button("Send") { radio.sendCAT(rawCAT); rawCAT = "" }.disabled(rawCAT.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
             }
         }.padding() }.navigationTitle("Radio")
     }
@@ -186,8 +209,18 @@ struct SettingsView: View {
                 LabeledContent("Mode", value: "Real hardware only")
             }
             Section("Physical Apple hardware") {
-                LabeledContent("PL2303 / KXUSB", value: "Blocked: 0 USBDriverKit-entitled profiles")
-                Text("No CAT command is sent by this build.").font(.caption).foregroundStyle(.secondary)
+                LabeledContent("Driver", value: "CP2102 / Digirig · DriverKit")
+                Picker("Serial port", selection: $radio.selectedPort) {
+                    if radio.serialPorts.isEmpty { Text("No physical port").tag("") }
+                    ForEach(radio.serialPorts, id: \.self) { Text(($0 as NSString).lastPathComponent).tag($0) }
+                }
+                HStack {
+                    Button("Scan") { radio.refreshPorts() }
+                    Button("Connect") { radio.connect() }.disabled(radio.selectedPort.isEmpty)
+                    Button("Disconnect") { radio.disconnect() }
+                }
+                Text(radio.transportStatus).font(.caption).foregroundStyle(.secondary)
+                Text("Use Radio for frequency, mode and raw KX3 CAT commands.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Software") { LabeledContent("Shared core", value: radio.coreVersion) }
         }.navigationTitle("Settings")

@@ -1,7 +1,7 @@
 .DS_Store
 build/
 core/build/
-ios/DerivedData/
+ios/DerivedData*/
 android/.gradle/
 android/local.properties
 android/app/build/
