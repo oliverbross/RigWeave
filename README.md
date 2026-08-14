@@ -8,7 +8,7 @@ Requirements:
 
 - Xcode 26.6 or newer;
 - Apple Development team `4WCMQ4U946`;
-- installed profile `RigWeave iPad Development` for `app.rigweave.mobile`;
+- installed profile `RigWeave iPad System Extension Development` for `app.rigweave.mobile`;
 - installed DriverKit App Development profile `RigWeave CP210x DriverKit Development` for `app.rigweave.mobile.CP210xDriver`;
 - supported M-series iPad with Developer Mode enabled;
 - CP2102 adapter (`VID 10C4`, `PID EA60`) and KX3/KX2 configured for 38,400 baud, 8N1.

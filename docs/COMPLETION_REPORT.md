@@ -14,7 +14,7 @@
 ## Apple
 
 - Signed generic iPadOS build: pass
-- App ID/profile: `app.rigweave.mobile` / `RigWeave iPad Development`
+- App ID/profile: `app.rigweave.mobile` / `RigWeave iPad System Extension Development`
 - Driver ID/profile: `app.rigweave.mobile.CP210xDriver` / `RigWeave CP210x DriverKit Development`
 - Embedded DriverKit extension: signed and present at `RigWeave.app/SystemExtensions/CP210xDriver.dext`
 - Detected device: iPad Pro 11-inch (4th generation), `iPad14,4`, iPadOS 26.6.1
