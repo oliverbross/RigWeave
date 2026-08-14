@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreGraphics
 import Foundation
 import Network
 
@@ -76,6 +77,11 @@ struct WSJTXMessage: Codable {
     let adif: String?
 }
 
+enum PanPalette: String, CaseIterable, Identifiable {
+    case aether = "Aether", ocean = "Ocean", fire = "Fire", grayscale = "Mono"
+    var id: String { rawValue }
+}
+
 final class FeatureCore {
     private let context: OpaquePointer
     private let lock = NSLock()
@@ -124,15 +130,15 @@ final class FeatureCore {
         return try? JSONDecoder().decode(WSJTXMessage.self, from: json)
     }
 
-    func pushAudio(_ data: Data, channels: UInt32, bytesPerSample: UInt32, bits: UInt32) -> [UInt8] {
+    func pushAudio(_ data: Data, channels: UInt32, bytesPerSample: UInt32, bits: UInt32) -> [Float] {
         lock.lock(); defer { lock.unlock() }
         let accepted = data.withUnsafeBytes { bytes in
             rw_panadapter_push_pcm(context, bytes.baseAddress?.assumingMemoryBound(to: UInt8.self),
                                    bytes.count, channels, bytesPerSample, bits)
         }
         guard accepted == 1 else { return [] }
-        var bins = [UInt8](repeating: 0, count: 1024)
-        let count = rw_panadapter_copy_bins(context, &bins, bins.count)
+        var bins = [Float](repeating: -140, count: 1024)
+        let count = rw_panadapter_copy_db_bins(context, &bins, bins.count)
         return Array(bins.prefix(count))
     }
 
@@ -282,9 +288,16 @@ final class FeatureModel: ObservableObject {
     @Published private(set) var clusterStatus = "DX cluster disconnected"
     @Published private(set) var wsjtxStatus = "WSJT-X listener stopped"
     @Published private(set) var lastWSJTX: WSJTXMessage?
-    @Published private(set) var spectrum: [UInt8] = []
+    @Published private(set) var spectrumDb: [Float] = []
+    @Published private(set) var waterfallImage: CGImage?
     @Published private(set) var audioStatus = "No physical audio capture"
     @Published private(set) var audioPeak: Float = -120
+    @Published private(set) var audioNoiseFloor: Float = -120
+    @Published private(set) var audioSampleRate: Double = 48_000
+    @Published var panRangeDb: Double { didSet { defaults.set(panRangeDb, forKey: "panRangeDb"); rebuildWaterfallImage() } }
+    @Published var panFloorOffsetDb: Double { didSet { defaults.set(panFloorOffsetDb, forKey: "panFloorOffsetDb"); rebuildWaterfallImage() } }
+    @Published var panPalette: PanPalette { didSet { defaults.set(panPalette.rawValue, forKey: "panPalette"); rebuildWaterfallImage() } }
+    @Published var reverseSpectrum: Bool { didSet { defaults.set(reverseSpectrum, forKey: "reverseSpectrum") } }
     @Published var clusterHost: String { didSet { defaults.set(clusterHost, forKey: "clusterHost") } }
     @Published var clusterPort: String { didSet { defaults.set(clusterPort, forKey: "clusterPort") } }
     @Published var operatorCallsign: String { didSet { defaults.set(operatorCallsign, forKey: "operatorCallsign") } }
@@ -292,6 +305,10 @@ final class FeatureModel: ObservableObject {
     @Published var wsjtxPort: String { didSet { defaults.set(wsjtxPort, forKey: "wsjtxPort") } }
 
     private let defaults = UserDefaults.standard
+    private var waterfallRows: [[Float]] = []
+    private let waterfallWidth = 512
+    private let waterfallDepth = 240
+    private var noiseFloorSeeded = false
 
     init() {
         clusterHost = defaults.string(forKey: "clusterHost") ?? "dxc.ve7cc.net"
@@ -299,6 +316,10 @@ final class FeatureModel: ObservableObject {
         operatorCallsign = defaults.string(forKey: "operatorCallsign") ?? ""
         watchlist = defaults.string(forKey: "watchlist") ?? ""
         wsjtxPort = defaults.string(forKey: "wsjtxPort") ?? "2237"
+        panRangeDb = defaults.object(forKey: "panRangeDb") as? Double ?? 72
+        panFloorOffsetDb = defaults.object(forKey: "panFloorOffsetDb") as? Double ?? -6
+        panPalette = PanPalette(rawValue: defaults.string(forKey: "panPalette") ?? "") ?? .aether
+        reverseSpectrum = defaults.object(forKey: "reverseSpectrum") as? Bool ?? false
         core.setWatchlist(watchlist)
         cluster.onStatus = { [weak self] value in Task { @MainActor in self?.clusterStatus = value } }
         cluster.onLine = { [weak self] line in
@@ -354,10 +375,17 @@ final class FeatureModel: ObservableObject {
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.record, mode: .measurement, options: [.allowBluetoothHFP])
+            if let usb = session.availableInputs?.first(where: { $0.portType == .usbAudio }) {
+                try session.setPreferredInput(usb)
+            }
             try session.setActive(true)
             let input = audioEngine.inputNode
             let format = input.inputFormat(forBus: 0)
-            guard format.channelCount > 0 else { audioStatus = "No physical input route"; return }
+            guard format.channelCount >= 2 else {
+                audioStatus = "The selected input is mono. Panadapter requires physical stereo I/Q."
+                return
+            }
+            audioSampleRate = format.sampleRate
             input.removeTap(onBus: 0)
             input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in self?.acceptAudio(buffer) }
             audioEngine.prepare(); try audioEngine.start()
@@ -367,6 +395,7 @@ final class FeatureModel: ObservableObject {
 
     func stopAudioCapture() {
         audioEngine.inputNode.removeTap(onBus: 0); audioEngine.stop()
+        spectrumDb = []; waterfallRows.removeAll(); waterfallImage = nil; noiseFloorSeeded = false
         audioStatus = "Audio capture stopped"
     }
 
@@ -383,9 +412,71 @@ final class FeatureModel: ObservableObject {
         let data = samples.withUnsafeBytes { Data($0) }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let bins = self.core.pushAudio(data, channels: UInt32(channelCount), bytesPerSample: 2, bits: 16)
-            if !bins.isEmpty { self.spectrum = bins; self.audioPeak = self.core.audioMetrics.peak }
+            var bins = self.core.pushAudio(data, channels: UInt32(channelCount), bytesPerSample: 2, bits: 16)
+            if self.reverseSpectrum { bins.reverse() }
+            if !bins.isEmpty { self.acceptSpectrum(bins) }
         }
+    }
+
+    private func acceptSpectrum(_ bins: [Float]) {
+        spectrumDb = bins
+        audioPeak = core.audioMetrics.peak
+        let centre = bins.count / 2
+        let usable = bins.enumerated().compactMap { index, value in
+            abs(index - centre) <= 4 || !value.isFinite ? nil : value
+        }
+        guard !usable.isEmpty else { return }
+        let mean = usable.reduce(0, +) / Float(usable.count)
+        let quiet = usable.filter { $0 <= mean }
+        let measured = quiet.isEmpty ? mean : quiet.reduce(0, +) / Float(quiet.count)
+        if noiseFloorSeeded { audioNoiseFloor += 0.10 * (measured - audioNoiseFloor) }
+        else { audioNoiseFloor = measured; noiseFloorSeeded = true }
+
+        var row = [Float](repeating: audioNoiseFloor, count: waterfallWidth)
+        for column in 0..<waterfallWidth {
+            let start = column * bins.count / waterfallWidth
+            let end = max(start + 1, (column + 1) * bins.count / waterfallWidth)
+            row[column] = bins[start..<min(end, bins.count)].max() ?? audioNoiseFloor
+        }
+        waterfallRows.insert(row, at: 0)
+        if waterfallRows.count > waterfallDepth { waterfallRows.removeLast(waterfallRows.count - waterfallDepth) }
+        rebuildWaterfallImage()
+    }
+
+    private func rebuildWaterfallImage() {
+        guard !waterfallRows.isEmpty else { waterfallImage = nil; return }
+        let floor = audioNoiseFloor + Float(panFloorOffsetDb)
+        let range = max(20, Float(panRangeDb))
+        var pixels = [UInt8](repeating: 0, count: waterfallWidth * waterfallRows.count * 4)
+        for (y, row) in waterfallRows.enumerated() {
+            for x in 0..<waterfallWidth {
+                let level = max(0, min(1, (row[x] - floor) / range))
+                let color = paletteColor(level)
+                let offset = (y * waterfallWidth + x) * 4
+                pixels[offset] = color.0; pixels[offset + 1] = color.1; pixels[offset + 2] = color.2; pixels[offset + 3] = 255
+            }
+        }
+        let data = Data(pixels) as CFData
+        guard let provider = CGDataProvider(data: data) else { return }
+        waterfallImage = CGImage(width: waterfallWidth, height: waterfallRows.count,
+            bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: waterfallWidth * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+    }
+
+    private func paletteColor(_ level: Float) -> (UInt8, UInt8, UInt8) {
+        let stops: [(Float, (Float, Float, Float))]
+        switch panPalette {
+        case .aether: stops = [(0, (2, 6, 18)), (0.18, (14, 28, 74)), (0.42, (0, 132, 174)), (0.68, (93, 226, 170)), (0.84, (247, 201, 72)), (1, (255, 88, 62))]
+        case .ocean: stops = [(0, (0, 4, 18)), (0.3, (0, 50, 110)), (0.6, (0, 184, 210)), (1, (224, 255, 255))]
+        case .fire: stops = [(0, (5, 3, 10)), (0.28, (72, 12, 92)), (0.56, (212, 45, 45)), (0.8, (255, 174, 38)), (1, (255, 255, 220))]
+        case .grayscale: stops = [(0, (0, 0, 0)), (1, (255, 255, 255))]
+        }
+        let upper = stops.firstIndex(where: { $0.0 >= level }) ?? stops.count - 1
+        let lower = max(0, upper - 1), a = stops[lower], b = stops[upper]
+        let t = b.0 == a.0 ? 0 : (level - a.0) / (b.0 - a.0)
+        func mix(_ left: Float, _ right: Float) -> UInt8 { UInt8(max(0, min(255, left + (right - left) * t))) }
+        return (mix(a.1.0, b.1.0), mix(a.1.1, b.1.1), mix(a.1.2, b.1.2))
     }
 
     private static func summaryValue(from data: Data, keys: [String]) throws -> Float {

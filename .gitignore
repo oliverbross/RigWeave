@@ -4,6 +4,7 @@ core/build/
 core/build-*/
 ios/DerivedData*/
 android/.gradle/
+android/app/.cxx/
 android/local.properties
 android/app/build/
 *.xcuserstate

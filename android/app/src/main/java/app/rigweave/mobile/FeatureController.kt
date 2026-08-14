@@ -45,7 +45,13 @@ class FeatureController(private val context: Context) {
     var wsjtxStatus by mutableStateOf("WSJT-X listener stopped"); private set
     var wsjtxMessage by mutableStateOf("No WSJT-X datagram received"); private set
     var audioStatus by mutableStateOf("No physical audio capture"); private set
-    var spectrum by mutableStateOf(ByteArray(0)); private set
+    var spectrum by mutableStateOf(FloatArray(0)); private set
+    var waterfall by mutableStateOf(emptyList<FloatArray>()); private set
+    var noiseFloor by mutableStateOf(-120f); private set
+    var panRangeDb by mutableStateOf(72f)
+    var panFloorOffsetDb by mutableStateOf(-6f)
+    var panPalette by mutableStateOf(0)
+    private var noiseFloorSeeded = false
 
     fun setWatchlist(value: String) { NativeCore.featureWatchlist(handle, value) }
 
@@ -116,7 +122,25 @@ class FeatureController(private val context: Context) {
                 val count = record.read(buffer, 0, buffer.size)
                 if (count > 0) {
                     val bins = NativeCore.featurePanadapter(handle, buffer.copyOf(count), 2, 2, 16)
-                    if (bins.isNotEmpty()) withContext(Dispatchers.Main) { spectrum = bins }
+                    if (bins.isNotEmpty()) {
+                        val centre = bins.size / 2
+                        val usable = bins.filterIndexed { index, value -> kotlin.math.abs(index - centre) > 4 && value.isFinite() }
+                        val mean = usable.average().toFloat()
+                        val quiet = usable.filter { it <= mean }
+                        val measured = (if (quiet.isEmpty()) mean.toDouble() else quiet.average()).toFloat()
+                        val row = FloatArray(256) { column ->
+                            val start = column * bins.size / 256
+                            val end = maxOf(start + 1, (column + 1) * bins.size / 256)
+                            var peak = measured
+                            for (index in start until minOf(end, bins.size)) peak = maxOf(peak, bins[index])
+                            peak
+                        }
+                        withContext(Dispatchers.Main) {
+                            noiseFloor = if (noiseFloorSeeded) noiseFloor + 0.1f * (measured - noiseFloor) else measured
+                            noiseFloorSeeded = true; spectrum = bins
+                            waterfall = (listOf(row) + waterfall).take(140)
+                        }
+                    }
                 }
             }
         }
@@ -124,7 +148,8 @@ class FeatureController(private val context: Context) {
 
     fun stopAudio() {
         audioRecord?.let { if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) it.stop(); it.release() }
-        audioRecord = null; spectrum = ByteArray(0); audioStatus = "Audio capture stopped"
+        audioRecord = null; spectrum = FloatArray(0); waterfall = emptyList(); noiseFloorSeeded = false
+        audioStatus = "Audio capture stopped"
     }
 
     fun close() {

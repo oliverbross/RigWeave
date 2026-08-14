@@ -1,7 +1,9 @@
 #include "rigweave/core.h"
 
+#include <algorithm>
 #include <cassert>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -71,6 +73,30 @@ int main() {
     assert(rw_panadapter_push_pcm(features, pcm.data(), pcm.size(), 2, 2, 16) == 1);
     std::array<uint8_t, 1024> bins{};
     assert(rw_panadapter_copy_bins(features, bins.data(), bins.size()) == bins.size());
+    std::array<float, 1024> db_bins{};
+    assert(rw_panadapter_copy_db_bins(features, db_bins.data(), db_bins.size()) == db_bins.size());
+    assert(std::all_of(db_bins.begin(), db_bins.end(), [](float value) {
+        return std::isfinite(value) && value >= -140.0F && value <= 6.0F;
+    }));
+
+    std::array<int16_t, 2048> iq_tone{};
+    constexpr float tone_amplitude = 0.5F;
+    constexpr std::size_t tone_bin = 96;
+    for (std::size_t frame = 0; frame < 1024; ++frame) {
+        const float phase = 2.0F * 3.14159265358979323846F *
+                            static_cast<float>(tone_bin * frame) / 1024.0F;
+        iq_tone[frame * 2] = static_cast<int16_t>(std::cos(phase) * tone_amplitude * 32767.0F);
+        iq_tone[frame * 2 + 1] = static_cast<int16_t>(std::sin(phase) * tone_amplitude * 32767.0F);
+    }
+    for (int frame = 0; frame < 4; ++frame) {
+        assert(rw_panadapter_push_pcm(features, reinterpret_cast<const uint8_t *>(iq_tone.data()),
+                                     iq_tone.size() * sizeof(int16_t), 2, 2, 16) == 1);
+    }
+    rw_panadapter_copy_db_bins(features, db_bins.data(), db_bins.size());
+    const auto peak = static_cast<std::size_t>(std::distance(db_bins.begin(),
+        std::max_element(db_bins.begin(), db_bins.end())));
+    assert(peak == 512 + tone_bin);
+    assert(db_bins[512 + tone_bin] - db_bins[512 - tone_bin] > 45.0F);
 
     char normalized_url[128]{};
     assert(rw_wavelog_normalize_url(normalized_url, sizeof(normalized_url), "htps://log.example/") > 0);

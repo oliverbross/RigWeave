@@ -21,7 +21,7 @@ class QsoDatabase(context: Context) : SQLiteOpenHelper(context, "rigweave.sqlite
             if (it.moveToFirst()) return false
         }
         writableDatabase.execSQL("INSERT INTO qso(id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at) VALUES(?,?,?,?,?,?,?)",
-            arrayOf(qso.id, qso.callsign, qso.frequencyHz, qso.mode, qso.rstSent, qso.rstReceived, qso.createdAt))
+            arrayOf<Any>(qso.id, qso.callsign, qso.frequencyHz, qso.mode, qso.rstSent, qso.rstReceived, qso.createdAt))
         return true
     }
 

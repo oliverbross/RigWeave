@@ -32,7 +32,7 @@ private:
     std::array<float, kPanFftSize> imag_{};
     std::array<std::uint8_t, kPanBins> bins_{};
     std::array<float, kPanBins> db_bins_{};
-    std::array<float, kPanBins> smoothed_{};
+    std::array<float, kPanBins> smoothed_db_{};
     std::size_t fill_{};
     float peak_db_{-120.0F};
     float display_floor_db_{-100.0F};

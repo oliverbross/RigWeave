@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.List
+import androidx.compose.material.icons.automirrored.outlined.ShowChart
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -85,7 +87,7 @@ enum class Destination(val label: String) { Home("Home"), Radio("Radio"), Spots(
 private fun icon(destination: Destination) = when (destination) {
     Destination.Home -> Icons.Outlined.Home; Destination.Radio -> Icons.Outlined.SettingsInputAntenna
     Destination.Spots -> Icons.Outlined.CellTower; Destination.DX -> Icons.Outlined.Public
-    Destination.Log -> Icons.Outlined.List; Destination.Panadapter -> Icons.Outlined.ShowChart
+    Destination.Log -> Icons.AutoMirrored.Outlined.List; Destination.Panadapter -> Icons.AutoMirrored.Outlined.ShowChart
     Destination.Digital -> Icons.Outlined.GraphicEq; Destination.Settings -> Icons.Outlined.Settings
 }
 
@@ -96,7 +98,7 @@ private fun icon(destination: Destination) = when (destination) {
         Destination.Spots -> SpotsScreen(features, send)
         Destination.DX -> DXScreen(features)
         Destination.Log -> LogScreen(state, database)
-        Destination.Panadapter -> PanadapterScreen(features)
+        Destination.Panadapter -> PanadapterScreen(features, state)
         Destination.Digital -> DigitalScreen(features)
         Destination.Settings -> SettingsScreen(state, usbDetail, features)
     }
@@ -186,20 +188,69 @@ private fun icon(destination: Destination) = when (destination) {
     Text("DX ranking, CTY resolution, watchlists and surge analysis run in the shared Tab5 engine.", color = Color.Gray)
 }
 
-@Composable private fun PanadapterScreen(features: FeatureController) {
+@Composable private fun PanadapterScreen(features: FeatureController, state: RadioState) {
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) features.startAudio() }
     ScreenColumn {
-        Brand(); Text(features.audioStatus, color = Color.Gray)
-        if (features.spectrum.isEmpty()) Box(Modifier.fillMaxWidth().height(360.dp), contentAlignment = Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Outlined.SignalWifiOff, null, modifier = Modifier.size(48.dp)); Text("No physical audio source"); Text("No generated spectrum is shown.", color = Color.Gray) } }
-        else Canvas(Modifier.fillMaxWidth().height(360.dp)) {
-            val bins = features.spectrum; if (bins.size > 1) for (index in 1 until bins.size) {
-                val x1 = size.width * (index - 1).toFloat() / (bins.size - 1).toFloat(); val x2 = size.width * index.toFloat() / (bins.size - 1).toFloat()
-                val y1 = size.height * (1f - ((bins[index - 1].toInt() and 0xff) / 255f)); val y2 = size.height * (1f - ((bins[index].toInt() and 0xff) / 255f))
-                drawLine(Amber, androidx.compose.ui.geometry.Offset(x1, y1), androidx.compose.ui.geometry.Offset(x2, y2), strokeWidth = 2f)
+        Brand(); Text(features.audioStatus, color = Color(0xFF9AA8B5))
+        if (features.spectrum.isEmpty()) Box(Modifier.fillMaxWidth().height(460.dp), contentAlignment = Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Icon(Icons.Outlined.SignalWifiOff, null, modifier = Modifier.size(48.dp)); Text("No physical stereo I/Q source"); Text("Connect USB audio and start capture. No generated spectrum is shown.", color = Color(0xFF9AA8B5)) } }
+        else {
+            Canvas(Modifier.fillMaxWidth().height(460.dp)) {
+                val bins = features.spectrum; val spectrumHeight = size.height * 0.41f
+                val floor = features.noiseFloor + features.panFloorOffsetDb; val range = features.panRangeDb
+                drawRect(Color(0xFF050912))
+                val rows = features.waterfall
+                if (rows.isNotEmpty()) {
+                    val rowHeight = (size.height - spectrumHeight) / rows.size
+                    val cellWidth = size.width / rows.first().size
+                    rows.forEachIndexed { y, row -> row.forEachIndexed { x, db ->
+                        val level = ((db - floor) / range).coerceIn(0f, 1f)
+                        drawRect(panColor(level, features.panPalette),
+                            topLeft = androidx.compose.ui.geometry.Offset(x * cellWidth, spectrumHeight + y * rowHeight),
+                            size = androidx.compose.ui.geometry.Size(cellWidth + 1f, rowHeight + 1f))
+                    } }
+                }
+                for (step in 0..8) {
+                    val x = size.width * step / 8f
+                    drawLine(Color.White.copy(alpha = if (step == 4) 0.22f else 0.07f), androidx.compose.ui.geometry.Offset(x, 0f), androidx.compose.ui.geometry.Offset(x, size.height), strokeWidth = if (step == 4) 1.5f else 0.7f)
+                }
+                for (step in 0..4) {
+                    val y = spectrumHeight * step / 4f
+                    drawLine(Color.White.copy(alpha = 0.09f), androidx.compose.ui.geometry.Offset(0f, y), androidx.compose.ui.geometry.Offset(size.width, y), strokeWidth = 0.7f)
+                }
+                if (bins.size > 1) for (index in 1 until bins.size) {
+                    val x1 = size.width * (index - 1f) / (bins.size - 1f); val x2 = size.width * index / (bins.size - 1f)
+                    val y1 = spectrumHeight * (1f - ((bins[index - 1] - floor) / range).coerceIn(0f, 1f)); val y2 = spectrumHeight * (1f - ((bins[index] - floor) / range).coerceIn(0f, 1f))
+                    drawLine(Amber, androidx.compose.ui.geometry.Offset(x1, y1), androidx.compose.ui.geometry.Offset(x2, y2), strokeWidth = 2f)
+                }
             }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("−24 kHz", fontFamily = FontFamily.Monospace, color = Color(0xFF9AA8B5), fontSize = 11.sp)
+                Text(if (state.frequencyHz > 0) "%.3f MHz".format(state.frequencyHz / 1_000_000.0) else "VFO", fontFamily = FontFamily.Monospace, color = Amber, fontSize = 12.sp)
+                Text("+24 kHz", fontFamily = FontFamily.Monospace, color = Color(0xFF9AA8B5), fontSize = 11.sp)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                Text("PEAK %.1f dBFS".format(features.spectrum.maxOrNull() ?: -140f), fontFamily = FontFamily.Monospace)
+                Text("FLOOR %.1f dBFS".format(features.noiseFloor), fontFamily = FontFamily.Monospace)
+            }
+        }
+        Text("Dynamic range ${features.panRangeDb.toInt()} dB", color = Color(0xFF9AA8B5)); Slider(value = features.panRangeDb, onValueChange = { features.panRangeDb = it }, valueRange = 40f..110f, steps = 34)
+        Text("Black level ${features.panFloorOffsetDb.toInt()} dB from floor", color = Color(0xFF9AA8B5)); Slider(value = features.panFloorOffsetDb, onValueChange = { features.panFloorOffsetDb = it }, valueRange = -20f..10f, steps = 29)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Aether", "Ocean", "Fire").forEachIndexed { index, label -> FilterChip(selected = features.panPalette == index, onClick = { features.panPalette = index }, label = { Text(label) }) }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Button(onClick = { permission.launch(android.Manifest.permission.RECORD_AUDIO) }) { Text("Start physical capture") }; Button(onClick = features::stopAudio) { Text("Stop") } }
     }
+}
+
+private fun panColor(level: Float, palette: Int): Color {
+    val t = level.coerceIn(0f, 1f)
+    val stops = when (palette) {
+        1 -> listOf(Color(0xFF000412), Color(0xFF00336E), Color(0xFF00B8D2), Color(0xFFE0FFFF))
+        2 -> listOf(Color(0xFF05030A), Color(0xFF480C5C), Color(0xFFD42D2D), Color(0xFFFFAE26), Color(0xFFFFFFDC))
+        else -> listOf(Color(0xFF020612), Color(0xFF0E1C4A), Color(0xFF0084AE), Color(0xFF5DE2AA), Color(0xFFF7C948), Color(0xFFFF583E))
+    }
+    val scaled = t * (stops.size - 1); val index = scaled.toInt().coerceIn(0, stops.size - 2)
+    return androidx.compose.ui.graphics.lerp(stops[index], stops[index + 1], scaled - index)
 }
 
 @Composable private fun DigitalScreen(features: FeatureController) {

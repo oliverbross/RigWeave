@@ -76,7 +76,13 @@ adb shell am start -n app.rigweave.mobile/.MainActivity
 
 An emulator can validate navigation and local logging, but cannot prove USB serial or radio operation. The Android app uses `usb-serial-for-android` for PL2303, CP210x, FTDI, CH34x, and CDC-ACM adapters where supported by that library. It opens the selected adapter at 38,400 baud and exposes frequency, mode, and raw CAT controls without simulation.
 
-The Android source also binds the full portable feature engine through JNI and supplies real TCP DX-cluster, NOAA, UDP WSJT-X, and `AudioRecord` physical-input panadapter paths with matching Compose screens. Android compilation on this Mac remains blocked before Kotlin compilation because NDK `28.2.13676358` is absent and its Android SDK licence has not been accepted; no licence was accepted automatically.
+The Android source also binds the full portable feature engine through JNI and supplies real TCP DX-cluster, NOAA, UDP WSJT-X, and `AudioRecord` physical-input panadapter paths with matching Compose screens. Android SDK licences were accepted with the owner's explicit approval and NDK `28.2.13676358` is installed under the SDK used by Gradle.
+
+## Panadapter architecture
+
+The mobile panadapter consumes physical stereo I/Q only. Its shared FFT path now uses independent DC removal, coherent-gain-normalized complex magnitudes, Blackman-Harris windowing, FFT shift, and asymmetric dB-domain attack/release smoothing. It does not infer an I/Q calibration transform from each live frame.
+
+Both native clients render a 41/59 spectrum/waterfall split with a centered VFO axis, scrolling newest-first history, live trimmed-mean noise-floor tracking, adjustable black level and dynamic range, and selectable perceptual color maps. The iPad implementation uploads waterfall history as an image texture for asynchronous compositing; Android uses its hardware-accelerated Compose canvas. See [`docs/PANADAPTER_DESIGN.md`](docs/PANADAPTER_DESIGN.md).
 
 ## Shared core tests
 

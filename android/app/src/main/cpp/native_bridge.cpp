@@ -110,18 +110,18 @@ Java_app_rigweave_mobile_NativeCore_featureSolar(JNIEnv *, jobject, jlong handle
     rw_feature_set_solar(features(handle), flux, a, kp, static_cast<int64_t>(epoch));
 }
 
-extern "C" JNIEXPORT jbyteArray JNICALL
+extern "C" JNIEXPORT jfloatArray JNICALL
 Java_app_rigweave_mobile_NativeCore_featurePanadapter(JNIEnv *env, jobject, jlong handle, jbyteArray pcm,
                                                        jint channels, jint subframeBytes, jint bits) {
-    if (!pcm) return env->NewByteArray(0);
+    if (!pcm) return env->NewFloatArray(0);
     const auto length = env->GetArrayLength(pcm); auto *bytes = env->GetByteArrayElements(pcm, nullptr);
     const int accepted = rw_panadapter_push_pcm(features(handle), reinterpret_cast<const uint8_t *>(bytes),
         static_cast<size_t>(length), static_cast<unsigned>(channels), static_cast<unsigned>(subframeBytes), static_cast<unsigned>(bits));
     env->ReleaseByteArrayElements(pcm, bytes, JNI_ABORT);
-    if (!accepted) return env->NewByteArray(0);
-    uint8_t bins[1024]{}; const auto count = rw_panadapter_copy_bins(features(handle), bins, sizeof(bins));
-    auto result = env->NewByteArray(static_cast<jsize>(count));
-    env->SetByteArrayRegion(result, 0, static_cast<jsize>(count), reinterpret_cast<const jbyte *>(bins));
+    if (!accepted) return env->NewFloatArray(0);
+    float bins[1024]{}; const auto count = rw_panadapter_copy_db_bins(features(handle), bins, 1024);
+    auto result = env->NewFloatArray(static_cast<jsize>(count));
+    env->SetFloatArrayRegion(result, 0, static_cast<jsize>(count), bins);
     return result;
 }
 

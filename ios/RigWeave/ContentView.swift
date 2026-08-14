@@ -234,42 +234,127 @@ struct LogView: View {
 
 struct PanadapterView: View {
     @EnvironmentObject private var features: FeatureModel
+    @EnvironmentObject private var radio: RadioModel
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            BrandHeader(); StatusBadge(status: features.spectrum.isEmpty ? "OFFLINE" : "LIVE")
-            if features.spectrum.isEmpty {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                BrandHeader()
+                HStack(spacing: 12) {
+                    StatusBadge(status: features.spectrumDb.isEmpty ? "OFFLINE" : "LIVE")
+                    Text(features.audioStatus).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer()
+                    if !features.spectrumDb.isEmpty {
+                        Text(String(format: "%.0f kHz I/Q", features.audioSampleRate / 1_000))
+                            .font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                    }
+                }
+            if features.spectrumDb.isEmpty {
                 ContentUnavailableView("No physical audio source", systemImage: "waveform.slash",
-                    description: Text("Start capture after selecting a real USB audio input. No generated waveform is shown."))
-                    .frame(maxWidth: .infinity, minHeight: 360).background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 16))
+                    description: Text("Connect the stereo I/Q USB interface, then start capture. RigWeave never substitutes generated spectrum data."))
+                    .frame(maxWidth: .infinity, minHeight: 430).background(Color(red: 0.025, green: 0.035, blue: 0.05)).clipShape(RoundedRectangle(cornerRadius: 14))
             } else {
-                SpectrumPlot(bins: features.spectrum)
-                    .frame(maxWidth: .infinity, minHeight: 360)
-                    .background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 16))
-                Text(String(format: "Peak %.1f dB", features.audioPeak)).font(.system(.caption, design: .monospaced))
+                PanadapterInstrument(bins: features.spectrumDb, waterfall: features.waterfallImage,
+                    centreHz: radio.snapshot.frequencyHz, sampleRate: features.audioSampleRate,
+                    noiseFloor: features.audioNoiseFloor, floorOffset: Float(features.panFloorOffsetDb),
+                    rangeDb: Float(features.panRangeDb))
+                    .frame(maxWidth: .infinity, minHeight: 500)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                HStack(spacing: 22) {
+                    measurement("PEAK", String(format: "%.1f dBFS", features.audioPeak))
+                    measurement("FLOOR", String(format: "%.1f dBFS", features.audioNoiseFloor))
+                    measurement("SPAN", String(format: "±%.0f kHz", features.audioSampleRate / 2_000))
+                    Spacer()
+                }.padding(.horizontal, 4)
             }
-            HStack {
-                Button("Start physical capture") { Task { await features.startAudioCapture() } }
-                Button("Stop") { features.stopAudioCapture() }
+                GroupBox("Display") {
+                    VStack(spacing: 12) {
+                        Picker("Waterfall palette", selection: $features.panPalette) {
+                            ForEach(PanPalette.allCases) { Text($0.rawValue).tag($0) }
+                        }.pickerStyle(.segmented)
+                        LabeledContent("Dynamic range", value: "\(Int(features.panRangeDb)) dB")
+                        Slider(value: $features.panRangeDb, in: 40...110, step: 2)
+                        LabeledContent("Black level", value: String(format: "%+.0f dB from floor", features.panFloorOffsetDb))
+                        Slider(value: $features.panFloorOffsetDb, in: -20...10, step: 1)
+                        Toggle("Reverse I/Q spectrum", isOn: $features.reverseSpectrum)
+                    }
+                }
+                HStack {
+                    Button("Start I/Q capture") { Task { await features.startAudioCapture() } }.buttonStyle(.borderedProminent)
+                    Button("Stop capture") { features.stopAudioCapture() }.buttonStyle(.bordered)
+                }
             }
-            Text(features.audioStatus).font(.caption).foregroundStyle(.secondary)
-            Spacer()
-        }.padding().navigationTitle("Panadapter")
+            .padding()
+        }.navigationTitle("Panadapter")
+    }
+
+    private func measurement(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            Text(value).font(.system(.callout, design: .monospaced).weight(.medium))
+        }
     }
 }
 
-struct SpectrumPlot: View {
-    let bins: [UInt8]
+struct PanadapterInstrument: View {
+    let bins: [Float]
+    let waterfall: CGImage?
+    let centreHz: UInt64
+    let sampleRate: Double
+    let noiseFloor: Float
+    let floorOffset: Float
+    let rangeDb: Float
+
     var body: some View {
-        Canvas { context, size in
+        Canvas(rendersAsynchronously: true) { context, size in
             guard bins.count > 1 else { return }
+            let spectrumHeight = size.height * 0.41
+            let axisHeight: CGFloat = 30
+            let waterfallTop = spectrumHeight + axisHeight
+            let waterfallRect = CGRect(x: 0, y: waterfallTop, width: size.width, height: size.height - waterfallTop)
+            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color(red: 0.018, green: 0.025, blue: 0.038)))
+
+            if let waterfall {
+                context.draw(Image(decorative: waterfall, scale: 1), in: waterfallRect)
+            }
+
+            let floor = noiseFloor + floorOffset
+            for step in 0...4 {
+                let y = spectrumHeight * CGFloat(step) / 4
+                var line = Path(); line.move(to: CGPoint(x: 0, y: y)); line.addLine(to: CGPoint(x: size.width, y: y))
+                context.stroke(line, with: .color(.white.opacity(step == 4 ? 0.16 : 0.08)), lineWidth: 0.5)
+                let db = floor + rangeDb * Float(4 - step) / 4
+                context.draw(Text(String(format: "%+.0f", db)).font(.system(size: 10, design: .monospaced)).foregroundStyle(.white.opacity(0.62)), at: CGPoint(x: 22, y: max(8, y - 7)), anchor: .leading)
+            }
+            for step in 0...8 {
+                let x = size.width * CGFloat(step) / 8
+                var line = Path(); line.move(to: CGPoint(x: x, y: 0)); line.addLine(to: CGPoint(x: x, y: size.height))
+                context.stroke(line, with: .color(.white.opacity(step == 4 ? 0.22 : 0.065)), lineWidth: step == 4 ? 1 : 0.5)
+            }
+
             var path = Path()
             for (index, bin) in bins.enumerated() {
                 let x = size.width * CGFloat(index) / CGFloat(bins.count - 1)
-                let y = size.height * (1 - CGFloat(bin) / 255)
+                let normalized = max(0, min(1, (bin - floor) / rangeDb))
+                let y = spectrumHeight * (1 - CGFloat(normalized))
                 if index == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
             }
-            context.stroke(path, with: .color(RigTheme.amber), lineWidth: 1.25)
-        }.accessibilityLabel("Live spectrum from physical audio input")
+            var fill = path; fill.addLine(to: CGPoint(x: size.width, y: spectrumHeight)); fill.addLine(to: CGPoint(x: 0, y: spectrumHeight)); fill.closeSubpath()
+            context.fill(fill, with: .linearGradient(Gradient(colors: [RigTheme.amber.opacity(0.30), RigTheme.amber.opacity(0.015)]), startPoint: .zero, endPoint: CGPoint(x: 0, y: spectrumHeight)))
+            context.stroke(path, with: .color(Color(red: 1.0, green: 0.69, blue: 0.24)), lineWidth: 1.35)
+
+            context.fill(Path(CGRect(x: 0, y: spectrumHeight, width: size.width, height: axisHeight)), with: .color(Color(red: 0.04, green: 0.055, blue: 0.075)))
+            let halfSpan = sampleRate / 2
+            let frequencies = [Double(centreHz) - halfSpan, Double(centreHz), Double(centreHz) + halfSpan]
+            let anchors: [UnitPoint] = [.leading, .center, .trailing]
+            let positions: [CGFloat] = [8, size.width / 2, size.width - 8]
+            for index in 0..<3 {
+                context.draw(Text(String(format: "%.3f", frequencies[index] / 1_000_000)).font(.system(size: 11, weight: index == 1 ? .semibold : .regular, design: .monospaced)).foregroundStyle(index == 1 ? RigTheme.amber : .white.opacity(0.68)), at: CGPoint(x: positions[index], y: spectrumHeight + axisHeight / 2), anchor: anchors[index])
+            }
+            context.draw(Text("MHz").font(.system(size: 9, weight: .medium)).foregroundStyle(.white.opacity(0.42)), at: CGPoint(x: size.width - 8, y: spectrumHeight + axisHeight - 4), anchor: .trailing)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Live I Q panadapter and waterfall")
+        .accessibilityValue(String(format: "Center %.3f megahertz, peak %.1f decibels full scale", Double(centreHz) / 1_000_000, bins.max() ?? -140))
     }
 }
 

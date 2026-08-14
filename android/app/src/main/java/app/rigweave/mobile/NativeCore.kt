@@ -30,7 +30,7 @@ object NativeCore {
     external fun featureClusterLine(handle: Long, value: String, epoch: Long): Boolean
     external fun featureDxSnapshot(handle: Long, epoch: Long): String
     external fun featureSolar(handle: Long, flux: Float, aIndex: Float, kpIndex: Float, epoch: Long)
-    external fun featurePanadapter(handle: Long, pcm: ByteArray, channels: Int, subframeBytes: Int, bits: Int): ByteArray
+    external fun featurePanadapter(handle: Long, pcm: ByteArray, channels: Int, subframeBytes: Int, bits: Int): FloatArray
     external fun featureWsjtx(datagram: ByteArray): String
 
     fun parseState(value: String): RadioState {

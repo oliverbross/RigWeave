@@ -271,6 +271,15 @@ size_t rw_panadapter_copy_bins(const rw_feature_context *context, uint8_t *outpu
     return count;
 }
 
+size_t rw_panadapter_copy_db_bins(const rw_feature_context *context, float *output,
+                                  size_t output_count) {
+    if (context == nullptr || output == nullptr) return 0;
+    const auto& bins = context->panadapter.db_bins();
+    const size_t count = std::min(output_count, bins.size());
+    std::copy_n(bins.begin(), count, output);
+    return count;
+}
+
 float rw_panadapter_peak_db(const rw_feature_context *context) {
     return context == nullptr ? -120.0F : context->panadapter.peak_db();
 }

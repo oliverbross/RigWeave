@@ -71,6 +71,8 @@ int rw_panadapter_push_pcm(rw_feature_context *context, const uint8_t *bytes, si
                            unsigned channels, unsigned subframe_bytes, unsigned bits);
 size_t rw_panadapter_copy_bins(const rw_feature_context *context, uint8_t *output,
                                size_t output_size);
+size_t rw_panadapter_copy_db_bins(const rw_feature_context *context, float *output,
+                                  size_t output_count);
 float rw_panadapter_peak_db(const rw_feature_context *context);
 float rw_panadapter_i_rms_db(const rw_feature_context *context);
 float rw_panadapter_q_rms_db(const rw_feature_context *context);
