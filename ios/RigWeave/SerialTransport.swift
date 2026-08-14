@@ -23,6 +23,7 @@ final class SerialTransport {
         "AG;", "RG;", "BW;", "PC;", "PA;", "RA;", "RT;", "XT;", "FR;", "FT;"
     ]
     private let queue = DispatchQueue(label: "app.rigweave.serial", qos: .userInitiated)
+    private let descriptorLock = NSLock()
     private var descriptor: Int32 = -1
     private var readSource: DispatchSourceRead?
     private var pollTimer: DispatchSourceTimer?
@@ -59,7 +60,9 @@ final class SerialTransport {
             Darwin.close(fd)
             throw error
         }
+        descriptorLock.lock()
         descriptor = fd
+        descriptorLock.unlock()
         installReader(fd: fd)
         startPolling()
         onStatus?("Connected: \((path as NSString).lastPathComponent) · 38400 8N1")
@@ -70,10 +73,11 @@ final class SerialTransport {
         pollTimer = nil
         readSource?.cancel()
         readSource = nil
-        if descriptor >= 0 {
-            Darwin.close(descriptor)
-            descriptor = -1
-        }
+        descriptorLock.lock()
+        let fd = descriptor
+        descriptor = -1
+        descriptorLock.unlock()
+        if fd >= 0 { Darwin.close(fd) }
         queryIndex = 0
     }
 
@@ -81,12 +85,26 @@ final class SerialTransport {
         guard command.hasSuffix(";"), command.utf8.count <= 128 else {
             throw TransportError.writeFailed(EINVAL)
         }
-        guard descriptor >= 0 else { throw TransportError.noPort }
         let bytes = Array(command.utf8)
-        let written = bytes.withUnsafeBytes { pointer in
-            Darwin.write(descriptor, pointer.baseAddress, pointer.count)
+        descriptorLock.lock()
+        defer { descriptorLock.unlock() }
+        guard descriptor >= 0 else { throw TransportError.noPort }
+        var offset = 0
+        var failure = Int32(0)
+        bytes.withUnsafeBytes { pointer in
+            while offset < pointer.count {
+                let count = Darwin.write(descriptor, pointer.baseAddress?.advanced(by: offset), pointer.count - offset)
+                if count > 0 {
+                    offset += count
+                } else if count < 0 && errno == EINTR {
+                    continue
+                } else {
+                    failure = count < 0 ? errno : EIO
+                    break
+                }
+            }
         }
-        guard written == bytes.count else { throw TransportError.writeFailed(errno) }
+        guard offset == bytes.count else { throw TransportError.writeFailed(failure) }
     }
 
     private func installReader(fd: Int32) {
