@@ -71,13 +71,20 @@ final class SerialTransport {
     func disconnect() {
         pollTimer?.cancel()
         pollTimer = nil
-        readSource?.cancel()
+        let source = readSource
         readSource = nil
         descriptorLock.lock()
         let fd = descriptor
         descriptor = -1
         descriptorLock.unlock()
-        if fd >= 0 { Darwin.close(fd) }
+        if let source {
+            // A dispatch source may still have an event handler in flight when
+            // it is cancelled. Close from its cancellation handler so this fd
+            // cannot be reused while that stale handler still references it.
+            source.cancel()
+        } else if fd >= 0 {
+            Darwin.close(fd)
+        }
         queryIndex = 0
     }
 
@@ -121,7 +128,7 @@ final class SerialTransport {
                 }
             }
         }
-        source.setCancelHandler {}
+        source.setCancelHandler { Darwin.close(fd) }
         readSource = source
         source.resume()
     }
