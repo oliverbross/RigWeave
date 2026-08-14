@@ -19,7 +19,7 @@ final class SerialTransport {
     }
 
     static let readOnlyQueries = [
-        "ID;", "FA;", "FB;", "MD;", "IF;", "TQ;", "SM;", "SW;", "PO;",
+        "K3;", "OM;", "ID;", "FA;", "FB;", "MD;", "IF;", "TQ;", "SM;", "SW;", "PO;",
         "AG;", "RG;", "BW;", "PC;", "PA;", "RA;", "RT;", "XT;", "FR;", "FT;"
     ]
     private let queue = DispatchQueue(label: "app.rigweave.serial", qos: .userInitiated)

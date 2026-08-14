@@ -24,7 +24,7 @@ class UsbRadioTransport(private val context: Context) {
     private val mutex = Mutex()
     private var connection: UsbDeviceConnection? = null
     private var port: UsbSerialPort? = null
-    private val instrumentQueries = listOf("ID;", "FA;", "FB;", "MD;", "IF;", "TQ;", "SM;", "SW;", "PO;",
+    private val instrumentQueries = listOf("K3;", "OM;", "ID;", "FA;", "FB;", "MD;", "IF;", "TQ;", "SM;", "SW;", "PO;",
         "AG;", "RG;", "BW;", "PC;", "PA;", "RA;", "RT;", "XT;", "FR;", "FT;")
 
     fun discovered(): List<String> = UsbSerialProber.getDefaultProber().findAllDrivers(manager).map {

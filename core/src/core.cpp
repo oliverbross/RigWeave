@@ -37,6 +37,11 @@ bool all_digits(std::string_view value) {
         [](unsigned char c) { return std::isdigit(c) != 0; });
 }
 
+bool has_suffix(std::string_view value, std::string_view suffix) {
+    return value.size() >= suffix.size() &&
+           value.substr(value.size() - suffix.size()) == suffix;
+}
+
 bool unsigned_payload(std::string_view frame, std::string_view prefix, int& output) {
     if (frame.rfind(prefix, 0) != 0) return false;
     const auto payload = frame.substr(prefix.size());
@@ -76,7 +81,21 @@ bool apply_frame(CoreContext &context, const std::string &raw) {
         copy_text(next.identity, sizeof(next.identity), frame.substr(2));
         if (frame.find("KX3") != std::string::npos) copy_text(next.model, sizeof(next.model), "KX3");
         else if (frame.find("KX2") != std::string::npos) copy_text(next.model, sizeof(next.model), "KX2");
-        else if (std::strlen(next.model) == 0) copy_text(next.model, sizeof(next.model), "ELECRAFT");
+        else if (std::strlen(next.model) == 0 || std::string_view(next.model) == "UNIDENTIFIED")
+            copy_text(next.model, sizeof(next.model), "ELECRAFT");
+        next.connected = 1;
+        recognized = true;
+    } else if (frame.rfind("K3", 0) == 0 && frame.size() == 3 &&
+               (frame[2] == '0' || frame[2] == '1')) {
+        if (std::strlen(next.model) == 0 || std::string_view(next.model) == "UNIDENTIFIED")
+            copy_text(next.model, sizeof(next.model), "ELECRAFT K3 FAMILY");
+        next.connected = 1;
+        recognized = true;
+    } else if (frame.rfind("OM", 0) == 0) {
+        if (has_suffix(frame, "02")) copy_text(next.model, sizeof(next.model), "KX3");
+        else if (has_suffix(frame, "01")) copy_text(next.model, sizeof(next.model), "KX2");
+        else if (std::string_view(next.model).find("KX") == std::string_view::npos)
+            copy_text(next.model, sizeof(next.model), "K3/K3S");
         next.connected = 1;
         recognized = true;
     } else if (frame.rfind("FA", 0) == 0 && frame.size() >= 13 && all_digits(std::string_view(frame).substr(2, 11))) {
@@ -202,8 +221,8 @@ rw_radio_state rw_context_state(const rw_context *context) {
 rw_command_class rw_classify_command(const char *command) {
     if (!command) return RW_COMMAND_UNKNOWN;
     const std::string value = upper(command);
-    static constexpr std::array<std::string_view, 19> safe{
-        "ID;", "FA;", "FB;", "MD;", "IF;", "TQ;", "SM;", "SW;", "PO;",
+    static constexpr std::array<std::string_view, 21> safe{
+        "K3;", "OM;", "ID;", "FA;", "FB;", "MD;", "IF;", "TQ;", "SM;", "SW;", "PO;",
         "AG;", "RG;", "BW;", "PC;", "PA;", "RA;", "RT;", "XT;", "FR;", "FT;"
     };
     if (std::find(safe.begin(), safe.end(), value) != safe.end()) return RW_COMMAND_READ_ONLY;

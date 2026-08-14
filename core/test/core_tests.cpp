@@ -15,12 +15,18 @@ int main() {
     assert(state.connected == 0 && state.transmitting == 0);
     assert(state.vfo_a_hz == 0 && std::string(state.model) == "UNIDENTIFIED");
 
-    const char *frames = "IDKX3;FA00014074000;MD2;IF00014075000ABCDEFGHI;TQ0;";
-    assert(rw_context_feed(context, frames, std::strlen(frames)) == 5);
+    const char *frames = "ID017;K30;OM A-F-------02;FA00014074000;MD2;IF00014075000ABCDEFGHI;TQ0;";
+    assert(rw_context_feed(context, frames, std::strlen(frames)) == 7);
     state = rw_context_state(context);
     assert(state.connected == 1);
     assert(std::string(state.model) == "KX3" && std::string(state.mode) == "USB");
     assert(state.vfo_a_hz == 14075000 && state.transmitting == 0);
+
+    rw_context *kx2_context = rw_context_create();
+    const char *kx2_identity = "ID017;K30;OM A-F-------01;";
+    assert(rw_context_feed(kx2_context, kx2_identity, std::strlen(kx2_identity)) == 3);
+    assert(std::string(rw_context_state(kx2_context).model) == "KX2");
+    rw_context_destroy(kx2_context);
 
     const char *instrument = "FB00007030000;SM18;SW14;PO37;AG190;RG210;BW0270;PC010;PA1;RA01;RT1;XT0;FR0;FT1;";
     assert(rw_context_feed(context, instrument, std::strlen(instrument)) == 14);
@@ -34,7 +40,7 @@ int main() {
     std::string oversized(600, 'A');
     assert(rw_context_feed(context, oversized.data(), oversized.size()) == 0);
     assert(rw_startup_command_count() == 0);
-    for (const char *query : {"ID;", "FA;", "MD;", "IF;", "TQ;"})
+    for (const char *query : {"K3;", "OM;", "ID;", "FA;", "MD;", "IF;", "TQ;"})
         assert(rw_classify_command(query) == RW_COMMAND_READ_ONLY);
     for (const char *unsafe : {"TX;", "RX;", "SWT44;", "SWH28;", "KY CQ;"})
         assert(rw_classify_command(unsafe) == RW_COMMAND_TRANSMIT);
