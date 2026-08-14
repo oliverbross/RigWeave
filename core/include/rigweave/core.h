@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 typedef struct rw_context rw_context;
+typedef struct rw_feature_context rw_feature_context;
 
 typedef enum rw_command_class {
     RW_COMMAND_UNKNOWN = 0,
@@ -42,6 +43,47 @@ int rw_adif_serialize(char *output, size_t output_size, const char *identity,
                       const char *callsign, const char *date_yyyymmdd,
                       const char *time_hhmmss, uint64_t frequency_hz,
                       const char *mode, const char *rst_sent, const char *rst_received);
+
+rw_feature_context *rw_feature_context_create(void);
+void rw_feature_context_destroy(rw_feature_context *context);
+int rw_feature_load_cty_text(rw_feature_context *context, const char *cty_text);
+int rw_feature_set_watchlist(rw_feature_context *context, const char *watchlist_text);
+int rw_feature_set_solar(rw_feature_context *context, float solar_flux, float a_index,
+                         float kp_index, int64_t observed_epoch);
+int rw_feature_ingest_cluster_line(rw_feature_context *context, const char *line,
+                                   int64_t received_epoch);
+int rw_feature_dx_snapshot_json(const rw_feature_context *context, char *output,
+                                size_t output_size, int64_t now_epoch);
+int rw_feature_add_worked_qso(rw_feature_context *context, const char *callsign,
+                              const char *entity, const char *band, const char *mode,
+                              const char *submode, int64_t epoch, int from_wavelog);
+int rw_feature_worked_json(const rw_feature_context *context, char *output,
+                           size_t output_size, const char *callsign, const char *entity,
+                           const char *band, const char *mode, const char *submode,
+                           int64_t now_epoch);
+int rw_feature_propagation_json(char *output, size_t output_size,
+                                const char *station_grid, const char *target_grid,
+                                const char *band, int64_t epoch, float solar_flux,
+                                float kp_index, int64_t solar_epoch,
+                                unsigned observations, unsigned favorable_observations);
+
+int rw_panadapter_push_pcm(rw_feature_context *context, const uint8_t *bytes, size_t length,
+                           unsigned channels, unsigned subframe_bytes, unsigned bits);
+size_t rw_panadapter_copy_bins(const rw_feature_context *context, uint8_t *output,
+                               size_t output_size);
+float rw_panadapter_peak_db(const rw_feature_context *context);
+float rw_panadapter_i_rms_db(const rw_feature_context *context);
+float rw_panadapter_q_rms_db(const rw_feature_context *context);
+float rw_panadapter_iq_correlation(const rw_feature_context *context);
+
+int rw_sync_action(int status_code, int network_error, int response_ambiguous);
+uint32_t rw_sync_retry_delay(uint32_t attempt, uint32_t jitter_seed,
+                             uint32_t retry_after, int has_retry_after);
+int rw_wavelog_normalize_url(char *output, size_t output_size, const char *url);
+int rw_wavelog_payload(char *output, size_t output_size, const char *api_key,
+                       const char *station_profile_id, const char *adif);
+int rw_wsjtx_parse_json(char *output, size_t output_size,
+                        const uint8_t *datagram, size_t datagram_size);
 
 const char *rw_core_version(void);
 

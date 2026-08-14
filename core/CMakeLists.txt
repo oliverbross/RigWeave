@@ -1,8 +1,21 @@
 cmake_minimum_required(VERSION 3.20)
 project(rigweave_core VERSION 0.1.0 LANGUAGES CXX)
 
-add_library(rigweave_core STATIC src/core.cpp)
-target_include_directories(rigweave_core PUBLIC include)
+set(RIGWEAVE_PORTABLE_SOURCES
+    portable/src/adif.cpp
+    portable/src/cat_parser.cpp
+    portable/src/cty.cpp
+    portable/src/dx_analysis.cpp
+    portable/src/operator_intel.cpp
+    portable/src/panadapter_dsp.cpp
+    portable/src/protocol.cpp
+    portable/src/spot.cpp
+    portable/src/sync_queue.cpp
+    portable/src/wsjtx_protocol.cpp
+)
+
+add_library(rigweave_core STATIC src/core.cpp src/features.cpp ${RIGWEAVE_PORTABLE_SOURCES})
+target_include_directories(rigweave_core PUBLIC include portable/include)
 target_compile_features(rigweave_core PUBLIC cxx_std_17)
 target_compile_options(rigweave_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
 

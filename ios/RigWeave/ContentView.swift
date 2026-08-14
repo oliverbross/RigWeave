@@ -1,10 +1,11 @@
 import SwiftUI
 
 enum Destination: String, CaseIterable, Identifiable {
-    case home = "Home", radio = "Radio", log = "Log", panadapter = "Panadapter", settings = "Settings"
+    case home = "Home", radio = "Radio", spots = "Spots", dx = "DX", log = "Log"
+    case panadapter = "Panadapter", digital = "Digital", lookup = "Lookup", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
-        switch self { case .home: "house"; case .radio: "antenna.radiowaves.left.and.right"; case .log: "list.clipboard"; case .panadapter: "waveform.path.ecg.rectangle"; case .settings: "gearshape" }
+        switch self { case .home: "house"; case .radio: "antenna.radiowaves.left.and.right"; case .spots: "dot.radiowaves.up.forward"; case .dx: "globe.americas"; case .log: "list.clipboard"; case .panadapter: "waveform.path.ecg.rectangle"; case .digital: "waveform.badge.magnifyingglass"; case .lookup: "person.text.rectangle"; case .settings: "gearshape" }
     }
 }
 
@@ -45,8 +46,12 @@ struct ContentView: View {
         switch destination {
         case .home: HomeView()
         case .radio: RadioView()
+        case .spots: SpotsView()
+        case .dx: DXView()
         case .log: LogView()
         case .panadapter: PanadapterView()
+        case .digital: DigitalView()
+        case .lookup: LookupView()
         case .settings: SettingsView()
         }
     }
@@ -111,6 +116,9 @@ struct RadioView: View {
     @State private var frequencyMHz = ""
     @State private var modeCode = "2"
     @State private var rawCAT = ""
+    @State private var cwText = ""
+    @State private var power = ""
+    @State private var filterHz = ""
     var body: some View {
         ScrollView { VStack(alignment: .leading, spacing: 22) {
             BrandHeader(); RadioSummary()
@@ -139,6 +147,38 @@ struct RadioView: View {
                     }
                 }
             }
+            GroupBox("KX3 front panel") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Button("RIT") { radio.sendCAT("SWT18;") }
+                        Button("XIT") { radio.sendCAT("SWT26;") }
+                        Button("A/B") { radio.sendCAT("SWT24;") }
+                        Button("A→B") { radio.sendCAT("SWT25;") }
+                        Button("Split") { radio.sendCAT("SWH25;") }
+                    }
+                    HStack {
+                        Button("Rate") { radio.sendCAT("SWT12;") }
+                        Button("Mode") { radio.sendCAT("SWT14;") }
+                        Button("Data") { radio.sendCAT("SWT17;") }
+                        Button("PBT I/II") { radio.sendCAT("SWT33;") }
+                        Button("Clear offset") { radio.sendCAT("SWH35;") }
+                    }
+                    HStack {
+                        Button("ATU tune") { radio.sendCAT("SWT44;") }
+                        Button("ANT") { radio.sendCAT("SWH44;") }
+                        Button("VFO up") { radio.sendCAT("UP;") }
+                        Button("VFO down") { radio.sendCAT("DN;") }
+                    }
+                }.buttonStyle(.bordered)
+            }
+            GroupBox("Power, filter and keyer") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack { TextField("PC value", text: $power).keyboardType(.numberPad); Button("Set power") { radio.sendCAT("PC\(power);") } }
+                    HStack { TextField("Filter Hz", text: $filterHz).keyboardType(.numberPad); Button("Set filter") { radio.sendCAT("BW\(filterHz);") } }
+                    HStack { TextField("CW keyer text", text: $cwText).textInputAutocapitalization(.characters).autocorrectionDisabled(); Button("Send KY") { radio.sendCAT("KY\(cwText);"); cwText = "" } }
+                    Text("Values and switch commands are sent directly to the connected radio; the app does not clamp them.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
         }.padding() }.navigationTitle("Radio")
     }
 }
@@ -146,6 +186,7 @@ struct RadioView: View {
 struct LogView: View {
     @EnvironmentObject private var radio: RadioModel
     @EnvironmentObject private var logbook: QSOStore
+    @EnvironmentObject private var features: FeatureModel
     @State private var callsign = ""
     @State private var rstSent = "59"
     @State private var rstReceived = "59"
@@ -184,24 +225,159 @@ struct LogView: View {
         let qso = QSO(id: radio.qsoIdentity(callsign: clean, at: now, frequencyHz: actualHz, mode: actualMode), callsign: clean,
                       frequencyHz: actualHz, mode: actualMode,
                       rstSent: rstSent, rstReceived: rstReceived, createdAt: now)
-        if logbook.save(qso) { callsign = "" }
+        if logbook.save(qso) {
+            features.enqueueWavelog(id: qso.id, adif: radio.adif(for: qso))
+            callsign = ""
+        }
     }
 }
 
 struct PanadapterView: View {
+    @EnvironmentObject private var features: FeatureModel
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            BrandHeader(); StatusBadge(status: "OFFLINE")
-            ContentUnavailableView("No physical audio source", systemImage: "waveform.slash",
-                description: Text("Spectrum remains blank until a real USB audio route supplies samples. No generated waveform is shown."))
-                .frame(maxWidth: .infinity, minHeight: 360).background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 16))
+            BrandHeader(); StatusBadge(status: features.spectrum.isEmpty ? "OFFLINE" : "LIVE")
+            if features.spectrum.isEmpty {
+                ContentUnavailableView("No physical audio source", systemImage: "waveform.slash",
+                    description: Text("Start capture after selecting a real USB audio input. No generated waveform is shown."))
+                    .frame(maxWidth: .infinity, minHeight: 360).background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 16))
+            } else {
+                SpectrumPlot(bins: features.spectrum)
+                    .frame(maxWidth: .infinity, minHeight: 360)
+                    .background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 16))
+                Text(String(format: "Peak %.1f dB", features.audioPeak)).font(.system(.caption, design: .monospaced))
+            }
+            HStack {
+                Button("Start physical capture") { Task { await features.startAudioCapture() } }
+                Button("Stop") { features.stopAudioCapture() }
+            }
+            Text(features.audioStatus).font(.caption).foregroundStyle(.secondary)
             Spacer()
         }.padding().navigationTitle("Panadapter")
     }
 }
 
+struct SpectrumPlot: View {
+    let bins: [UInt8]
+    var body: some View {
+        Canvas { context, size in
+            guard bins.count > 1 else { return }
+            var path = Path()
+            for (index, bin) in bins.enumerated() {
+                let x = size.width * CGFloat(index) / CGFloat(bins.count - 1)
+                let y = size.height * (1 - CGFloat(bin) / 255)
+                if index == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
+            }
+            context.stroke(path, with: .color(RigTheme.amber), lineWidth: 1.25)
+        }.accessibilityLabel("Live spectrum from physical audio input")
+    }
+}
+
+struct SpotsView: View {
+    @EnvironmentObject private var features: FeatureModel
+    @EnvironmentObject private var radio: RadioModel
+    var body: some View {
+        List {
+            Section {
+                HStack { StatusBadge(status: features.clusterStatus.hasPrefix("Connected") ? "LIVE" : "OFFLINE"); Text(features.clusterStatus).font(.caption) }
+            }
+            Section("Live cluster opportunities") {
+                if features.dx.opportunities.isEmpty {
+                    ContentUnavailableView("No live spots", systemImage: "dot.radiowaves.up.forward", description: Text("Connect the configured DX cluster. No fixture spots are loaded."))
+                }
+                ForEach(features.dx.opportunities) { spot in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack { Text(spot.callsign).font(.headline); if spot.watchlisted { Image(systemName: "star.fill").foregroundStyle(RigTheme.amber) }; Spacer(); Text(spot.band) }
+                        Text(String(format: "%.3f MHz · %@ · %@", Double(spot.frequencyHz) / 1_000_000, spot.mode, spot.country)).foregroundStyle(.secondary)
+                        if !spot.comment.isEmpty { Text(spot.comment).font(.caption) }
+                        HStack { Text("via \(spot.spotter)").font(.caption2).foregroundStyle(.secondary); Spacer(); Button("Tune") { radio.sendCAT(String(format: "FA%011llu;", spot.frequencyHz)) } }
+                    }.padding(.vertical, 5)
+                }
+            }
+        }.navigationTitle("Spots")
+    }
+}
+
+struct DXView: View {
+    @EnvironmentObject private var features: FeatureModel
+    var body: some View {
+        ScrollView { VStack(alignment: .leading, spacing: 18) {
+            BrandHeader()
+            HStack {
+                metric("5 min", features.dx.spots5m)
+                metric("60 min", features.dx.spots60m)
+                metric("Watch", features.dx.watchlistHits)
+                metric("Surges", features.dx.surgingBands)
+            }
+            GroupBox("NOAA space weather") {
+                if features.dx.solar.valid {
+                    HStack { LabeledContent("SFI", value: String(format: "%.1f", features.dx.solar.flux)); LabeledContent("Kp", value: String(format: "%.1f", features.dx.solar.kpIndex)) }
+                } else { Text("No current NOAA reading loaded").foregroundStyle(.secondary) }
+                Button("Refresh NOAA") { Task { await features.refreshSolar() } }
+            }
+            Text("Band activity").font(.headline)
+            ForEach(features.dx.bands) { band in
+                HStack { Text(band.band).font(.system(.body, design: .monospaced).bold()); Spacer(); Text("\(band.spots5m) / 5m · \(band.spots60m) / 60m"); if band.surge { Text("SURGE").font(.caption.bold()).foregroundStyle(RigTheme.amber) } }
+                    .padding().background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+        }.padding() }.navigationTitle("DX")
+    }
+    private func metric(_ name: String, _ value: UInt) -> some View {
+        VStack { Text("\(value)").font(.title2.bold()); Text(name).font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity).padding().background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct DigitalView: View {
+    @EnvironmentObject private var features: FeatureModel
+    var body: some View {
+        Form {
+            Section("WSJT-X UDP") {
+                Text(features.wsjtxStatus)
+                HStack { Button("Listen") { features.startWSJTX() }; Button("Stop") { features.stopWSJTX() } }
+            }
+            Section("Last real datagram") {
+                if let message = features.lastWSJTX {
+                    LabeledContent("Valid", value: message.valid ? "Yes" : "No")
+                    LabeledContent("Station", value: message.stationId ?? "—")
+                    LabeledContent("Type", value: message.type ?? "—")
+                    LabeledContent("Mode", value: message.mode ?? "—")
+                    if let call = message.dxCall ?? message.callsign { LabeledContent("Call", value: call) }
+                    if let text = message.message { Text(text).font(.system(.body, design: .monospaced)) }
+                    if let error = message.error { Text(error).foregroundStyle(.red) }
+                } else { Text("No WSJT-X datagram received").foregroundStyle(.secondary) }
+            }
+        }.navigationTitle("Digital")
+    }
+}
+
+struct LookupView: View {
+    @EnvironmentObject private var features: FeatureModel
+    @State private var callsign = ""
+    var body: some View {
+        Form {
+            Section("Live callbook lookup") {
+                HStack {
+                    TextField("Callsign", text: $callsign).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                    Button("Lookup") { Task { await features.callbook.lookup(callsign) } }
+                }
+                Text(features.callbook.status).font(.caption).foregroundStyle(.secondary)
+            }
+            if let result = features.callbook.result {
+                Section(result.callsign) {
+                    LabeledContent("Name", value: result.name)
+                    LabeledContent("Location", value: result.location)
+                    LabeledContent("Country", value: result.country)
+                    LabeledContent("Grid", value: result.grid)
+                    if !result.latitude.isEmpty { LabeledContent("Coordinates", value: "\(result.latitude), \(result.longitude)") }
+                }
+            }
+        }.navigationTitle("Lookup")
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject private var radio: RadioModel
+    @EnvironmentObject private var features: FeatureModel
     var body: some View {
         Form {
             Section("Radio profile") {
@@ -223,6 +399,35 @@ struct SettingsView: View {
                 Text("Use Radio for frequency, mode and raw KX3 CAT commands.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Software") { LabeledContent("Shared core", value: radio.coreVersion) }
+            Section("DX cluster") {
+                TextField("Operator callsign", text: $features.operatorCallsign).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                TextField("Host", text: $features.clusterHost).textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("Port", text: $features.clusterPort).keyboardType(.numberPad)
+                TextField("Watchlist callsigns", text: $features.watchlist, axis: .vertical).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                HStack { Button("Connect") { features.connectCluster() }; Button("Disconnect") { features.disconnectCluster() } }
+                Text(features.clusterStatus).font(.caption).foregroundStyle(.secondary)
+            }
+            Section("WSJT-X") {
+                TextField("UDP port", text: $features.wsjtxPort).keyboardType(.numberPad)
+                HStack { Button("Listen") { features.startWSJTX() }; Button("Stop") { features.stopWSJTX() } }
+                Text(features.wsjtxStatus).font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Wavelog sync") {
+                TextField("Wavelog base URL", text: Binding(get: { features.wavelog.baseURL }, set: { features.wavelog.baseURL = $0 })).textInputAutocapitalization(.never).autocorrectionDisabled()
+                SecureField("API key", text: Binding(get: { features.wavelog.apiKey }, set: { features.wavelog.apiKey = $0 }))
+                TextField("Station profile ID", text: Binding(get: { features.wavelog.stationProfile }, set: { features.wavelog.stationProfile = $0 })).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button("Sync queued QSOs") { Task { await features.wavelog.syncNow() } }
+                LabeledContent("Pending", value: "\(features.wavelog.pendingCount)")
+                Text(features.wavelog.status).font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Callbook") {
+                Picker("Provider", selection: Binding(get: { features.callbook.provider }, set: { features.callbook.provider = $0 })) {
+                    Text("QRZ").tag("QRZ"); Text("HamQTH").tag("HamQTH")
+                }
+                TextField("Username", text: Binding(get: { features.callbook.username }, set: { features.callbook.username = $0 })).textInputAutocapitalization(.never).autocorrectionDisabled()
+                SecureField("Password", text: Binding(get: { features.callbook.password }, set: { features.callbook.password = $0 }))
+                Text("Credentials remain in the device Keychain and are sent only to the selected provider.").font(.caption).foregroundStyle(.secondary)
+            }
         }.navigationTitle("Settings")
     }
 }

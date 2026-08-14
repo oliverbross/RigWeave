@@ -1,6 +1,6 @@
 # RigWeave Mobile
 
-Native iPadOS and Android clients for direct Elecraft KX3/KX2 CAT control. The apps share a small C++17 core for bounded CAT parsing, radio state, deterministic QSO identity, and ADIF output. They contain no demo or simulated radio state.
+Native iPadOS and Android clients for direct Elecraft KX3/KX2 operation. The apps share a C++17 engine for CAT, ADIF, cluster spots, CTY resolution, worked-status intelligence, DX analysis, panadapter DSP, Wavelog retry policy, and WSJT-X decoding. They contain no demo or simulated radio state.
 
 ## iPadOS
 
@@ -39,6 +39,18 @@ xcrun devicectl device process launch \
 
 The host app embeds the signed DriverKit extension at `SystemExtensions/CP210xDriver.dext`. Connection begins only after tapping **Connect**, then the app polls `ID;`, `FA;`, `MD;`, `IF;`, and `TQ;`. Frequency, mode, and raw CAT controls pass commands to the real radio; there is no simulated fallback.
 
+The native iPad app also includes:
+
+- a real TCP DX-cluster connection with callsign login, watchlist ranking, CTY enrichment, band activity, and one-tap CAT tuning;
+- live NOAA SFI/Kp retrieval;
+- real UDP WSJT-X datagram reception and parsing;
+- physical AVAudioSession input capture feeding the shared 1,024-bin panadapter DSP;
+- local SQLite QSO logging and ADIF export;
+- a durable Wavelog upload queue with Keychain credentials, acknowledgement, quarantine, and bounded retry/backoff;
+- authenticated QRZ or HamQTH callbook lookup with credentials stored in the device Keychain.
+
+Each service remains explicitly offline until its real connection, credentials, or physical input is available. No fixture spots, generated spectrum, fake radio state, or automatic test QSO is injected.
+
 ## Android
 
 Requirements:
@@ -76,6 +88,7 @@ core/build/rigweave_core_tests
 
 - iPad target detected previously: iPad Pro 11-inch (4th generation), `iPad14,4`, iPadOS 26.6.1, Developer Mode enabled.
 - The signed iPad app and embedded CP210x DriverKit extension build and verify locally.
+- Portable feature-core tests and the signed iPad device build pass with the cluster, DX, Wavelog, callbook, WSJT-X, and panadapter code included.
 - Physical install, DriverKit activation, USB enumeration, and live KX3/KX2 CAT responses remain unproven until the iPad is connected and unlocked.
+- Live service credentials and endpoints have not been exercised in this checkout; those checks require the owner's configured accounts and network context.
 - No Android hardware or emulator proof has been completed in this repository.
-

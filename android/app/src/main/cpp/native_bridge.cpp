@@ -6,6 +6,7 @@
 
 namespace {
 rw_context *context(jlong handle) { return reinterpret_cast<rw_context *>(static_cast<intptr_t>(handle)); }
+rw_feature_context *features(jlong handle) { return reinterpret_cast<rw_feature_context *>(static_cast<intptr_t>(handle)); }
 std::string utf(JNIEnv *env, jstring value) {
     if (!value) return {};
     const char *chars = env->GetStringUTFChars(value, nullptr);
@@ -74,4 +75,60 @@ Java_app_rigweave_mobile_NativeCore_adif(JNIEnv *env, jobject, jstring identity,
 extern "C" JNIEXPORT jstring JNICALL
 Java_app_rigweave_mobile_NativeCore_version(JNIEnv *env, jobject) {
     return env->NewStringUTF(rw_core_version());
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_app_rigweave_mobile_NativeCore_featureCreate(JNIEnv *, jobject) {
+    return static_cast<jlong>(reinterpret_cast<intptr_t>(rw_feature_context_create()));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_rigweave_mobile_NativeCore_featureDestroy(JNIEnv *, jobject, jlong handle) {
+    rw_feature_context_destroy(features(handle));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_rigweave_mobile_NativeCore_featureWatchlist(JNIEnv *env, jobject, jlong handle, jstring value) {
+    const auto text = utf(env, value); rw_feature_set_watchlist(features(handle), text.c_str());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_app_rigweave_mobile_NativeCore_featureClusterLine(JNIEnv *env, jobject, jlong handle, jstring value, jlong epoch) {
+    const auto text = utf(env, value);
+    return rw_feature_ingest_cluster_line(features(handle), text.c_str(), static_cast<int64_t>(epoch)) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeCore_featureDxSnapshot(JNIEnv *env, jobject, jlong handle, jlong epoch) {
+    std::string output(131072, '\0');
+    const int size = rw_feature_dx_snapshot_json(features(handle), output.data(), output.size(), static_cast<int64_t>(epoch));
+    return env->NewStringUTF(size > 0 ? output.c_str() : "{}");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_rigweave_mobile_NativeCore_featureSolar(JNIEnv *, jobject, jlong handle, jfloat flux, jfloat a, jfloat kp, jlong epoch) {
+    rw_feature_set_solar(features(handle), flux, a, kp, static_cast<int64_t>(epoch));
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_app_rigweave_mobile_NativeCore_featurePanadapter(JNIEnv *env, jobject, jlong handle, jbyteArray pcm,
+                                                       jint channels, jint subframeBytes, jint bits) {
+    if (!pcm) return env->NewByteArray(0);
+    const auto length = env->GetArrayLength(pcm); auto *bytes = env->GetByteArrayElements(pcm, nullptr);
+    const int accepted = rw_panadapter_push_pcm(features(handle), reinterpret_cast<const uint8_t *>(bytes),
+        static_cast<size_t>(length), static_cast<unsigned>(channels), static_cast<unsigned>(subframeBytes), static_cast<unsigned>(bits));
+    env->ReleaseByteArrayElements(pcm, bytes, JNI_ABORT);
+    if (!accepted) return env->NewByteArray(0);
+    uint8_t bins[1024]{}; const auto count = rw_panadapter_copy_bins(features(handle), bins, sizeof(bins));
+    auto result = env->NewByteArray(static_cast<jsize>(count));
+    env->SetByteArrayRegion(result, 0, static_cast<jsize>(count), reinterpret_cast<const jbyte *>(bins));
+    return result;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeCore_featureWsjtx(JNIEnv *env, jobject, jbyteArray datagram) {
+    if (!datagram) return env->NewStringUTF("{\"valid\":false,\"error\":\"EMPTY DATAGRAM\"}");
+    const auto length = env->GetArrayLength(datagram); auto *bytes = env->GetByteArrayElements(datagram, nullptr);
+    char output[65536]{}; rw_wsjtx_parse_json(output, sizeof(output), reinterpret_cast<const uint8_t *>(bytes), static_cast<size_t>(length));
+    env->ReleaseByteArrayElements(datagram, bytes, JNI_ABORT); return env->NewStringUTF(output);
 }

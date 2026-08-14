@@ -24,6 +24,14 @@ object NativeCore {
     external fun qsoIdentity(callsign: String, timestamp: String, frequency: Long, mode: String): String
     external fun adif(identity: String, callsign: String, date: String, time: String, frequency: Long, mode: String, sent: String, received: String): String
     external fun version(): String
+    external fun featureCreate(): Long
+    external fun featureDestroy(handle: Long)
+    external fun featureWatchlist(handle: Long, value: String)
+    external fun featureClusterLine(handle: Long, value: String, epoch: Long): Boolean
+    external fun featureDxSnapshot(handle: Long, epoch: Long): String
+    external fun featureSolar(handle: Long, flux: Float, aIndex: Float, kpIndex: Float, epoch: Long)
+    external fun featurePanadapter(handle: Long, pcm: ByteArray, channels: Int, subframeBytes: Int, bits: Int): ByteArray
+    external fun featureWsjtx(datagram: ByteArray): String
 
     fun parseState(value: String): RadioState {
         val fields = value.split('|')
