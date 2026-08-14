@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum Destination: String, CaseIterable, Identifiable {
     case home = "Home", radio = "Radio", spots = "Spots", dx = "DX", log = "Log"
@@ -748,6 +749,7 @@ struct LookupView: View {
 }
 
 struct SettingsView: View {
+    @Environment(\.openURL) private var openURL
     @EnvironmentObject private var radio: RadioModel
     @EnvironmentObject private var features: FeatureModel
     var body: some View {
@@ -758,6 +760,14 @@ struct SettingsView: View {
             }
             Section("Physical Apple hardware") {
                 LabeledContent("Driver", value: "CP2102 / Digirig · DriverKit")
+                Text("Driver approval is controlled by iPadOS, not by this screen. Open iPad Settings, choose Drivers, enable RigWeave CP210x Driver, then reconnect the adapter.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Open iPad Settings to enable driver") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        openURL(url)
+                    }
+                }
                 Picker("Serial port", selection: $radio.selectedPort) {
                     if radio.serialPorts.isEmpty { Text("No physical port").tag("") }
                     ForEach(radio.serialPorts, id: \.self) { Text(($0 as NSString).lastPathComponent).tag($0) }
