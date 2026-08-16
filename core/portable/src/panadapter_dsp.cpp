@@ -25,19 +25,19 @@ void PanadapterDsp::reset() {
     peak_db_ = -120.0F;
     bins_.fill(0);
     db_bins_.fill(-120.0F);
-    smoothed_db_.fill(-120.0F);
+    smoothed_.fill(0.0F);
     i_rms_db_ = q_rms_db_ = -120.0F;
     iq_correlation_ = 0.0F;
 }
 
 void PanadapterDsp::set_window(const PanWindow window) {
     window_ = window;
-    smoothed_db_.fill(-120.0F);
+    smoothed_.fill(0.0F);
 }
 
 void PanadapterDsp::set_display_floor(float floor_db) {
     display_floor_db_ = std::clamp(floor_db, -120.0F, -60.0F);
-    smoothed_db_.fill(-120.0F);
+    smoothed_.fill(0.0F);
 }
 
 bool PanadapterDsp::push_pcm(const std::uint8_t* bytes, std::size_t length,
@@ -72,14 +72,20 @@ void PanadapterDsp::transform() {
     q_rms_db_ = std::max(-120.0F, 10.0F * std::log10(power_q + 1.0e-12F));
     iq_correlation_ = cross / (static_cast<float>(kPanFftSize) *
                                std::sqrt(power_i * power_q + 1.0e-18F));
-    // Remove DC independently from I and Q. I/Q gain and phase calibration is
-    // deliberately not inferred from a live FFT frame: doing so can rotate or
-    // suppress legitimate asymmetric RF content.
+    // Correct the sound-card/KX3 analogue I/Q amplitude and phase imbalance.
+    // Gram-Schmidt makes Q orthogonal to I, then equalises their RMS levels.
+    // Without this correction, a real RF signal appears as a mirrored pair.
+    const float projection = cross / (static_cast<float>(kPanFftSize) * power_i + 1.0e-18F);
+    float corrected_q_power{};
     for (std::size_t i = 0; i < kPanFftSize; ++i) {
-        real_[i] -= mean_i;
-        imag_[i] -= mean_q;
+        const float centered_i = real_[i] - mean_i;
+        const float corrected_q = (imag_[i] - mean_q) - projection * centered_i;
+        corrected_q_power += corrected_q * corrected_q;
+        real_[i] = centered_i;
+        imag_[i] = corrected_q;
     }
-    float window_sum{};
+    corrected_q_power /= static_cast<float>(kPanFftSize);
+    const float q_scale = std::sqrt(power_i / (corrected_q_power + 1.0e-18F));
     for (std::size_t i = 0; i < kPanFftSize; ++i) {
         const float phase = 2.0F * kPi * static_cast<float>(i) /
                             static_cast<float>(kPanFftSize - 1U);
@@ -93,9 +99,8 @@ void PanadapterDsp::transform() {
             window = 0.35875F - 0.48829F * std::cos(phase) +
                      0.14128F * std::cos(2.0F * phase) - 0.01168F * std::cos(3.0F * phase);
         }
-        window_sum += window;
         real_[i] *= window;
-        imag_[i] *= window;
+        imag_[i] *= q_scale * window;
     }
     for (std::size_t i = 1, j = 0; i < kPanFftSize; ++i) {
         std::size_t bit = kPanFftSize >> 1U;
@@ -121,15 +126,14 @@ void PanadapterDsp::transform() {
     for (std::size_t x = 0; x < kPanBins; ++x) {
         const std::size_t shifted = (x + kPanFftSize / 2U) % kPanFftSize;
         const float magnitude = std::hypot(real_[shifted], imag_[shifted]) /
-                                std::max(window_sum, 1.0e-12F);
-        const float raw_db = std::max(-140.0F, 20.0F * std::log10(magnitude + 1.0e-12F));
-        const float alpha = raw_db > smoothed_db_[x] ? 0.55F : 0.18F;
-        smoothed_db_[x] += alpha * (raw_db - smoothed_db_[x]);
-        db_bins_[x] = smoothed_db_[x];
-        peak_db_ = std::max(peak_db_, smoothed_db_[x]);
-        const float level = std::clamp((smoothed_db_[x] - display_floor_db_) *
+                                static_cast<float>(kPanFftSize);
+        const float db = std::max(-120.0F, 20.0F * std::log10(magnitude + 1.0e-9F));
+        db_bins_[x] = db;
+        peak_db_ = std::max(peak_db_, db);
+        const float level = std::clamp((db - display_floor_db_) *
                                        (255.0F / -display_floor_db_), 0.0F, 255.0F);
-        bins_[x] = static_cast<std::uint8_t>(level);
+        smoothed_[x] = smoothed_[x] == 0.0F ? level : smoothed_[x] * 0.72F + level * 0.28F;
+        bins_[x] = static_cast<std::uint8_t>(smoothed_[x]);
     }
     // A sound-card DC residual is not an RF signal. Suppress the narrow centre
     // notch after smoothing so it cannot form a permanent line in the waterfall.
@@ -138,9 +142,7 @@ void PanadapterDsp::transform() {
         (static_cast<unsigned>(bins_[centre - 4U]) + bins_[centre + 4U]) / 2U);
     for (std::size_t x = centre - 3U; x <= centre + 3U; ++x) {
         bins_[x] = shoulder;
-        smoothed_db_[x] = display_floor_db_ +
-            static_cast<float>(shoulder) * (-display_floor_db_ / 255.0F);
-        db_bins_[x] = smoothed_db_[x];
+        smoothed_[x] = shoulder;
     }
 }
 

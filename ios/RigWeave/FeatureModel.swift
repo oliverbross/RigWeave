@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import CoreGraphics
 import Foundation
 import Network
@@ -143,9 +144,20 @@ final class FeatureCore {
         lock.lock(); defer { lock.unlock() }
         var output = [CChar](repeating: 0, count: 131_072)
         let count = rw_feature_dx_snapshot_json(context, &output, output.count, Int64(date.timeIntervalSince1970))
-        guard count > 0, let data = String(cString: output).data(using: .utf8),
-              let value = try? JSONDecoder().decode(DXSnapshot.self, from: data) else { return .empty }
-        return value
+        guard count > 0 else {
+            print("RIGWEAVE_DX_SNAPSHOT_ERROR core returned \(count)")
+            return .empty
+        }
+        guard let data = String(cString: output).data(using: .utf8) else {
+            print("RIGWEAVE_DX_SNAPSHOT_ERROR invalid UTF-8 count=\(count)")
+            return .empty
+        }
+        do {
+            return try JSONDecoder().decode(DXSnapshot.self, from: data)
+        } catch {
+            print("RIGWEAVE_DX_SNAPSHOT_ERROR decode count=\(count) error=\(error)")
+            return .empty
+        }
     }
 
     func parseWSJTX(_ data: Data) -> WSJTXMessage? {
@@ -207,14 +219,44 @@ final class FeatureCore {
 }
 
 final class DXClusterConnection {
+    struct Endpoint: Equatable { let host: String; let port: UInt16 }
     var onLine: ((String) -> Void)?
     var onStatus: ((String) -> Void)?
     private let queue = DispatchQueue(label: "app.rigweave.dxcluster")
     private var connection: NWConnection?
-    private var pending = Data()
+    private var pending: [UInt8] = []
+    private var historyRequested = false
+    private var endpoints: [Endpoint] = []
+    private var endpointIndex = 0
+    private var callsign = ""
+    private var reconnectAttempt = 0
+    private var reconnectWorkItem: DispatchWorkItem?
 
-    func connect(host: String, port: UInt16, callsign: String) {
-        disconnect()
+    func connect(endpoints: [Endpoint], callsign: String) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.endpoints = endpoints
+            self.endpointIndex = 0
+            self.callsign = callsign
+            self.reconnectAttempt = 0
+            self.startCurrentEndpoint()
+        }
+    }
+
+    private func startCurrentEndpoint() {
+        guard !endpoints.isEmpty else { onStatus?("No valid cluster endpoints"); return }
+        let endpoint = endpoints[endpointIndex % endpoints.count]
+        startConnection(host: endpoint.host, port: endpoint.port, callsign: callsign)
+    }
+
+    private func startConnection(host: String, port: UInt16, callsign: String) {
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
+        let oldConnection = connection
+        connection = nil
+        oldConnection?.cancel()
+        pending.removeAll(keepingCapacity: true)
+        historyRequested = false
         guard let nwPort = NWEndpoint.Port(rawValue: port) else { onStatus?("Invalid cluster port"); return }
         let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: .tcp)
         self.connection = connection
@@ -222,14 +264,27 @@ final class DXClusterConnection {
             guard let self, let connection else { return }
             switch state {
             case .ready:
+                self.reconnectAttempt = 0
                 self.onStatus?("Connected to \(host):\(port)")
                 if !callsign.isEmpty {
                     connection.send(content: Data((callsign.uppercased() + "\r\n").utf8), completion: .contentProcessed { _ in })
+                    self.queue.asyncAfter(deadline: .now() + 1.5) { [weak self, weak connection] in
+                        guard let self, connection === self.connection else { return }
+                        self.requestHistory()
+                    }
                 }
                 self.receive(on: connection)
             case .waiting(let error): self.onStatus?("Cluster waiting: \(error.localizedDescription)")
-            case .failed(let error): self.onStatus?("Cluster failed: \(error.localizedDescription)")
-            case .cancelled: self.onStatus?("Cluster disconnected")
+            case .failed(let error):
+                guard connection === self.connection else { return }
+                self.connection = nil
+                self.onStatus?("Cluster failed: \(error.localizedDescription)")
+                self.scheduleReconnect()
+            case .cancelled:
+                if connection === self.connection {
+                    self.connection = nil
+                    self.scheduleReconnect()
+                }
             default: break
             }
         }
@@ -238,28 +293,92 @@ final class DXClusterConnection {
     }
 
     func disconnect() {
-        connection?.cancel(); connection = nil; pending.removeAll(keepingCapacity: true)
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.endpoints = []
+            self.reconnectWorkItem?.cancel()
+            self.reconnectWorkItem = nil
+            let connection = self.connection
+            self.connection = nil
+            connection?.cancel()
+            self.pending.removeAll(keepingCapacity: true)
+            self.historyRequested = false
+            self.onStatus?("Cluster disconnected")
+        }
     }
 
     private func receive(on connection: NWConnection) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { [weak self, weak connection] data, _, complete, error in
             guard let self, let connection else { return }
             if let data { self.consume(data) }
-            if let error { self.onStatus?("Cluster receive failed: \(error.localizedDescription)"); return }
-            if complete { self.onStatus?("Cluster closed connection"); return }
+            if let error {
+                self.onStatus?("Cluster receive failed: \(error.localizedDescription)")
+                self.connectionLost(connection)
+                return
+            }
+            if complete {
+                self.onStatus?("Cluster closed connection")
+                self.connectionLost(connection)
+                return
+            }
             self.receive(on: connection)
         }
     }
 
+    private func connectionLost(_ connection: NWConnection) {
+        guard connection === self.connection else { return }
+        self.connection = nil
+        connection.cancel()
+        scheduleReconnect()
+    }
+
+    private func scheduleReconnect() {
+        guard !endpoints.isEmpty, reconnectWorkItem == nil else { return }
+        endpointIndex = (endpointIndex + 1) % endpoints.count
+        let endpoint = endpoints[endpointIndex]
+        let delay = min(30, 1 << min(reconnectAttempt, 4))
+        reconnectAttempt += 1
+        onStatus?("Trying \(endpoint.host):\(endpoint.port) in \(delay)s…")
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !self.endpoints.isEmpty else { return }
+            self.reconnectWorkItem = nil
+            self.startCurrentEndpoint()
+        }
+        reconnectWorkItem = work
+        queue.asyncAfter(deadline: .now() + .seconds(delay), execute: work)
+    }
+
     private func consume(_ data: Data) {
-        pending.append(data)
-        while let newline = pending.firstIndex(of: 0x0A) {
-            let raw = pending[..<newline]
-            pending.removeSubrange(...newline)
-            if let line = String(data: raw, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !line.isEmpty {
-                onLine?(line)
+        for byte in data {
+            if byte == 0x0A {
+                emitPendingLine()
+            } else if byte == 0x0D {
+                continue
+            } else if byte >= 0x20 && byte < 0x7F && pending.count < 2_048 {
+                pending.append(byte)
             }
         }
+        if !historyRequested,
+           let text = String(bytes: pending, encoding: .utf8),
+           text.uppercased().contains("DXSPIDER >") {
+            requestHistory()
+            pending.removeAll(keepingCapacity: true)
+        }
+    }
+
+    private func emitPendingLine() {
+        guard !pending.isEmpty else { return }
+        let line = String(bytes: pending, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        pending.removeAll(keepingCapacity: true)
+        guard !line.isEmpty else { return }
+        if !historyRequested && line.uppercased().contains("DXSPIDER >") { requestHistory() }
+        onLine?(line)
+    }
+
+    private func requestHistory() {
+        guard !historyRequested, let connection else { return }
+        historyRequested = true
+        connection.send(content: Data("sh/dx 50\r\n".utf8), completion: .contentProcessed { _ in })
     }
 }
 
@@ -312,9 +431,13 @@ final class FeatureModel: ObservableObject {
     private let audioEngine = AVAudioEngine()
     let wavelog = WavelogSync()
     let callbook = CallbookService()
+    let cty = CtyDatabase()
 
     @Published private(set) var dx = DXSnapshot.empty
     @Published private(set) var clusterStatus = "DX cluster disconnected"
+    @Published private(set) var acceptedClusterLines = 0
+    @Published private(set) var lastAcceptedClusterLine = ""
+    @Published private(set) var settingsStatus = "Settings not saved in this session"
     @Published private(set) var wsjtxStatus = "WSJT-X listener stopped"
     @Published private(set) var lastWSJTX: WSJTXMessage?
     @Published private(set) var spectrumDb: [Float] = []
@@ -335,20 +458,31 @@ final class FeatureModel: ObservableObject {
     @Published var reverseSpectrum: Bool { didSet { defaults.set(reverseSpectrum, forKey: "reverseSpectrum") } }
     @Published var clusterHost: String { didSet { defaults.set(clusterHost, forKey: "clusterHost") } }
     @Published var clusterPort: String { didSet { defaults.set(clusterPort, forKey: "clusterPort") } }
+    @Published var clusterFallbackHost: String { didSet { defaults.set(clusterFallbackHost, forKey: "clusterFallbackHost") } }
+    @Published var clusterFallbackPort: String { didSet { defaults.set(clusterFallbackPort, forKey: "clusterFallbackPort") } }
+    @Published var clusterFallback2Host: String { didSet { defaults.set(clusterFallback2Host, forKey: "clusterFallback2Host") } }
+    @Published var clusterFallback2Port: String { didSet { defaults.set(clusterFallback2Port, forKey: "clusterFallback2Port") } }
     @Published var operatorCallsign: String { didSet { defaults.set(operatorCallsign, forKey: "operatorCallsign") } }
     @Published var watchlist: String { didSet { defaults.set(watchlist, forKey: "watchlist"); core.setWatchlist(watchlist); refreshDX() } }
     @Published var wsjtxPort: String { didSet { defaults.set(wsjtxPort, forKey: "wsjtxPort") } }
 
     private let defaults = UserDefaults.standard
+    private var observations = Set<AnyCancellable>()
     private var waterfallRows: [[Float]] = []
     private let waterfallWidth = 512
     private let waterfallDepth = 240
     private var noiseFloorSeeded = false
     private var audioTapInstalled = false
+    private var accumulatedAudioFrames: UInt64 = 0
+    private var lastPublishedAudioFrame: UInt64 = 0
 
     init() {
-        clusterHost = defaults.string(forKey: "clusterHost") ?? "dxc.ve7cc.net"
-        clusterPort = defaults.string(forKey: "clusterPort") ?? "23"
+        clusterHost = defaults.string(forKey: "clusterHost") ?? "cluster.om0rx.com"
+        clusterPort = defaults.string(forKey: "clusterPort") ?? "7300"
+        clusterFallbackHost = defaults.string(forKey: "clusterFallbackHost") ?? ""
+        clusterFallbackPort = defaults.string(forKey: "clusterFallbackPort") ?? "7300"
+        clusterFallback2Host = defaults.string(forKey: "clusterFallback2Host") ?? ""
+        clusterFallback2Port = defaults.string(forKey: "clusterFallback2Port") ?? "7300"
         operatorCallsign = defaults.string(forKey: "operatorCallsign") ?? ""
         watchlist = defaults.string(forKey: "watchlist") ?? ""
         wsjtxPort = defaults.string(forKey: "wsjtxPort") ?? "2237"
@@ -356,12 +490,26 @@ final class FeatureModel: ObservableObject {
         panFloorOffsetDb = defaults.object(forKey: "panFloorOffsetDb") as? Double ?? -6
         panPalette = PanPalette(rawValue: defaults.string(forKey: "panPalette") ?? "") ?? .aether
         reverseSpectrum = defaults.object(forKey: "reverseSpectrum") as? Bool ?? false
+        wavelog.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &observations)
+        callbook.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &observations)
+        cty.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &observations)
         core.setWatchlist(watchlist)
         cluster.onStatus = { [weak self] value in Task { @MainActor in self?.clusterStatus = value } }
         cluster.onLine = { [weak self] line in
             guard let self else { return }
             Task { @MainActor in
-                if self.core.ingestCluster(line, at: Date()) { self.refreshDX() }
+                if self.core.ingestCluster(line, at: Date()) {
+                    self.acceptedClusterLines += 1
+                    self.lastAcceptedClusterLine = line
+                    self.refreshDX()
+                    self.clusterStatus = "DX cluster live · \(self.acceptedClusterLines) spots received"
+                }
             }
         }
         wsjtx.onStatus = { [weak self] value in Task { @MainActor in self?.wsjtxStatus = value } }
@@ -379,12 +527,44 @@ final class FeatureModel: ObservableObject {
     deinit { cluster.disconnect(); wsjtx.stop(); audioEngine.stop() }
 
     func connectCluster() {
+        clusterHost = clusterHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        clusterPort = clusterPort.trimmingCharacters(in: .whitespacesAndNewlines)
+        operatorCallsign = operatorCallsign.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        saveSettings()
         guard let port = UInt16(clusterPort), !clusterHost.isEmpty else { clusterStatus = "Enter a valid cluster host and port"; return }
-        cluster.connect(host: clusterHost, port: port, callsign: operatorCallsign)
+        guard !operatorCallsign.isEmpty else {
+            clusterStatus = "Enter your operator callsign before connecting"
+            return
+        }
+        var endpoints = [DXClusterConnection.Endpoint(host: clusterHost, port: port)]
+        for (host, value) in [(clusterFallbackHost, clusterFallbackPort),
+                              (clusterFallback2Host, clusterFallback2Port)] {
+            let clean = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if !clean.isEmpty, let fallbackPort = UInt16(value) {
+                let endpoint = DXClusterConnection.Endpoint(host: clean, port: fallbackPort)
+                if !endpoints.contains(endpoint) { endpoints.append(endpoint) }
+            }
+        }
+        cluster.connect(endpoints: endpoints, callsign: operatorCallsign)
     }
 
     func disconnectCluster() { cluster.disconnect() }
     func refreshDX() { dx = core.snapshot() }
+
+    func saveSettings() {
+        defaults.set(clusterHost, forKey: "clusterHost")
+        defaults.set(clusterPort, forKey: "clusterPort")
+        defaults.set(clusterFallbackHost, forKey: "clusterFallbackHost")
+        defaults.set(clusterFallbackPort, forKey: "clusterFallbackPort")
+        defaults.set(clusterFallback2Host, forKey: "clusterFallback2Host")
+        defaults.set(clusterFallback2Port, forKey: "clusterFallback2Port")
+        defaults.set(operatorCallsign, forKey: "operatorCallsign")
+        defaults.set(watchlist, forKey: "watchlist")
+        defaults.set(wsjtxPort, forKey: "wsjtxPort")
+        defaults.synchronize()
+        wavelog.saveSettings()
+        settingsStatus = "Settings saved on this iPad"
+    }
 
     func startWSJTX() {
         guard let port = UInt16(wsjtxPort) else { wsjtxStatus = "Enter a valid WSJT-X port"; return }
@@ -471,6 +651,8 @@ final class FeatureModel: ObservableObject {
             }
             audioSampleRate = format.sampleRate
             audioCapturedFrames = 0
+            accumulatedAudioFrames = 0
+            lastPublishedAudioFrame = 0
             input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in self?.acceptAudio(buffer) }
             audioTapInstalled = true
             audioEngine.prepare(); try audioEngine.start()
@@ -515,10 +697,24 @@ final class FeatureModel: ObservableObject {
         let data = samples.withUnsafeBytes { Data($0) }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.audioCapturedFrames += UInt64(frameCount)
-            var bins = self.core.pushAudio(data, channels: UInt32(channelCount), bytesPerSample: 2, bits: 16)
-            if self.reverseSpectrum { bins.reverse() }
-            if !bins.isEmpty { self.acceptSpectrum(bins) }
+            self.accumulatedAudioFrames += UInt64(frameCount)
+            var prepared = data
+            if self.reverseSpectrum {
+                prepared.withUnsafeMutableBytes { raw in
+                    let pcm = raw.bindMemory(to: Int16.self)
+                    for frame in 0..<frameCount {
+                        pcm.swapAt(frame * channelCount, frame * channelCount + 1)
+                    }
+                }
+            }
+            let bins = self.core.pushAudio(prepared, channels: UInt32(channelCount), bytesPerSample: 2, bits: 16)
+            let publishInterval = UInt64(max(1, self.audioSampleRate / 9.0))
+            if !bins.isEmpty,
+               self.accumulatedAudioFrames - self.lastPublishedAudioFrame >= publishInterval {
+                self.lastPublishedAudioFrame = self.accumulatedAudioFrames
+                self.audioCapturedFrames = self.accumulatedAudioFrames
+                self.acceptSpectrum(bins)
+            }
         }
     }
 

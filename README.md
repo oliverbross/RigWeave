@@ -1,6 +1,6 @@
 # RigWeave Mobile
 
-Native iPadOS and Android clients for direct Elecraft KX3/KX2 operation. The apps share a C++17 engine for CAT, ADIF, cluster spots, CTY resolution, worked-status intelligence, DX analysis, panadapter DSP, Wavelog retry policy, and WSJT-X decoding. They contain no demo or simulated radio state.
+Native iPadOS and Android clients for direct Elecraft KX3/KX2 operation. The apps share a C++17 engine for CAT, ADIF, cluster spots, CTY resolution, worked-status intelligence, DX analysis, panadapter DSP, and Wavelog retry policy. They contain no demo or simulated radio state.
 
 ## iPadOS
 
@@ -9,9 +9,9 @@ Requirements:
 - Xcode 26.6 or newer;
 - Apple Development team `4WCMQ4U946`;
 - installed profile `RigWeave iPad System Extension Development` for `app.rigweave.mobile`;
-- installed DriverKit App Development profile `RigWeave CP210x DriverKit Development` for `app.rigweave.mobile.CP210xDriver`;
+- installed DriverKit App Development profile `RigWeave CP210x DriverKit Development` for the legacy bundle ID `app.rigweave.mobile.CP210xDriver` (the extension itself now drives KXUSB/PL2303GC);
 - supported M-series iPad with Developer Mode enabled;
-- CP2102 adapter (`VID 10C4`, `PID EA60`) and KX3/KX2 configured for 38,400 baud, 8N1.
+- Elecraft KXUSB Prolific PL2303GC cable (`VID 067B`, `PID 23A3`) and KX3/KX2 configured for 38,400 baud, 8N1.
 
 Build the signed iPad application:
 
@@ -37,18 +37,20 @@ xcrun devicectl device process launch \
   app.rigweave.mobile
 ```
 
-The host app embeds the signed DriverKit extension at `SystemExtensions/CP210xDriver.dext`. Connection begins only after tapping **Connect**, then the app polls the real KX3 identity, dual-VFO, mode, TX, meter, gain, bandwidth, power, preamp, attenuator, RIT/XIT, and split state. The KX3-inspired control deck and every CAT button operate on those responses; there is no simulated fallback.
+The host app embeds the signed DriverKit extension at `SystemExtensions/CP210xDriver.dext`. On iPadOS it uses base USBDriverKit for the KXUSB control/bulk transfers and an IOKit user-client channel to the app; it does not rely on macOS-only USBSerialDriverKit or `/dev` nodes. Connection begins only after tapping **Connect**, then the app polls the real KX3 identity, dual-VFO, mode, TX, meter, gain, bandwidth, power, preamp, attenuator, RIT/XIT, and split state. The KX3-inspired control deck and every CAT button operate on those responses; there is no simulated fallback.
 
 The native iPad app also includes:
 
-- a real TCP DX-cluster connection with callsign login, watchlist ranking, CTY enrichment, band activity, and one-tap CAT tuning;
+- a real TCP DX-cluster connection with callsign login, two ordered fallback clusters, watchlist ranking, CTY enrichment, band activity, and one-tap CAT tuning;
 - live NOAA SFI/Kp retrieval;
-- real UDP WSJT-X datagram reception and parsing;
 - physical AVAudioSession input capture feeding the shared 1,024-bin panadapter DSP;
-- local SQLite QSO logging, searchable journal, and whole-log ADIF export;
-- Wavelog station discovery, station selection, cursor-based full remote-log caching, and a durable upload queue with Keychain credentials, acknowledgement, quarantine, and bounded retry/backoff;
+- local SQLite QSO logging in app-private tablet storage, searchable journal, and ADIF import/export through the system document picker;
+- CTY.DAT download, validation, atomic replacement, and local callsign-prefix enrichment in app-private tablet storage;
+- Wavelog connection/time checks, station discovery and selection, cursor-based full remote-log caching, and a durable upload queue with Keychain credentials, acknowledgement, quarantine, and bounded retry/backoff;
 - the Tab5-derived graphical DX suite: live opportunities, smart ranking, bandmap, 12-bucket band pulse, world heat grid with regional activity, and watchlist activity;
-- authenticated QRZ or HamQTH callbook lookup with credentials stored in the device Keychain.
+- authenticated QRZ or HamQTH callbook lookup, connection testing, and log enrichment with credentials stored in the device Keychain.
+
+Settings uses the same top-level order on iPadOS and Android: **Default, Log, Cluster, Macros, Alerts, Safety, Audio, Health, Diag, About**. WSJT-X is intentionally not exposed in this release.
 
 Each service remains explicitly offline until its real connection, credentials, or physical input is available. No fixture spots, generated spectrum, fake radio state, or automatic test QSO is injected.
 
@@ -77,7 +79,7 @@ adb shell am start -n app.rigweave.mobile/.MainActivity
 
 An emulator can validate navigation and local logging, but cannot prove USB serial or radio operation. The Android app uses `usb-serial-for-android` for PL2303, CP210x, FTDI, CH34x, and CDC-ACM adapters where supported by that library. It opens the selected adapter at 38,400 baud and exposes frequency, mode, and raw CAT controls without simulation.
 
-The Android source also binds the full portable feature engine through JNI and supplies the same KX3-style live CAT deck, local ADIF journal/export, Wavelog discovery/upload/full-log cache, six graphical DX views, real TCP DX-cluster, NOAA, UDP WSJT-X, and `AudioRecord` physical-input panadapter paths with matching Compose screens. Android SDK licences were accepted with the owner's explicit approval and NDK `28.2.13676358` is installed under the SDK used by Gradle.
+The Android source also binds the full portable feature engine through JNI and supplies the same KX3-style live CAT deck, local ADIF journal/import/export, Wavelog discovery/upload/full-log cache, six graphical DX views, real TCP DX-cluster, NOAA, and `AudioRecord` physical-input panadapter paths with matching Compose screens. Android SDK licences were accepted with the owner's explicit approval and NDK `28.2.13676358` is installed under the SDK used by Gradle.
 
 ## Panadapter architecture
 
@@ -95,9 +97,10 @@ core/build/rigweave_core_tests
 
 ## Current physical status
 
-- iPad target detected previously: iPad Pro 11-inch (4th generation), `iPad14,4`, iPadOS 26.6.1, Developer Mode enabled.
-- The signed iPad app and embedded CP210x DriverKit extension build and verify locally.
-- Portable feature-core tests and the signed iPad device build pass with the cluster, DX, Wavelog, callbook, WSJT-X, and panadapter code included.
-- Physical install, DriverKit activation, USB enumeration, and live KX3/KX2 CAT responses remain unproven until the iPad is connected and unlocked.
-- Live service credentials and endpoints have not been exercised in this checkout; those checks require the owner's configured accounts and network context.
+- Physical iPad: iPad Pro 11-inch (4th generation), `iPad14,4`, iPadOS 26.6.1, Developer Mode enabled and connected through CoreDevice.
+- Signed build 38 and its embedded PL2303GC/KXUSB DriverKit extension build, install, launch, and verify on the physical iPad.
+- Portable feature-core tests and the signed iPad device build pass with the cluster, DX, Wavelog, callbook, and panadapter code included.
+- Physical CAT passes through the enabled DriverKit extension and real Elecraft KXUSB (`067B:23A3`): build 38 opened the PL2303GC at 38,400 8N1, identified the connected radio as KX3, and read VFO A at 21.1366 MHz. A physical UI test connected in Settings, navigated through Home and Radio, returned to Settings, and verified that CAT and frequency stayed live.
+- Physical ICUSBAUDIO2D stereo I/Q passes at 48 kHz: more than 1.2 million live frames reached the shared 1,024-bin spectrum pipeline during the build-30 soak. The DSP now matches Tab5's proven analogue I/Q imbalance correction and complex-tone image-rejection test; every PCM frame is processed while SwiftUI presentation is bounded to about 9 FPS.
+- The saved `OM0RX-6` profile was exercised against `cluster.om0rx.com:7300` on the physical iPad: login, `sh/dx 50`, parsing, shared-core snapshot generation, and populated Spots UI passed with real records. Wavelog authentication still requires a configured API key and station profile.
 - No Android hardware or emulator proof has been completed in this repository.

@@ -189,6 +189,7 @@ int rw_feature_dx_snapshot_json(const rw_feature_context *context, char *output,
         }
         json << ']';
     }
+    json << ']';
     auto write_opportunities = [&](const char *name, const auto& rows) {
         json << ",\"" << name << "\":[";
         bool row_first = true;

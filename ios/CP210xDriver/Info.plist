@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>RigWeave CP210x Driver</string>
+	<string>RigWeave Prolific KXUSB Driver</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -22,29 +22,40 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>IOKitPersonalities</key>
 	<dict>
-		<key>RigWeave CP2102 USB UART</key>
+		<key>RigWeave PL2303GC KXUSB</key>
 		<dict>
+			<key>CFBundleIdentifier</key>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 			<key>CFBundleIdentifierKernel</key>
 			<string>com.apple.kpi.iokit</string>
 			<key>IOClass</key>
 			<string>IOUserService</string>
 			<key>IOProviderClass</key>
 			<string>IOUSBHostInterface</string>
+			<key>IOMatchCategory</key>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 			<key>IOUserClass</key>
 			<string>CP210xDriver</string>
 			<key>IOUserServerName</key>
 			<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 			<key>idVendor</key>
-			<integer>4292</integer>
+			<integer>1659</integer>
 			<key>idProduct</key>
-			<integer>60000</integer>
+			<integer>9123</integer>
 			<key>bConfigurationValue</key>
 			<integer>1</integer>
 			<key>bInterfaceNumber</key>
 			<integer>0</integer>
+			<key>UserClientProperties</key>
+			<dict>
+				<key>IOClass</key>
+				<string>IOUserUserClient</string>
+				<key>IOUserClass</key>
+				<string>KXUSBUserClient</string>
+			</dict>
 		</dict>
 	</dict>
 	<key>OSBundleUsageDescription</key>
-	<string>Allows RigWeave to communicate with a Digirig CP2102 USB serial adapter for KX3 CAT control.</string>
+	<string>Allows RigWeave to communicate with an Elecraft KXUSB Prolific PL2303GC cable for KX3 CAT control.</string>
 </dict>
 </plist>

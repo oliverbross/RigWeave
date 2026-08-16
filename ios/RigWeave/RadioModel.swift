@@ -107,7 +107,13 @@ final class RadioCore {
                 }
             }
         }
-        return length > 0 ? String(cString: output) : ""
+        var adif = length > 0 ? String(cString: output) : ""
+        for (name, value) in [("NAME", qso.name), ("QTH", qso.qth),
+                              ("COUNTRY", qso.country), ("COMMENT", qso.notes)] where !value.isEmpty {
+            guard let end = adif.range(of: "<EOR>", options: .caseInsensitive) else { continue }
+            adif.insert(contentsOf: "<\(name):\(value.utf8.count)>\(value)", at: end.lowerBound)
+        }
+        return adif
     }
 
     var version: String { String(cString: rw_core_version()) }
@@ -134,45 +140,105 @@ final class RadioModel: ObservableObject {
     @Published private(set) var snapshot: RadioSnapshot
     @Published private(set) var serialPorts: [String] = []
     @Published private(set) var transportStatus = "Driver ready; no serial port scanned"
-    @Published var selectedPort = ""
+    @Published var selectedPort: String {
+        didSet { defaults.set(selectedPort, forKey: "selectedSerialPort") }
+    }
+    private let defaults = UserDefaults.standard
+    private var wantsConnection: Bool
+    private var connectedAt: Date?
+    private var lastCATResponseAt: Date?
 
     init() {
         snapshot = core.snapshot()
+        selectedPort = defaults.string(forKey: "selectedSerialPort") ?? ""
+        wantsConnection = defaults.bool(forKey: "radioAutoConnect") &&
+            !ProcessInfo.processInfo.arguments.contains("--disable-radio-autoconnect")
         transport.onData = { [weak self] data in
             Task { @MainActor in self?.acceptCAT(data) }
         }
         transport.onStatus = { [weak self] status in
             Task { @MainActor in self?.transportStatus = status }
         }
+        refreshPorts()
     }
 
     deinit { transport.disconnect() }
 
     func acceptCAT(_ data: Data) {
-        if core.feed(data) > 0 { snapshot = core.snapshot() }
+        if core.feed(data) > 0 {
+            snapshot = core.snapshot()
+            lastCATResponseAt = Date()
+        }
     }
 
     func refreshPorts() {
+        guard !transport.isConnected else {
+            if serialPorts.isEmpty, !selectedPort.isEmpty { serialPorts = [selectedPort] }
+            return
+        }
         serialPorts = SerialTransport.serialPorts()
         if !serialPorts.contains(selectedPort) { selectedPort = serialPorts.first ?? "" }
         transportStatus = serialPorts.isEmpty
-            ? "No /dev/cu.* or /dev/tty.* endpoints are exposed. The driver is not active or the adapter is not attached."
+            ? "No active PL2303/KXUSB DriverKit service is exposed. Enable the updated driver or reconnect the cable."
             : "Found \(serialPorts.count) physical serial endpoint(s): \(serialPorts.map { ($0 as NSString).lastPathComponent }.joined(separator: ", "))"
     }
 
     func connect() {
-        snapshot = core.reset()
+        wantsConnection = true
+        defaults.set(true, forKey: "radioAutoConnect")
+        connectNow()
+    }
+
+    private func connectNow() {
+        guard !transport.isConnected else { return }
         do {
             try transport.connect(path: selectedPort)
+            connectedAt = Date()
+            lastCATResponseAt = nil
+            try transport.send("ID;")
+            try transport.send("FA;")
+            try transport.send("MD;")
         } catch {
+            transport.disconnect()
+            connectedAt = nil
             transportStatus = error.localizedDescription
         }
     }
 
     func disconnect() {
+        wantsConnection = false
+        defaults.set(false, forKey: "radioAutoConnect")
         transport.disconnect()
+        connectedAt = nil
+        lastCATResponseAt = nil
         snapshot = core.reset()
         transportStatus = "Disconnected"
+    }
+
+    func maintainConnection() {
+        if transport.isConnected {
+            let reference = lastCATResponseAt ?? connectedAt ?? Date()
+            if Date().timeIntervalSince(reference) <= 5 { return }
+            transportStatus = "KX3 did not answer CAT; reopening the physical connection…"
+            transport.disconnect()
+            connectedAt = nil
+            lastCATResponseAt = nil
+        }
+        let available = SerialTransport.serialPorts()
+        serialPorts = available
+        if !available.contains(selectedPort) { selectedPort = available.first ?? "" }
+        guard wantsConnection, !transport.isConnected else { return }
+        guard !selectedPort.isEmpty else {
+            transportStatus = "Waiting for the PL2303GC/KXUSB DriverKit service…"
+            return
+        }
+        connectNow()
+    }
+
+    func saveSettings() {
+        defaults.set(selectedPort, forKey: "selectedSerialPort")
+        defaults.set(wantsConnection, forKey: "radioAutoConnect")
+        defaults.synchronize()
     }
 
     func sendCAT(_ command: String) {

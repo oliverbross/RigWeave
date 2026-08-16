@@ -62,6 +62,18 @@ final class CallbookService: ObservableObject {
         } catch { status = error.localizedDescription }
     }
 
+    func testConnection() async {
+        guard !username.isEmpty, !password.isEmpty else {
+            status = "\(provider) username and password required"
+            return
+        }
+        status = "Testing \(provider)…"
+        do {
+            session = try await login()
+            status = "\(provider) connection passed"
+        } catch { status = "\(provider) test failed: \(error.localizedDescription)" }
+    }
+
     private func login() async throws -> String {
         let url: URL
         if provider == "HamQTH" {
@@ -102,5 +114,69 @@ final class CallbookService: ObservableObject {
         var errorDescription: String? {
             switch self { case .invalidURL: "Invalid callbook URL"; case .noSession: "Callbook login returned no session"; case .http: "Callbook HTTP request failed"; case .invalidXML: "Callbook returned invalid XML"; case .remote(let value): value }
         }
+    }
+}
+
+@MainActor
+final class CtyDatabase: ObservableObject {
+    @Published private(set) var status = "CTY.DAT not installed"
+    @Published private(set) var prefixCount = 0
+    private var prefixes: [(String, String)] = []
+    private let fileURL: URL
+
+    init() {
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        fileURL = directory.appendingPathComponent("cty.dat")
+        load()
+    }
+
+    func update() async {
+        guard let url = URL(string: "https://www.country-files.com/cty/cty.dat") else { return }
+        status = "Downloading CTY.DAT…"
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode,
+                  data.count > 50_000, let text = String(data: data, encoding: .utf8),
+                  text.contains(":") && text.contains(";") else {
+                status = "CTY.DAT update rejected: invalid content"; return
+            }
+            let temporary = fileURL.appendingPathExtension("tmp")
+            try data.write(to: temporary, options: .atomic)
+            if FileManager.default.fileExists(atPath: fileURL.path) {
+                _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporary,
+                    backupItemName: "cty.dat.previous", options: .usingNewMetadataOnly)
+            } else {
+                try FileManager.default.moveItem(at: temporary, to: fileURL)
+            }
+            load()
+            status = "CTY.DAT updated · \(prefixCount) prefixes"
+        } catch {
+            if prefixes.isEmpty { status = "CTY.DAT update failed: \(error.localizedDescription)" }
+        }
+    }
+
+    func country(for callsign: String) -> String {
+        let call = callsign.uppercased()
+        return prefixes.first(where: { call.hasPrefix($0.0) })?.1 ?? ""
+    }
+
+    private func load() {
+        guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else { return }
+        var loaded: [(String, String)] = []
+        for record in text.split(separator: ";") {
+            let fields = record.split(separator: ":", maxSplits: 8, omittingEmptySubsequences: false)
+            guard fields.count == 9 else { continue }
+            let country = fields[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            for raw in fields[8].split(separator: ",") {
+                var prefix = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+                if prefix.hasPrefix("=") { prefix.removeFirst() }
+                if let modifier = prefix.firstIndex(where: { "([<{~".contains($0) }) { prefix.removeSubrange(modifier...) }
+                if !prefix.isEmpty { loaded.append((prefix, country)) }
+            }
+        }
+        prefixes = loaded.sorted { $0.0.count > $1.0.count }
+        prefixCount = prefixes.count
+        if !prefixes.isEmpty { status = "CTY.DAT ready · \(prefixCount) prefixes" }
     }
 }

@@ -1,12 +1,13 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 enum Destination: String, CaseIterable, Identifiable {
     case home = "Home", radio = "Radio", spots = "Spots", dx = "DX", log = "Log"
-    case panadapter = "Panadapter", digital = "Digital", lookup = "Lookup", settings = "Settings"
+    case panadapter = "Panadapter", lookup = "Lookup", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
-        switch self { case .home: "house"; case .radio: "antenna.radiowaves.left.and.right"; case .spots: "dot.radiowaves.up.forward"; case .dx: "globe.americas"; case .log: "list.clipboard"; case .panadapter: "waveform.path.ecg.rectangle"; case .digital: "waveform.badge.magnifyingglass"; case .lookup: "person.text.rectangle"; case .settings: "gearshape" }
+        switch self { case .home: "house"; case .radio: "antenna.radiowaves.left.and.right"; case .spots: "dot.radiowaves.up.forward"; case .dx: "globe.americas"; case .log: "list.clipboard"; case .panadapter: "waveform.path.ecg.rectangle"; case .lookup: "person.text.rectangle"; case .settings: "gearshape" }
     }
 }
 
@@ -51,7 +52,6 @@ struct ContentView: View {
         case .dx: DXView()
         case .log: LogView()
         case .panadapter: PanadapterView()
-        case .digital: DigitalView()
         case .lookup: LookupView()
         case .settings: SettingsView()
         }
@@ -90,6 +90,7 @@ struct RadioSummary: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack { StatusBadge(status: state.status); Spacer(); Text(state.model).font(.headline) }
             Text(state.connected ? state.frequencyText : "—.——— MHz").font(.system(size: 54, weight: .semibold, design: .monospaced)).minimumScaleFactor(0.55)
+                .accessibilityIdentifier("homeFrequencyDisplay")
             HStack(spacing: 24) {
                 Label(state.mode, systemImage: "waveform")
                 Label(state.transmitting ? "TX" : "RX", systemImage: state.transmitting ? "dot.radiowaves.left.and.right" : "arrow.down.circle")
@@ -169,7 +170,7 @@ struct RadioView: View {
                     Text("Values and switch commands are sent directly to the connected radio; the app does not clamp them.").font(.caption).foregroundStyle(.secondary)
                 }
             }
-        }.padding() }.navigationTitle("Radio").task { radio.refreshPorts() }
+        }.padding() }.navigationTitle("Radio")
     }
 }
 
@@ -268,9 +269,14 @@ struct LogView: View {
     @State private var rstReceived = "59"
     @State private var frequencyMHz = ""
     @State private var mode = ""
+    @State private var name = ""
+    @State private var qth = ""
+    @State private var country = ""
+    @State private var notes = ""
     @State private var scope: LogScope = .local
     @State private var search = ""
     @State private var exportURL: URL?
+    @State private var importingADIF = false
 
     var body: some View {
         ScrollView { LazyVStack(alignment: .leading, spacing: 18) {
@@ -279,15 +285,29 @@ struct LogView: View {
             if scope == .local { localLog } else { wavelogLog }
         }.padding() }.navigationTitle("Log")
             .searchable(text: $search, prompt: "Callsign, band, mode or country")
+            .fileImporter(isPresented: $importingADIF, allowedContentTypes: [.data, .plainText]) { result in
+                if case .success(let url) = result { _ = logbook.importADIF(from: url) }
+            }
     }
 
     private var localLog: some View {
         Group {
             GroupBox("New local QSO") {
-                TextField("Callsign", text: $callsign).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                HStack {
+                    TextField("Callsign", text: $callsign).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                    Button("Enrich") { Task {
+                        await features.callbook.lookup(callsign)
+                        if let record = features.callbook.result {
+                            name = record.name; qth = record.location; country = record.country
+                        }
+                    } }.disabled(callsign.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
                 HStack { TextField("RST sent", text: $rstSent); TextField("RST received", text: $rstReceived) }
                 TextField("Frequency MHz", text: $frequencyMHz).keyboardType(.decimalPad)
                 TextField("Mode", text: $mode).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                HStack { TextField("Name", text: $name); TextField("QTH", text: $qth); TextField("Country", text: $country) }
+                TextField("Notes", text: $notes, axis: .vertical)
+                Text(features.callbook.status).font(.caption).foregroundStyle(.secondary)
                 Button("Save QSO") { save() }.buttonStyle(.borderedProminent).disabled(callsign.trimmingCharacters(in: .whitespaces).isEmpty)
                 if !logbook.message.isEmpty { Text(logbook.message).font(.caption).foregroundStyle(.secondary) }
             }
@@ -295,6 +315,7 @@ struct LogView: View {
                 Text("Local log · \(logbook.records.count) recent").font(.headline)
                 Spacer()
                 Button("Build ADIF export") { exportURL = logbook.exportADIF(using: radio.adif) }
+                Button("Import ADIF") { importingADIF = true }
                 if let exportURL { ShareLink(item: exportURL) { Label("Share ADIF", systemImage: "square.and.arrow.up") } }
             }
             if filteredLocal.isEmpty { ContentUnavailableView("No matching local QSOs", systemImage: "list.clipboard") }
@@ -307,6 +328,7 @@ struct LogView: View {
             GroupBox("Wavelog station log") {
                 HStack { Text(features.wavelog.status).font(.subheadline); Spacer(); if features.wavelog.pendingCount > 0 { Text("\(features.wavelog.pendingCount) queued").foregroundStyle(RigTheme.amber) } }
                 HStack {
+                    Button("Test") { Task { await features.wavelog.testConnection() } }
                     Button("Load stations") { Task { await features.wavelog.loadStations() } }
                     Button("Full log refresh") { Task { await features.wavelog.fullSync() } }.buttonStyle(.borderedProminent)
                 }
@@ -347,7 +369,8 @@ struct LogView: View {
     private func localRow(_ qso: QSO) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack { Text(qso.callsign).font(.headline); Spacer(); Text(qso.mode) }
-            Text(String(format: "%.3f MHz", Double(qso.frequencyHz) / 1_000_000)).foregroundStyle(.secondary)
+            Text([String(format: "%.3f MHz", Double(qso.frequencyHz) / 1_000_000), qso.name, qso.qth, qso.country]
+                .filter { !$0.isEmpty }.joined(separator: " · ")).foregroundStyle(.secondary)
             ShareLink(item: radio.adif(for: qso), preview: SharePreview("\(qso.callsign).adi")) { Label("Share record ADIF", systemImage: "square.and.arrow.up") }.font(.caption)
         }.padding().background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 12))
     }
@@ -358,12 +381,14 @@ struct LogView: View {
         let actualHz = radio.snapshot.connected ? radio.snapshot.frequencyHz : enteredHz
         let actualMode = radio.snapshot.connected ? radio.snapshot.mode : mode.uppercased()
         guard actualHz > 0, !actualMode.isEmpty else { return }
+        let resolvedCountry = country.isEmpty ? features.cty.country(for: clean) : country
         let qso = QSO(id: radio.qsoIdentity(callsign: clean, at: now, frequencyHz: actualHz, mode: actualMode), callsign: clean,
                       frequencyHz: actualHz, mode: actualMode,
-                      rstSent: rstSent, rstReceived: rstReceived, createdAt: now)
+                      rstSent: rstSent, rstReceived: rstReceived, createdAt: now,
+                      name: name, qth: qth, country: resolvedCountry, notes: notes)
         if logbook.save(qso) {
             features.enqueueWavelog(id: qso.id, adif: radio.adif(for: qso))
-            callsign = ""
+            callsign = ""; name = ""; qth = ""; country = ""; notes = ""
         }
     }
 }
@@ -418,7 +443,7 @@ struct PanadapterView: View {
                         Slider(value: $features.panRangeDb, in: 40...110, step: 2)
                         LabeledContent("Black level", value: String(format: "%+.0f dB from floor", features.panFloorOffsetDb))
                         Slider(value: $features.panFloorOffsetDb, in: -20...10, step: 1)
-                        Toggle("Reverse I/Q spectrum", isOn: $features.reverseSpectrum)
+                        Toggle("Swap I/Q channels", isOn: $features.reverseSpectrum)
                     }
                 }
                 GroupBox("Physical I/Q input") {
@@ -522,10 +547,10 @@ struct SpotsView: View {
                 HStack { StatusBadge(status: features.clusterStatus.hasPrefix("Connected") ? "LIVE" : "OFFLINE"); Text(features.clusterStatus).font(.caption) }
             }
             Section("Live cluster opportunities") {
-                if features.dx.opportunities.isEmpty {
+                if features.dx.liveSpots.isEmpty {
                     ContentUnavailableView("No live spots", systemImage: "dot.radiowaves.up.forward", description: Text("Connect the configured DX cluster. No fixture spots are loaded."))
                 }
-                ForEach(features.dx.opportunities) { spot in
+                ForEach(features.dx.liveSpots) { spot in
                     VStack(alignment: .leading, spacing: 5) {
                         HStack { Text(spot.callsign).font(.headline); if spot.watchlisted { Image(systemName: "star.fill").foregroundStyle(RigTheme.amber) }; Spacer(); Text(spot.band) }
                         Text(String(format: "%.3f MHz · %@ · %@", Double(spot.frequencyHz) / 1_000_000, spot.mode, spot.country)).foregroundStyle(.secondary)
@@ -710,29 +735,6 @@ private struct DXOpportunityDetail: View {
 
 private extension String { func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self } }
 
-struct DigitalView: View {
-    @EnvironmentObject private var features: FeatureModel
-    var body: some View {
-        Form {
-            Section("WSJT-X UDP") {
-                Text(features.wsjtxStatus)
-                HStack { Button("Listen") { features.startWSJTX() }; Button("Stop") { features.stopWSJTX() } }
-            }
-            Section("Last real datagram") {
-                if let message = features.lastWSJTX {
-                    LabeledContent("Valid", value: message.valid ? "Yes" : "No")
-                    LabeledContent("Station", value: message.stationId ?? "—")
-                    LabeledContent("Type", value: message.type ?? "—")
-                    LabeledContent("Mode", value: message.mode ?? "—")
-                    if let call = message.dxCall ?? message.callsign { LabeledContent("Call", value: call) }
-                    if let text = message.message { Text(text).font(.system(.body, design: .monospaced)) }
-                    if let error = message.error { Text(error).foregroundStyle(.red) }
-                } else { Text("No WSJT-X datagram received").foregroundStyle(.secondary) }
-            }
-        }.navigationTitle("Digital")
-    }
-}
-
 struct LookupView: View {
     @EnvironmentObject private var features: FeatureModel
     @State private var callsign = ""
@@ -758,19 +760,177 @@ struct LookupView: View {
     }
 }
 
+private enum SettingsTab: String, CaseIterable, Identifiable {
+    case defaults = "Default", log = "Log", cluster = "Cluster", macros = "Macros", alerts = "Alerts"
+    case safety = "Safety", audio = "Audio", health = "Health", diag = "Diag", about = "About"
+    var id: String { rawValue }
+}
+
 struct SettingsView: View {
     @Environment(\.openURL) private var openURL
     @EnvironmentObject private var radio: RadioModel
     @EnvironmentObject private var features: FeatureModel
+    @EnvironmentObject private var logbook: QSOStore
+    @State private var tab: SettingsTab = .defaults
+    @State private var importingADIF = false
+    @State private var exportURL: URL?
+    @AppStorage("macroLabel1") private var macroLabel1 = "CQ"
+    @AppStorage("macroLabel2") private var macroLabel2 = "EXCH"
+    @AppStorage("macroLabel3") private var macroLabel3 = "TU"
+    @AppStorage("macroText1") private var macroText1 = ""
+    @AppStorage("macroText2") private var macroText2 = ""
+    @AppStorage("macroText3") private var macroText3 = ""
+    @AppStorage("alertSounds") private var alertSounds = false
+    @AppStorage("quietAlerts") private var quietAlerts = false
     var body: some View {
-        Form {
+        VStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(SettingsTab.allCases) { item in
+                        Button(item.rawValue) { tab = item }
+                            .buttonStyle(.bordered).tint(tab == item ? RigTheme.amber : .secondary)
+                            .accessibilityIdentifier("settingsTab\(item.rawValue)")
+                    }
+                }.padding(.horizontal).padding(.vertical, 10)
+            }
+            .accessibilityIdentifier("settingsTabs")
+            .background(RigTheme.panel)
+            Form { tabContent }
+        }
+        .navigationTitle("Settings")
+        .fileImporter(isPresented: $importingADIF, allowedContentTypes: [.data, .plainText]) { result in
+            if case .success(let url) = result { _ = logbook.importADIF(from: url) }
+        }
+    }
+
+    @ViewBuilder private var tabContent: some View {
+        switch tab {
+        case .defaults:
+            Section("Save configuration") {
+                Button("Save settings") {
+                    radio.saveSettings()
+                    features.saveSettings()
+                }
+                .buttonStyle(.borderedProminent)
+                Text(features.settingsStatus).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("settingsSaveStatus")
+            }
             Section("Radio profile") {
                 LabeledContent("Radio", value: radio.snapshot.connected ? radio.snapshot.model : "Awaiting ID response")
+                    .accessibilityIdentifier("settingsRadioModel")
                 LabeledContent("Mode", value: "Real hardware only")
             }
+            Section("Operator defaults") {
+                TextField("Operator callsign", text: $features.operatorCallsign)
+                    .textInputAutocapitalization(.characters).autocorrectionDisabled()
+                TextField("DX watchlist callsigns", text: $features.watchlist, axis: .vertical)
+                    .textInputAutocapitalization(.characters).autocorrectionDisabled()
+            }
+        case .log:
+            Section("Local tablet log") {
+                LabeledContent("SQLite QSOs", value: "\(logbook.records.count) recent")
+                HStack {
+                    Button("Import ADIF") { importingADIF = true }
+                    Button("Build ADIF export") { exportURL = logbook.exportADIF(using: radio.adif) }
+                    if let exportURL { ShareLink(item: exportURL) { Text("Share ADIF") } }
+                }.buttonStyle(.borderless)
+                Text(logbook.message).font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Wavelog") {
+                TextField("Wavelog HTTPS base URL", text: Binding(get: { features.wavelog.baseURL }, set: { features.wavelog.baseURL = $0 }))
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                SecureField("API key", text: Binding(get: { features.wavelog.apiKey }, set: { features.wavelog.apiKey = $0 }))
+                if features.wavelog.stations.isEmpty {
+                    TextField("Station profile ID", text: Binding(get: { features.wavelog.stationProfile }, set: { features.wavelog.stationProfile = $0 }))
+                } else {
+                    Picker("Station", selection: Binding(get: { features.wavelog.stationProfile }, set: features.wavelog.selectStation)) {
+                        ForEach(features.wavelog.stations) { Text($0.label).tag($0.id) }
+                    }
+                }
+                HStack {
+                    Button("Sync queue") { Task { await features.wavelog.syncNow() } }
+                    Button("Full log") { Task { await features.wavelog.fullSync() } }
+                }.buttonStyle(.borderless)
+                LabeledContent("Pending", value: "\(features.wavelog.pendingCount)")
+                LabeledContent("Cached remote QSOs", value: "\(features.wavelog.contacts.count)")
+                Text(features.wavelog.status).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("wavelogStatus")
+            }
+            Section("Callbook enrichment") {
+                Picker("Provider", selection: Binding(get: { features.callbook.provider }, set: { features.callbook.provider = $0 })) {
+                    Text("QRZ.com").tag("QRZ"); Text("HamQTH").tag("HamQTH")
+                }
+                TextField("Username", text: Binding(get: { features.callbook.username }, set: { features.callbook.username = $0 }))
+                SecureField("Password", text: Binding(get: { features.callbook.password }, set: { features.callbook.password = $0 }))
+                Text("Log → Enrich fills Name, QTH and Country before the local save and Wavelog queue.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("CTY.DAT") {
+                LabeledContent("Status", value: features.cty.status).accessibilityIdentifier("ctyStatus")
+                Button("Update CTY.DAT") { Task { await features.cty.update() } }
+            }
+        case .cluster:
+            Section("DX cluster endpoints") {
+                TextField("Operator callsign", text: $features.operatorCallsign).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                endpointFields("Primary", host: $features.clusterHost, port: $features.clusterPort)
+                endpointFields("Fallback 1", host: $features.clusterFallbackHost, port: $features.clusterFallbackPort)
+                endpointFields("Fallback 2", host: $features.clusterFallback2Host, port: $features.clusterFallback2Port)
+                TextField("Watchlist callsigns", text: $features.watchlist, axis: .vertical).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                HStack { Button("Connect") { features.connectCluster() }; Button("Disconnect") { features.disconnectCluster() } }
+                    .buttonStyle(.borderless)
+                Text(features.clusterStatus).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("clusterStatus")
+            }
+        case .macros:
+            Section("CW macros") {
+                macroRow(label: $macroLabel1, text: $macroText1)
+                macroRow(label: $macroLabel2, text: $macroText2)
+                macroRow(label: $macroLabel3, text: $macroText3)
+                Text("Macros are stored locally. Transmission remains subject to the Safety controls and a live CW-mode radio session.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        case .alerts:
+            Section("Alerts") {
+                Toggle("Audible opportunity tones", isOn: $alertSounds)
+                Toggle("Quiet non-critical alerts", isOn: $quietAlerts)
+                Button("Refresh NOAA conditions") { Task { await features.refreshSolar() } }
+                Text(features.clusterStatus).font(.caption).foregroundStyle(.secondary)
+            }
+        case .safety:
+            Section("Transmit safety") {
+                Text("RigWeave never transmits on launch. Transmit-capable CAT actions require a live radio session and deliberate operator action.")
+                Button("Force receive now") { radio.sendCAT("RX;") }.disabled(!radio.snapshot.connected)
+                    .buttonStyle(.borderedProminent)
+                LabeledContent("Radio", value: radio.snapshot.connected ? "Connected" : "Disconnected")
+                LabeledContent("State", value: radio.snapshot.transmitting ? "TRANSMITTING" : "Receive")
+            }
+        case .audio:
+            Section("USB receive audio") {
+                Picker("Input", selection: $features.selectedAudioInputUID) {
+                    if features.audioInputs.isEmpty { Text("No physical input").tag("") }
+                    ForEach(features.audioInputs) { Text("\($0.name) · \($0.type)").tag($0.id) }
+                }
+                HStack {
+                    Button("Scan") { Task { await features.refreshAudioInputs() } }
+                    Button("Start") { Task { await features.startAudioCapture() } }
+                    Button("Stop") { features.stopAudioCapture() }
+                }.buttonStyle(.borderless)
+                Text(features.audioStatus).font(.caption).foregroundStyle(.secondary)
+                LabeledContent("Format", value: "\(Int(features.audioSampleRate)) Hz · I/Q stereo required")
+            }
+        case .health:
+            Section("System health") {
+                LabeledContent("CAT / USB", value: radio.snapshot.connected ? "LIVE" : "OFFLINE")
+                LabeledContent("DX cluster", value: features.clusterStatus)
+                LabeledContent("Wavelog", value: features.wavelog.status)
+                LabeledContent("Audio", value: features.audioStatus)
+                LabeledContent("Local database", value: "\(logbook.records.count) recent QSOs")
+                LabeledContent("CTY", value: features.cty.status)
+            }
+        case .diag:
             Section("Physical Apple hardware") {
-                LabeledContent("Driver", value: "CP2102 / Digirig · DriverKit")
-                Text("Driver approval is controlled by iPadOS, not by this screen. Open iPad Settings, choose Drivers, enable RigWeave CP210x Driver, then reconnect the adapter.")
+                LabeledContent("Driver", value: "Elecraft KXUSB / PL2303GC · DriverKit")
+                Text("Driver approval is controlled by iPadOS, not by this screen. Open iPad Settings, choose Drivers, enable RigWeave Prolific KXUSB Driver, then reconnect the cable.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("Open iPad Settings to enable driver") {
@@ -787,50 +947,42 @@ struct SettingsView: View {
                     Button("Connect") { radio.connect() }.disabled(radio.selectedPort.isEmpty)
                     Button("Disconnect") { radio.disconnect() }
                 }
+                .buttonStyle(.borderless)
                 Text(radio.transportStatus).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("settingsSerialStatus")
                 Text("Use Radio for frequency, mode and raw KX3 CAT commands.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Software") { LabeledContent("Shared core", value: radio.coreVersion) }
-            Section("DX cluster") {
-                TextField("Operator callsign", text: $features.operatorCallsign).textInputAutocapitalization(.characters).autocorrectionDisabled()
-                TextField("Host", text: $features.clusterHost).textInputAutocapitalization(.never).autocorrectionDisabled()
-                TextField("Port", text: $features.clusterPort).keyboardType(.numberPad)
-                TextField("Watchlist callsigns", text: $features.watchlist, axis: .vertical).textInputAutocapitalization(.characters).autocorrectionDisabled()
-                HStack { Button("Connect") { features.connectCluster() }; Button("Disconnect") { features.disconnectCluster() } }
-                Text(features.clusterStatus).font(.caption).foregroundStyle(.secondary)
-            }
-            Section("WSJT-X") {
-                TextField("UDP port", text: $features.wsjtxPort).keyboardType(.numberPad)
-                HStack { Button("Listen") { features.startWSJTX() }; Button("Stop") { features.stopWSJTX() } }
-                Text(features.wsjtxStatus).font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Wavelog sync") {
-                TextField("Wavelog base URL", text: Binding(get: { features.wavelog.baseURL }, set: { features.wavelog.baseURL = $0 })).textInputAutocapitalization(.never).autocorrectionDisabled()
-                SecureField("API key", text: Binding(get: { features.wavelog.apiKey }, set: { features.wavelog.apiKey = $0 }))
-                if features.wavelog.stations.isEmpty {
-                    TextField("Station profile ID", text: Binding(get: { features.wavelog.stationProfile }, set: { features.wavelog.stationProfile = $0 })).textInputAutocapitalization(.never).autocorrectionDisabled()
-                } else {
-                    Picker("Station", selection: Binding(get: { features.wavelog.stationProfile }, set: features.wavelog.selectStation)) {
-                        ForEach(features.wavelog.stations) { Text($0.label).tag($0.id) }
-                    }
-                }
+            Section("Required service tests") {
                 HStack {
+                    Button("Test Wavelog") { Task { await features.wavelog.testConnection() } }
+                    Button("Test QRZ / HamQTH") { Task { await features.callbook.testConnection() } }
+                    Button("Check time sync") { Task { await features.wavelog.checkDeviceTime() } }
                     Button("Load stations") { Task { await features.wavelog.loadStations() } }
-                    Button("Sync queue") { Task { await features.wavelog.syncNow() } }
-                    Button("Full log") { Task { await features.wavelog.fullSync() } }
-                }
-                LabeledContent("Pending", value: "\(features.wavelog.pendingCount)")
-                LabeledContent("Cached remote QSOs", value: "\(features.wavelog.contacts.count)")
+                }.buttonStyle(.borderless)
                 Text(features.wavelog.status).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("wavelogStatus")
+                Text(features.callbook.status).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("callbookStatus")
             }
-            Section("Callbook") {
-                Picker("Provider", selection: Binding(get: { features.callbook.provider }, set: { features.callbook.provider = $0 })) {
-                    Text("QRZ").tag("QRZ"); Text("HamQTH").tag("HamQTH")
-                }
-                TextField("Username", text: Binding(get: { features.callbook.username }, set: { features.callbook.username = $0 })).textInputAutocapitalization(.never).autocorrectionDisabled()
-                SecureField("Password", text: Binding(get: { features.callbook.password }, set: { features.callbook.password = $0 }))
-                Text("Credentials remain in the device Keychain and are sent only to the selected provider.").font(.caption).foregroundStyle(.secondary)
+        case .about:
+            Section("RigWeave") {
+                LabeledContent("Product", value: "Radio. Spectrum. Spots. Logs.")
+                LabeledContent("Shared core", value: radio.coreVersion)
+                Text("Local-first tablet control and logging for real radio hardware. Wavelog, QRZ.com, HamQTH, CTY.DAT and DX-cluster integrations are optional.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("WSJT-X is intentionally not exposed in Settings yet.").font(.caption).foregroundStyle(.secondary)
             }
-        }.navigationTitle("Settings")
+        }
+    }
+
+    private func endpointFields(_ title: String, host: Binding<String>, port: Binding<String>) -> some View {
+        HStack { TextField("\(title) host", text: host).textInputAutocapitalization(.never).autocorrectionDisabled()
+            TextField("Port", text: port).keyboardType(.numberPad).frame(maxWidth: 120) }
+    }
+
+    private func macroRow(label: Binding<String>, text: Binding<String>) -> some View {
+        HStack { TextField("Label", text: label).frame(maxWidth: 140)
+            TextField("CW text", text: text).textInputAutocapitalization(.characters).autocorrectionDisabled() }
     }
 }

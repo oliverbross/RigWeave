@@ -29,14 +29,24 @@ int main() {
     assert(std::string(rw_context_state(kx2_context).model) == "KX2");
     rw_context_destroy(kx2_context);
 
-    const char *instrument = "FB00007030000;SM18;SW14;PO37;AG190;RG210;BW0270;PC010;PA1;RA01;RT1;XT0;FR0;FT1;";
-    assert(rw_context_feed(context, instrument, std::strlen(instrument)) == 14);
+    const char *instrument = "FB00007030000;SM18;SW14;PO37;AG190;RG210;BW0270;PC010;ML045;MG030;KS020;IS 1500;PA1;RA01;RT1;XT0;FR0;FT1;GT004;";
+    assert(rw_context_feed(context, instrument, std::strlen(instrument)) == 19);
     state = rw_context_state(context);
     assert(state.vfo_b_hz == 7030000 && state.meter == 18);
     assert(state.swr_tenths == 14 && state.rf_output_tenths == 37);
     assert(state.af_gain == 190 && state.rf_gain == 210 && state.bandwidth_hz == 2700);
     assert(state.power_w == 10 && state.preamp == 1 && state.attenuator == 1);
+    assert(state.monitor_level == 45 && state.mic_gain == 30 && state.keyer_speed == 20 && state.if_shift_hz == 1500);
     assert(state.rit == 1 && state.xit == 0 && state.split == 1);
+    assert(state.agc_mode == 4 && state.rx_vfo == 0 && state.tx_vfo == 1);
+
+    std::string display = "DS12345678";
+    display.push_back(static_cast<char>(0x98));
+    display.push_back(static_cast<char>(0x88));
+    display.push_back(';');
+    assert(rw_context_feed(context, display.data(), display.size()) == 1);
+    state = rw_context_state(context);
+    assert(state.preamp == 1 && state.attenuator == 1 && state.cwt == 1);
 
     rw_context_reset(context);
     state = rw_context_state(context);
@@ -45,7 +55,7 @@ int main() {
     std::string oversized(600, 'A');
     assert(rw_context_feed(context, oversized.data(), oversized.size()) == 0);
     assert(rw_startup_command_count() == 0);
-    for (const char *query : {"K3;", "OM;", "ID;", "FA;", "MD;", "IF;", "TQ;"})
+    for (const char *query : {"K3;", "OM;", "ID;", "FA;", "MD;", "IF;", "TQ;", "ML;", "MG;", "KS;", "IS;"})
         assert(rw_classify_command(query) == RW_COMMAND_READ_ONLY);
     for (const char *unsafe : {"TX;", "RX;", "SWT44;", "SWH28;", "KY CQ;"})
         assert(rw_classify_command(unsafe) == RW_COMMAND_TRANSMIT);
@@ -79,6 +89,7 @@ int main() {
     assert(std::string(dx_json).find("\"watchlisted\":true") != std::string::npos);
     assert(std::string(dx_json).find("\"bandTimeline\":[") != std::string::npos);
     assert(std::string(dx_json).find("\"worldGrid\":[") != std::string::npos);
+    assert(std::string(dx_json).find("]],\"opportunities\":[") != std::string::npos);
     assert(std::string(dx_json).find("\"liveSpots\":[") != std::string::npos);
 
     assert(rw_feature_add_worked_qso(features, "JA1XYZ", "Japan", "20m", "FT8", "", 1719999900, 0) == 1);

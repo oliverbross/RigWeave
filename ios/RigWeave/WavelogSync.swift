@@ -95,6 +95,16 @@ final class WavelogSync: ObservableObject {
 
     func bind(core: FeatureCore) { self.core = core; Task { await syncNow() } }
 
+    func saveSettings() {
+        baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        stationProfile = stationProfile.trimmingCharacters(in: .whitespacesAndNewlines)
+        defaults.set(baseURL, forKey: "wavelogBaseURL")
+        defaults.set(stationProfile, forKey: "wavelogStationProfile")
+        KeychainValue.save(apiKey, account: "wavelogApiKey")
+        defaults.synchronize()
+        status = baseURL.isEmpty || apiKey.isEmpty ? "Wavelog settings saved; URL and API key are required" : "Wavelog settings saved"
+    }
+
     func enqueue(id: String, adif: String) {
         guard !queue.contains(where: { $0.id == id }) else { status = "QSO already queued or acknowledged"; return }
         queue.append(WavelogQueueItem(id: id, adif: adif, attempts: 0, nextAttempt: Date(), state: "pending", lastError: ""))
@@ -107,18 +117,16 @@ final class WavelogSync: ObservableObject {
             status = queue.isEmpty ? "Wavelog not configured" : "Wavelog credentials required; QSOs remain queued"
             return
         }
-        guard let endpoint = endpoint("qso", core: core) else { status = "Invalid Wavelog URL"; return }
+        let endpoints = endpointCandidates("qso", core: core)
+        guard !endpoints.isEmpty else { status = "Wavelog requires a valid HTTPS URL"; return }
         syncing = true; defer { syncing = false; persist() }
         for index in queue.indices where ["pending", "retry"].contains(queue[index].state) && queue[index].nextAttempt <= Date() {
             guard let payload = core.wavelogPayload(key: apiKey, station: stationProfile, adif: queue[index].adif) else {
                 queue[index].state = "quarantined"; queue[index].lastError = "Payload encoding failed"; continue
             }
             queue[index].attempts += 1
-            var request = URLRequest(url: endpoint); request.httpMethod = "POST"; request.httpBody = payload
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             do {
-                let (_, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse else { queue[index].state = "inspect"; queue[index].lastError = "Non-HTTP response"; continue }
+                let (_, http) = try await perform(endpoints: endpoints, method: "POST", body: payload)
                 apply(action: core.syncAction(status: http.statusCode, networkError: false, ambiguous: false), index: index,
                       retryAfter: http.value(forHTTPHeaderField: "Retry-After").flatMap(UInt32.init), core: core)
             } catch {
@@ -130,14 +138,15 @@ final class WavelogSync: ObservableObject {
     }
 
     func loadStations() async {
-        guard let core, !apiKey.isEmpty,
-              let endpoint = endpoint("station_info", core: core)?.appendingPathComponent(apiKey) else {
+        guard let core, !apiKey.isEmpty else {
             status = "Wavelog URL and API key are required"
             return
         }
+        let endpoints = endpointCandidates("station_info", core: core).map { $0.appendingPathComponent(apiKey) }
+        guard !endpoints.isEmpty else { status = "Wavelog requires a valid HTTPS URL"; return }
         status = "Loading Wavelog stations…"
         do {
-            let (data, response) = try await URLSession.shared.data(from: endpoint)
+            let (data, response) = try await perform(endpoints: endpoints, method: "GET")
             try Self.requireSuccess(response)
             guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
                 throw WavelogError.invalidResponse
@@ -155,36 +164,37 @@ final class WavelogSync: ObservableObject {
 
     func fullSync() async {
         guard !syncing else { return }
-        guard let core, !apiKey.isEmpty, let stationID = Int(stationProfile),
-              let endpoint = endpoint("get_contacts_adif", core: core) else {
+        guard let core, !apiKey.isEmpty, let stationID = Int(stationProfile) else {
             status = "Wavelog URL, API key and station are required"
             return
         }
+        let endpoints = endpointCandidates("get_contacts_adif", core: core)
+        guard !endpoints.isEmpty else { status = "Wavelog requires a valid HTTPS URL"; return }
         syncing = true; defer { syncing = false }
         var cursor: Int64 = 0
         var pages = 0
         var loaded: [WavelogContact] = []
+        var complete = false
         status = "Starting full Wavelog sync…"
         do {
             for page in 0..<256 {
                 let body: [String: Any] = ["key": apiKey, "station_id": stationID,
                     "fetchfromid": cursor, "output_format": "json", "fields": Self.contactFields]
-                var request = URLRequest(url: endpoint); request.httpMethod = "POST"
-                request.httpBody = try JSONSerialization.data(withJSONObject: body)
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                let (data, response) = try await URLSession.shared.data(for: request)
+                let payload = try JSONSerialization.data(withJSONObject: body)
+                let (data, response) = try await perform(endpoints: endpoints, method: "POST", body: payload)
                 try Self.requireSuccess(response)
                 let root = try JSONSerialization.jsonObject(with: data)
                 guard let exported = Self.integer(in: root, keys: ["exported_qsos", "exported_records", "exportedRecords"]),
                       let next = Self.integer(in: root, keys: ["lastfetchedid", "lastFetchedId", "last_fetched_id"]) else {
                     throw WavelogError.invalidCursor
                 }
-                if exported == 0 { break }
+                if exported == 0 { complete = true; break }
                 guard next > cursor else { throw WavelogError.invalidCursor }
                 loaded.append(contentsOf: Self.contactRows(in: root))
                 cursor = next; pages = page + 1; syncPages = pages
                 status = "Full sync page \(pages) · \(loaded.count) QSOs"
             }
+            guard complete else { throw WavelogError.incompleteSync }
             contacts = Self.deduplicated(loaded)
             lastFullSync = Date()
             if let data = try? JSONEncoder().encode(contacts) { try data.write(to: contactsURL, options: .atomic) }
@@ -195,6 +205,47 @@ final class WavelogSync: ObservableObject {
     func selectStation(_ id: String) {
         stationProfile = id
         if let station = stations.first(where: { $0.id == id }) { status = "Selected \(station.label)" }
+    }
+
+    func testConnection() async {
+        guard let core, !apiKey.isEmpty else {
+            status = "Wavelog URL and API key are required"
+            return
+        }
+        let endpoints = endpointCandidates("version", core: core)
+        guard !endpoints.isEmpty else { status = "Wavelog requires a valid HTTPS URL"; return }
+        status = "Testing Wavelog API…"
+        do {
+            let payload = try JSONSerialization.data(withJSONObject: ["key": apiKey])
+            let (data, response) = try await perform(endpoints: endpoints, method: "POST", body: payload)
+            try Self.requireSuccess(response)
+            guard !data.isEmpty else { throw WavelogError.invalidResponse }
+            let body = String(decoding: data, as: UTF8.self).lowercased()
+            guard !["error", "invalid", "unauthorized"].contains(where: body.contains) else {
+                throw WavelogError.invalidResponse
+            }
+            status = "Wavelog connection passed"
+        } catch {
+            status = "Wavelog test failed: \(error.localizedDescription)"
+        }
+    }
+
+    func checkDeviceTime() async {
+        guard let core else { status = "Wavelog service is not ready"; return }
+        let endpoints = endpointCandidates("version", core: core)
+        guard !endpoints.isEmpty else { status = "Set the Wavelog HTTPS URL before checking time"; return }
+        status = "Checking device time against Wavelog…"
+        do {
+            let payload = try JSONSerialization.data(withJSONObject: ["key": apiKey])
+            let (_, response) = try await perform(endpoints: endpoints, method: "POST", body: payload)
+            guard let header = response.value(forHTTPHeaderField: "Date") else { throw WavelogError.missingServerTime }
+            let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = .gmt; formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
+            guard let serverDate = formatter.date(from: header) else { throw WavelogError.missingServerTime }
+            let drift = abs(Date().timeIntervalSince(serverDate))
+            status = drift <= 5 ? "Device time synchronized · drift under 5 seconds" :
+                "Device time differs from Wavelog by \(Int(drift)) seconds · enable automatic date & time"
+        } catch { status = "Time check failed: \(error.localizedDescription)" }
     }
 
     private func apply(action: Int, index: Int, retryAfter: UInt32?, core: FeatureCore) {
@@ -216,11 +267,34 @@ final class WavelogSync: ObservableObject {
         return "Wavelog: \(acknowledged) acknowledged · \(pending) pending"
     }
 
-    private func endpoint(_ resource: String, core: FeatureCore) -> URL? {
+    private func endpointCandidates(_ resource: String, core: FeatureCore) -> [URL] {
         var value = core.normalizedWavelogURL(baseURL)
-        guard !value.isEmpty else { return nil }
-        if !value.hasSuffix("/index.php/api") { value += "/index.php/api" }
-        return URL(string: value)?.appendingPathComponent(resource)
+        while value.hasSuffix("/") { value.removeLast() }
+        guard let base = URL(string: value), base.scheme?.lowercased() == "https" else { return [] }
+        let roots: [String]
+        if value.hasSuffix("/index.php/api") || value.hasSuffix("/api") {
+            roots = [value]
+        } else if value.hasSuffix("/index.php") {
+            roots = [value + "/api"]
+        } else {
+            roots = [value + "/api", value + "/index.php/api"]
+        }
+        return roots.compactMap(URL.init(string:)).map { $0.appendingPathComponent(resource) }
+    }
+
+    private func perform(endpoints: [URL], method: String, body: Data? = nil) async throws -> (Data, HTTPURLResponse) {
+        for (index, endpoint) in endpoints.enumerated() {
+            var request = URLRequest(url: endpoint)
+            request.httpMethod = method
+            request.timeoutInterval = 20
+            request.httpBody = body
+            if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw WavelogError.invalidResponse }
+            if [404, 405].contains(http.statusCode), index + 1 < endpoints.count { continue }
+            return (data, http)
+        }
+        throw WavelogError.invalidResponse
     }
 
     private static let contactFields = ["CALL", "NAME", "BAND", "MODE", "SUBMODE", "DXCC", "COUNTRY",
@@ -295,11 +369,13 @@ final class WavelogSync: ObservableObject {
     }
 
     private enum WavelogError: LocalizedError {
-        case invalidResponse, invalidCursor, http(Int)
+        case invalidResponse, invalidCursor, incompleteSync, missingServerTime, http(Int)
         var errorDescription: String? {
             switch self {
             case .invalidResponse: "Invalid Wavelog response"
             case .invalidCursor: "Invalid Wavelog pagination cursor"
+            case .incompleteSync: "Wavelog full sync ended before the terminal page"
+            case .missingServerTime: "Wavelog did not return a server time"
             case .http(let status): "Wavelog HTTP \(status)"
             }
         }

@@ -1,27 +1,19 @@
 package app.rigweave.mobile
 
-import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
-import android.media.AudioDeviceInfo
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.MediaRecorder
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
-import java.net.DatagramPacket
-import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
@@ -29,7 +21,11 @@ import java.time.Instant
 
 data class AndroidDXSpot(
     val id: String, val callsign: String, val spotter: String, val frequencyHz: Long,
-    val band: String, val mode: String, val country: String, val comment: String, val watchlisted: Boolean,
+    val band: String, val mode: String, val country: String, val continent: String, val comment: String,
+    val score: Int, val confidence: Int, val samples: Int, val watchlisted: Boolean,
+    val workedCountry: Boolean, val workedCall: Boolean, val workedBand: Boolean,
+    val workedMode: Boolean, val workedBandMode: Boolean, val recentDupe: Boolean,
+    val distanceKm: Int, val bearingDegrees: Int, val pathState: String, val reason: String,
 )
 
 data class AndroidDXBand(val band: String, val spots5m: Int, val spots60m: Int, val uniqueCalls: Int,
@@ -41,8 +37,16 @@ class FeatureController(private val context: Context) {
     private val handle = NativeCore.featureCreate()
     private val scope = CoroutineScope(Job() + Dispatchers.IO)
     private var clusterSocket: Socket? = null
-    private var udpSocket: DatagramSocket? = null
-    private var audioRecord: AudioRecord? = null
+    private var clusterGeneration = 0
+    private val prefs = context.getSharedPreferences("dx_cluster", Context.MODE_PRIVATE)
+
+    var clusterHost by mutableStateOf(prefs.getString("host", "cluster.om0rx.com") ?: "cluster.om0rx.com")
+    var clusterPort by mutableStateOf(prefs.getInt("port", 7300))
+    var fallbackHost by mutableStateOf(prefs.getString("fallback_host", "") ?: "")
+    var fallbackPort by mutableStateOf(prefs.getInt("fallback_port", 7300))
+    var fallback2Host by mutableStateOf(prefs.getString("fallback2_host", "") ?: "")
+    var fallback2Port by mutableStateOf(prefs.getInt("fallback2_port", 7300))
+    var clusterCallsign by mutableStateOf(prefs.getString("callsign", "") ?: "")
 
     var clusterStatus by mutableStateOf("DX cluster disconnected"); private set
     var spots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
@@ -53,37 +57,60 @@ class FeatureController(private val context: Context) {
     var dxTimeline by mutableStateOf(emptyList<List<Int>>()); private set
     var dxWorld by mutableStateOf(emptyList<List<Int>>()); private set
     var dxSummary by mutableStateOf("No live DX data"); private set
-    var wsjtxStatus by mutableStateOf("WSJT-X listener stopped"); private set
-    var wsjtxMessage by mutableStateOf("No WSJT-X datagram received"); private set
-    var audioStatus by mutableStateOf("No physical audio capture"); private set
-    var spectrum by mutableStateOf(FloatArray(0)); private set
-    var waterfall by mutableStateOf(emptyList<FloatArray>()); private set
-    var noiseFloor by mutableStateOf(-120f); private set
-    var panRangeDb by mutableStateOf(72f)
-    var panFloorOffsetDb by mutableStateOf(-6f)
-    var panPalette by mutableStateOf(0)
-    private var noiseFloorSeeded = false
 
     fun setWatchlist(value: String) { NativeCore.featureWatchlist(handle, value) }
 
-    fun connectCluster(host: String, port: Int, callsign: String) {
-        disconnectCluster(); clusterStatus = "Connecting to $host:$port…"
+    fun connectCluster(host: String, port: Int, callsign: String,
+        fallbackHost: String = "", fallbackPort: Int = 7300,
+        fallback2Host: String = "", fallback2Port: Int = 7300) {
+        clusterHost = host.trim().lowercase(); clusterPort = port
+        clusterCallsign = callsign.trim().uppercase()
+        this.fallbackHost = fallbackHost.trim().lowercase(); this.fallbackPort = fallbackPort
+        this.fallback2Host = fallback2Host.trim().lowercase(); this.fallback2Port = fallback2Port
+        prefs.edit().putString("host", clusterHost).putInt("port", clusterPort).putString("callsign", clusterCallsign)
+            .putString("fallback_host", this.fallbackHost).putInt("fallback_port", this.fallbackPort)
+            .putString("fallback2_host", this.fallback2Host).putInt("fallback2_port", this.fallback2Port).apply()
+        disconnectCluster(); val generation = ++clusterGeneration
+        val endpoints = listOf(clusterHost to clusterPort, this.fallbackHost to this.fallbackPort,
+            this.fallback2Host to this.fallback2Port).filter { it.first.isNotBlank() && it.second in 1..65535 }.distinct()
         scope.launch {
-            try {
-                val socket = Socket(); socket.connect(InetSocketAddress(host, port), 12_000); clusterSocket = socket
-                if (callsign.isNotBlank()) { socket.getOutputStream().write((callsign.uppercase() + "\r\n").toByteArray()); socket.getOutputStream().flush() }
-                publishCluster("Connected to $host:$port")
-                BufferedReader(InputStreamReader(socket.getInputStream())).useLines { lines ->
-                    lines.forEach { line ->
-                        if (NativeCore.featureClusterLine(handle, line, Instant.now().epochSecond)) refreshDX()
+            var endpointIndex = 0
+            var reconnectAttempt = 0
+            while (generation == clusterGeneration && endpoints.isNotEmpty()) {
+                val (endpointHost, endpointPort) = endpoints[endpointIndex]
+                publishCluster("Connecting to $endpointHost:$endpointPort…")
+                try {
+                    val socket = Socket(); socket.connect(InetSocketAddress(endpointHost, endpointPort), 12_000); clusterSocket = socket
+                    val output = socket.getOutputStream()
+                    if (clusterCallsign.isNotBlank()) {
+                        output.write((clusterCallsign + "\r\n").toByteArray()); output.flush()
+                        delay(1_500)
+                        if (generation != clusterGeneration) return@launch
+                        output.write("sh/dx 50\r\n".toByteArray()); output.flush()
                     }
-                }
-                publishCluster("Cluster closed connection")
-            } catch (error: Exception) { publishCluster("Cluster failed: ${error.message ?: error.javaClass.simpleName}") }
+                    reconnectAttempt = 0
+                    publishCluster("Connected to $endpointHost:$endpointPort")
+                    BufferedReader(InputStreamReader(socket.getInputStream())).useLines { lines ->
+                        lines.forEach { line ->
+                            if (generation != clusterGeneration) return@useLines
+                            if (NativeCore.featureClusterLine(handle, line, Instant.now().epochSecond)) refreshDX()
+                        }
+                    }
+                } catch (error: Exception) {
+                    if (generation == clusterGeneration) publishCluster("$endpointHost failed · trying next cluster")
+                } finally { clusterSocket?.close(); clusterSocket = null }
+                if (generation != clusterGeneration) return@launch
+                endpointIndex = (endpointIndex + 1) % endpoints.size
+                val next = endpoints[endpointIndex]
+                val waitSeconds = minOf(30, 1 shl minOf(reconnectAttempt, 4))
+                reconnectAttempt++
+                publishCluster("Trying ${next.first}:${next.second} in ${waitSeconds}s…")
+                delay(waitSeconds * 1_000L)
+            }
         }
     }
 
-    fun disconnectCluster() { clusterSocket?.close(); clusterSocket = null; clusterStatus = "DX cluster disconnected" }
+    fun disconnectCluster() { clusterGeneration++; clusterSocket?.close(); clusterSocket = null; clusterStatus = "DX cluster disconnected" }
 
     fun refreshSolar() {
         scope.launch {
@@ -95,76 +122,8 @@ class FeatureController(private val context: Context) {
         }
     }
 
-    fun startWSJTX(port: Int) {
-        stopWSJTX(); scope.launch {
-            try {
-                val socket = DatagramSocket(port); socket.broadcast = true; udpSocket = socket
-                publishWSJTX("Listening for WSJT-X UDP on $port")
-                val bytes = ByteArray(65_507)
-                while (!socket.isClosed) {
-                    val packet = DatagramPacket(bytes, bytes.size); socket.receive(packet)
-                    val payload = bytes.copyOf(packet.length); val json = NativeCore.featureWsjtx(payload)
-                    withContext(Dispatchers.Main) { wsjtxMessage = json }
-                }
-            } catch (error: Exception) { if (udpSocket != null) publishWSJTX("WSJT-X failed: ${error.message}") }
-        }
-    }
-
-    fun stopWSJTX() { udpSocket?.close(); udpSocket = null; wsjtxStatus = "WSJT-X listener stopped" }
-
-    fun startAudio() {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            audioStatus = "Microphone / USB audio permission required"; return
-        }
-        stopAudio()
-        val rate = 48_000; val channelMask = AudioFormat.CHANNEL_IN_STEREO; val encoding = AudioFormat.ENCODING_PCM_16BIT
-        val minimum = AudioRecord.getMinBufferSize(rate, channelMask, encoding)
-        if (minimum <= 0) { audioStatus = "No supported physical stereo input"; return }
-        val record = AudioRecord(MediaRecorder.AudioSource.UNPROCESSED, rate, channelMask, encoding, minimum * 2)
-        val usb = record.routedDevice ?: context.getSystemService(android.media.AudioManager::class.java)
-            .getDevices(android.media.AudioManager.GET_DEVICES_INPUTS)
-            .firstOrNull { it.type == AudioDeviceInfo.TYPE_USB_DEVICE || it.type == AudioDeviceInfo.TYPE_USB_HEADSET }
-        if (usb != null) record.preferredDevice = usb
-        if (record.state != AudioRecord.STATE_INITIALIZED) { record.release(); audioStatus = "Physical audio input could not initialize"; return }
-        audioRecord = record; record.startRecording(); audioStatus = "Capturing ${usb?.productName ?: "physical input"} · $rate Hz"
-        scope.launch {
-            val buffer = ByteArray(minimum)
-            while (audioRecord === record && record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                val count = record.read(buffer, 0, buffer.size)
-                if (count > 0) {
-                    val bins = NativeCore.featurePanadapter(handle, buffer.copyOf(count), 2, 2, 16)
-                    if (bins.isNotEmpty()) {
-                        val centre = bins.size / 2
-                        val usable = bins.filterIndexed { index, value -> kotlin.math.abs(index - centre) > 4 && value.isFinite() }
-                        val mean = usable.average().toFloat()
-                        val quiet = usable.filter { it <= mean }
-                        val measured = (if (quiet.isEmpty()) mean.toDouble() else quiet.average()).toFloat()
-                        val row = FloatArray(256) { column ->
-                            val start = column * bins.size / 256
-                            val end = maxOf(start + 1, (column + 1) * bins.size / 256)
-                            var peak = measured
-                            for (index in start until minOf(end, bins.size)) peak = maxOf(peak, bins[index])
-                            peak
-                        }
-                        withContext(Dispatchers.Main) {
-                            noiseFloor = if (noiseFloorSeeded) noiseFloor + 0.1f * (measured - noiseFloor) else measured
-                            noiseFloorSeeded = true; spectrum = bins
-                            waterfall = (listOf(row) + waterfall).take(140)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fun stopAudio() {
-        audioRecord?.let { if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) it.stop(); it.release() }
-        audioRecord = null; spectrum = FloatArray(0); waterfall = emptyList(); noiseFloorSeeded = false
-        audioStatus = "Audio capture stopped"
-    }
-
     fun close() {
-        disconnectCluster(); stopWSJTX(); stopAudio(); scope.cancel(); NativeCore.featureDestroy(handle)
+        disconnectCluster(); scope.cancel(); NativeCore.featureDestroy(handle)
     }
 
     private suspend fun refreshDX() {
@@ -176,7 +135,11 @@ class FeatureController(private val context: Context) {
                 val row = rows.getJSONObject(index); val frequency = row.optLong("frequencyHz")
                 add(AndroidDXSpot("${row.optString("callsign")}-$frequency-${row.optLong("receivedEpoch")}",
                     row.optString("callsign"), row.optString("spotter"), frequency, row.optString("band"),
-                    row.optString("mode"), row.optString("country"), row.optString("comment"), row.optBoolean("watchlisted")))
+                    row.optString("mode"), row.optString("country"), row.optString("continent"), row.optString("comment"),
+                    row.optInt("score"), row.optInt("confidence"), row.optInt("samples"), row.optBoolean("watchlisted"),
+                    row.optBoolean("workedCountry"), row.optBoolean("workedCall"), row.optBoolean("workedBand"),
+                    row.optBoolean("workedMode"), row.optBoolean("workedBandMode"), row.optBoolean("recentDupe"),
+                    row.optInt("distanceKm"), row.optInt("bearingDegrees"), row.optString("pathState"), row.optString("reason")))
             }
         }
         val loaded = loadSpots("opportunities")
@@ -217,5 +180,4 @@ class FeatureController(private val context: Context) {
     }
 
     private suspend fun publishCluster(value: String) = withContext(Dispatchers.Main) { clusterStatus = value }
-    private suspend fun publishWSJTX(value: String) = withContext(Dispatchers.Main) { wsjtxStatus = value }
 }

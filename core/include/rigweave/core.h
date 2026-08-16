@@ -40,6 +40,12 @@ typedef struct rw_radio_state {
     int rx_vfo;
     int tx_vfo;
     int split;
+    int agc_mode;
+    int cwt;
+    int monitor_level;
+    int mic_gain;
+    int keyer_speed;
+    int if_shift_hz;
     uint64_t revision;
 } rw_radio_state;
 

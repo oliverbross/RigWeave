@@ -18,15 +18,17 @@
 		A10000000000000000000008 /* SerialTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* SerialTransport.swift */; };
 		A10000000000000000000009 /* CP210xDriver.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* CP210xDriver.cpp */; };
 		A1000000000000000000000A /* CP210xDriver.iig in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* CP210xDriver.iig */; };
+		A10000000000000000000016 /* KXUSBUserClient.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001A /* KXUSBUserClient.cpp */; };
+		A10000000000000000000017 /* KXUSBUserClient.iig in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001B /* KXUSBUserClient.iig */; };
 		A1000000000000000000000B /* DriverKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000F /* DriverKit.framework */; };
 		A1000000000000000000000C /* USBDriverKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* USBDriverKit.framework */; };
-		A1000000000000000000000D /* USBSerialDriverKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* USBSerialDriverKit.framework */; };
-		A1000000000000000000000E /* SerialDriverKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* SerialDriverKit.framework */; };
 		A1000000000000000000000F /* CP210xDriver.dext in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* CP210xDriver.dext */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		A10000000000000000000010 /* FeatureModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* FeatureModel.swift */; };
 		A10000000000000000000011 /* WavelogSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000015 /* WavelogSync.swift */; };
 		A10000000000000000000012 /* CallbookService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000016 /* CallbookService.swift */; };
 		A10000000000000000000013 /* Settings.bundle in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* Settings.bundle */; };
+		A10000000000000000000014 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* IOKit.framework */; };
+		A10000000000000000000015 /* KXUSBDriverClient.mm in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* KXUSBDriverClient.mm */; };
 		B10000000000000000000001 /* features.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* features.cpp */; };
 		B10000000000000000000002 /* adif.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000002 /* adif.cpp */; };
 		B10000000000000000000003 /* cat_parser.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000003 /* cat_parser.cpp */; };
@@ -85,17 +87,19 @@
 		A2000000000000000000000A /* RigWeave.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = RigWeave.entitlements; sourceTree = "<group>"; };
 		A2000000000000000000000B /* CP210xDriver.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = CP210xDriver.cpp; sourceTree = "<group>"; };
 		A2000000000000000000000C /* CP210xDriver.iig */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.iig; path = CP210xDriver.iig; sourceTree = "<group>"; };
+		A2000000000000000000001A /* KXUSBUserClient.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = KXUSBUserClient.cpp; sourceTree = "<group>"; };
+		A2000000000000000000001B /* KXUSBUserClient.iig */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.iig; path = KXUSBUserClient.iig; sourceTree = "<group>"; };
 		A2000000000000000000000D /* CP210xDriver.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CP210xDriver.entitlements; sourceTree = "<group>"; };
 		A2000000000000000000000E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A2000000000000000000000F /* DriverKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = DriverKit.framework; path = System/DriverKit/System/Library/Frameworks/DriverKit.framework; sourceTree = SDKROOT; };
 		A20000000000000000000010 /* USBDriverKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = USBDriverKit.framework; path = System/DriverKit/System/Library/Frameworks/USBDriverKit.framework; sourceTree = SDKROOT; };
-		A20000000000000000000011 /* USBSerialDriverKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = USBSerialDriverKit.framework; path = System/DriverKit/System/Library/Frameworks/USBSerialDriverKit.framework; sourceTree = SDKROOT; };
-		A20000000000000000000012 /* SerialDriverKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SerialDriverKit.framework; path = System/DriverKit/System/Library/Frameworks/SerialDriverKit.framework; sourceTree = SDKROOT; };
 		A20000000000000000000013 /* CP210xDriver.dext */ = {isa = PBXFileReference; explicitFileType = "wrapper.driver-extension"; includeInIndex = 0; path = CP210xDriver.dext; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000000000000000000014 /* FeatureModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureModel.swift; sourceTree = "<group>"; };
 		A20000000000000000000015 /* WavelogSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WavelogSync.swift; sourceTree = "<group>"; };
 		A20000000000000000000016 /* CallbookService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallbookService.swift; sourceTree = "<group>"; };
 		A20000000000000000000017 /* Settings.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = Settings.bundle; sourceTree = "<group>"; };
+		A20000000000000000000018 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
+		A20000000000000000000019 /* KXUSBDriverClient.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = KXUSBDriverClient.mm; sourceTree = "<group>"; };
 		B20000000000000000000001 /* features.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = features.cpp; path = ../core/src/features.cpp; sourceTree = SOURCE_ROOT; };
 		B20000000000000000000002 /* adif.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = adif.cpp; path = ../core/portable/src/adif.cpp; sourceTree = SOURCE_ROOT; };
 		B20000000000000000000003 /* cat_parser.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = cat_parser.cpp; path = ../core/portable/src/cat_parser.cpp; sourceTree = SOURCE_ROOT; };
@@ -125,6 +129,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000007 /* libsqlite3.tbd in Frameworks */,
+				A10000000000000000000014 /* IOKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -134,8 +139,6 @@
 			files = (
 				A1000000000000000000000B /* DriverKit.framework in Frameworks */,
 				A1000000000000000000000C /* USBDriverKit.framework in Frameworks */,
-				A1000000000000000000000D /* USBSerialDriverKit.framework in Frameworks */,
-				A1000000000000000000000E /* SerialDriverKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -166,6 +169,7 @@
 				A20000000000000000000016 /* CallbookService.swift */,
 				A20000000000000000000017 /* Settings.bundle */,
 				A20000000000000000000009 /* SerialTransport.swift */,
+				A20000000000000000000019 /* KXUSBDriverClient.mm */,
 				A20000000000000000000005 /* RigWeave-Bridging-Header.h */,
 				A2000000000000000000000A /* RigWeave.entitlements */,
 			);
@@ -197,6 +201,8 @@
 			children = (
 				A2000000000000000000000B /* CP210xDriver.cpp */,
 				A2000000000000000000000C /* CP210xDriver.iig */,
+				A2000000000000000000001A /* KXUSBUserClient.cpp */,
+				A2000000000000000000001B /* KXUSBUserClient.iig */,
 				A2000000000000000000000D /* CP210xDriver.entitlements */,
 				A2000000000000000000000E /* Info.plist */,
 			);
@@ -209,8 +215,7 @@
 				A20000000000000000000007 /* libsqlite3.tbd */,
 				A2000000000000000000000F /* DriverKit.framework */,
 				A20000000000000000000010 /* USBDriverKit.framework */,
-				A20000000000000000000011 /* USBSerialDriverKit.framework */,
-				A20000000000000000000012 /* SerialDriverKit.framework */,
+				A20000000000000000000018 /* IOKit.framework */,
 				D1270766CF2E2320EC66ACAF /* iOS */,
 			);
 			name = Frameworks;
@@ -394,6 +399,7 @@
 				A10000000000000000000012 /* CallbookService.swift in Sources */,
 				A10000000000000000000006 /* core.cpp in Sources */,
 				A10000000000000000000008 /* SerialTransport.swift in Sources */,
+				A10000000000000000000015 /* KXUSBDriverClient.mm in Sources */,
 				B10000000000000000000001 /* features.cpp in Sources */,
 				B10000000000000000000002 /* adif.cpp in Sources */,
 				B10000000000000000000003 /* cat_parser.cpp in Sources */,
@@ -414,6 +420,8 @@
 			files = (
 				A10000000000000000000009 /* CP210xDriver.cpp in Sources */,
 				A1000000000000000000000A /* CP210xDriver.iig in Sources */,
+				A10000000000000000000016 /* KXUSBUserClient.cpp in Sources */,
+				A10000000000000000000017 /* KXUSBUserClient.iig in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -505,7 +513,7 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CODE_SIGN_ENTITLEMENTS = RigWeave/RigWeave.entitlements;
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 38;
 				DEVELOPMENT_TEAM = 4WCMQ4U946;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -544,7 +552,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = RigWeave/RigWeave.entitlements;
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 38;
 				DEVELOPMENT_TEAM = 4WCMQ4U946;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = (
@@ -585,7 +593,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = CP210xDriver/CP210xDriver.Debug.entitlements;
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 38;
 				DEVELOPMENT_TEAM = 4WCMQ4U946;
 				DRIVERKIT_DEPLOYMENT_TARGET = 22.0;
 				GCC_ENABLE_CPP_EXCEPTIONS = NO;
@@ -612,7 +620,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = CP210xDriver/CP210xDriver.entitlements;
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 38;
 				DEVELOPMENT_TEAM = 4WCMQ4U946;
 				DRIVERKIT_DEPLOYMENT_TARGET = 22.0;
 				GCC_ENABLE_CPP_EXCEPTIONS = NO;

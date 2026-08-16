@@ -44,7 +44,9 @@ Java_app_rigweave_mobile_NativeCore_state(JNIEnv *env, jobject, jlong handle) {
         << state.vfo_b_hz << '|' << state.connected << '|' << state.transmitting << '|' << state.meter << '|'
         << state.swr_tenths << '|' << state.rf_output_tenths << '|' << state.af_gain << '|' << state.rf_gain << '|'
         << state.bandwidth_hz << '|' << state.power_w << '|' << state.preamp << '|' << state.attenuator << '|'
-        << state.rit << '|' << state.xit << '|' << state.split << '|' << state.revision;
+        << state.rit << '|' << state.xit << '|' << state.rx_vfo << '|' << state.tx_vfo << '|' << state.split << '|'
+        << state.agc_mode << '|' << state.cwt << '|' << state.monitor_level << '|' << state.mic_gain << '|'
+        << state.keyer_speed << '|' << state.if_shift_hz << '|' << state.revision;
     return env->NewStringUTF(out.str().c_str());
 }
 
@@ -111,27 +113,4 @@ Java_app_rigweave_mobile_NativeCore_featureDxSnapshot(JNIEnv *env, jobject, jlon
 extern "C" JNIEXPORT void JNICALL
 Java_app_rigweave_mobile_NativeCore_featureSolar(JNIEnv *, jobject, jlong handle, jfloat flux, jfloat a, jfloat kp, jlong epoch) {
     rw_feature_set_solar(features(handle), flux, a, kp, static_cast<int64_t>(epoch));
-}
-
-extern "C" JNIEXPORT jfloatArray JNICALL
-Java_app_rigweave_mobile_NativeCore_featurePanadapter(JNIEnv *env, jobject, jlong handle, jbyteArray pcm,
-                                                       jint channels, jint subframeBytes, jint bits) {
-    if (!pcm) return env->NewFloatArray(0);
-    const auto length = env->GetArrayLength(pcm); auto *bytes = env->GetByteArrayElements(pcm, nullptr);
-    const int accepted = rw_panadapter_push_pcm(features(handle), reinterpret_cast<const uint8_t *>(bytes),
-        static_cast<size_t>(length), static_cast<unsigned>(channels), static_cast<unsigned>(subframeBytes), static_cast<unsigned>(bits));
-    env->ReleaseByteArrayElements(pcm, bytes, JNI_ABORT);
-    if (!accepted) return env->NewFloatArray(0);
-    float bins[1024]{}; const auto count = rw_panadapter_copy_db_bins(features(handle), bins, 1024);
-    auto result = env->NewFloatArray(static_cast<jsize>(count));
-    env->SetFloatArrayRegion(result, 0, static_cast<jsize>(count), bins);
-    return result;
-}
-
-extern "C" JNIEXPORT jstring JNICALL
-Java_app_rigweave_mobile_NativeCore_featureWsjtx(JNIEnv *env, jobject, jbyteArray datagram) {
-    if (!datagram) return env->NewStringUTF("{\"valid\":false,\"error\":\"EMPTY DATAGRAM\"}");
-    const auto length = env->GetArrayLength(datagram); auto *bytes = env->GetByteArrayElements(datagram, nullptr);
-    char output[65536]{}; rw_wsjtx_parse_json(output, sizeof(output), reinterpret_cast<const uint8_t *>(bytes), static_cast<size_t>(length));
-    env->ReleaseByteArrayElements(datagram, bytes, JNI_ABORT); return env->NewStringUTF(output);
 }

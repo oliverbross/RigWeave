@@ -50,6 +50,15 @@ bool unsigned_payload(std::string_view frame, std::string_view prefix, int& outp
     return true;
 }
 
+bool spaced_unsigned_payload(std::string_view frame, std::string_view prefix, int& output) {
+    if (frame.rfind(prefix, 0) != 0) return false;
+    auto payload = frame.substr(prefix.size());
+    if (!payload.empty() && payload.front() == ' ') payload.remove_prefix(1);
+    if (!all_digits(payload)) return false;
+    output = std::stoi(std::string(payload));
+    return true;
+}
+
 bool bool_payload(std::string_view frame, std::string_view prefix, int& output) {
     int value = 0;
     if (!unsigned_payload(frame, prefix, value)) return false;
@@ -123,6 +132,20 @@ bool apply_frame(CoreContext &context, const std::string &raw) {
     } else if (frame.rfind("TQ", 0) == 0 && frame.size() >= 3 && (frame[2] == '0' || frame[2] == '1')) {
         next.transmitting = frame[2] == '1' ? 1 : 0;
         recognized = true;
+    } else if (frame.rfind("DS", 0) == 0 && frame.size() >= 12) {
+        const auto icons = static_cast<unsigned char>(frame[10]);
+        const auto extended_icons = static_cast<unsigned char>(frame[11]);
+        next.preamp = (icons & 0x10U) != 0U;
+        next.attenuator = (icons & 0x08U) != 0U;
+        next.rit = (icons & 0x02U) != 0U;
+        next.xit = (icons & 0x01U) != 0U;
+        next.cwt = (extended_icons & 0x08U) != 0U;
+        recognized = true;
+    } else if (frame.rfind("GT", 0) == 0 && frame.size() >= 5 &&
+               all_digits(std::string_view(frame).substr(2, 3))) {
+        next.agc_mode = std::stoi(frame.substr(2, 3));
+        if (frame.size() >= 6 && frame[5] == '0') next.agc_mode = 0;
+        recognized = true;
     } else if (unsigned_payload(frame, "SM", next.meter)) {
         next.meter = std::clamp(next.meter, 0, 30); recognized = true;
     } else if (unsigned_payload(frame, "SW", next.swr_tenths)) {
@@ -137,6 +160,14 @@ bool apply_frame(CoreContext &context, const std::string &raw) {
         next.bandwidth_hz = std::clamp(bandwidth_units, 0, 9999) * 10; recognized = true;
     } else if (unsigned_payload(frame, "PC", next.power_w)) {
         next.power_w = std::clamp(next.power_w, 0, 100); recognized = true;
+    } else if (unsigned_payload(frame, "ML", next.monitor_level)) {
+        next.monitor_level = std::clamp(next.monitor_level, 0, 60); recognized = true;
+    } else if (unsigned_payload(frame, "MG", next.mic_gain)) {
+        next.mic_gain = std::clamp(next.mic_gain, 0, 60); recognized = true;
+    } else if (unsigned_payload(frame, "KS", next.keyer_speed)) {
+        next.keyer_speed = std::clamp(next.keyer_speed, 8, 50); recognized = true;
+    } else if (spaced_unsigned_payload(frame, "IS", next.if_shift_hz)) {
+        next.if_shift_hz = std::clamp(next.if_shift_hz, 0, 9999); recognized = true;
     } else if (bool_payload(frame, "PA", next.preamp)) {
         recognized = true;
     } else if (unsigned_payload(frame, "RA", next.attenuator)) {
@@ -201,6 +232,12 @@ void rw_context_reset(rw_context *context) {
     context->core.state.meter = 0;
     context->core.state.swr_tenths = -1;
     context->core.state.rf_output_tenths = -1;
+    context->core.state.agc_mode = -1;
+    context->core.state.cwt = 0;
+    context->core.state.monitor_level = -1;
+    context->core.state.mic_gain = -1;
+    context->core.state.keyer_speed = -1;
+    context->core.state.if_shift_hz = -1;
     context->core.state.revision = 0;
 }
 
@@ -225,9 +262,9 @@ rw_radio_state rw_context_state(const rw_context *context) {
 rw_command_class rw_classify_command(const char *command) {
     if (!command) return RW_COMMAND_UNKNOWN;
     const std::string value = upper(command);
-    static constexpr std::array<std::string_view, 21> safe{
+    static constexpr std::array<std::string_view, 27> safe{
         "K3;", "OM;", "ID;", "FA;", "FB;", "MD;", "IF;", "TQ;", "SM;", "SW;", "PO;",
-        "AG;", "RG;", "BW;", "PC;", "PA;", "RA;", "RT;", "XT;", "FR;", "FT;"
+        "AG;", "RG;", "BW;", "PC;", "ML;", "MG;", "KS;", "IS;", "PA;", "RA;", "RT;", "XT;", "FR;", "FT;", "DS;", "GT;"
     };
     if (std::find(safe.begin(), safe.end(), value) != safe.end()) return RW_COMMAND_READ_ONLY;
     if (value.rfind("TX", 0) == 0 || value.rfind("RX", 0) == 0 ||

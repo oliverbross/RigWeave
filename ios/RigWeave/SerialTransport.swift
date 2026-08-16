@@ -10,10 +10,10 @@ final class SerialTransport {
 
         var errorDescription: String? {
             switch self {
-            case .noPort: "No CP210x serial port is exposed by DriverKit."
-            case .openFailed(let code): "Could not open serial port (errno \(code))."
-            case .configureFailed(let code): "Could not configure 38400 8N1 (errno \(code))."
-            case .writeFailed(let code): "CAT write failed (errno \(code))."
+            case .noPort: "No active PL2303/KXUSB DriverKit service is available."
+            case .openFailed(let code): "Could not open the KXUSB driver service (IOReturn 0x\(String(UInt32(bitPattern: code), radix: 16)))."
+            case .configureFailed(let code): "The KXUSB driver did not become ready (IOReturn 0x\(String(UInt32(bitPattern: code), radix: 16)))."
+            case .writeFailed(let code): "CAT write failed (IOReturn 0x\(String(UInt32(bitPattern: code), radix: 16)))."
             }
         }
     }
@@ -22,146 +22,111 @@ final class SerialTransport {
         "K3;", "OM;", "ID;", "FA;", "FB;", "MD;", "IF;", "TQ;", "SM;", "SW;", "PO;",
         "AG;", "RG;", "BW;", "PC;", "PA;", "RA;", "RT;", "XT;", "FR;", "FT;"
     ]
+
+    private static let virtualPath = "driverkit://pl2303-kxusb"
+
     private let queue = DispatchQueue(label: "app.rigweave.serial", qos: .userInitiated)
-    private let descriptorLock = NSLock()
-    private var descriptor: Int32 = -1
-    private var readSource: DispatchSourceRead?
+    private var connection: UInt32 = 0
     private var pollTimer: DispatchSourceTimer?
     private var queryIndex = 0
+    private var pollTick = 0
 
     var onData: ((Data) -> Void)?
     var onStatus: ((String) -> Void)?
 
-    static func serialPorts() -> [String] {
-        let entries = (try? FileManager.default.contentsOfDirectory(atPath: "/dev")) ?? []
-        return entries
-            .filter { $0.hasPrefix("cu.") || $0.hasPrefix("tty.") }
-            .sorted { left, right in
-                let leftPreferred = isCandidate(left), rightPreferred = isCandidate(right)
-                return leftPreferred == rightPreferred ? left < right : leftPreferred
-            }
-            .map { "/dev/\($0)" }
-    }
+    var isConnected: Bool { queue.sync { connection != 0 } }
 
-    private static func isCandidate(_ name: String) -> Bool {
-        guard name.hasPrefix("cu.") || name.hasPrefix("tty.") else { return false }
-        let value = name.lowercased()
-        return ["usb", "slab", "cp210", "serial", "digirig", "modem"].contains { value.contains($0) }
+    static func serialPorts() -> [String] {
+        rigweave_kxusb_available() == 1 ? [virtualPath] : []
     }
 
     func connect(path: String) throws {
-        disconnect()
-        guard !path.isEmpty else { throw TransportError.noPort }
-        let fd = Darwin.open(path, O_RDWR | O_NOCTTY | O_NONBLOCK)
-        guard fd >= 0 else { throw TransportError.openFailed(errno) }
-        do {
-            try Self.configure(fd)
-        } catch {
-            Darwin.close(fd)
-            throw error
+        try queue.sync {
+            disconnectLocked()
+            guard path == Self.virtualPath else {
+                throw TransportError.noPort
+            }
+            var newConnection: UInt32 = 0
+            let result = rigweave_kxusb_open(&newConnection)
+            guard result == 0, newConnection != 0 else {
+                throw TransportError.openFailed(result)
+            }
+            connection = newConnection
+            startPollingLocked()
         }
-        descriptorLock.lock()
-        descriptor = fd
-        descriptorLock.unlock()
-        installReader(fd: fd)
-        startPolling()
-        onStatus?("Connected: \((path as NSString).lastPathComponent) · 38400 8N1")
+        onStatus?("Connected: Elecraft KXUSB · PL2303GC · 38400 8N1")
     }
 
     func disconnect() {
+        queue.sync { disconnectLocked() }
+    }
+
+    private func disconnectLocked() {
         pollTimer?.cancel()
         pollTimer = nil
-        let source = readSource
-        readSource = nil
-        descriptorLock.lock()
-        let fd = descriptor
-        descriptor = -1
-        descriptorLock.unlock()
-        if let source {
-            // A dispatch source may still have an event handler in flight when
-            // it is cancelled. Close from its cancellation handler so this fd
-            // cannot be reused while that stale handler still references it.
-            source.cancel()
-        } else if fd >= 0 {
-            Darwin.close(fd)
-        }
+        let oldConnection = connection
+        connection = 0
+        if oldConnection != 0 { rigweave_kxusb_close(oldConnection) }
         queryIndex = 0
+        pollTick = 0
     }
 
     func send(_ command: String) throws {
         guard command.hasSuffix(";"), command.utf8.count <= 128 else {
             throw TransportError.writeFailed(EINVAL)
         }
+        try queue.sync { try sendLocked(command) }
+    }
+
+    private func sendLocked(_ command: String) throws {
         let bytes = Array(command.utf8)
-        descriptorLock.lock()
-        defer { descriptorLock.unlock() }
-        guard descriptor >= 0 else { throw TransportError.noPort }
-        var offset = 0
-        var failure = Int32(0)
-        bytes.withUnsafeBytes { pointer in
-            while offset < pointer.count {
-                let count = Darwin.write(descriptor, pointer.baseAddress?.advanced(by: offset), pointer.count - offset)
-                if count > 0 {
-                    offset += count
-                } else if count < 0 && errno == EINTR {
-                    continue
-                } else {
-                    failure = count < 0 ? errno : EIO
-                    break
-                }
-            }
+        guard connection != 0 else { throw TransportError.noPort }
+
+        let result = bytes.withUnsafeBytes { pointer in
+            rigweave_kxusb_write(connection,
+                                 pointer.bindMemory(to: UInt8.self).baseAddress,
+                                 pointer.count)
         }
-        guard offset == bytes.count else { throw TransportError.writeFailed(failure) }
+        guard result == 0 else {
+            throw TransportError.writeFailed(result)
+        }
     }
 
-    private func installReader(fd: Int32) {
-        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
-        source.setEventHandler { [weak self] in
-            guard let self else { return }
-            var bytes = [UInt8](repeating: 0, count: 512)
-            while true {
-                let count = Darwin.read(fd, &bytes, bytes.count)
-                if count > 0 {
-                    self.onData?(Data(bytes.prefix(Int(count))))
-                } else {
-                    break
-                }
-            }
-        }
-        source.setCancelHandler { Darwin.close(fd) }
-        readSource = source
-        source.resume()
-    }
-
-    private func startPolling() {
+    private func startPollingLocked() {
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(180), leeway: .milliseconds(25))
-        timer.setEventHandler { [weak self] in
-            guard let self else { return }
-            let command = Self.readOnlyQueries[self.queryIndex % Self.readOnlyQueries.count]
-            self.queryIndex += 1
-            do {
-                try self.send(command)
-            } catch {
-                self.onStatus?(error.localizedDescription)
-            }
-        }
+        timer.schedule(deadline: .now(), repeating: .milliseconds(25), leeway: .milliseconds(5))
+        timer.setEventHandler { [weak self] in self?.pollOnce() }
         pollTimer = timer
         timer.resume()
     }
 
-    private static func configure(_ fd: Int32) throws {
-        var options = termios()
-        guard tcgetattr(fd, &options) == 0 else { throw TransportError.configureFailed(errno) }
-        cfmakeraw(&options)
-        options.c_cflag |= tcflag_t(CLOCAL | CREAD | CS8)
-        options.c_cflag &= ~tcflag_t(PARENB | CSTOPB | CRTSCTS)
-        options.c_cc.16 = 1
-        options.c_cc.17 = 0
-        guard cfsetspeed(&options, speed_t(B38400)) == 0,
-              tcsetattr(fd, TCSANOW, &options) == 0 else {
-            throw TransportError.configureFailed(errno)
+    private func pollOnce() {
+        let currentConnection = connection
+        guard currentConnection != 0 else { return }
+
+        var bytes = [UInt8](repeating: 0, count: 512)
+        var count = bytes.count
+        let result = bytes.withUnsafeMutableBytes { pointer in
+            rigweave_kxusb_read(currentConnection,
+                                pointer.bindMemory(to: UInt8.self).baseAddress,
+                                pointer.count, &count)
         }
-        tcflush(fd, TCIOFLUSH)
+        if result == 0, count > 0 {
+            onData?(Data(bytes.prefix(count)))
+        } else if result != 0 {
+            let code = String(UInt32(bitPattern: result), radix: 16)
+            disconnectLocked()
+            onStatus?("KXUSB connection lost (IOReturn 0x\(code)); waiting for the physical driver to return")
+            return
+        }
+
+        pollTick += 1
+        if pollTick >= 7 {
+            pollTick = 0
+            let command = Self.readOnlyQueries[queryIndex % Self.readOnlyQueries.count]
+            queryIndex += 1
+            do { try sendLocked(command) }
+            catch { onStatus?(error.localizedDescription) }
+        }
     }
 }
