@@ -24,6 +24,7 @@ import java.util.Locale
 data class AndroidCtyRecord(
     val country: String = "", val dxcc: String = "", val continent: String = "",
     val region: String = "", val cqZone: String = "", val ituZone: String = "",
+    val latitude: Double = 0.0, val longitude: Double = 0.0,
 )
 
 enum class CtyUpdateState { NOT_INSTALLED, CHECKING, CURRENT, AVAILABLE, UPDATING, FAILED }
@@ -212,7 +213,8 @@ class CtyController(context: Context) {
         if (fields.size != 10) return@flatMap emptySequence()
         val continent = fields[3].trim().uppercase()
         val entity = AndroidCtyRecord(fields[1].trim(), fields[2].trim(), continent,
-            continentName(continent), fields[4].trim(), fields[5].trim())
+            continentName(continent), fields[4].trim(), fields[5].trim(),
+            fields[6].trim().toDoubleOrNull() ?: 0.0, -(fields[7].trim().toDoubleOrNull() ?: 0.0))
         val primary = fields[0].trim()
         sequenceOf(primary).plus(fields[9].removeSuffix(";").trim().split(Regex("\\s+")).asSequence())
             .mapNotNull { prefix(it, entity) }
@@ -223,7 +225,8 @@ class CtyController(context: Context) {
         if (fields.size != 9) emptyList() else {
             val continent = fields[3].trim().uppercase()
             val entity = AndroidCtyRecord(fields[0].trim(), "", continent, continentName(continent),
-                fields[1].trim(), fields[2].trim())
+                fields[1].trim(), fields[2].trim(), fields[4].trim().toDoubleOrNull() ?: 0.0,
+                -(fields[5].trim().toDoubleOrNull() ?: 0.0))
             (listOf(fields[7]) + fields[8].split(',')).mapNotNull { prefix(it, entity) }
         }
     }

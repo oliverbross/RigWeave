@@ -71,7 +71,7 @@ data class NeuralWspr(val available: Boolean = false, val updatedEpoch: Long = 0
     val hf: List<WsprBandActivity> = emptyList(), val vhf: List<WsprBandActivity> = emptyList(), val error: String = "")
 
 data class BriefingItem(val title: String, val link: String, val published: String = "", val summary: String = "",
-    val callsigns: List<String> = emptyList())
+    val callsigns: List<String> = emptyList(), val imageUrl: String = "")
 data class BriefingSource(val id: String, val name: String, val site: String, val items: List<BriefingItem> = emptyList(),
     val updatedEpoch: Long = 0, val stale: Boolean = false, val error: String = "")
 
@@ -343,6 +343,8 @@ class NeuralDxController(private val context: Context, private val database: Qso
     private var satellitePoint: GeoPoint? = null
     private val lightningBuffer = ArrayDeque<LightningStrike>()
     private var lastIngestIds = emptySet<String>()
+    private var lastIngestStation: String? = null
+    private var lastCtyRevision = Long.MIN_VALUE
 
     var weather by mutableStateOf(loadWeatherCache()); private set
     var wspr by mutableStateOf(NeuralWspr()); private set
@@ -374,18 +376,22 @@ class NeuralDxController(private val context: Context, private val database: Qso
     var perplexityKey by mutableStateOf(readSecret("perplexity_key")); private set
     var briefingDxMode by mutableStateOf(prefs.getBoolean("briefing_dx_mode", true)); private set
     var briefingOrder by mutableStateOf(loadBriefingOrder()); private set
+    var enrichedSpots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
 
     init { createNotificationChannel() }
 
-    fun ingest(spots: List<AndroidDXSpot>, stationId: String?, cty: CtyController) {
+    fun ingest(spots: List<AndroidDXSpot>, stationId: String?, cty: CtyController, stationCall: String = "") {
         if (spots.isEmpty()) return
         val ids = spots.mapTo(linkedSetOf()) { it.id }
-        if (ids == lastIngestIds) return
-        lastIngestIds = ids
+        if (ids == lastIngestIds && stationId == lastIngestStation && cty.dataRevision == lastCtyRevision) return
+        lastIngestIds = ids; lastIngestStation = stationId; lastCtyRevision = cty.dataRevision
         scope.launch {
             val enriched = spots.map { row -> cty.lookup(row.callsign)?.let { entity -> row.copy(
                 country = entity.country.ifBlank { row.country }, continent = entity.continent.ifBlank { row.continent },
-                cqZone = entity.cqZone.toIntOrNull() ?: row.cqZone, ituZone = entity.ituZone.toIntOrNull() ?: row.ituZone) } ?: row }
+                cqZone = entity.cqZone.toIntOrNull() ?: row.cqZone, ituZone = entity.ituZone.toIntOrNull() ?: row.ituZone,
+                latitude = entity.latitude.takeUnless { it == 0.0 } ?: row.latitude,
+                longitude = entity.longitude.takeUnless { it == 0.0 } ?: row.longitude) } ?: row }
+            withContext(Dispatchers.Main) { enrichedSpots = enriched }
             val fresh = store.ingest(enriched)
             val statuses = database.spotStatuses(enriched.map { SpotLogIdentity(it.id, it.callsign, it.band, it.mode,
                 cty.lookup(it.callsign)?.dxcc.orEmpty(), cty.lookup(it.callsign)?.country.orEmpty().ifBlank { it.country }) }, stationId)
@@ -395,7 +401,7 @@ class NeuralDxController(private val context: Context, private val database: Qso
                 if (state?.dxccStatus == "ATNO") deliverAlert("New DXCC · ${spot.country}", "${spot.callsign} on ${spot.band} ${spot.mode}", "dxcc:${spot.country}:${spot.band}")
             }
             if (store.recentBandCount("6m", 10) >= 8) deliverAlert("6m opening", "${store.recentBandCount("6m", 10)} spots in the last 10 minutes", "surge:6m")
-            publishDerived(enriched)
+            publishDerived(enriched, stationId, stationCall)
         }
     }
 
@@ -466,10 +472,11 @@ class NeuralDxController(private val context: Context, private val database: Qso
     fun testNtfy() = scope.launch { deliverAlert("RigWeave Neural DX", "Notification test successful", "test:${Instant.now().epochSecond}", force = true) }
     fun close() { refreshJob?.cancel(); lightningJob?.cancel(); satelliteJob?.cancel(); scope.cancel(); store.close() }
 
-    private suspend fun publishDerived(rows: List<AndroidDXSpot>) {
+    private suspend fun publishDerived(rows: List<AndroidDXSpot>, stationId: String?, stationCall: String) {
         val p = store.predictions(rows); val w = store.worldCells(worldWindowMinutes, worldBand)
         val b = store.bandActivity(); val h = store.heatmap6m(); val be = buildBeaconReception(rows)
-        withContext(Dispatchers.Main) { predictions = p; world = w; bandActivity = b; heatmap6m = h; beacons = be }
+        val currentInsight = buildInsight(stationCall, database.neuralLogSummary(stationId), rows)
+        withContext(Dispatchers.Main) { predictions = p; world = w; bandActivity = b; heatmap6m = h; beacons = be; insight = currentInsight }
     }
 
     private fun ensureLightning(point: GeoPoint) {
@@ -767,7 +774,14 @@ class NeuralDxController(private val context: Context, private val database: Qso
             var link = xmlValue(block, "link").htmlText().ifBlank { Regex("href=[\"']([^\"']+)", RegexOption.IGNORE_CASE).find(block)?.groupValues?.get(1).orEmpty() }
             if (link.startsWith('/')) link = URL(URL(base), link).toString()
             val summary = (xmlValue(block, "description").ifBlank { title }).htmlText().take(360)
-            BriefingItem(title.take(180), link, xmlValue(block, "pubDate").htmlText(), summary, extractCallsigns("$title $summary"))
+            val image = sequenceOf(
+                Regex("<media:(?:content|thumbnail)[^>]+url=[\"']([^\"']+)", RegexOption.IGNORE_CASE).find(block)?.groupValues?.get(1),
+                Regex("<enclosure[^>]+url=[\"']([^\"']+)[\"'][^>]+type=[\"']image/", RegexOption.IGNORE_CASE).find(block)?.groupValues?.get(1),
+                Regex("<img[^>]+src=[\"']([^\"']+)", RegexOption.IGNORE_CASE).find(block)?.groupValues?.get(1),
+            ).filterNotNull().firstOrNull().orEmpty().let { raw ->
+                when { raw.startsWith("https://", true) -> raw; raw.startsWith('/') -> runCatching { URL(URL(base), raw).toString() }.getOrDefault(""); else -> "" }
+            }
+            BriefingItem(title.take(180), link, xmlValue(block, "pubDate").htmlText(), summary, extractCallsigns("$title $summary"), image)
         }.distinctBy { it.title }.take(20)
     }
 
@@ -857,7 +871,7 @@ class NeuralDxController(private val context: Context, private val database: Qso
     private fun loadBriefingCache(): List<BriefingSource> = runCatching {
         val file=cacheFile("briefing.json"); if(!file.exists()) return@runCatching emptyList()
         val rows=JSONArray(file.readText());buildList{for(i in 0 until rows.length()){val r=rows.getJSONObject(i);val items=r.optJSONArray("items")?:JSONArray()
-            add(BriefingSource(r.optString("id"),r.optString("name"),r.optString("site"),buildList{for(j in 0 until items.length()){val q=items.getJSONObject(j);add(BriefingItem(q.optString("title"),q.optString("link"),q.optString("published"),q.optString("summary"),extractCallsigns(q.optString("title")+" "+q.optString("summary"))))}},r.optLong("updated"),true))}}
+            add(BriefingSource(r.optString("id"),r.optString("name"),r.optString("site"),buildList{for(j in 0 until items.length()){val q=items.getJSONObject(j);add(BriefingItem(q.optString("title"),q.optString("link"),q.optString("published"),q.optString("summary"),extractCallsigns(q.optString("title")+" "+q.optString("summary")),q.optString("image")))}},r.optLong("updated"),true))}}
     }.getOrDefault(emptyList())
 
     private fun loadOrbitCache(): List<OrbitRecord> = runCatching { val f=cacheFile("satellites.json");if(f.exists())parseOrbits(f.readText()) else emptyList() }.getOrDefault(emptyList())
@@ -873,7 +887,7 @@ class NeuralDxController(private val context: Context, private val database: Qso
         val saved=prefs.getString("briefing_order","").orEmpty().split(',').filter{it in canonical}.distinct()
         return saved + canonical.filter{it !in saved}
     }
-    private fun sourceToJson(s:BriefingSource)=JSONObject().put("id",s.id).put("name",s.name).put("site",s.site).put("updated",s.updatedEpoch).put("items",JSONArray(s.items.map{JSONObject().put("title",it.title).put("link",it.link).put("published",it.published).put("summary",it.summary)}))
+    private fun sourceToJson(s:BriefingSource)=JSONObject().put("id",s.id).put("name",s.name).put("site",s.site).put("updated",s.updatedEpoch).put("items",JSONArray(s.items.map{JSONObject().put("title",it.title).put("link",it.link).put("published",it.published).put("summary",it.summary).put("image",it.imageUrl)}))
     private fun orbitToJson(r:OrbitRecord)=JSONObject().put("NORAD_CAT_ID",r.norad).put("OBJECT_NAME",r.name)
         .put("EPOCH",Instant.ofEpochSecond(r.epoch).toString()).put("INCLINATION",r.inclination).put("RA_OF_ASC_NODE",r.raan)
         .put("ECCENTRICITY",r.eccentricity).put("ARG_OF_PERICENTER",r.argumentPerigee).put("MEAN_ANOMALY",r.meanAnomaly).put("MEAN_MOTION",r.meanMotion)
