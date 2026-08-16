@@ -250,7 +250,7 @@ private fun navIcon(item: Destination) = when (item) {
                 CompactLogger(state, database, wavelog, callbook, cty, app, send, Modifier.weight(1f).fillMaxHeight())
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     CompactKx3TuningDeck(state, send, Modifier.fillMaxWidth().weight(1f))
-                    LiveSpotsPanel(features, send, Modifier.fillMaxWidth().weight(3f))
+                    LiveSpotsPanel(features, database, wavelog, send, Modifier.fillMaxWidth().weight(3f))
                 }
             }
         }
@@ -659,30 +659,109 @@ private fun segmentMask(character: Char) = when (character) {
     }
 }
 
-@Composable private fun LiveSpotsPanel(features: FeatureController, send: (String) -> Unit, modifier: Modifier = Modifier) {
+private enum class RadioActivityTab(val label: String) { SPOTS("LIVE DX SPOTS"), LOG("LOG") }
+
+@Composable private fun LiveSpotsPanel(features: FeatureController, database: QsoDatabase, wavelog: WavelogController,
+    send: (String) -> Unit, modifier: Modifier = Modifier) {
+    var selected by remember { mutableStateOf(RadioActivityTab.SPOTS) }
+    var log by remember { mutableStateOf(emptyList<Qso>()) }
+    LaunchedEffect(selected, wavelog.logMode, wavelog.stationId) {
+        if (selected == RadioActivityTab.LOG && wavelog.logMode == LogMode.WAVELOG &&
+            wavelog.configured && wavelog.stations.isEmpty()) wavelog.loadStations()
+        while (selected == RadioActivityTab.LOG) {
+            log = withContext(Dispatchers.IO) { database.list() }
+            delay(2_000)
+        }
+    }
+    val visibleLog = remember(log, wavelog.logMode, wavelog.stationId) {
+        if (wavelog.logMode == LogMode.LOCAL) log else log.filter {
+            it.stationProfileId == wavelog.stationId || it.syncState == "pending" ||
+                (it.stationProfileId.isBlank() && it.remoteId.isBlank())
+        }
+    }
     Surface(color = Color(0xFF121617), shape = MaterialTheme.shapes.small,
         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF444B4E)), modifier = modifier) {
-        Column(Modifier.fillMaxSize().padding(11.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("LIVE DX SPOTS", color = Amber, fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleSmall)
-                Text(features.clusterStatus, color = if (features.liveSpots.isNotEmpty()) Healthy else Muted, style = MaterialTheme.typography.labelSmall)
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().height(44.dp).background(Color(0xFF171D20)), verticalAlignment = Alignment.CenterVertically) {
+                TabRow(selected.ordinal, modifier = Modifier.width(330.dp).fillMaxHeight(), containerColor = Color.Transparent,
+                    contentColor = Amber, divider = {}) {
+                    RadioActivityTab.entries.forEach { tab -> Tab(selected == tab, { selected = tab },
+                        text = { Text(tab.label, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelMedium) }) }
+                }
+                Spacer(Modifier.weight(1f))
+                Text(if (selected == RadioActivityTab.SPOTS) features.clusterStatus else if (wavelog.logMode == LogMode.LOCAL)
+                    "LOCAL LOG · ${visibleLog.size}" else "WAVELOG · ${wavelog.selectedStation?.name ?: "STATION ${wavelog.stationId}"}",
+                    color = if (selected == RadioActivityTab.SPOTS && features.liveSpots.isEmpty()) Muted else Healthy,
+                    style = MaterialTheme.typography.labelSmall, maxLines = 1, modifier = Modifier.padding(horizontal = 10.dp))
             }
-            if (features.liveSpots.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("No live spots yet. Connect the DX cluster in Settings.", color = Muted)
-            } else LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                val spots = features.liveSpots.take(20)
-                items(spots.size) { index -> val spot = spots[index]
-                    Surface(onClick = { send("FA%011d;".format(spot.frequencyHz)) }, color = Color(0xFF1A2023), shape = MaterialTheme.shapes.small) {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) { Text(spot.callsign, color = if (spot.watchlisted) Hold else Ink, fontWeight = FontWeight.Black)
-                                Text("${spot.country} · ${spot.band} · ${spot.mode}", color = Muted, style = MaterialTheme.typography.labelSmall) }
-                            Text(formatRadioFrequency(spot.frequencyHz), color = Amber, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.width(12.dp)); Text("TUNE", color = Healthy, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelSmall)
+            if (selected == RadioActivityTab.SPOTS) {
+                if (features.liveSpots.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("No live spots yet. Connect the DX cluster in Settings.", color = Muted)
+                } else LazyColumn(Modifier.fillMaxSize().padding(7.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val spots = features.liveSpots.take(20)
+                    items(spots.size) { index -> val spot = spots[index]
+                        Surface(onClick = { send("FA%011d;".format(spot.frequencyHz)) }, color = Color(0xFF1A2023), shape = MaterialTheme.shapes.small) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) { Text(spot.callsign, color = if (spot.watchlisted) Hold else Ink, fontWeight = FontWeight.Black)
+                                    Text("${spot.country} · ${spot.band} · ${spot.mode}", color = Muted, style = MaterialTheme.typography.labelSmall) }
+                                Text(formatRadioFrequency(spot.frequencyHz), color = Amber, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.width(12.dp)); Text("TUNE", color = Healthy, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelSmall)
+                            }
                         }
                     }
                 }
+            } else RadioLogTable(visibleLog.take(40), Modifier.fillMaxSize())
+        }
+    }
+}
+
+@Composable private fun RadioLogTable(records: List<Qso>, modifier: Modifier = Modifier) {
+    val columns = listOf(
+        "Date" to .88f, "Time" to .66f, "Call" to 1.05f, "Mode" to .72f, "RST (S)" to .67f,
+        "RST (R)" to .67f, "Band" to .62f, "Country" to 1.65f, "LoTW" to .66f, "Clublog" to .82f)
+    Column(modifier) {
+        Row(Modifier.fillMaxWidth().height(36.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
+            columns.forEach { (label, weight) -> RadioLogCell(label, weight, header = true) }
+        }
+        if (records.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("No QSOs in the configured log yet.", color = Muted)
+        } else LazyColumn(Modifier.fillMaxSize()) {
+            items(records.size, key = { records[it].id }) { index ->
+                val qso = records[index]
+                val utc = Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC)
+                Row(Modifier.fillMaxWidth().height(39.dp)
+                    .background(if (index % 2 == 0) Color(0xFF181E22) else Color(0xFF22282C)),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    RadioLogCell(utc.format(DateTimeFormatter.ofPattern("dd/MM/yy")), columns[0].second)
+                    RadioLogCell(utc.format(DateTimeFormatter.ofPattern("HH:mm")), columns[1].second)
+                    RadioLogCell(qso.callsign, columns[2].second, Healthy, true)
+                    RadioLogCell(qso.submode.ifBlank { qso.mode }, columns[3].second)
+                    RadioLogCell(qso.rstSent, columns[4].second); RadioLogCell(qso.rstReceived, columns[5].second)
+                    RadioLogCell(qso.band, columns[6].second)
+                    RadioLogCell(qso.country.ifBlank { qso.dxcc }, columns[7].second)
+                    RadioLogQslCell(qso.lotwSent, qso.lotwReceived, columns[8].second)
+                    RadioLogQslCell(qso.clublogSent, qso.clublogReceived, columns[9].second)
+                }
             }
         }
+    }
+}
+
+@Composable private fun RowScope.RadioLogCell(value: String, weight: Float, color: Color = Ink, bold: Boolean = false,
+    header: Boolean = false) {
+    Box(Modifier.weight(weight).fillMaxHeight().border(.5.dp, Color(0xFF3D474D)).padding(horizontal = 6.dp),
+        contentAlignment = Alignment.CenterStart) {
+        Text(value.ifBlank { "—" }, color = if (value.isBlank()) Muted.copy(alpha = .55f) else color,
+            fontWeight = if (header || bold) FontWeight.Black else FontWeight.Medium,
+            fontSize = if (header) 10.sp else 11.sp, maxLines = 1)
+    }
+}
+
+@Composable private fun RowScope.RadioLogQslCell(sent: String, received: String, weight: Float) {
+    Row(Modifier.weight(weight).fillMaxHeight().border(.5.dp, Color(0xFF3D474D)),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+        Text("▲", color = if (positiveLogStatus(sent)) Healthy else Danger, fontSize = 11.sp)
+        Text("▼", color = if (positiveLogStatus(received)) Healthy else Danger, fontSize = 11.sp)
     }
 }
 
