@@ -313,8 +313,8 @@ private fun navIcon(item: Destination) = when (item) {
                         CwDecodeLine(state.cwDecodedText, state.connected, clearCwDecode,
                             Modifier.fillMaxWidth().heightIn(min = 48.dp))
                     }
-                    CompactKx3TuningDeck(state, send, Modifier.fillMaxWidth().weight(1.5f))
-                    LiveSpotsPanel(features, database, wavelog, cty, send, Modifier.fillMaxWidth().weight(2.5f))
+                    CompactKx3TuningDeck(state, send, Modifier.fillMaxWidth().weight(1f))
+                    LiveSpotsPanel(features, database, wavelog, cty, send, Modifier.fillMaxWidth().weight(3f))
                 }
             }
         }
@@ -768,10 +768,13 @@ private enum class Kx3Adjustment(val title: String, val unit: String) {
         expandedVisible = true
         adjustmentGeneration++
     }
-    fun keepAlive() { adjustmentGeneration++ }
+    fun keepAlive() {
+        expandedVisible = true
+        adjustmentGeneration++
+    }
     LaunchedEffect(expanded, adjustmentGeneration) {
         if (expandedVisible) {
-            delay(700)
+            delay(3_000)
             expandedVisible = false
         }
     }
@@ -852,13 +855,11 @@ private enum class Kx3Adjustment(val title: String, val unit: String) {
 
 @Composable private fun InlineKx3Slider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, change: (Float) -> Unit,
     finish: () -> Unit, enabled: Boolean = true, expand: () -> Unit) {
-    Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-        Surface(onClick = expand, enabled = enabled, color = Color(0xFF283137), contentColor = Ink,
-            shape = RoundedCornerShape(4.dp), modifier = Modifier.width(58.dp).fillMaxHeight()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("$label ↗", color = if (enabled) Ink else Muted, fontWeight = FontWeight.Black, fontSize = 11.sp,
-                    letterSpacing = .1.sp, maxLines = 1, softWrap = false)
-            }
+    Row(Modifier.fillMaxWidth().height(37.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.width(50.dp).fillMaxHeight().clickable(enabled = enabled, onClick = expand),
+            contentAlignment = Alignment.CenterStart) {
+            Text(label, color = if (enabled) Ink else Muted, fontWeight = FontWeight.Black, fontSize = 12.sp,
+                letterSpacing = .15.sp, maxLines = 1, softWrap = false)
         }
         Slider(value, change, enabled = enabled, valueRange = range, onValueChangeFinished = finish, modifier = Modifier.weight(1f))
         Text(value.toInt().toString(), color = if (enabled) Hold else Muted, fontFamily = FontFamily.Monospace,
@@ -890,7 +891,7 @@ private enum class Kx3Adjustment(val title: String, val unit: String) {
 @Composable private fun Kx3DeckDivider() = Box(Modifier.width(1.dp).fillMaxHeight(.84f).background(Color(0xFF394044)))
 
 @Composable private fun InlineKx3Button(label: String, enabled: Boolean, action: () -> Unit) {
-    Button(action, enabled = enabled, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RectangleShape,
+    Button(action, enabled = enabled, modifier = Modifier.fillMaxWidth().height(37.dp), shape = RectangleShape,
         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF33383B), contentColor = Hold),
         contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp)) {
         Text(label, fontWeight = FontWeight.Black, fontSize = 12.sp, letterSpacing = .2.sp)
