@@ -23,7 +23,10 @@ class CtyController(context: Context) {
     private var prefixes = emptyList<CtyPrefix>()
     var status by mutableStateOf("CTY.DAT not installed"); private set
 
-    init { load() }
+    init {
+        load()
+        if (prefixes.isEmpty()) update()
+    }
 
     fun update() = scope.launch {
         publish("Downloading CTY.DAT entity data…")

@@ -105,5 +105,41 @@ class QsoDatabaseInstrumentedTest {
         ).forEach { filter -> assertEquals(filter.toString(), listOf("target"), database.page(0, 50, filter, "7").rows.map { it.id }) }
     }
 
+    @Test fun spotStatusesAggregateOnlyTheSelectedLogStation() {
+        assertTrue(database.save(Qso(id = "confirmed-40", callsign = "K1AAA", frequencyHz = 7_050_000,
+            mode = "SSB", submode = "USB", rstSent = "59", rstReceived = "59", createdAt = 100,
+            country = "United States", dxcc = "291", band = "40m", qslReceived = "Y",
+            stationProfileId = "7", syncState = "synced")))
+        assertTrue(database.save(Qso(id = "worked-20", callsign = "VE3BBB", frequencyHz = 14_074_000,
+            mode = "MFSK", submode = "FT8", rstSent = "-10", rstReceived = "-12", createdAt = 200,
+            country = "Canada", dxcc = "1", band = "20m", eqslReceived = "Y", qrzReceived = "Y",
+            stationProfileId = "7", syncState = "synced")))
+        assertTrue(database.save(Qso(id = "other-station-call", callsign = "VK8ONLY", frequencyHz = 14_200_000,
+            mode = "SSB", rstSent = "59", rstReceived = "59", createdAt = 300, country = "Australia",
+            dxcc = "150", band = "20m", qslReceived = "Y", stationProfileId = "8", syncState = "synced")))
+        assertTrue(database.save(Qso(id = "local-only", callsign = "ZL1LOCAL", frequencyHz = 14_050_000,
+            mode = "CW", rstSent = "599", rstReceived = "599", createdAt = 400, country = "New Zealand",
+            dxcc = "170", band = "20m", lotwReceived = "Y", stationProfileId = "", syncState = "local")))
+
+        val spots = listOf(
+            SpotLogIdentity("new", "ZL1NEW", "170", "New Zealand", "20m", "CW"),
+            SpotLogIdentity("new-band", "K1AAA", "291", "United States", "20m", "SSB"),
+            SpotLogIdentity("new-mode", "VE3BBB", "1", "Canada", "20m", "CW"),
+            SpotLogIdentity("isolated", "VK8ONLY", "150", "Australia", "20m", "SSB"),
+        )
+        val result = database.spotStatuses(spots, "7")
+        assertEquals(SpotLogStatus("NC", "ATNO"), result["new"])
+        assertEquals(SpotLogStatus("NB", "C/NB"), result["new-band"])
+        assertEquals(SpotLogStatus("NM", "W"), result["new-mode"])
+        assertEquals(SpotLogStatus("NC", "ATNO"), result["isolated"])
+
+        val local = database.spotStatuses(listOf(
+            SpotLogIdentity("local", "ZL1LOCAL", "170", "New Zealand", "20m", "CW"),
+            SpotLogIdentity("cached-wavelog", "K1AAA", "291", "United States", "40m", "SSB"),
+        ))
+        assertEquals(SpotLogStatus("C", "C"), local["local"])
+        assertEquals(SpotLogStatus("NC", "ATNO"), local["cached-wavelog"])
+    }
+
     companion object { private const val databaseName = "rigweave-instrumented.sqlite" }
 }

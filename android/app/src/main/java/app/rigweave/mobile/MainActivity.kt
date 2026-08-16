@@ -47,6 +47,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -136,6 +138,7 @@ private enum class LogbookFilterTab(val label: String) { GENERAL("General"), QSL
         audio.refreshDevices()
         while (true) { delay(450); transport.poll()?.let(::accept) }
     }
+    LaunchedEffect(features) { features.connectConfiguredCluster() }
     LaunchedEffect(transport, radio.mode) {
         while (isCwMacroMode(radio.mode)) { delay(90); transport.pollCwText()?.let(::accept) }
     }
@@ -281,7 +284,7 @@ private fun navIcon(item: Destination) = when (item) {
                             Modifier.fillMaxWidth().heightIn(min = 48.dp))
                     }
                     CompactKx3TuningDeck(state, send, Modifier.fillMaxWidth().weight(1f))
-                    LiveSpotsPanel(features, database, wavelog, send, Modifier.fillMaxWidth().weight(3f))
+                    LiveSpotsPanel(features, database, wavelog, cty, send, Modifier.fillMaxWidth().weight(3f))
                 }
             }
         }
@@ -732,11 +735,13 @@ private fun segmentMask(character: Char) = when (character) {
 private enum class RadioActivityTab(val label: String) { SPOTS("LIVE DX SPOTS"), LOG("LOG") }
 
 @Composable private fun LiveSpotsPanel(features: FeatureController, database: QsoDatabase, wavelog: WavelogController,
-    send: (String) -> Unit, modifier: Modifier = Modifier) {
+    cty: CtyController, send: (String) -> Unit, modifier: Modifier = Modifier) {
     var selected by remember { mutableStateOf(RadioActivityTab.SPOTS) }
     var logPage by remember { mutableStateOf(QsoPage(emptyList(), 0, 0, 50)) }
     var page by remember { mutableIntStateOf(0) }
     var pageSize by remember { mutableIntStateOf(50) }
+    var spotStatuses by remember { mutableStateOf(emptyMap<String, SpotLogStatus>()) }
+    val ctyRevision = cty.status
     LaunchedEffect(wavelog.logMode, wavelog.stationId) { page = 0 }
     LaunchedEffect(selected, wavelog.logMode, wavelog.stationId, page, pageSize) {
         if (selected == RadioActivityTab.LOG && wavelog.logMode == LogMode.WAVELOG &&
@@ -750,6 +755,32 @@ private enum class RadioActivityTab(val label: String) { SPOTS("LIVE DX SPOTS"),
                 }
                 observedRevision = revision
                 if (page != logPage.page) page = logPage.page
+            }
+            delay(2_000)
+        }
+    }
+    LaunchedEffect(selected, features.liveSpots, wavelog.logMode, wavelog.stationId, wavelog.configured, ctyRevision) {
+        if (selected != RadioActivityTab.SPOTS) return@LaunchedEffect
+        val visible = features.liveSpots.take(20)
+        val identities = visible.map { spot ->
+            val entity = cty.lookup(spot.callsign)
+            SpotLogIdentity(spot.id, spot.callsign, entity?.dxcc.orEmpty(),
+                entity?.country.orEmpty().ifBlank { spot.country }, spot.band, spot.mode)
+        }
+        if (identities.isEmpty() || (wavelog.logMode == LogMode.WAVELOG &&
+                (!wavelog.configured || wavelog.stationId.isBlank()))) {
+            spotStatuses = emptyMap()
+            return@LaunchedEffect
+        }
+        var observedRevision = Long.MIN_VALUE
+        while (selected == RadioActivityTab.SPOTS) {
+            val revision = database.changeToken()
+            if (revision != observedRevision) {
+                spotStatuses = withContext(Dispatchers.IO) {
+                    database.spotStatuses(identities,
+                        wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG })
+                }
+                observedRevision = revision
             }
             delay(2_000)
         }
@@ -774,23 +805,80 @@ private enum class RadioActivityTab(val label: String) { SPOTS("LIVE DX SPOTS"),
                 }
             }
             if (selected == RadioActivityTab.SPOTS) {
-                if (features.liveSpots.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("No live spots yet. Connect the DX cluster in Settings.", color = Muted)
-                } else LazyColumn(Modifier.fillMaxSize().padding(7.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    val spots = features.liveSpots.take(20)
-                    items(spots.size) { index -> val spot = spots[index]
-                        Surface(onClick = { send("FA%011d;".format(spot.frequencyHz)) }, color = Color(0xFF1A2023), shape = MaterialTheme.shapes.small) {
-                            Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) { Text(spot.callsign, color = if (spot.watchlisted) Hold else Ink, fontWeight = FontWeight.Black)
-                                    Text("${spot.country} · ${spot.band} · ${spot.mode}", color = Muted, style = MaterialTheme.typography.labelSmall) }
-                                Text(formatRadioFrequency(spot.frequencyHz), color = Amber, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
-                                Spacer(Modifier.width(12.dp)); Text("TUNE", color = Healthy, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelSmall)
-                            }
-                        }
-                    }
-                }
+                LiveSpotTable(features.liveSpots.take(20), spotStatuses, cty, send, Modifier.fillMaxSize())
             } else RadioLogTable(logPage.rows, Modifier.fillMaxSize())
         }
+    }
+}
+
+private data class SpotColumn(val label: String, val width: Dp, val mono: Boolean = false)
+
+@Composable private fun LiveSpotTable(spots: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>,
+    cty: CtyController, send: (String) -> Unit, modifier: Modifier = Modifier) {
+    BoxWithConstraints(modifier) {
+        val minimumWidth = 760.dp
+        val tableWidth = if (maxWidth > minimumWidth) maxWidth else minimumWidth
+        val commentWidth = 166.dp + if (maxWidth > minimumWidth) maxWidth - minimumWidth else 0.dp
+        val columns = listOf(
+            SpotColumn("Date", 44.dp, true), SpotColumn("Time", 68.dp, true), SpotColumn("Band", 36.dp),
+            SpotColumn("Freq", 76.dp, true), SpotColumn("Callsign", 72.dp), SpotColumn("Mode", 42.dp),
+            SpotColumn("Country", 86.dp), SpotColumn("CQ", 28.dp, true), SpotColumn("DX de", 66.dp),
+            SpotColumn("CS", 32.dp, true), SpotColumn("DS", 44.dp, true), SpotColumn("Comment", commentWidth))
+        Column(Modifier.width(tableWidth).fillMaxHeight().horizontalScroll(rememberScrollState())) {
+            Row(Modifier.fillMaxWidth().height(36.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
+                columns.forEach { SpotTableCell(it.label, it, header = true) }
+            }
+            if (spots.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("No live spots yet · configured clusters connect automatically", color = Muted)
+            } else LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+                items(spots.size, key = { spots[it].id }) { index ->
+                    val spot = spots[index]
+                    val utc = Instant.ofEpochSecond(spot.receivedEpoch).atZone(ZoneOffset.UTC)
+                    val entity = cty.lookup(spot.callsign)
+                    val status = statuses[spot.id]
+                    val cq = entity?.cqZone.orEmpty()
+                        .ifBlank { spot.cqZone.takeIf { it > 0 }?.toString().orEmpty() }
+                    Row(Modifier.fillMaxWidth().height(48.dp)
+                        .background(if (index % 2 == 0) Color(0xFF181E22) else Color(0xFF22282C))
+                        .clickable { send("FA%011d;".format(spot.frequencyHz)) }, verticalAlignment = Alignment.CenterVertically) {
+                        SpotTableCell(utc.format(DateTimeFormatter.ofPattern("dd/MM")), columns[0])
+                        SpotTableCell(utc.format(DateTimeFormatter.ofPattern("HH:mm:ss")), columns[1])
+                        SpotTableCell(spot.band, columns[2])
+                        SpotTableCell(formatSpotFrequency(spot.frequencyHz), columns[3], Amber, true)
+                        SpotTableCell(spot.callsign, columns[4], if (spot.watchlisted) Hold else Healthy, true)
+                        SpotTableCell(spot.mode, columns[5])
+                        SpotTableCell(entity?.country.orEmpty().ifBlank { spot.country }, columns[6])
+                        SpotTableCell(cq, columns[7])
+                        SpotTableCell(spot.spotter, columns[8])
+                        SpotTableCell(status?.callStatus.orEmpty(), columns[9], spotStatusColor(status?.callStatus))
+                        SpotTableCell(status?.dxccStatus.orEmpty(), columns[10], spotStatusColor(status?.dxccStatus))
+                        SpotTableCell(spot.comment, columns[11])
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatSpotFrequency(frequencyHz: Long): String = "%d.%03d.%02d".format(
+    java.util.Locale.US, frequencyHz / 1_000_000, (frequencyHz / 1_000) % 1_000, (frequencyHz / 10) % 100)
+
+private fun spotStatusColor(status: String?): Color = when (status) {
+    "C" -> Healthy
+    "NC", "ATNO" -> Hold
+    "NB", "NM", "W/NB", "C/NB" -> Amber
+    else -> Ink
+}
+
+@Composable private fun RowScope.SpotTableCell(value: String, column: SpotColumn, color: Color = Ink,
+    bold: Boolean = false, header: Boolean = false) {
+    Box(Modifier.width(column.width).fillMaxHeight().border(.5.dp, Color(0xFF3D474D)).padding(horizontal = 4.dp),
+        contentAlignment = Alignment.CenterStart) {
+        Text(value.ifBlank { "—" }, color = if (value.isBlank()) Muted.copy(alpha = .55f) else color,
+            fontFamily = if (column.mono) FontFamily.Monospace else FontFamily.Default,
+            fontWeight = if (header || bold) FontWeight.Black else FontWeight.Medium,
+            fontSize = if (header) 11.sp else 12.sp, maxLines = 1, softWrap = false,
+            overflow = TextOverflow.Ellipsis)
     }
 }
 

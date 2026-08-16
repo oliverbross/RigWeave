@@ -21,7 +21,8 @@ import java.time.Instant
 
 data class AndroidDXSpot(
     val id: String, val callsign: String, val spotter: String, val frequencyHz: Long,
-    val band: String, val mode: String, val country: String, val continent: String, val comment: String,
+    val receivedEpoch: Long, val band: String, val mode: String, val country: String, val continent: String,
+    val cqZone: Int, val comment: String,
     val score: Int, val confidence: Int, val samples: Int, val watchlisted: Boolean,
     val workedCountry: Boolean, val workedCall: Boolean, val workedBand: Boolean,
     val workedMode: Boolean, val workedBandMode: Boolean, val recentDupe: Boolean,
@@ -59,6 +60,13 @@ class FeatureController(private val context: Context) {
     var dxSummary by mutableStateOf("No live DX data"); private set
 
     fun setWatchlist(value: String) { NativeCore.featureWatchlist(handle, value) }
+
+    fun connectConfiguredCluster() {
+        if (clusterHost.isNotBlank() && clusterPort in 1..65535 && clusterCallsign.isNotBlank()) {
+            connectCluster(clusterHost, clusterPort, clusterCallsign,
+                fallbackHost, fallbackPort, fallback2Host, fallback2Port)
+        }
+    }
 
     fun connectCluster(host: String, port: Int, callsign: String,
         fallbackHost: String = "", fallbackPort: Int = 7300,
@@ -134,8 +142,9 @@ class FeatureController(private val context: Context) {
             if (rows != null) for (index in 0 until rows.length()) {
                 val row = rows.getJSONObject(index); val frequency = row.optLong("frequencyHz")
                 add(AndroidDXSpot("${row.optString("callsign")}-$frequency-${row.optLong("receivedEpoch")}",
-                    row.optString("callsign"), row.optString("spotter"), frequency, row.optString("band"),
-                    row.optString("mode"), row.optString("country"), row.optString("continent"), row.optString("comment"),
+                    row.optString("callsign"), row.optString("spotter"), frequency, row.optLong("receivedEpoch"),
+                    row.optString("band"), row.optString("mode"), row.optString("country"), row.optString("continent"),
+                    row.optInt("cqZone"), row.optString("comment"),
                     row.optInt("score"), row.optInt("confidence"), row.optInt("samples"), row.optBoolean("watchlisted"),
                     row.optBoolean("workedCountry"), row.optBoolean("workedCall"), row.optBoolean("workedBand"),
                     row.optBoolean("workedMode"), row.optBoolean("workedBandMode"), row.optBoolean("recentDupe"),

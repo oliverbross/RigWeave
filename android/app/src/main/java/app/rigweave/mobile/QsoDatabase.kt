@@ -50,7 +50,7 @@ fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
     in 50_000_000L..54_000_000L -> "6m"; else -> ""
 }
 
-class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 5) {
+class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 6) {
     private val changeRevision = AtomicLong(0)
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -67,12 +67,20 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         if (oldVersion < 3) db.execSQL("ALTER TABLE qso ADD COLUMN country TEXT NOT NULL DEFAULT ''")
         if (oldVersion < 4) db.execSQL("ALTER TABLE qso ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'")
         if (oldVersion < 5) createPagingIndexes(db)
+        if (oldVersion < 6) createSpotStatusIndexes(db)
     }
 
     private fun createPagingIndexes(db: SQLiteDatabase) {
         db.execSQL("CREATE INDEX IF NOT EXISTS qso_created_at_idx ON qso(created_at DESC)")
         db.execSQL("CREATE INDEX IF NOT EXISTS qso_station_idx ON qso(json_extract(details_json,'$.stationProfileId'))")
         db.execSQL("CREATE INDEX IF NOT EXISTS qso_sync_state_idx ON qso(json_extract(details_json,'$.syncState'))")
+        createSpotStatusIndexes(db)
+    }
+
+    private fun createSpotStatusIndexes(db: SQLiteDatabase) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_callsign_upper_idx ON qso(UPPER(callsign))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_country_upper_idx ON qso(UPPER(country))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_dxcc_upper_idx ON qso(UPPER(COALESCE(json_extract(details_json,'$.dxcc'),'')))")
     }
 
     fun save(qso: Qso): Boolean {
@@ -136,6 +144,77 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         val rows = queryWhere("${spec.where} ORDER BY ${spec.order} LIMIT ? OFFSET ?", args)
         return QsoPage(rows, total, boundedPage, size)
     }
+
+    fun spotStatuses(spots: List<SpotLogIdentity>, stationId: String? = null): Map<String, SpotLogStatus> {
+        if (spots.isEmpty()) return emptyMap()
+        val calls = dimensions("UPPER(callsign)", spots.map { it.callsign }, stationId)
+        val countries = dimensions("UPPER(country)", spots.map { it.country }, stationId)
+        val dxccs = dimensions("UPPER(COALESCE(json_extract(details_json,'$.dxcc'),''))",
+            spots.map { it.dxcc }, stationId)
+        return spots.associate { spot ->
+            val call = calls[spot.callsign.normalizedStatusKey()] ?: WorkedDimensions()
+            val dxcc = spot.dxcc.normalizedStatusKey()
+            val entity = if (dxcc.isNotBlank() && dxccs.containsKey(dxcc)) dxccs.getValue(dxcc)
+                else countries[spot.country.normalizedStatusKey()] ?: WorkedDimensions()
+            spot.id to classifySpotStatus(spot, call, entity)
+        }
+    }
+
+    private fun dimensions(keyExpression: String, rawKeys: List<String>, stationId: String?): Map<String, WorkedDimensions> {
+        val keys = rawKeys.map { it.normalizedStatusKey() }.filter(String::isNotBlank).distinct()
+        if (keys.isEmpty()) return emptyMap()
+        val placeholders = keys.joinToString(",") { "?" }
+        val stationClause = if (stationId == null)
+            " AND COALESCE(json_extract(details_json,'$.stationProfileId'),'') = ''"
+        else " AND COALESCE(json_extract(details_json,'$.stationProfileId'),'') = ?"
+        val bandExpression = "UPPER(COALESCE(json_extract(details_json,'$.band'),''))"
+        val submodeExpression = "UPPER(COALESCE(json_extract(details_json,'$.submode'),''))"
+        val confirmedExpression = listOf("qslReceived", "lotwReceived")
+            .joinToString(" OR ") { "UPPER(COALESCE(json_extract(details_json,'$.$it'),'')) IN ('Y','V')" }
+        val sql = """SELECT $keyExpression, $bandExpression, $submodeExpression, UPPER(mode),
+            MAX(CASE WHEN $confirmedExpression THEN 1 ELSE 0 END)
+            FROM qso WHERE $keyExpression IN ($placeholders)$stationClause
+            GROUP BY $keyExpression, $bandExpression, $submodeExpression, UPPER(mode)""".trimIndent()
+        val mutable = mutableMapOf<String, MutableWorkedDimensions>()
+        val args = (keys + listOfNotNull(stationId)).toTypedArray()
+        readableDatabase.rawQuery(sql, args).use { cursor ->
+            while (cursor.moveToNext()) {
+                val key = cursor.getString(0).orEmpty().normalizedStatusKey()
+                val band = cursor.getString(1).orEmpty().normalizedStatusKey()
+                val mode = canonicalSpotMode(cursor.getString(2).orEmpty().ifBlank { cursor.getString(3).orEmpty() })
+                val confirmed = cursor.getInt(4) == 1
+                mutable.getOrPut(key, ::MutableWorkedDimensions).add(band, mode, confirmed)
+            }
+        }
+        return mutable.mapValues { it.value.freeze() }
+    }
+
+    private class MutableWorkedDimensions {
+        var any = false
+        var confirmedAny = false
+        val bands = mutableSetOf<String>()
+        val confirmedBands = mutableSetOf<String>()
+        val bandModes = mutableSetOf<String>()
+        val confirmedBandModes = mutableSetOf<String>()
+
+        fun add(band: String, mode: String, confirmed: Boolean) {
+            any = true
+            if (confirmed) confirmedAny = true
+            if (band.isNotBlank()) {
+                bands += band
+                if (confirmed) confirmedBands += band
+                if (mode.isNotBlank()) {
+                    val bandMode = "$band|$mode"
+                    bandModes += bandMode
+                    if (confirmed) confirmedBandModes += bandMode
+                }
+            }
+        }
+
+        fun freeze() = WorkedDimensions(any, confirmedAny, bands, confirmedBands, bandModes, confirmedBandModes)
+    }
+
+    private fun String.normalizedStatusKey() = trim().uppercase(java.util.Locale.US)
     fun <T> transaction(block: () -> T): T {
         val database = writableDatabase
         database.beginTransaction()
