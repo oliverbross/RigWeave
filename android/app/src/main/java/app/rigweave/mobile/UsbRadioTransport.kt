@@ -1,12 +1,17 @@
 package app.rigweave.mobile
 
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.hardware.usb.UsbDeviceConnection
+import androidx.core.content.ContextCompat
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -35,19 +40,15 @@ class UsbRadioTransport(private val context: Context) {
         "VID:%04X PID:%04X".format(it.device.vendorId, it.device.productId)
     }
 
-    fun requestPermission(): UsbResult {
-        val driver = UsbSerialProber.getDefaultProber().findAllDrivers(manager).firstOrNull()
-            ?: return UsbResult.Unavailable("No supported USB serial adapter detected")
-        if (manager.hasPermission(driver.device)) return UsbResult.PermissionRequired("USB permission already granted; connect again")
-        val intent = PendingIntent.getBroadcast(context, 0, Intent(ACTION_USB_PERMISSION), PendingIntent.FLAG_IMMUTABLE)
-        manager.requestPermission(driver.device, intent)
-        return UsbResult.PermissionRequired("USB permission requested")
-    }
-
     suspend fun connect(): UsbResult = withContext(Dispatchers.IO) { mutex.withLock {
+        if (port?.isOpen == true) {
+            return@withLock UsbResult.Connected(byteArrayOf(), "Elecraft KX3 is already connected")
+        }
         val driver = UsbSerialProber.getDefaultProber().findAllDrivers(manager).firstOrNull()
             ?: return@withLock UsbResult.Unavailable("No supported USB serial adapter detected")
-        if (!manager.hasPermission(driver.device)) return@withLock requestPermission()
+        if (!awaitPermission(driver.device)) {
+            return@withLock UsbResult.PermissionRequired("USB permission was not granted · tap Connect to try again")
+        }
         closeLocked()
         val openedConnection = manager.openDevice(driver.device)
             ?: return@withLock UsbResult.Unavailable("USB device could not be opened")
@@ -109,6 +110,39 @@ class UsbRadioTransport(private val context: Context) {
     } }
 
     suspend fun disconnect() = withContext(Dispatchers.IO) { mutex.withLock { closeLocked() } }
+
+    private suspend fun awaitPermission(device: UsbDevice): Boolean {
+        if (manager.hasPermission(device)) return true
+        val result = CompletableDeferred<Boolean>()
+        val receiver = object : BroadcastReceiver() {
+            @Suppress("DEPRECATION")
+            override fun onReceive(receiverContext: Context?, intent: Intent?) {
+                if (intent?.action != ACTION_USB_PERMISSION) return
+                val returnedDevice = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                if (returnedDevice?.deviceId != device.deviceId) return
+                result.complete(intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false))
+            }
+        }
+        ContextCompat.registerReceiver(
+            context,
+            receiver,
+            IntentFilter(ACTION_USB_PERMISSION),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        return try {
+            val permissionIntent = Intent(ACTION_USB_PERMISSION).setPackage(context.packageName)
+            val pendingIntent = PendingIntent.getBroadcast(
+                context,
+                device.deviceId,
+                permissionIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            manager.requestPermission(device, pendingIntent)
+            result.await()
+        } finally {
+            runCatching { context.unregisterReceiver(receiver) }
+        }
+    }
 
     private fun exchange(commands: List<String>, initialTimeout: Int = 350, trailingTimeout: Int = 35): ByteArray {
         val active = port ?: return byteArrayOf()

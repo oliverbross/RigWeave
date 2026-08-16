@@ -126,7 +126,11 @@ private enum class LogbookFilterTab(val label: String) { GENERAL("General"), QSL
             is UsbResult.Unavailable -> usbDetail = result.detail
         }
     }
-    val connect: () -> Unit = { scope.launch { accept(transport.connect()) } }
+    suspend fun connectKx3() {
+        usbDetail = "Connecting to Elecraft KX3…"
+        accept(transport.connect())
+    }
+    val connect: () -> Unit = { scope.launch { connectKx3() } }
     val direct: (String) -> Unit = { command -> scope.launch { accept(transport.send(command)) } }
     val send: (String) -> Unit = { raw ->
         val command = raw.uppercase()
@@ -136,6 +140,8 @@ private enum class LogbookFilterTab(val label: String) { GENERAL("General"), QSL
     }
     LaunchedEffect(transport) {
         audio.refreshDevices()
+        delay(250)
+        connectKx3()
         while (true) { delay(450); transport.poll()?.let(::accept) }
     }
     LaunchedEffect(features) { features.connectConfiguredCluster() }
