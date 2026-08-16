@@ -78,7 +78,7 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), CONTROLS("Controls"), LOGBOOK("Logbook"), PRESETS("Presets"), DX("DX"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), LOGBOOK("Logbook"), PRESETS("Presets"), DX("DX"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     DEFAULT("Default"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
@@ -148,7 +148,6 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
 private fun navIcon(item: Destination) = when (item) {
     Destination.HOME -> Icons.Outlined.Home
     Destination.RADIO -> Icons.Outlined.SettingsInputAntenna
-    Destination.CONTROLS -> Icons.Outlined.Tune
     Destination.LOGBOOK -> Icons.AutoMirrored.Outlined.List
     Destination.PRESETS -> Icons.Outlined.Bookmarks
     Destination.DX -> Icons.Outlined.Public
@@ -161,7 +160,6 @@ private fun navIcon(item: Destination) = when (item) {
     when (destination) {
         Destination.HOME -> HomeScreen(radio, app, send)
         Destination.RADIO -> RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, connect, send, direct)
-        Destination.CONTROLS -> ControlsScreen(radio, app, send)
         Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(features, send)
@@ -1171,39 +1169,6 @@ private fun qslMethodLabel(code: String) = qslMethodChoices.firstOrNull { it.fir
         Text(audio.status, color = if (audio.enabled) Healthy else Muted)
         Text("Receive-only. Headphones are recommended to prevent feedback.", color = Hold)
     } }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable private fun ControlsScreen(state: RadioState, app: AppController, send: (String) -> Unit) {
-    var editing by remember { mutableStateOf(false) }; var selected by remember { mutableIntStateOf(-1) }
-    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Header("KX3 controls", state)
-            Button({ editing = !editing; if (!editing) selected = -1 }) { Text(if (editing) "DONE" else "EDIT ORDER") }
-        }
-        Text(if (editing) "Select a control, then move it earlier or later." else "Tap sends the white function · press and hold sends the yellow function.", color = Muted)
-        LazyVerticalGrid(GridCells.Fixed(6), Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-            items(app.controlOrder.size) { position ->
-                val index = app.controlOrder[position]; val control = AppController.controls[index]
-                Surface(color = if (selected == position) Amber.copy(alpha = .25f) else Raised,
-                    shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth().height(92.dp)
-                        .border(if (selected == position) 2.dp else 1.dp, if (selected == position) Amber else Color(0xFF4A555D), MaterialTheme.shapes.small)
-                        .combinedClickable(enabled = editing || state.connected, onClick = {
-                            if (editing) selected = position else send(control.tapCommand)
-                        }, onLongClick = { if (!editing) send(control.holdCommand) })) {
-                    Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.SpaceBetween) {
-                        Text(control.tapLabel, color = Ink, fontWeight = FontWeight.Black, fontSize = 12.sp)
-                        Text(control.holdLabel, color = Hold, fontWeight = FontWeight.Bold, fontSize = 10.sp)
-                    }
-                }
-            }
-        }
-        if (editing) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton({ app.moveControl(selected, -1); selected = (selected - 1).coerceAtLeast(0) }, enabled = selected > 0, modifier = Modifier.weight(1f)) { Text("‹ EARLIER") }
-            OutlinedButton({ app.moveControl(selected, 1); selected = (selected + 1).coerceAtMost(app.controlOrder.lastIndex) }, enabled = selected in 0 until app.controlOrder.lastIndex, modifier = Modifier.weight(1f)) { Text("LATER ›") }
-            OutlinedButton({ app.resetControlOrder(); selected = -1 }, modifier = Modifier.weight(1f)) { Text("RESET") }
-        }
-    }
 }
 
 @Composable private fun PresetsScreen(state: RadioState, app: AppController, send: (String) -> Unit) {

@@ -19,13 +19,6 @@ data class RadioPreset(
     val color: Long,
 )
 
-data class KX3Control(
-    val tapLabel: String,
-    val tapCommand: String,
-    val holdLabel: String,
-    val holdCommand: String,
-)
-
 class AppController(private val context: Context) {
     private val prefs = context.getSharedPreferences("rigweave-app", Context.MODE_PRIVATE)
     var fieldProfile by mutableStateOf(runCatching { FieldProfile.valueOf(prefs.getString("profile", "DAY")!!) }.getOrDefault(FieldProfile.DAY)); private set
@@ -48,7 +41,6 @@ class AppController(private val context: Context) {
     val macroTexts = mutableStateListOf(
         prefs.getString("macro_text_0", "") ?: "", prefs.getString("macro_text_1", "") ?: "",
         prefs.getString("macro_text_2", "") ?: "")
-    val controlOrder = mutableStateListOf<Int>().apply { addAll(loadControlOrder()) }
     val presets = mutableStateListOf<RadioPreset>().apply { addAll(loadPresets()) }
 
     fun setProfile(value: FieldProfile) {
@@ -109,20 +101,6 @@ class AppController(private val context: Context) {
         presets.clear(); presets.addAll(ordered.sortedBy { it.slot }); persistPresets()
     }
 
-    fun moveControl(position: Int, delta: Int) {
-        val target = position + delta
-        if (position !in controlOrder.indices || target !in controlOrder.indices) return
-        val value = controlOrder.removeAt(position); controlOrder.add(target, value); persistControlOrder()
-    }
-
-    fun resetControlOrder() {
-        controlOrder.clear(); controlOrder.addAll(controls.indices); persistControlOrder()
-    }
-
-    fun persistControlOrder() {
-        prefs.edit().putString("control_order", controlOrder.joinToString(",")).apply()
-    }
-
     fun backupNow(): String = runCatching {
         val payload = JSONObject().put("version", 1).put("created_at", System.currentTimeMillis())
             .put("preferences", JSONObject(prefs.all))
@@ -153,11 +131,6 @@ class AppController(private val context: Context) {
         } }; editor.commit(); "Recovery restored · restart app to load all settings"
     }.getOrElse { "Restore failed: ${it.message}" }
 
-    private fun loadControlOrder(): List<Int> {
-        val loaded = prefs.getString("control_order", null)?.split(",")?.mapNotNull(String::toIntOrNull)
-        return if (loaded != null && loaded.sorted() == controls.indices.toList()) loaded else controls.indices.toList()
-    }
-
     private fun loadPresets(): List<RadioPreset> = runCatching {
         val rows = JSONArray(prefs.getString("presets", "[]"))
         List(rows.length()) { index ->
@@ -175,28 +148,5 @@ class AppController(private val context: Context) {
 
     companion object {
         val presetColors = listOf(0xFF704B12, 0xFF174F70, 0xFF245A43, 0xFF593C73, 0xFF713337, 0xFF37444C)
-        val controls = listOf(
-            KX3Control("FREQ ENT", "SWT10;", "SCAN", "SWH10;"),
-            KX3Control("MSG", "SWT11;", "REC", "SWH11;"),
-            KX3Control("ATU TUNE", "SWT44;", "ANT", "SWH44;"),
-            KX3Control("PRE", "SWT19;", "NR", "SWH19;"),
-            KX3Control("ATTN", "SWT27;", "NB", "SWH27;"),
-            KX3Control("APF", "SWT20;", "NTCH", "SWH20;"),
-            KX3Control("SPOT", "SWT28;", "CWT", "SWH28;"),
-            KX3Control("CMP", "SWT21;", "PITCH", "SWH21;"),
-            KX3Control("DLY", "SWT29;", "VOX", "SWH29;"),
-            KX3Control("MODE", "SWT14;", "ALT", "SWH14;"),
-            KX3Control("DATA", "SWT17;", "TEXT", "SWH17;"),
-            KX3Control("RIT", "SWT18;", "PF1", "SWH18;"),
-            KX3Control("RATE", "SWT12;", "kHz", "SWH12;"),
-            KX3Control("A/B", "SWT24;", "REV", "SWH24;"),
-            KX3Control("A>B", "SWT25;", "SPLIT", "SWH25;"),
-            KX3Control("XIT", "SWT26;", "PF2", "SWH26;"),
-            KX3Control("DISP", "SWT9;", "MENU", "SWH9;"),
-            KX3Control("AF/RF-SQL", "SWT32;", "MON", "SWH32;"),
-            KX3Control("PBT I/II", "SWT33;", "NORM", "SWH33;"),
-            KX3Control("KEYER/MIC", "SWT34;", "PWR", "SWH34;"),
-            KX3Control("OFS/B", "SWT35;", "CLR", "SWH35;"),
-        )
     }
 }

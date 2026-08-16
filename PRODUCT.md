@@ -27,7 +27,7 @@ RigWeave is the native mobile successor to the M5Stack Tab5 KX3 Touch Remote: on
 
 ## Capabilities and Constraints
 
-- Retained destinations: Home, Radio, Controls, Logbook, Presets, DX, and Settings.
+- Retained destinations: Home, Radio, Logbook, Presets, DX, and Settings. Radio owns the complete KX3 control surface.
 - Panadapter, raw Spots destination, and Digital/WSJT-X are explicitly deferred and absent from navigation.
 - The consolidated DX destination owns live cluster browsing and analyzed DX views.
 - Radio state must be observed truth with explicit live, stale, disconnected, pending, and failed states.
