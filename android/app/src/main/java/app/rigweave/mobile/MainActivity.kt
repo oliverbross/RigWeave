@@ -146,9 +146,11 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val direct: (String) -> Unit = { command -> scope.launch { accept(transport.send(command)) } }
     val send: (String) -> Unit = { raw ->
         val command = raw.uppercase()
-        val risky = command.startsWith("TX") || command.startsWith("KY") ||
+        val cwMacro = command.startsWith("KY ")
+        val risky = command.startsWith("TX") || cwMacro ||
             command in setOf("SWT11;", "SWH11;", "SWT44;", "SWT16;", "SWH16;")
-        if (risky) pendingRisk = command else direct(command)
+        if (cwMacro && app.cwMacrosArmed) direct(command)
+        else if (risky) pendingRisk = command else direct(command)
     }
     LaunchedEffect(transport) {
         audio.refreshDevices()
@@ -173,10 +175,23 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         scope.launch { transport.disconnect() }; audio.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
         NativeCore.destroy(core); database.close()
     } }
-    pendingRisk?.let { command -> AlertDialog(
-        onDismissRequest = { pendingRisk = null }, title = { Text("Confirm radio action") },
-        text = { Text("Send $command once? This may key or tune the transmitter.") },
-        confirmButton = { Button({ direct(command); pendingRisk = null }) { Text("Send once") } },
+    pendingRisk?.let { command ->
+        val cwMacro = command.startsWith("KY ")
+        AlertDialog(
+        onDismissRequest = { pendingRisk = null }, title = { Text(if (cwMacro) "Arm and send CW macro?" else "Confirm radio action") },
+        text = { Text(if (cwMacro)
+            "Send $command now and arm CW macros for this connected CW session. Later macro taps send immediately; the arm clears on disconnect or mode change."
+            else "Send $command once? This may key or tune the transmitter.") },
+        confirmButton = { Button({
+            if (cwMacro && (!radio.connected || !isCwMacroMode(radio.mode))) {
+                pendingRisk = null
+            } else {
+                if (cwMacro) app.updateCwMacrosArmed(true)
+                direct(command); pendingRisk = null
+            }
+        }, enabled = !cwMacro || (radio.connected && isCwMacroMode(radio.mode))) {
+            Text(if (cwMacro) "Arm & send" else "Send once")
+        } },
         dismissButton = { TextButton({ pendingRisk = null }) { Text("Cancel") } },
     ) }
     BoxWithConstraints(Modifier.fillMaxSize().background(Chassis)) {
@@ -377,7 +392,7 @@ private fun navIcon(item: Destination) = when (item) {
         border = androidx.compose.foundation.BorderStroke(1.dp, Hold.copy(alpha = .72f)), modifier = modifier) {
         Row(Modifier.fillMaxSize().padding(3.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
             configured.forEach { (_, label, text) ->
-                Kx3DirectKey(label, state.connected && app.cwMacrosArmed, { cwMacroCommand(text)?.let(send) },
+                Kx3DirectKey(label, state.connected, { cwMacroCommand(text)?.let(send) },
                     Modifier.weight(1f), secondary = true, risky = true, compact = true)
             }
         }

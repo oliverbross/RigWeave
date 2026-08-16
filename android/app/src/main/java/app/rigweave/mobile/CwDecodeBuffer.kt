@@ -5,8 +5,16 @@ internal class CwDecodeBuffer(private val historyLimit: Int = 192) {
         const val MAX_DB_WINDOW = 15
         val CONTROL_STATUS = Regex(
             "^(?:[-+]?\\d+(?:\\.\\d+)?\\s*)?" +
-                "(?:AF|RF|MON|MIC|PWR|BW|KEYER|WIDTH|SHIFT|I/WID|II/SHT|AGC|ATT|PRE|NR|NB|NCH|APF|VOX|DLY|CMP|PITCH|RIT|XIT)" +
+                "(?:AF|RF|MON|MIC|PWR|BW|KEYER|WIDTH|SHIFT|I/WID|II/SHT|AGC|ATT|PRE|NR|NB|NCH|APF|VOX|DLY|CMP|PITCH|RIT|RTQ|XIT)" +
                 "(?:\\s*[-+]?\\d*(?:\\.\\d+)?\\s*(?:W|HZ|DB|ON|OFF)?)?$",
+            RegexOption.IGNORE_CASE,
+        )
+        val TELEMETRY_VALUE = Regex(
+            "^[-+]?\\d+(?:\\.\\d+)?\\s*(?:W|DB|HZ|V|A|MA|SWR)$",
+            RegexOption.IGNORE_CASE,
+        )
+        val NESTED_DB_TELEMETRY = Regex(
+            "^DB\\s*[-+]?\\d+(?:[.:]\\d+)+(?:\\s*(?:W|DB|HZ|V|A|MA|SWR))?$",
             RegexOption.IGNORE_CASE,
         )
     }
@@ -74,7 +82,9 @@ internal class CwDecodeBuffer(private val historyLimit: Int = 192) {
                 })
             }
         }
-        if (looksLikeFrequencyDisplay(window) || looksLikeKx3Status(window)) return muteControlDisplay()
+        if (looksLikeFrequencyDisplay(window) || looksLikeKx3Status(window) || looksLikeTelemetryDisplay(window)) {
+            return muteControlDisplay()
+        }
         val decodedWindow = suppressDecoderNoise(window)
         if (decodedWindow.isEmpty()) return false
         if (mutedWindows > 0) {
@@ -139,6 +149,22 @@ internal class CwDecodeBuffer(private val historyLimit: Int = 192) {
                     ),
                 )
         }
+
+    private fun looksLikeTelemetryDisplay(value: String): Boolean = value.trim().let { display ->
+        if (display.equals("DB", ignoreCase = true) || display.matches(TELEMETRY_VALUE) || display.matches(NESTED_DB_TELEMETRY)) {
+            return@let true
+        }
+        val embeddedDb = display.indexOf("DB", ignoreCase = true)
+        if (embeddedDb > 0) {
+            val nested = display.drop(embeddedDb + 2).trimStart()
+            if (nested.isNotEmpty() && (looksLikeFrequencyDisplay(nested) || looksLikeKx3Status(nested) || nested.matches(TELEMETRY_VALUE))) {
+                return@let true
+            }
+        }
+        if (!display.startsWith("DB", ignoreCase = true)) return@let false
+        val nested = display.drop(2).trimStart()
+        nested.isNotEmpty() && (looksLikeFrequencyDisplay(nested) || looksLikeKx3Status(nested) || nested.matches(TELEMETRY_VALUE))
+    }
 
     private fun looksLikeControlFragment(value: String): Boolean =
         value.trim().matches(Regex("[-+.]*\\d+(?:\\.\\d+)*"))

@@ -16,7 +16,10 @@ class CwDecodeBufferTest {
     @Test fun ignoresVfoBDisplayAndRepeatedWindow() {
         listOf("DB14.074.0;", "DB028008650RX FA00028008650RX;", "DBk28.1;DBdb28.100.20;",
             "DB RX THR1;", "DB TX THR3;", "DB AF 60;", "DB 60 AF;", "DB RF 190;",
-            "DB TR26;", "DB WPM 28;", "DB WPMEC .72;", "DB FC .71;").forEach { frame ->
+            "DB TR26;", "DB WPM 28;", "DB WPMEC .72;", "DB FC .71;", "DB0.0W;",
+            "DB 0.0 W;", "DBDB 7.1000;", "DBDB 14.074.00;", "DBDB 0.0W;",
+            "DBDB AF 60;", "DBDB 60 AF;", "DBDB RX THR1;", "DBDB;", "DBRTQ0;",
+            "DBRDBRX THR1;", "DBRDB 7.1000;").forEach { frame ->
             assertFalse(CwDecodeBuffer().feed(frame.toByteArray()))
         }
         val decoder = CwDecodeBuffer()

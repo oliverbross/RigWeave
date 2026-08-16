@@ -19,7 +19,7 @@ class CwMacroRulesTest {
     }
 
     @Test fun buildsOnlySafeNonBlankKx3Commands() {
-        assertEquals("KYCQ CQ OM0RX;", cwMacroCommand("cq cq om0rx;TX;"))
+        assertEquals("KY CQ CQ OM0RX;", cwMacroCommand("cq cq om0rx;TX;"))
         assertNull(cwMacroCommand(" ;\n"))
     }
 

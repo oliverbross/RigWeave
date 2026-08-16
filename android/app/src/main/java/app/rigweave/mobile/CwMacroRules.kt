@@ -21,4 +21,4 @@ fun sanitizeCwMacroText(value: String): String = value.substringBefore(';').subs
 
 fun isCwMacroMode(mode: String): Boolean = mode.trim().uppercase().replace('_', '-') in setOf("CW", "CW-R", "CWR")
 
-fun cwMacroCommand(text: String): String? = sanitizeCwMacroText(text).takeIf(String::isNotBlank)?.let { "KY$it;" }
+fun cwMacroCommand(text: String): String? = sanitizeCwMacroText(text).takeIf(String::isNotBlank)?.let { "KY $it;" }
