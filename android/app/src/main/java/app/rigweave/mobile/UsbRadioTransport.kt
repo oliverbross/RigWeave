@@ -29,9 +29,9 @@ class UsbRadioTransport(private val context: Context) {
     private val mutex = Mutex()
     private var connection: UsbDeviceConnection? = null
     private var port: UsbSerialPort? = null
-    private val fastQueries = listOf("FA;", "FB;", "IF;", "TQ;", "SM;", "SW;", "PO;")
-    private val slowQueries = listOf("MD;", "DS;", "GT;", "AG;", "RG;", "BW;", "PC;", "ML;", "MG;", "KS;", "IS;",
-        "PA;", "RA;", "RT;", "XT;", "FR;", "FT;")
+    private val fastQueries = listOf("FA;", "FB;", "IF;", "TQ;", "SM;", "SW;", "PO;", "AG;", "RG;", "BW;",
+        "PC;", "ML;", "MG;", "KS;", "IS;")
+    private val slowQueries = listOf("MD;", "DS;", "GT;", "PA;", "RA;", "RT;", "XT;", "FR;", "FT;")
     private val instrumentQueries = fastQueries + slowQueries
     private val connectQueries = listOf("K3;", "OM;", "ID;", "K31;", "AI2;") + instrumentQueries
     private var pollCount = 0
@@ -90,7 +90,7 @@ class UsbRadioTransport(private val context: Context) {
     suspend fun poll(): UsbResult? = withContext(Dispatchers.IO) { mutex.withLock {
         if (port == null) return@withLock null
         try {
-            val queries = if (pollCount++ % 3 == 0) instrumentQueries else fastQueries
+            val queries = if (pollCount++ % 6 == 0) instrumentQueries else fastQueries
             UsbResult.Connected(exchange(queries), "Live CAT state")
         } catch (error: Exception) {
             closeLocked()

@@ -6,6 +6,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -37,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -140,7 +147,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         audio.refreshDevices()
         delay(250)
         connectKx3()
-        while (true) { delay(450); transport.poll()?.let(::accept) }
+        while (true) { delay(240); transport.poll()?.let(::accept) }
     }
     LaunchedEffect(features) { features.connectConfiguredCluster() }
     LaunchedEffect(transport, radio.mode) {
@@ -271,11 +278,30 @@ private fun navIcon(item: Destination) = when (item) {
 @Composable private fun RadioScreen(state: RadioState, detail: String, app: AppController, database: QsoDatabase,
     wavelog: WavelogController, callbook: CallbookController, cty: CtyController, features: FeatureController, connect: () -> Unit, send: (String) -> Unit,
     direct: (String) -> Unit, clearCwDecode: () -> Unit) {
+    var previousState by remember { mutableStateOf<RadioState?>(null) }
+    var radioFeedback by remember { mutableStateOf<RadioFeedback?>(null) }
+    var feedbackVisible by remember { mutableStateOf(false) }
+    var feedbackGeneration by remember { mutableIntStateOf(0) }
+    LaunchedEffect(state.revision) {
+        val previous = previousState
+        previousState = state
+        previous?.let { detectRadioFeedback(it, state) }?.let {
+            radioFeedback = it
+            feedbackVisible = true
+            feedbackGeneration++
+        }
+    }
+    LaunchedEffect(feedbackGeneration) {
+        if (feedbackGeneration > 0) {
+            delay(1_200)
+            feedbackVisible = false
+        }
+    }
     BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF090B0C)).navigationBarsPadding().padding(10.dp)) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Kx3StatusRail(state, detail, connect, direct)
-                CompactKx3Face(state, send, Modifier.fillMaxWidth().weight(1f))
+                CompactKx3Face(state, send, radioFeedback, feedbackVisible, Modifier.fillMaxWidth().weight(1f))
             }
             Row(Modifier.fillMaxWidth().weight(2f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -287,8 +313,8 @@ private fun navIcon(item: Destination) = when (item) {
                         CwDecodeLine(state.cwDecodedText, state.connected, clearCwDecode,
                             Modifier.fillMaxWidth().heightIn(min = 48.dp))
                     }
-                    CompactKx3TuningDeck(state, send, Modifier.fillMaxWidth().weight(1f))
-                    LiveSpotsPanel(features, database, wavelog, cty, send, Modifier.fillMaxWidth().weight(3f))
+                    CompactKx3TuningDeck(state, send, Modifier.fillMaxWidth().weight(1.5f))
+                    LiveSpotsPanel(features, database, wavelog, cty, send, Modifier.fillMaxWidth().weight(2.5f))
                 }
             }
         }
@@ -333,7 +359,8 @@ private fun navIcon(item: Destination) = when (item) {
     }
 }
 
-@Composable private fun CompactKx3Face(state: RadioState, send: (String) -> Unit, modifier: Modifier = Modifier) {
+@Composable private fun CompactKx3Face(state: RadioState, send: (String) -> Unit, feedback: RadioFeedback?,
+    feedbackVisible: Boolean, modifier: Modifier = Modifier) {
     Surface(color = Color(0xFF0B0D0E), shape = MaterialTheme.shapes.medium,
         border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF454C50)), modifier = modifier) {
         Column(Modifier.fillMaxSize().padding(7.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -356,13 +383,41 @@ private fun navIcon(item: Destination) = when (item) {
                     Kx3CompactLcd(state, send, Modifier.weight(4f).fillMaxWidth())
                     Kx3ReceiveKeyRow(state.connected, send, Modifier.weight(1f).fillMaxWidth())
                 }
-                Kx3KeyMatrix(
-                    columns = listOf(
-                        listOf(Kx3KeySpec("MODE", "SWT14;"), Kx3KeySpec("DATA", "SWT17;"), Kx3KeySpec("RIT", "SWT18;")),
-                        listOf(Kx3KeySpec("ALT", "SWH14;"), Kx3KeySpec("TEXT", "SWH17;"), Kx3KeySpec("PF1", "SWH18;")),
-                        listOf(Kx3KeySpec("A/B", "SWT24;"), Kx3KeySpec("A → B", "SWT25;"), Kx3KeySpec("XIT", "SWT26;")),
-                        listOf(Kx3KeySpec("REV", "SWH24;"), Kx3KeySpec("SPLIT", "SWH25;"), Kx3KeySpec("PF2", "SWH26;")),
-                    ), state.connected, send, Modifier.width(318.dp).fillMaxHeight())
+                Box(Modifier.width(318.dp).fillMaxHeight()) {
+                    Kx3KeyMatrix(
+                        columns = listOf(
+                            listOf(Kx3KeySpec("MODE", "SWT14;"), Kx3KeySpec("DATA", "SWT17;"), Kx3KeySpec("RIT", "SWT18;")),
+                            listOf(Kx3KeySpec("ALT", "SWH14;"), Kx3KeySpec("TEXT", "SWH17;"), Kx3KeySpec("PF1", "SWH18;")),
+                            listOf(Kx3KeySpec("A/B", "SWT24;"), Kx3KeySpec("A → B", "SWT25;"), Kx3KeySpec("XIT", "SWT26;")),
+                            listOf(Kx3KeySpec("REV", "SWH24;"), Kx3KeySpec("SPLIT", "SWH25;"), Kx3KeySpec("PF2", "SWH26;")),
+                        ), state.connected, send, Modifier.fillMaxSize())
+                    RadioActionVisibility(feedback, feedbackVisible, Modifier.fillMaxSize())
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun RadioActionVisibility(feedback: RadioFeedback?, visible: Boolean, modifier: Modifier = Modifier) {
+    AnimatedVisibility(visible && feedback != null,
+        enter = fadeIn(tween(120)) + scaleIn(tween(160), initialScale = .96f),
+        exit = fadeOut(tween(300)) + scaleOut(tween(300), targetScale = .98f), modifier = modifier) {
+        feedback?.let { RadioActionOverlay(it, Modifier.fillMaxSize()) }
+    }
+}
+
+@Composable private fun RadioActionOverlay(feedback: RadioFeedback, modifier: Modifier = Modifier) {
+    Box(modifier.background(Color(0xE6121718)).padding(12.dp), contentAlignment = Alignment.Center) {
+        Surface(color = Color(0xFF17291F), contentColor = Ink, shape = RoundedCornerShape(10.dp),
+            border = androidx.compose.foundation.BorderStroke(2.dp, Healthy), shadowElevation = 10.dp,
+            modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(feedback.title, color = Healthy, fontWeight = FontWeight.Black, fontSize = 13.sp,
+                    letterSpacing = 1.1.sp, maxLines = 1)
+                Text(feedback.value, color = Ink, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Black,
+                    fontSize = 24.sp, maxLines = 1, softWrap = false)
+                Text("KX3 LIVE", color = Healthy.copy(alpha = .72f), fontWeight = FontWeight.Bold, fontSize = 9.sp,
+                    letterSpacing = .8.sp)
             }
         }
     }
@@ -412,18 +467,29 @@ private data class Kx3KeySpec(val label: String, val command: String, val requir
 
 @Composable private fun Kx3DirectKey(label: String, enabled: Boolean, action: () -> Unit, modifier: Modifier = Modifier,
     secondary: Boolean = false, risky: Boolean = false, bold: Boolean = true, compact: Boolean = false) {
+    val pressFlash = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
     val shape = RoundedCornerShape(4.dp)
-    val cap = if (enabled) listOf(Color(0xFF818789), Color(0xFF555B5D), Color(0xFF363A3C))
+    val baseCap = if (enabled) listOf(Color(0xFF818789), Color(0xFF555B5D), Color(0xFF363A3C))
         else listOf(Color(0xFF34383A), Color(0xFF282C2E), Color(0xFF202426))
-    val edge = if (risky) Color(0xFFB39A57) else Color(0xFFA4AAAC)
-    Button(action, enabled = enabled, modifier = modifier.fillMaxWidth().fillMaxHeight().heightIn(min = 48.dp).padding(1.dp),
+    val flash = pressFlash.value
+    val cap = baseCap.map { lerp(it, Color(0xFF167C43), flash) }
+    val baseEdge = if (risky) Color(0xFFB39A57) else Color(0xFFA4AAAC)
+    val edge = lerp(baseEdge, Healthy, flash)
+    Button({
+        scope.launch {
+            pressFlash.snapTo(1f)
+            pressFlash.animateTo(0f, tween(900))
+        }
+        action()
+    }, enabled = enabled, modifier = modifier.fillMaxWidth().fillMaxHeight().heightIn(min = 48.dp).padding(1.dp),
         shape = shape, border = androidx.compose.foundation.BorderStroke(1.dp, if (enabled) edge else Color(0xFF454A4C)),
         contentPadding = PaddingValues(0.dp),
         colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent, contentColor = Ink,
             disabledContainerColor = Color.Transparent, disabledContentColor = Muted),
         elevation = ButtonDefaults.buttonElevation(defaultElevation = 3.dp, pressedElevation = 0.dp, disabledElevation = 0.dp)) {
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(cap)), contentAlignment = Alignment.Center) {
-            Text(label, color = if (!enabled) Muted else if (secondary) Hold else Ink,
+            Text(label, color = if (!enabled) Muted else if (flash > .45f) Color.White else if (secondary) Hold else Ink,
                 fontWeight = if (bold) FontWeight.Black else FontWeight.SemiBold,
                 fontSize = if (compact) 11.sp else 14.sp, maxLines = 1, softWrap = false)
         }
@@ -678,6 +744,12 @@ private fun segmentMask(character: Char) = when (character) {
     }
 }
 
+private enum class Kx3Adjustment(val title: String, val unit: String) {
+    AF("AF GAIN", "of 255"), RF("RF GAIN", "of 250"), MONITOR("MONITOR", "of 60"),
+    WIDTH("FILTER WIDTH", "Hz"), SHIFT("IF SHIFT", "Hz"), KEYER("KEYER SPEED", "WPM"),
+    MIC("MIC GAIN", "of 60"), POWER("TX POWER", "W")
+}
+
 @Composable private fun CompactKx3TuningDeck(state: RadioState, send: (String) -> Unit, modifier: Modifier = Modifier) {
     var step by remember { mutableIntStateOf(100) }
     var af by remember(state.afGain) { mutableFloatStateOf(state.afGain.toFloat()) }
@@ -688,48 +760,137 @@ private fun segmentMask(character: Char) = when (character) {
     var mic by remember(state.micGain) { mutableFloatStateOf(state.micGain.coerceAtLeast(0).toFloat()) }
     var keyer by remember(state.keyerSpeed) { mutableFloatStateOf(state.keyerSpeed.takeIf { it >= 8 }?.toFloat() ?: 20f) }
     var power by remember(state.powerW) { mutableFloatStateOf(state.powerW.coerceIn(0, 12).toFloat()) }
+    var expanded by remember { mutableStateOf<Kx3Adjustment?>(null) }
+    var expandedVisible by remember { mutableStateOf(false) }
+    var adjustmentGeneration by remember { mutableIntStateOf(0) }
+    fun open(adjustment: Kx3Adjustment) {
+        expanded = adjustment
+        expandedVisible = true
+        adjustmentGeneration++
+    }
+    fun keepAlive() { adjustmentGeneration++ }
+    LaunchedEffect(expanded, adjustmentGeneration) {
+        if (expandedVisible) {
+            delay(700)
+            expandedVisible = false
+        }
+    }
     Surface(color = Color(0xFF111516), shape = MaterialTheme.shapes.small,
         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF434A4D)), modifier = modifier) {
-        Row(Modifier.fillMaxSize().padding(6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly) {
-                InlineKx3Slider("AF", af, 0f..255f, { af = it }, { send("AG%03d;".format(af.toInt())) }, state.connected)
-                InlineKx3Slider("RF", rf, 0f..250f, { rf = it }, { send("RG%03d;".format(rf.toInt())) }, state.connected)
-                InlineKx3Slider("MON", monitor, 0f..60f, { monitor = it }, { send("ML%03d;".format(monitor.toInt())) }, state.connected)
+        Box(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxSize().padding(6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly) {
+                    InlineKx3Slider("AF", af, 0f..255f, { af = it }, { send("AG%03d;".format(af.toInt())) },
+                        state.connected) { open(Kx3Adjustment.AF) }
+                    InlineKx3Slider("RF", rf, 0f..250f, { rf = it }, { send("RG%03d;".format(rf.toInt())) },
+                        state.connected) { open(Kx3Adjustment.RF) }
+                    InlineKx3Slider("MON", monitor, 0f..60f, { monitor = it }, { send("ML%03d;".format(monitor.toInt())) },
+                        state.connected) { open(Kx3Adjustment.MONITOR) }
+                }
+                Kx3DeckDivider()
+                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly) {
+                    InlineKx3Slider("I/WID", width, 100f..4000f, { width = it },
+                        { send("BW%04d;".format((width.toInt() / 10).coerceIn(0, 9999))) }, state.connected) { open(Kx3Adjustment.WIDTH) }
+                    InlineKx3Slider("II/SHT", shift, 300f..3000f, { shift = it },
+                        { send("IS %04d;".format(shift.toInt())) }, state.connected) { open(Kx3Adjustment.SHIFT) }
+                    InlineKx3Button("NORM", state.connected) { send("IS 9999;") }
+                }
+                Kx3DeckDivider()
+                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly) {
+                    InlineKx3Slider("KEYER", keyer, 8f..50f, { keyer = it }, { send("KS%03d;".format(keyer.toInt())) },
+                        state.connected) { open(Kx3Adjustment.KEYER) }
+                    InlineKx3Slider("MIC", mic, 0f..60f, { mic = it }, { send("MG%03d;".format(mic.toInt())) },
+                        state.connected) { open(Kx3Adjustment.MIC) }
+                    InlineKx3Slider("PWR", power, 0f..12f, { power = it }, { send("PC%03d;".format(power.toInt())) },
+                        state.connected) { open(Kx3Adjustment.POWER) }
+                }
+                Kx3VfoWheel(state, step, send, { step = when (step) { 10 -> 100; 100 -> 1000; 1000 -> 10000; else -> 10 } }, Modifier.fillMaxHeight().aspectRatio(1f))
             }
-            Kx3DeckDivider()
-            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly) {
-                InlineKx3Slider("I/WID", width, 100f..4000f, { width = it },
-                    { send("BW%04d;".format((width.toInt() / 10).coerceIn(0, 9999))) }, state.connected)
-                InlineKx3Slider("II/SHT", shift, 300f..3000f, { shift = it },
-                    { send("IS %04d;".format(shift.toInt())) }, state.connected)
-                InlineKx3Button("NORM", state.connected) { send("IS 9999;") }
+            AnimatedVisibility(expandedVisible && expanded != null,
+                enter = fadeIn(tween(120)) + scaleIn(tween(180), initialScale = .97f),
+                exit = fadeOut(tween(300)) + scaleOut(tween(300), targetScale = .98f),
+                modifier = Modifier.fillMaxSize()) {
+                expanded?.let { adjustment ->
+                    val value = when (adjustment) {
+                        Kx3Adjustment.AF -> af; Kx3Adjustment.RF -> rf; Kx3Adjustment.MONITOR -> monitor
+                        Kx3Adjustment.WIDTH -> width; Kx3Adjustment.SHIFT -> shift; Kx3Adjustment.KEYER -> keyer
+                        Kx3Adjustment.MIC -> mic; Kx3Adjustment.POWER -> power
+                    }
+                    val range = when (adjustment) {
+                        Kx3Adjustment.AF -> 0f..255f; Kx3Adjustment.RF -> 0f..250f; Kx3Adjustment.MONITOR -> 0f..60f
+                        Kx3Adjustment.WIDTH -> 100f..4000f; Kx3Adjustment.SHIFT -> 300f..3000f
+                        Kx3Adjustment.KEYER -> 8f..50f; Kx3Adjustment.MIC -> 0f..60f; Kx3Adjustment.POWER -> 0f..12f
+                    }
+                    fun change(next: Float) {
+                        when (adjustment) {
+                            Kx3Adjustment.AF -> af = next; Kx3Adjustment.RF -> rf = next; Kx3Adjustment.MONITOR -> monitor = next
+                            Kx3Adjustment.WIDTH -> width = next; Kx3Adjustment.SHIFT -> shift = next
+                            Kx3Adjustment.KEYER -> keyer = next; Kx3Adjustment.MIC -> mic = next; Kx3Adjustment.POWER -> power = next
+                        }
+                        keepAlive()
+                    }
+                    fun finish() {
+                        when (adjustment) {
+                            Kx3Adjustment.AF -> send("AG%03d;".format(af.toInt()))
+                            Kx3Adjustment.RF -> send("RG%03d;".format(rf.toInt()))
+                            Kx3Adjustment.MONITOR -> send("ML%03d;".format(monitor.toInt()))
+                            Kx3Adjustment.WIDTH -> send("BW%04d;".format((width.toInt() / 10).coerceIn(0, 9999)))
+                            Kx3Adjustment.SHIFT -> send("IS %04d;".format(shift.toInt()))
+                            Kx3Adjustment.KEYER -> send("KS%03d;".format(keyer.toInt()))
+                            Kx3Adjustment.MIC -> send("MG%03d;".format(mic.toInt()))
+                            Kx3Adjustment.POWER -> send("PC%03d;".format(power.toInt()))
+                        }
+                        keepAlive()
+                    }
+                    ExpandedKx3Adjustment(adjustment, value, range, state.connected, ::change, ::finish,
+                        Modifier.fillMaxSize())
+                }
             }
-            Kx3DeckDivider()
-            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly) {
-                InlineKx3Slider("KEYER", keyer, 8f..50f, { keyer = it }, { send("KS%03d;".format(keyer.toInt())) }, state.connected)
-                InlineKx3Slider("MIC", mic, 0f..60f, { mic = it }, { send("MG%03d;".format(mic.toInt())) }, state.connected)
-                InlineKx3Slider("PWR", power, 0f..12f, { power = it }, { send("PC%03d;".format(power.toInt())) }, state.connected)
-            }
-            Kx3VfoWheel(state, step, send, { step = when (step) { 10 -> 100; 100 -> 1000; 1000 -> 10000; else -> 10 } }, Modifier.fillMaxHeight().aspectRatio(1f))
         }
     }
 }
 
 @Composable private fun InlineKx3Slider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, change: (Float) -> Unit,
-    finish: () -> Unit, enabled: Boolean = true) {
-    Row(Modifier.fillMaxWidth().height(37.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = if (enabled) Ink else Muted, fontWeight = FontWeight.Black, fontSize = 12.sp,
-            letterSpacing = .15.sp, maxLines = 1, softWrap = false, modifier = Modifier.width(50.dp))
+    finish: () -> Unit, enabled: Boolean = true, expand: () -> Unit) {
+    Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Surface(onClick = expand, enabled = enabled, color = Color(0xFF283137), contentColor = Ink,
+            shape = RoundedCornerShape(4.dp), modifier = Modifier.width(58.dp).fillMaxHeight()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("$label ↗", color = if (enabled) Ink else Muted, fontWeight = FontWeight.Black, fontSize = 11.sp,
+                    letterSpacing = .1.sp, maxLines = 1, softWrap = false)
+            }
+        }
         Slider(value, change, enabled = enabled, valueRange = range, onValueChangeFinished = finish, modifier = Modifier.weight(1f))
         Text(value.toInt().toString(), color = if (enabled) Hold else Muted, fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold, fontSize = 9.sp, modifier = Modifier.width(32.dp))
+            fontWeight = FontWeight.Bold, fontSize = 10.sp, modifier = Modifier.width(36.dp))
+    }
+}
+
+@Composable private fun ExpandedKx3Adjustment(adjustment: Kx3Adjustment, value: Float,
+    range: ClosedFloatingPointRange<Float>, enabled: Boolean, change: (Float) -> Unit, finish: () -> Unit,
+    modifier: Modifier = Modifier) {
+    Surface(color = Color(0xFF17201C), contentColor = Ink, shape = RoundedCornerShape(8.dp),
+        border = androidx.compose.foundation.BorderStroke(2.dp, Healthy), shadowElevation = 12.dp, modifier = modifier.padding(4.dp)) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.Center) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(adjustment.title, color = Healthy, fontWeight = FontWeight.Black, fontSize = 16.sp,
+                        letterSpacing = .8.sp, maxLines = 1)
+                    Text("Drag to adjust · release to send", color = Muted, fontSize = 10.sp, maxLines = 1)
+                }
+                Text("${value.toInt()} ${adjustment.unit}", color = Hold, fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Black, fontSize = 24.sp, maxLines = 1)
+            }
+            Slider(value, change, enabled = enabled, valueRange = range, onValueChangeFinished = finish,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp))
+        }
     }
 }
 
 @Composable private fun Kx3DeckDivider() = Box(Modifier.width(1.dp).fillMaxHeight(.84f).background(Color(0xFF394044)))
 
 @Composable private fun InlineKx3Button(label: String, enabled: Boolean, action: () -> Unit) {
-    Button(action, enabled = enabled, modifier = Modifier.fillMaxWidth().height(37.dp), shape = RectangleShape,
+    Button(action, enabled = enabled, modifier = Modifier.fillMaxWidth().height(48.dp), shape = RectangleShape,
         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF33383B), contentColor = Hold),
         contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp)) {
         Text(label, fontWeight = FontWeight.Black, fontSize = 12.sp, letterSpacing = .2.sp)
