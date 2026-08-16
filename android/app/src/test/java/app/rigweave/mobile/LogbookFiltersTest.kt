@@ -67,4 +67,13 @@ class LogbookFiltersTest {
         assertTrue(numericMatches(500.0, "400..600")); assertFalse(numericMatches(500.0, ">500"))
         assertFalse(numericMatches(500.0, "invalid"))
     }
+
+    @Test fun pagingUsesOnlySupportedSizesAndNeverExceedsOneThousand() {
+        assertEquals(listOf(25, 50, 100, 200, 500, 1_000), LOGBOOK_PAGE_SIZES)
+        assertEquals(50, normalizedLogbookPageSize(65_000))
+        assertEquals(50, normalizedLogbookPageSize(50))
+        assertEquals(3, logbookPageCount(101, 50))
+        assertEquals(1, logbookPageCount(0, 1_000))
+        assertEquals(1_000, WAVELOG_SYNC_PAGE_SIZE)
+    }
 }

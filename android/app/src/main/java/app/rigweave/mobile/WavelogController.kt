@@ -29,6 +29,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 enum class LogMode { LOCAL, WAVELOG }
+const val WAVELOG_SYNC_PAGE_SIZE = 1_000
 
 data class AndroidWavelogStation(
     val id: String, val name: String, val callsign: String, val grid: String, val city: String,
@@ -36,16 +37,10 @@ data class AndroidWavelogStation(
     val iota: String, val sotaRef: String, val wwffRef: String, val potaRef: String, val active: Boolean,
 ) { val label get() = listOf(name, callsign, grid).filter { it.isNotBlank() }.joinToString(" · ") }
 
-data class AndroidWavelogContact(
-    val id: String, val callsign: String, val band: String, val mode: String, val submode: String,
-    val country: String, val date: String, val time: String, val frequency: String,
-)
-
 class WavelogController(private val context: Context, private val database: QsoDatabase) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val prefs = context.getSharedPreferences("wavelog", Context.MODE_PRIVATE)
     private val queueFile = File(context.filesDir, "wavelog-queue.json")
-    private val contactsFile = File(context.filesDir, "wavelog-contacts.json")
     private val syncMutex = Mutex()
     private val queueLock = Any()
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
@@ -62,7 +57,6 @@ class WavelogController(private val context: Context, private val database: QsoD
     var status by mutableStateOf("Wavelog not configured"); private set
     var timeStatus by mutableStateOf("NTP not checked"); private set
     var stations by mutableStateOf(emptyList<AndroidWavelogStation>()); private set
-    var contacts by mutableStateOf(loadContacts()); private set
     var pendingCount by mutableStateOf(loadQueue().length()); private set
     var syncPages by mutableStateOf(0); private set
 
@@ -194,11 +188,11 @@ class WavelogController(private val context: Context, private val database: QsoD
         val station = stationId.toLongOrNull() ?: return
         var cursor = if (reset) 0L else prefs.getLong("cursor_$stationId", 0L)
         var pages = 0; var added = 0
-        val loaded = if (reset) mutableListOf() else contacts.toMutableList()
         try {
             for (page in 0 until 256) {
                 val payload = JSONObject().put("key", apiKey).put("station_id", station)
-                    .put("fetchfromid", cursor).put("output_format", "json").put("fields", JSONArray(contactFields))
+                    .put("fetchfromid", cursor).put("limit", WAVELOG_SYNC_PAGE_SIZE)
+                    .put("output_format", "json").put("fields", JSONArray(contactFields))
                 val root = JSONObject(request("get_contacts_adif", "POST", payload))
                 val exported = integer(root, setOf("exported_qsos", "exported_records", "exportedRecords"))
                     ?: error("Missing exported QSO count")
@@ -206,32 +200,31 @@ class WavelogController(private val context: Context, private val database: QsoD
                     ?: error("Missing pagination cursor")
                 if (exported == 0L) break
                 if (next <= cursor) error("Invalid Wavelog cursor")
-                contactRows(root).forEach { row ->
-                    fun field(name: String): String {
-                        val key = row.keys().asSequence().firstOrNull { it.equals(name, true) } ?: return ""
-                        return row.optString(key).takeUnless { it.equals("null", true) } ?: ""
-                    }
-                    val remoteId = field("COL_PRIMARY_KEY").ifBlank {
-                        listOf(field("CALL"), field("QSO_DATE"), field("TIME_ON"), field("BAND"), field("MODE")).joinToString("-")
-                    }
-                    database.qsoFromFields(::field, remoteId, stationId)?.let { remote ->
-                        val stationRow = selectedStation
-                        val complete = remote.copy(stationLocation = stationRow?.name.orEmpty(), myCountry = remote.myCountry.ifBlank { stationRow?.country.orEmpty() },
-                            myDxcc = remote.myDxcc.ifBlank { stationRow?.dxcc.orEmpty() }, myCqZone = remote.myCqZone.ifBlank { stationRow?.cqZone.orEmpty() },
-                            myItuZone = remote.myItuZone.ifBlank { stationRow?.ituZone.orEmpty() }, myState = remote.myState.ifBlank { stationRow?.state.orEmpty() })
-                        if (database.mergeRemote(complete)) added++
-                        loaded += AndroidWavelogContact(remoteId, complete.callsign, complete.band, complete.mode, "",
-                            complete.country, field("QSO_DATE"), field("TIME_ON"), field("FREQ"))
+                val rows = contactRows(root)
+                database.transaction {
+                    rows.forEach { row ->
+                        fun field(name: String): String {
+                            val key = row.keys().asSequence().firstOrNull { it.equals(name, true) } ?: return ""
+                            return row.optString(key).takeUnless { it.equals("null", true) } ?: ""
+                        }
+                        val remoteId = field("COL_PRIMARY_KEY").ifBlank {
+                            listOf(field("CALL"), field("QSO_DATE"), field("TIME_ON"), field("BAND"), field("MODE")).joinToString("-")
+                        }
+                        database.qsoFromFields(::field, remoteId, stationId)?.let { remote ->
+                            val stationRow = selectedStation
+                            val complete = remote.copy(stationLocation = stationRow?.name.orEmpty(), myCountry = remote.myCountry.ifBlank { stationRow?.country.orEmpty() },
+                                myDxcc = remote.myDxcc.ifBlank { stationRow?.dxcc.orEmpty() }, myCqZone = remote.myCqZone.ifBlank { stationRow?.cqZone.orEmpty() },
+                                myItuZone = remote.myItuZone.ifBlank { stationRow?.ituZone.orEmpty() }, myState = remote.myState.ifBlank { stationRow?.state.orEmpty() })
+                            if (database.mergeRemote(complete)) added++
+                        }
                     }
                 }
                 cursor = next; pages = page + 1
                 prefs.edit().putLong("cursor_$stationId", cursor).apply()
                 publish("Two-way sync page $pages · $added new local QSOs")
             }
-            val unique = loaded.distinctBy { it.id }
-            writeJson(contactsFile, JSONArray(unique.map(::contactJson)))
             withContext(Dispatchers.Main) {
-                contacts = unique; syncPages = pages
+                syncPages = pages
                 status = "Two-way sync complete · $added downloaded · ${pendingCount} queued"
             }
         } catch (error: Exception) { publish("Two-way sync paused: ${error.message}; local data is safe") }
@@ -271,9 +264,6 @@ class WavelogController(private val context: Context, private val database: QsoD
     private suspend fun publish(value: String) = withContext(Dispatchers.Main) { status = value }
     private suspend fun publishTime(value: String) = withContext(Dispatchers.Main) { timeStatus = value }
     private fun loadQueue() = runCatching { JSONArray(queueFile.readText()) }.getOrElse { JSONArray() }
-    private fun loadContacts() = runCatching {
-        val rows = JSONArray(contactsFile.readText()); List(rows.length()) { contact(rows.getJSONObject(it)) }
-    }.getOrElse { emptyList() }
     private fun writeJson(file: File, value: Any) {
         val atomic = AtomicFile(file)
         val stream = atomic.startWrite()
@@ -295,12 +285,6 @@ class WavelogController(private val context: Context, private val database: QsoD
         } }
         visit(node); return output
     }
-    private fun contact(row: JSONObject) = AndroidWavelogContact(row.optString("id"), row.optString("callsign"),
-        row.optString("band"), row.optString("mode"), row.optString("submode"), row.optString("country"),
-        row.optString("date"), row.optString("time"), row.optString("frequency"))
-    private fun contactJson(row: AndroidWavelogContact) = JSONObject().put("id", row.id).put("callsign", row.callsign)
-        .put("band", row.band).put("mode", row.mode).put("submode", row.submode).put("country", row.country)
-        .put("date", row.date).put("time", row.time).put("frequency", row.frequency)
     private fun integer(node: Any?, keys: Set<String>): Long? { when (node) {
         is JSONObject -> { node.keys().forEach { key ->
             if (key in keys) return node.optString(key).toLongOrNull()

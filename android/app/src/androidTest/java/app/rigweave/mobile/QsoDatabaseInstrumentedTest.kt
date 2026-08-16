@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -59,6 +60,49 @@ class QsoDatabaseInstrumentedTest {
         assertTrue(bandForFrequency(14_200_000) == "20m")
         assertTrue(bandForFrequency(50_100_000) == "6m")
         assertTrue(bandForFrequency(100_000_000).isBlank())
+    }
+
+    @Test fun pagesAndFiltersInsideSqlBeforeReturningRows() {
+        val target = Qso(
+            id = "target", callsign = "OM0RX", frequencyHz = 14_060_000, mode = "CW", rstSent = "599",
+            rstReceived = "579", createdAt = 200, country = "Slovakia", band = "20m", grid = "JN98",
+            iota = "EU-001", sotaRef = "OM/ZA-001", wwffRef = "OMFF-0001", potaRef = "OM-0001",
+            comment = "Summit contact", notes = "Strong signal", operatorCallsign = "OM0RX", dxcc = "504",
+            continent = "EU", state = "ZA", propagationMode = "F2", county = "ZILINA", dok = "A01",
+            contestId = "CQ-WW-CW", distanceKm = 1_250.0, durationSeconds = 3_600, qslSent = "Y",
+            qslReceived = "Y", qslMethod = "D", qslReceivedMethod = "B", qslVia = "OM0RX",
+            lotwSent = "Y", lotwReceived = "Y", clublogSent = "Y", clublogReceived = "Y",
+            eqslSent = "Y", eqslReceived = "Y", dclSent = "Y", dclReceived = "Y", qrzSent = "Y",
+            qrzReceived = "Y", qslImages = "front.jpg", stationProfileId = "7", syncState = "synced")
+        assertTrue(database.save(target))
+        repeat(75) { index -> assertTrue(database.save(Qso(
+            id = "other-$index", callsign = "VK${index}TEST", frequencyHz = 7_100_000, mode = "SSB",
+            rstSent = "59", rstReceived = "59", createdAt = 1_000L + index, country = "Australia",
+            band = "40m", stationProfileId = "7", syncState = "synced"))) }
+        assertTrue(database.save(target.copy(id = "other-station", callsign = "OM0RX/P", createdAt = 500,
+            stationProfileId = "8")))
+
+        val first = database.page(0, 25, stationId = "7")
+        val second = database.page(1, 25, stationId = "7")
+        assertEquals(76, first.total); assertEquals(4, first.pageCount); assertEquals(25, first.rows.size)
+        assertEquals(25, second.rows.size); assertTrue(first.rows.map { it.id }.intersect(second.rows.map { it.id }.toSet()).isEmpty())
+
+        listOf(
+            LogbookFilter(callsign = "0rx"), LogbookFilter(dxcc = "504"), LogbookFilter(state = "za"),
+            LogbookFilter(grid = "jn98"), LogbookFilter(mode = "CW"), LogbookFilter(band = "20m"),
+            LogbookFilter(propagation = "F2"), LogbookFilter(county = "zil"), LogbookFilter(dok = "A01"),
+            LogbookFilter(sota = "ZA-001"), LogbookFilter(pota = "OM-0001"), LogbookFilter(iota = "EU-001"),
+            LogbookFilter(wwff = "OMFF"), LogbookFilter(operator = "OM0RX"), LogbookFilter(contest = "CQ-WW"),
+            LogbookFilter(continent = "EU"), LogbookFilter(comment = "strong signal"),
+            LogbookFilter(distance = ">1000"), LogbookFilter(duration = ">=60"), LogbookFilter(qslSent = "Y"),
+            LogbookFilter(qslReceived = "Y"), LogbookFilter(qslSentMethod = "D"),
+            LogbookFilter(qslReceivedMethod = "B"), LogbookFilter(lotwSent = "Y"),
+            LogbookFilter(lotwReceived = "Y"), LogbookFilter(clublogSent = "Y"),
+            LogbookFilter(clublogReceived = "Y"), LogbookFilter(eqslSent = "Y"),
+            LogbookFilter(eqslReceived = "Y"), LogbookFilter(dclSent = "Y"),
+            LogbookFilter(dclReceived = "Y"), LogbookFilter(qrzSent = "Y"),
+            LogbookFilter(qrzReceived = "Y"), LogbookFilter(qslVia = "0rx"), LogbookFilter(qslImages = "Y"),
+        ).forEach { filter -> assertEquals(filter.toString(), listOf("target"), database.page(0, 50, filter, "7").rows.map { it.id }) }
     }
 
     companion object { private const val databaseName = "rigweave-instrumented.sqlite" }

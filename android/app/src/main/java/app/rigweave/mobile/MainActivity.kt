@@ -127,6 +127,11 @@ private enum class LogbookFilterTab(val label: String) { GENERAL("General"), QSL
         if (risky) pendingRisk = command else direct(command)
     }
     LaunchedEffect(transport) { audio.refreshDevices(); while (true) { delay(450); transport.poll()?.let(::accept) } }
+    LaunchedEffect(radio.connected, radio.mode, app.cwMacrosArmed) {
+        if (app.cwMacrosArmed && (!radio.connected || !isCwMacroMode(radio.mode))) {
+            app.updateCwMacrosArmed(false)
+        }
+    }
     DisposableEffect(Unit) { onDispose {
         scope.launch { transport.disconnect() }; audio.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
         NativeCore.destroy(core); database.close()
@@ -249,11 +254,33 @@ private fun navIcon(item: Destination) = when (item) {
                 CompactKx3Face(state, send, Modifier.fillMaxWidth().weight(1f))
             }
             Row(Modifier.fillMaxWidth().weight(2f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CompactLogger(state, database, wavelog, callbook, cty, app, send, Modifier.weight(1f).fillMaxHeight())
+                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    CwMacroStrip(state, app, send, Modifier.fillMaxWidth().height(54.dp))
+                    CompactLogger(state, database, wavelog, callbook, cty, app, send, Modifier.weight(1f).fillMaxWidth())
+                }
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     CompactKx3TuningDeck(state, send, Modifier.fillMaxWidth().weight(1f))
                     LiveSpotsPanel(features, database, wavelog, send, Modifier.fillMaxWidth().weight(3f))
                 }
+            }
+        }
+    }
+}
+
+@Composable private fun CwMacroStrip(state: RadioState, app: AppController, send: (String) -> Unit,
+    modifier: Modifier = Modifier) {
+    val configured = (0 until CW_MACRO_COUNT).mapNotNull { index ->
+        app.macroTexts.getOrNull(index)?.takeIf(String::isNotBlank)?.let { text ->
+            Triple(index, app.macroLabels.getOrNull(index).orEmpty().ifBlank { "M${index + 1}" }, text)
+        }
+    }
+    if (!isCwMacroMode(state.mode) || configured.isEmpty()) return
+    Surface(color = Color(0xFF15191A), shape = MaterialTheme.shapes.small,
+        border = androidx.compose.foundation.BorderStroke(1.dp, Hold.copy(alpha = .72f)), modifier = modifier) {
+        Row(Modifier.fillMaxSize().padding(3.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            configured.forEach { (_, label, text) ->
+                Kx3DirectKey(label, state.connected && app.cwMacrosArmed, { cwMacroCommand(text)?.let(send) },
+                    Modifier.weight(1f), secondary = true, risky = true, compact = true)
             }
         }
     }
@@ -477,13 +504,14 @@ private fun kx3FilterWidths(mode: String): List<Int> = when (mode) {
 }
 
 @Composable private fun Kx3OriginalMeter(state: RadioState, ink: Color, modifier: Modifier = Modifier) {
+    val swrProgress = if (state.transmitting && state.swrTenths >= 10) (state.swrTenths - 10) / 25f else 0f
     Column(modifier, verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Kx3BarMeter("S", "1  3  5  7  9  +20", state.meter / 21f, ink, Modifier.weight(1f).fillMaxHeight())
             Kx3CwtMeter(state.cwt, ink, Modifier.weight(.72f).fillMaxHeight())
         }
         Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Kx3BarMeter("SWR", "1  1.5  2  3", ((state.swrTenths - 10) / 25f), ink, Modifier.weight(1f).fillMaxHeight())
+            Kx3BarMeter("SWR", "1  1.5  2  3", swrProgress, ink, Modifier.weight(1f).fillMaxHeight())
             Kx3BarMeter("RF", "0   5   10", state.rfOutputTenths / 120f, ink, Modifier.weight(1f).fillMaxHeight())
         }
         Canvas(Modifier.fillMaxWidth().weight(.68f)) {
@@ -513,8 +541,8 @@ private fun kx3FilterWidths(mode: String): List<Int> = when (mode) {
             fontSize = 12.sp, maxLines = 1, softWrap = false)
         Canvas(Modifier.fillMaxWidth().weight(1f)) {
             val bounded = progress.coerceIn(0f, 1f)
-            drawRect(ink.copy(alpha = .13f), size = size)
-            drawRect(ink, size = Size(size.width * bounded, size.height))
+            drawRect(ink.copy(alpha = .34f), size = size, style = Stroke(1.dp.toPx()))
+            if (bounded > 0f) drawRect(ink, size = Size(size.width * bounded, size.height))
             repeat(7) { tick ->
                 val x = size.width * tick / 6f
                 drawLine(ink.copy(alpha = .62f), Offset(x, 0f), Offset(x, size.height * .48f), 1.dp.toPx())
@@ -666,19 +694,24 @@ private enum class RadioActivityTab(val label: String) { SPOTS("LIVE DX SPOTS"),
 @Composable private fun LiveSpotsPanel(features: FeatureController, database: QsoDatabase, wavelog: WavelogController,
     send: (String) -> Unit, modifier: Modifier = Modifier) {
     var selected by remember { mutableStateOf(RadioActivityTab.SPOTS) }
-    var log by remember { mutableStateOf(emptyList<Qso>()) }
-    LaunchedEffect(selected, wavelog.logMode, wavelog.stationId) {
+    var logPage by remember { mutableStateOf(QsoPage(emptyList(), 0, 0, 50)) }
+    var page by remember { mutableIntStateOf(0) }
+    var pageSize by remember { mutableIntStateOf(50) }
+    LaunchedEffect(wavelog.logMode, wavelog.stationId) { page = 0 }
+    LaunchedEffect(selected, wavelog.logMode, wavelog.stationId, page, pageSize) {
         if (selected == RadioActivityTab.LOG && wavelog.logMode == LogMode.WAVELOG &&
             wavelog.configured && wavelog.stations.isEmpty()) wavelog.loadStations()
+        var observedRevision = Long.MIN_VALUE
         while (selected == RadioActivityTab.LOG) {
-            log = withContext(Dispatchers.IO) { database.list() }
+            val revision = database.changeToken()
+            if (revision != observedRevision) {
+                logPage = withContext(Dispatchers.IO) {
+                    database.page(page, pageSize, stationId = wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG })
+                }
+                observedRevision = revision
+                if (page != logPage.page) page = logPage.page
+            }
             delay(2_000)
-        }
-    }
-    val visibleLog = remember(log, wavelog.logMode, wavelog.stationId) {
-        if (wavelog.logMode == LogMode.LOCAL) log else log.filter {
-            it.stationProfileId == wavelog.stationId || it.syncState == "pending" ||
-                (it.stationProfileId.isBlank() && it.remoteId.isBlank())
         }
     }
     Surface(color = Color(0xFF121617), shape = MaterialTheme.shapes.small,
@@ -692,9 +725,13 @@ private enum class RadioActivityTab(val label: String) { SPOTS("LIVE DX SPOTS"),
                 }
                 Spacer(Modifier.weight(1f))
                 Text(if (selected == RadioActivityTab.SPOTS) features.clusterStatus else if (wavelog.logMode == LogMode.LOCAL)
-                    "LOCAL LOG · ${visibleLog.size}" else "WAVELOG · ${wavelog.selectedStation?.name ?: "STATION ${wavelog.stationId}"}",
+                    "LOCAL LOG · ${logPage.total}" else "WAVELOG · ${wavelog.selectedStation?.name ?: "STATION ${wavelog.stationId}"}",
                     color = if (selected == RadioActivityTab.SPOTS && features.liveSpots.isEmpty()) Muted else Healthy,
                     style = MaterialTheme.typography.labelSmall, maxLines = 1, modifier = Modifier.padding(horizontal = 10.dp))
+                if (selected == RadioActivityTab.LOG) {
+                    CompactPager(logPage, pageSize, { pageSize = it; page = 0 }, { page = (page - 1).coerceAtLeast(0) },
+                        { page = (page + 1).coerceAtMost(logPage.pageCount - 1) })
+                }
             }
             if (selected == RadioActivityTab.SPOTS) {
                 if (features.liveSpots.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -712,7 +749,7 @@ private enum class RadioActivityTab(val label: String) { SPOTS("LIVE DX SPOTS"),
                         }
                     }
                 }
-            } else RadioLogTable(visibleLog.take(40), Modifier.fillMaxSize())
+            } else RadioLogTable(logPage.rows, Modifier.fillMaxSize())
         }
     }
 }
@@ -722,7 +759,7 @@ private enum class RadioActivityTab(val label: String) { SPOTS("LIVE DX SPOTS"),
         "Date" to .88f, "Time" to .66f, "Call" to 1.05f, "Mode" to .72f, "RST (S)" to .67f,
         "RST (R)" to .67f, "Band" to .62f, "Country" to 1.65f, "LoTW" to .66f, "Clublog" to .82f)
     Column(modifier) {
-        Row(Modifier.fillMaxWidth().height(36.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().height(42.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
             columns.forEach { (label, weight) -> RadioLogCell(label, weight, header = true) }
         }
         if (records.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -731,7 +768,7 @@ private enum class RadioActivityTab(val label: String) { SPOTS("LIVE DX SPOTS"),
             items(records.size, key = { records[it].id }) { index ->
                 val qso = records[index]
                 val utc = Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC)
-                Row(Modifier.fillMaxWidth().height(39.dp)
+                Row(Modifier.fillMaxWidth().height(48.dp)
                     .background(if (index % 2 == 0) Color(0xFF181E22) else Color(0xFF22282C)),
                     verticalAlignment = Alignment.CenterVertically) {
                     RadioLogCell(utc.format(DateTimeFormatter.ofPattern("dd/MM/yy")), columns[0].second)
@@ -751,19 +788,19 @@ private enum class RadioActivityTab(val label: String) { SPOTS("LIVE DX SPOTS"),
 
 @Composable private fun RowScope.RadioLogCell(value: String, weight: Float, color: Color = Ink, bold: Boolean = false,
     header: Boolean = false) {
-    Box(Modifier.weight(weight).fillMaxHeight().border(.5.dp, Color(0xFF3D474D)).padding(horizontal = 6.dp),
+    Box(Modifier.weight(weight).fillMaxHeight().border(.5.dp, Color(0xFF3D474D)).padding(horizontal = 5.dp),
         contentAlignment = Alignment.CenterStart) {
         Text(value.ifBlank { "—" }, color = if (value.isBlank()) Muted.copy(alpha = .55f) else color,
             fontWeight = if (header || bold) FontWeight.Black else FontWeight.Medium,
-            fontSize = if (header) 10.sp else 11.sp, maxLines = 1)
+            fontSize = if (header) 15.sp else 16.sp, maxLines = 1)
     }
 }
 
 @Composable private fun RowScope.RadioLogQslCell(sent: String, received: String, weight: Float) {
     Row(Modifier.weight(weight).fillMaxHeight().border(.5.dp, Color(0xFF3D474D)),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-        Text("▲", color = if (positiveLogStatus(sent)) Healthy else Danger, fontSize = 11.sp)
-        Text("▼", color = if (positiveLogStatus(received)) Healthy else Danger, fontSize = 11.sp)
+        Text("▲", color = if (positiveLogStatus(sent)) Healthy else Danger, fontSize = 17.sp)
+        Text("▼", color = if (positiveLogStatus(received)) Healthy else Danger, fontSize = 17.sp)
     }
 }
 
@@ -960,10 +997,6 @@ private enum class RadioActivityTab(val label: String) { SPOTS("LIVE DX SPOTS"),
                         InstrumentStrip(Color(0xFF65A6C7)) {
                             LogField("Location / QTH", qth, { qth = it }, Modifier.weight(1f)); LogField("Gridsquare", grid, { grid = it.uppercase() }, Modifier.weight(1f))
                             LogField("Comment", comment, { comment = it }, Modifier.weight(1f))
-                        }
-                        InstrumentStrip(Hold, Modifier.height(56.dp)) {
-                            app.macroLabels.forEachIndexed { index, label -> Kx3DirectKey(label.ifBlank { listOf("CQ", "EXCH", "TU")[index] },
-                                state.connected && app.cwMacrosArmed, { app.macroTexts[index].takeIf(String::isNotBlank)?.let { send("KY${it};") } }, Modifier.weight(1f), secondary = true) }
                         }
                     }
                     QsoEditorTab.STATION -> {
@@ -1464,32 +1497,28 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
     var applied by remember { mutableStateOf(LogbookFilter()) }
     var fromDate by remember { mutableStateOf("") }; var toDate by remember { mutableStateOf("") }
     var filterError by remember { mutableStateOf("") }; var selectedId by remember { mutableStateOf<String?>(null) }
-    var records by remember { mutableStateOf(emptyList<Qso>()) }
-    val scope = rememberCoroutineScope()
-    val reload = { scope.launch { records = withContext(Dispatchers.IO) { database.all() } } }
+    var page by remember { mutableIntStateOf(0) }
+    var pageData by remember { mutableStateOf(QsoPage(emptyList(), 0, 0, applied.limit)) }
+    var refreshGeneration by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(wavelog.logMode, wavelog.stationId) {
         if (wavelog.logMode == LogMode.WAVELOG) {
             if (wavelog.configured && wavelog.stations.isEmpty()) wavelog.loadStations()
             wavelog.syncTwoWay()
         }
-        records = withContext(Dispatchers.IO) { database.all() }
+        page = 0; refreshGeneration++
     }
     LaunchedEffect(wavelog.status) {
-        if (wavelog.status.startsWith("Two-way sync complete")) {
-            records = withContext(Dispatchers.IO) { database.all() }
-        }
+        if (wavelog.status.startsWith("Two-way sync complete")) refreshGeneration++
     }
-
-    val sourceRecords = remember(records, wavelog.logMode, wavelog.stationId) {
-        if (wavelog.logMode == LogMode.LOCAL) records else records.filter {
-            it.stationProfileId == wavelog.stationId || it.syncState == "pending" ||
-                (it.stationProfileId.isBlank() && it.remoteId.isBlank())
+    LaunchedEffect(applied, page, wavelog.logMode, wavelog.stationId, refreshGeneration) {
+        pageData = withContext(Dispatchers.IO) {
+            database.page(page, applied.limit, applied,
+                wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG })
         }
+        if (page != pageData.page) page = pageData.page
     }
-    val matching = remember(sourceRecords, applied) { filterLogbook(sourceRecords, applied.copy(limit = 5_000)) }
-    val visible = remember(matching, applied.limit) { matching.take(applied.limit) }
-    val selected = sourceRecords.firstOrNull { it.id == selectedId }
+    val selected = pageData.rows.firstOrNull { it.id == selectedId }
     val stationLabel = wavelog.selectedStation?.label?.ifBlank { null }
         ?: wavelog.stationId.takeIf { it.isNotBlank() }?.let { "Station $it" }
         ?: "Station not selected"
@@ -1499,19 +1528,20 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
             Box(Modifier.weight(1f)) { Header(if (wavelog.logMode == LogMode.WAVELOG) "Wavelog logbook" else "Local logbook", state) }
             StatusChip(if (wavelog.logMode == LogMode.WAVELOG) "WAVELOG · TWO-WAY" else "LOCAL · TABLET", true)
             if (wavelog.logMode == LogMode.WAVELOG) Text(stationLabel, color = Hold, style = MaterialTheme.typography.labelLarge, maxLines = 1)
-            Text("${visible.size} / ${matching.size} RESULTS", color = Ink, fontWeight = FontWeight.Bold)
-            CompactSelect("Limit", applied.limit.toString(), listOf("250", "1000", "2500", "5000")) { value ->
-                val limit = value.toInt(); draft = draft.copy(limit = limit); applied = applied.copy(limit = limit)
-            }
+            Text("${pageData.rows.size} / ${pageData.total} RESULTS", color = Ink, fontWeight = FontWeight.Bold)
+            CompactPager(pageData, applied.limit, { limit ->
+                draft = draft.copy(limit = limit); applied = applied.copy(limit = limit); page = 0; selectedId = null
+            }, { page = (page - 1).coerceAtLeast(0); selectedId = null },
+                { page = (page + 1).coerceAtMost(pageData.pageCount - 1); selectedId = null })
             QuickFilterMenu(selected) { key ->
                 val updated = quickFilter(applied, selected ?: return@QuickFilterMenu, key)
                 if (key == "date") {
                     val date = Instant.ofEpochSecond(selected.createdAt).atZone(ZoneOffset.UTC).toLocalDate().toString()
                     fromDate = date; toDate = date
                 }
-                draft = updated; applied = updated; tab = LogbookTab.LOGBOOK
+                draft = updated; applied = updated; page = 0; selectedId = null; tab = LogbookTab.LOGBOOK
             }
-            OutlinedButton({ if (wavelog.logMode == LogMode.WAVELOG) wavelog.syncTwoWay(); reload() }, modifier = Modifier.heightIn(min = 48.dp)) {
+            OutlinedButton({ if (wavelog.logMode == LogMode.WAVELOG) wavelog.syncTwoWay(); refreshGeneration++ }, modifier = Modifier.heightIn(min = 48.dp)) {
                 Icon(Icons.Outlined.Refresh, null); Spacer(Modifier.width(6.dp)); Text(if (wavelog.logMode == LogMode.WAVELOG) "SYNC" else "REFRESH")
             }
         }
@@ -1522,15 +1552,15 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
             }) }
         }
         if (tab == LogbookTab.LOGBOOK) {
-            LogbookTable(visible, selectedId, { selectedId = it }, applied, Modifier.weight(1f)) { sort ->
+            LogbookTable(pageData.rows, selectedId, { selectedId = it }, applied, Modifier.weight(1f)) { sort ->
                 val direction = if (applied.sort == sort && applied.direction == LogbookSortDirection.DESCENDING)
                     LogbookSortDirection.ASCENDING else LogbookSortDirection.DESCENDING
                 draft = draft.copy(sort = sort, direction = direction)
-                applied = applied.copy(sort = sort, direction = direction)
+                applied = applied.copy(sort = sort, direction = direction); page = 0; selectedId = null
             }
         } else {
             LogbookFilterPanel(filterTab, { filterTab = it }, draft, { draft = it }, fromDate, { fromDate = it },
-                toDate, { toDate = it }, sourceRecords, filterError, onPreset = { preset ->
+                toDate, { toDate = it }, filterError, onPreset = { preset ->
                     val (from, to) = logbookDatePreset(preset); fromDate = from.toString(); toDate = to.toString(); filterError = ""
                 }, onApply = {
                     val from = fromDate.takeIf { it.isNotBlank() }?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
@@ -1543,11 +1573,11 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                         filterError = ""
                         applied = draft.copy(fromEpochSeconds = from?.atStartOfDay()?.toEpochSecond(ZoneOffset.UTC),
                             toEpochSecondsExclusive = to?.plusDays(1)?.atStartOfDay()?.toEpochSecond(ZoneOffset.UTC))
-                        draft = applied; tab = LogbookTab.LOGBOOK
+                        draft = applied; page = 0; selectedId = null; tab = LogbookTab.LOGBOOK
                     }
                 }, onClear = {
                     val cleared = LogbookFilter(limit = applied.limit)
-                    draft = cleared; applied = cleared; fromDate = ""; toDate = ""; filterError = ""
+                    draft = cleared; applied = cleared; page = 0; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
                 }, modifier = Modifier.weight(1f))
         }
     }
@@ -1563,6 +1593,27 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
             choices.forEach { choice -> DropdownMenuItem({ Text(choice) }, onClick = { change(choice); expanded = false },
                 trailingIcon = { if (choice == value) Icon(Icons.Outlined.Check, null) }) }
         }
+    }
+}
+
+@Composable private fun CompactPager(page: QsoPage, pageSize: Int, changeSize: (Int) -> Unit,
+    previous: () -> Unit, next: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        Box {
+            TextButton({ expanded = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                Text("$pageSize ROWS", fontWeight = FontWeight.Bold); Icon(Icons.Outlined.ArrowDropDown, null)
+            }
+            DropdownMenu(expanded, { expanded = false }) {
+                LOGBOOK_PAGE_SIZES.forEach { choice -> DropdownMenuItem({ Text("$choice rows") }, onClick = {
+                    changeSize(choice); expanded = false
+                }, trailingIcon = { if (choice == pageSize) Icon(Icons.Outlined.Check, null) }) }
+            }
+        }
+        TextButton(previous, enabled = page.page > 0, modifier = Modifier.heightIn(min = 48.dp)) { Text("PREV") }
+        Text("${page.page + 1}/${page.pageCount}", color = Ink, fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace, maxLines = 1)
+        TextButton(next, enabled = page.page + 1 < page.pageCount, modifier = Modifier.heightIn(min = 48.dp)) { Text("NEXT") }
     }
 }
 
@@ -1696,13 +1747,13 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
 
 @Composable private fun LogbookFilterPanel(selected: LogbookFilterTab, select: (LogbookFilterTab) -> Unit,
     draft: LogbookFilter, update: (LogbookFilter) -> Unit, fromDate: String, updateFrom: (String) -> Unit,
-    toDate: String, updateTo: (String) -> Unit, records: List<Qso>, error: String, onPreset: (String) -> Unit,
+    toDate: String, updateTo: (String) -> Unit, error: String, onPreset: (String) -> Unit,
     onApply: () -> Unit, onClear: () -> Unit, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         TabRow(selected.ordinal, containerColor = Color(0xFF171D21), contentColor = Amber) {
             LogbookFilterTab.entries.forEach { item -> Tab(selected == item, { select(item) }, text = { Text(item.label, fontWeight = FontWeight.Bold) }) }
         }
-        if (selected == LogbookFilterTab.GENERAL) GeneralLogbookFilters(draft, update, fromDate, updateFrom, toDate, updateTo, records, onPreset, Modifier.weight(1f))
+        if (selected == LogbookFilterTab.GENERAL) GeneralLogbookFilters(draft, update, fromDate, updateFrom, toDate, updateTo, onPreset, Modifier.weight(1f))
         else QslLogbookFilters(draft, update, Modifier.weight(1f))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Button(onApply, modifier = Modifier.heightIn(min = 48.dp)) { Icon(Icons.Outlined.Search, null); Spacer(Modifier.width(6.dp)); Text("APPLY FILTERS") }
@@ -1715,9 +1766,11 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
 
 @Composable private fun GeneralLogbookFilters(filter: LogbookFilter, update: (LogbookFilter) -> Unit,
     fromDate: String, updateFrom: (String) -> Unit, toDate: String, updateTo: (String) -> Unit,
-    records: List<Qso>, preset: (String) -> Unit, modifier: Modifier = Modifier) {
-    val modes = listOf("" to "All") + records.map { it.mode }.filter { it.isNotBlank() }.distinct().sorted().map { it to it }
-    val bands = listOf("" to "All") + records.map { it.band }.filter { it.isNotBlank() }.distinct().map { it to it }
+    preset: (String) -> Unit, modifier: Modifier = Modifier) {
+    val modes = listOf("" to "All") + listOf("CW", "SSB", "USB", "LSB", "AM", "FM", "RTTY", "DATA", "FT8", "FT4", "PSK31")
+        .map { it to it }
+    val bands = listOf("" to "All") + listOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m")
+        .map { it to it }
     LazyVerticalGrid(GridCells.Adaptive(210.dp), modifier, horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 4.dp)) {
         item(span = { GridItemSpan(maxLineSpan) }) {
@@ -1839,12 +1892,25 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             }
             Button({ app.saveLocalSettings(stationCall, stationName, stationGrid, repeatSeconds, macroLabels, macroTexts) }) { Text("SAVE DEFAULTS") }
             } else {
-            repeat(3) { index -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(macroLabels[index], { macroLabels[index] = it.uppercase().take(11) }, label = { Text("Macro ${index + 1} label") }, modifier = Modifier.weight(1f))
-                OutlinedTextField(macroTexts[index], { macroTexts[index] = it.uppercase().take(24) }, label = { Text("CW text") }, modifier = Modifier.weight(3f))
+            val configuredMacros = macroTexts.count(String::isNotBlank)
+            Text("$configuredMacros of $CW_MACRO_COUNT configured · blank messages stay hidden on the Radio screen.", color = Muted)
+            repeat(CW_MACRO_COUNT) { index -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Surface(color = if (macroTexts[index].isBlank()) Color(0xFF303638) else Hold.copy(alpha = .18f),
+                    shape = RoundedCornerShape(6.dp), modifier = Modifier.size(42.dp)) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("${index + 1}", color = if (macroTexts[index].isBlank()) Muted else Hold, fontWeight = FontWeight.Black)
+                    }
+                }
+                OutlinedTextField(macroLabels[index], { macroLabels[index] = sanitizeCwMacroLabel(it) },
+                    label = { Text("Button label") }, placeholder = { Text("M${index + 1}") }, singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedTextField(macroTexts[index], { macroTexts[index] = sanitizeCwMacroText(it) },
+                    label = { Text("CW message") }, supportingText = { Text("${macroTexts[index].length} / $CW_MACRO_TEXT_MAX") },
+                    singleLine = true, modifier = Modifier.weight(3f))
             } }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("CQ repeat"); Slider(repeatSeconds.toFloat(), { repeatSeconds = it.toInt() }, valueRange = 2f..120f, modifier = Modifier.weight(1f)); Text("$repeatSeconds s")
+                Text("CQ repeat"); Slider(repeatSeconds.toFloat(), { repeatSeconds = it.toInt() },
+                    valueRange = CQ_REPEAT_MIN_SECONDS.toFloat()..CQ_REPEAT_MAX_SECONDS.toFloat(), steps = 3,
+                    modifier = Modifier.weight(1f)); Text("$repeatSeconds s")
                 FilterChip(app.cwMacrosArmed, { app.updateCwMacrosArmed(!app.cwMacrosArmed) }, { Text(if (app.cwMacrosArmed) "CW ARMED" else "CW SAFE") })
             }
             Button({ app.saveLocalSettings(stationCall, stationName, stationGrid, repeatSeconds, macroLabels, macroTexts) }) { Text("SAVE MACROS") }

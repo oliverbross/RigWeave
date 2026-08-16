@@ -8,6 +8,7 @@ import java.time.LocalDateTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 
 data class Qso(
     val id: String, val callsign: String, val frequencyHz: Long, val mode: String,
@@ -35,6 +36,10 @@ data class Qso(
     val syncState: String = "local", val remoteId: String = "",
 )
 
+data class QsoPage(val rows: List<Qso>, val total: Int, val page: Int, val pageSize: Int) {
+    val pageCount get() = logbookPageCount(total, pageSize)
+}
+
 fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
     in 135_700L..137_800L -> "2200m"; in 472_000L..479_000L -> "630m"
     in 1_800_000L..2_000_000L -> "160m"; in 3_500_000L..4_000_000L -> "80m"
@@ -45,11 +50,13 @@ fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
     in 50_000_000L..54_000_000L -> "6m"; else -> ""
 }
 
-class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 4) {
+class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 5) {
+    private val changeRevision = AtomicLong(0)
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         db.execSQL("CREATE TABLE radio_profile(id TEXT PRIMARY KEY, model TEXT NOT NULL)")
         db.execSQL("CREATE TABLE qso(id TEXT PRIMARY KEY, callsign TEXT NOT NULL, frequency_hz INTEGER NOT NULL, mode TEXT NOT NULL, rst_sent TEXT NOT NULL, rst_received TEXT NOT NULL, created_at INTEGER NOT NULL, name TEXT NOT NULL DEFAULT '', qth TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '', details_json TEXT NOT NULL DEFAULT '{}')")
+        createPagingIndexes(db)
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
@@ -59,6 +66,13 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         }
         if (oldVersion < 3) db.execSQL("ALTER TABLE qso ADD COLUMN country TEXT NOT NULL DEFAULT ''")
         if (oldVersion < 4) db.execSQL("ALTER TABLE qso ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'")
+        if (oldVersion < 5) createPagingIndexes(db)
+    }
+
+    private fun createPagingIndexes(db: SQLiteDatabase) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_created_at_idx ON qso(created_at DESC)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_station_idx ON qso(json_extract(details_json,'$.stationProfileId'))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_sync_state_idx ON qso(json_extract(details_json,'$.syncState'))")
     }
 
     fun save(qso: Qso): Boolean {
@@ -108,8 +122,29 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     }
 
     fun markSynced(id: String) { findById(id)?.let { update(it.copy(syncState = "synced")) } }
+    fun changeToken(): Long = changeRevision.get()
     fun list(): List<Qso> = query(" LIMIT 100")
     fun all(): List<Qso> = query("")
+    fun page(page: Int, pageSize: Int, filter: LogbookFilter = LogbookFilter(), stationId: String? = null): QsoPage {
+        val size = normalizedLogbookPageSize(pageSize)
+        val spec = pageQuery(filter, stationId)
+        val total = readableDatabase.rawQuery("SELECT COUNT(*) FROM qso WHERE ${spec.where}", spec.args.toTypedArray()).use {
+            if (it.moveToFirst()) it.getInt(0) else 0
+        }
+        val boundedPage = page.coerceIn(0, logbookPageCount(total, size) - 1)
+        val args = (spec.args + listOf(size.toString(), (boundedPage * size).toString())).toTypedArray()
+        val rows = queryWhere("${spec.where} ORDER BY ${spec.order} LIMIT ? OFFSET ?", args)
+        return QsoPage(rows, total, boundedPage, size)
+    }
+    fun <T> transaction(block: () -> T): T {
+        val database = writableDatabase
+        database.beginTransaction()
+        return try {
+            block().also { database.setTransactionSuccessful() }
+        } finally {
+            database.endTransaction()
+        }
+    }
     fun exportADIF(): String = all().asReversed().joinToString("") { toADIF(it) }
 
     fun toADIF(qso: Qso): String {
@@ -209,16 +244,90 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         writableDatabase.execSQL("INSERT INTO qso(id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at,name,qth,notes,country,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             arrayOf<Any>(qso.id, qso.callsign, qso.frequencyHz, qso.mode, qso.rstSent, qso.rstReceived,
                 qso.createdAt, qso.name, qso.qth, qso.notes, qso.country, details(qso).toString()))
+        changeRevision.incrementAndGet()
     }
     private fun update(qso: Qso) {
         writableDatabase.execSQL("UPDATE qso SET callsign=?,frequency_hz=?,mode=?,rst_sent=?,rst_received=?,created_at=?,name=?,qth=?,notes=?,country=?,details_json=? WHERE id=?",
             arrayOf<Any>(qso.callsign, qso.frequencyHz, qso.mode, qso.rstSent, qso.rstReceived, qso.createdAt,
                 qso.name, qso.qth, qso.notes, qso.country, details(qso).toString(), qso.id))
+        changeRevision.incrementAndGet()
     }
     private fun findNatural(qso: Qso): Qso? = queryWhere("callsign=? AND frequency_hz=? AND mode=? AND created_at BETWEEN ? AND ? LIMIT 1",
         arrayOf(qso.callsign, qso.frequencyHz.toString(), qso.mode, (qso.createdAt - 15).toString(), (qso.createdAt + 15).toString())).firstOrNull()
     private fun findById(id: String): Qso? = queryWhere("id=? LIMIT 1", arrayOf(id)).firstOrNull()
     private fun query(limit: String): List<Qso> = queryWhere("1=1 ORDER BY created_at DESC$limit", null)
+
+    private data class PageQuery(val where: String, val args: List<String>, val order: String)
+
+    private fun pageQuery(filter: LogbookFilter, stationId: String?): PageQuery {
+        val clauses = mutableListOf<String>(); val args = mutableListOf<String>()
+        fun json(key: String) = "COALESCE(json_extract(details_json,'$.${key}'),'')"
+        fun text(expression: String, value: String) {
+            if (value.isBlank()) return
+            clauses += "$expression LIKE ? ESCAPE '\\' COLLATE NOCASE"
+            args += "%" + value.trim().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        }
+        fun choice(expression: String, value: String) {
+            if (value.isBlank()) return
+            clauses += "$expression = ? COLLATE NOCASE"; args += value.trim()
+        }
+        fun status(expression: String, value: String) {
+            if (value.isBlank()) return
+            val normalized = "UPPER(TRIM($expression))"
+            if (value.equals("Y", true)) clauses += "$normalized IN ('Y','YES','S','SENT','UPLOADED','1','TRUE')"
+            else if (value.equals("N", true)) clauses += "($normalized = '' OR $normalized IN ('N','NO','0','FALSE'))"
+            else { clauses += "$normalized = ?"; args += value.trim().uppercase() }
+        }
+        fun numeric(expression: String, value: String) {
+            val raw = value.trim().replace(',', '.')
+            if (raw.isBlank() || raw == "*") return
+            Regex("^(-?\\d+(?:\\.\\d+)?)\\s*(?:\\.\\.|-)\\s*(-?\\d+(?:\\.\\d+)?)$").matchEntire(raw)?.let {
+                val first = it.groupValues[1].toDouble(); val second = it.groupValues[2].toDouble()
+                clauses += "CAST($expression AS REAL) BETWEEN ? AND ?"
+                args += minOf(first, second).toString(); args += maxOf(first, second).toString(); return
+            }
+            val match = Regex("^(>=|<=|>|<|=)?\\s*(-?\\d+(?:\\.\\d+)?)$").matchEntire(raw) ?: return
+            clauses += "CAST($expression AS REAL) ${match.groupValues[1].ifBlank { ">=" }} ?"
+            args += match.groupValues[2]
+        }
+
+        clauses += "1=1"
+        stationId?.takeIf { it.isNotBlank() }?.let { station ->
+            clauses += "(${json("stationProfileId")} = ? OR ${json("syncState")} = 'pending' OR (${json("stationProfileId")} = '' AND ${json("remoteId")} = ''))"
+            args += station
+        }
+        filter.fromEpochSeconds?.let { clauses += "created_at >= ?"; args += it.toString() }
+        filter.toEpochSecondsExclusive?.let { clauses += "created_at < ?"; args += it.toString() }
+        text("callsign", filter.callsign); text(json("dxcc"), filter.dxcc); text(json("state"), filter.state)
+        text(json("grid"), filter.grid); choice("mode", filter.mode); choice(json("band"), filter.band)
+        choice(json("propagationMode"), filter.propagation); text(json("county"), filter.county)
+        text(json("dok"), filter.dok); text(json("sotaRef"), filter.sota); text(json("potaRef"), filter.pota)
+        text(json("iota"), filter.iota); text(json("wwffRef"), filter.wwff); text(json("operatorCallsign"), filter.operator)
+        text(json("contestId"), filter.contest); choice(json("continent"), filter.continent)
+        text("(COALESCE(json_extract(details_json,'$.comment'),'') || ' ' || notes)", filter.comment)
+        numeric(json("distanceKm"), filter.distance); numeric("(${json("durationSeconds")} / 60.0)", filter.duration)
+        status(json("qslSent"), filter.qslSent); status(json("qslReceived"), filter.qslReceived)
+        choice(json("qslMethod"), filter.qslSentMethod); choice(json("qslReceivedMethod"), filter.qslReceivedMethod)
+        status(json("lotwSent"), filter.lotwSent); status(json("lotwReceived"), filter.lotwReceived)
+        status(json("clublogSent"), filter.clublogSent); status(json("clublogReceived"), filter.clublogReceived)
+        status(json("eqslSent"), filter.eqslSent); status(json("eqslReceived"), filter.eqslReceived)
+        status(json("dclSent"), filter.dclSent); status(json("dclReceived"), filter.dclReceived)
+        status(json("qrzSent"), filter.qrzSent); status(json("qrzReceived"), filter.qrzReceived)
+        text(json("qslVia"), filter.qslVia)
+        if (filter.qslImages.equals("Y", true)) clauses += "${json("qslImages")} <> '' AND UPPER(${json("qslImages")}) NOT IN ('N','NO','0','FALSE')"
+        if (filter.qslImages.equals("N", true)) clauses += "(${json("qslImages")} = '' OR UPPER(${json("qslImages")}) IN ('N','NO','0','FALSE'))"
+
+        val sortExpression = when (filter.sort) {
+            LogbookSort.TIME -> "created_at"; LogbookSort.CALLSIGN -> "callsign COLLATE NOCASE"
+            LogbookSort.DXCC -> "${json("dxcc")} COLLATE NOCASE"; LogbookSort.MODE -> "mode COLLATE NOCASE"
+            LogbookSort.BAND -> "frequency_hz"; LogbookSort.FREQUENCY -> "frequency_hz"
+            LogbookSort.DISTANCE -> "CAST(${json("distanceKm")} AS REAL)"
+            LogbookSort.DURATION -> "CAST(${json("durationSeconds")} AS INTEGER)"
+        }
+        val direction = if (filter.direction == LogbookSortDirection.ASCENDING) "ASC" else "DESC"
+        return PageQuery(clauses.joinToString(" AND "), args, "$sortExpression $direction, created_at DESC, id ASC")
+    }
+
     private fun queryWhere(where: String, args: Array<String>?): List<Qso> = buildList {
         readableDatabase.rawQuery("SELECT id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at,name,qth,notes,country,details_json FROM qso WHERE $where", args).use { cursor ->
             while (cursor.moveToNext()) add(fromRow(cursor.getString(0), cursor.getString(1), cursor.getLong(2), cursor.getString(3),

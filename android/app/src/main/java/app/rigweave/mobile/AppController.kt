@@ -33,14 +33,15 @@ class AppController(private val context: Context) {
     var alertTones by mutableStateOf(prefs.getBoolean("alert_tones", false)); private set
     var quietAlerts by mutableStateOf(prefs.getBoolean("quiet_alerts", false)); private set
     var brightness by mutableStateOf(prefs.getInt("brightness", 82)); private set
-    var cqRepeatSeconds by mutableStateOf(prefs.getInt("cq_repeat", 10)); private set
+    var cqRepeatSeconds by mutableStateOf(prefs.getInt("cq_repeat", 3).coerceIn(CQ_REPEAT_MIN_SECONDS, CQ_REPEAT_MAX_SECONDS)); private set
     var favoriteBands by mutableStateOf(prefs.getString("favorites", "7.020,7.030,7.100,7.200,14.060,21.060")!!.split(",")); private set
-    val macroLabels = mutableStateListOf(
-        prefs.getString("macro_label_0", "CQ") ?: "CQ", prefs.getString("macro_label_1", "EXCH") ?: "EXCH",
-        prefs.getString("macro_label_2", "TU") ?: "TU")
-    val macroTexts = mutableStateListOf(
-        prefs.getString("macro_text_0", "") ?: "", prefs.getString("macro_text_1", "") ?: "",
-        prefs.getString("macro_text_2", "") ?: "")
+    val macroLabels = mutableStateListOf<String>().apply {
+        repeat(CW_MACRO_COUNT) { index -> add(sanitizeCwMacroLabel(prefs.getString("macro_label_$index", defaultCwMacroLabel(index))
+            ?: defaultCwMacroLabel(index))) }
+    }
+    val macroTexts = mutableStateListOf<String>().apply {
+        repeat(CW_MACRO_COUNT) { index -> add(sanitizeCwMacroText(prefs.getString("macro_text_$index", "") ?: "")) }
+    }
     val presets = mutableStateListOf<RadioPreset>().apply { addAll(loadPresets()) }
 
     fun setProfile(value: FieldProfile) {
@@ -53,15 +54,16 @@ class AppController(private val context: Context) {
     fun saveLocalSettings(call: String, name: String, grid: String, repeat: Int,
         labels: List<String>, texts: List<String>) {
         stationCallsign = call.uppercase(); stationName = name; stationGrid = grid.uppercase()
-        cqRepeatSeconds = repeat.coerceIn(2, 120)
-        repeat(3) { index ->
-            macroLabels[index] = labels.getOrNull(index).orEmpty().take(11).uppercase()
-            macroTexts[index] = texts.getOrNull(index).orEmpty().take(24).uppercase()
+        cqRepeatSeconds = repeat.coerceIn(CQ_REPEAT_MIN_SECONDS, CQ_REPEAT_MAX_SECONDS)
+        repeat(CW_MACRO_COUNT) { index ->
+            macroLabels[index] = sanitizeCwMacroLabel(labels.getOrNull(index).orEmpty())
+            macroTexts[index] = sanitizeCwMacroText(texts.getOrNull(index).orEmpty())
         }
-        prefs.edit().putString("station_call", stationCallsign).putString("station_name", stationName)
+        val editor = prefs.edit().putString("station_call", stationCallsign).putString("station_name", stationName)
             .putString("station_grid", stationGrid).putInt("cq_repeat", cqRepeatSeconds)
-            .putString("macro_label_0", macroLabels[0]).putString("macro_label_1", macroLabels[1]).putString("macro_label_2", macroLabels[2])
-            .putString("macro_text_0", macroTexts[0]).putString("macro_text_1", macroTexts[1]).putString("macro_text_2", macroTexts[2]).apply()
+        repeat(CW_MACRO_COUNT) { index -> editor.putString("macro_label_$index", macroLabels[index])
+            .putString("macro_text_$index", macroTexts[index]) }
+        editor.apply()
     }
 
     fun saveFieldSettings(profile: FieldProfile, brightnessPercent: Int, dim: Boolean,

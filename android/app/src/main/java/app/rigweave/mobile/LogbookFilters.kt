@@ -3,6 +3,13 @@ package app.rigweave.mobile
 enum class LogbookSort { TIME, CALLSIGN, DXCC, MODE, BAND, FREQUENCY, DISTANCE, DURATION }
 enum class LogbookSortDirection { DESCENDING, ASCENDING }
 
+val LOGBOOK_PAGE_SIZES = listOf(25, 50, 100, 200, 500, 1_000)
+
+fun normalizedLogbookPageSize(value: Int): Int = value.takeIf { it in LOGBOOK_PAGE_SIZES } ?: 50
+
+fun logbookPageCount(total: Int, pageSize: Int): Int =
+    maxOf(1, (total + normalizedLogbookPageSize(pageSize) - 1) / normalizedLogbookPageSize(pageSize))
+
 data class LogbookFilter(
     val fromEpochSeconds: Long? = null,
     val toEpochSecondsExclusive: Long? = null,
@@ -43,7 +50,7 @@ data class LogbookFilter(
     val qslImages: String = "",
     val sort: LogbookSort = LogbookSort.TIME,
     val direction: LogbookSortDirection = LogbookSortDirection.DESCENDING,
-    val limit: Int = 250,
+    val limit: Int = 50,
 )
 
 fun filterLogbook(records: List<Qso>, filter: LogbookFilter): List<Qso> {
@@ -81,7 +88,7 @@ fun filterLogbook(records: List<Qso>, filter: LogbookFilter): List<Qso> {
         LogbookSort.DURATION -> compareBy<Qso> { it.durationSeconds }
     }
     val ordered = matching.sortedWith(if (filter.direction == LogbookSortDirection.DESCENDING) comparator.reversed() else comparator)
-    return ordered.take(filter.limit.coerceIn(1, 5_000))
+    return ordered.take(filter.limit.coerceIn(1, 1_000))
 }
 
 fun activeLogbookFilterCount(filter: LogbookFilter): Int = listOf(
