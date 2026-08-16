@@ -1014,7 +1014,7 @@ private enum class RadioActivityTab(val label: String) {
     var page by remember { mutableIntStateOf(0) }
     var pageSize by remember { mutableIntStateOf(50) }
     var spotStatuses by remember { mutableStateOf(emptyMap<String, SpotLogStatus>()) }
-    val ctyRevision = cty.status
+    val ctyRevision = cty.dataRevision
     LaunchedEffect(insight?.record?.callsign) { if (insight != null) selected = RadioActivityTab.DETAILS }
     LaunchedEffect(wavelog.logMode, wavelog.stationId) { page = 0 }
     LaunchedEffect(selected, wavelog.logMode, wavelog.stationId, page, pageSize) {
@@ -2581,9 +2581,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                     callbook.configureHamQth(hamQthEnabled, hamQthUser, hamQthPassword) }) { Text("SAVE") }
             }
             Text("Automatic lookup order: QRZ.COM → HamQTH → CTY.DAT. Email-style QRZ accounts use the configured station callsign for XML access; CTY.DAT supplements missing entity and zone fields.", color = Muted)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton(cty::update) { Text("UPDATE CTY.DAT") }; Text(cty.status, color = Muted)
-            }
+            CtyUpdatePanel(cty)
         }
         if (section == SettingsSection.AUDIO) SettingsCard("USB RECEIVE AUDIO") { AudioCard(audio) }
         if (section == SettingsSection.HEALTH) SettingsCard("SYSTEM HEALTH") {
@@ -2627,6 +2625,55 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         text = { Text("${app.reviewRecovery(payload)}\n\nRestoring replaces saved station, preset, control-order, field, and connection preferences. Live radio state and QSOs are not changed.") },
         confirmButton = { Button({ systemMessage = app.restoreRecovery(payload); restorePayload = null }, colors = ButtonDefaults.buttonColors(containerColor = Danger)) { Text("RESTORE SETTINGS") } },
         dismissButton = { TextButton({ restorePayload = null }) { Text("CANCEL") } }) }
+}
+
+@Composable private fun CtyUpdatePanel(cty: CtyController) {
+    val (stateLabel, stateColor) = when (cty.updateState) {
+        CtyUpdateState.NOT_INSTALLED -> "NOT INSTALLED" to Danger
+        CtyUpdateState.CHECKING -> "CHECKING" to Amber
+        CtyUpdateState.CURRENT -> "UP TO DATE" to Healthy
+        CtyUpdateState.AVAILABLE -> "UPDATE AVAILABLE" to Amber
+        CtyUpdateState.UPDATING -> "INSTALLING" to Amber
+        CtyUpdateState.FAILED -> "CHECK UNAVAILABLE" to Muted
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("CTY.DAT COUNTRY FILE", color = Amber, fontWeight = FontWeight.Bold)
+            Text("DXCC, country, continent, CQ and ITU zone source", color = Muted, style = MaterialTheme.typography.bodySmall)
+        }
+        Surface(color = stateColor.copy(alpha = 0.14f), shape = RoundedCornerShape(50)) {
+            Row(Modifier.padding(horizontal = 12.dp, vertical = 7.dp), horizontalArrangement = Arrangement.spacedBy(7.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                if (cty.isBusy) CircularProgressIndicator(Modifier.size(14.dp), color = stateColor, strokeWidth = 2.dp)
+                Text(stateLabel, color = stateColor, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text("INSTALLED", color = Muted, style = MaterialTheme.typography.labelSmall)
+            Text("${cty.installedVersion} · ${cty.prefixCount} prefixes", color = Ink, style = MaterialTheme.typography.bodyMedium)
+        }
+        Column(Modifier.weight(1f)) {
+            Text("LATEST AVAILABLE", color = Muted, style = MaterialTheme.typography.labelSmall)
+            Text(cty.latestVersion, color = if (cty.updateAvailable) Amber else Ink, style = MaterialTheme.typography.bodyMedium)
+        }
+        Column(Modifier.weight(1f)) {
+            Text("LAST AUTOMATIC CHECK", color = Muted, style = MaterialTheme.typography.labelSmall)
+            Text(cty.lastChecked, color = Ink, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+    Text(cty.updateMessage, color = if (cty.updateState == CtyUpdateState.FAILED) Amber else Muted,
+        style = MaterialTheme.typography.bodySmall)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (cty.updateAvailable) {
+            Button(cty::update, enabled = !cty.isBusy) { Text("INSTALL UPDATE") }
+        } else {
+            OutlinedButton(cty::update, enabled = !cty.isBusy) { Text("UPDATE NOW") }
+        }
+        OutlinedButton(cty::checkForUpdates, enabled = !cty.isBusy) { Text("CHECK NOW") }
+    }
 }
 
 @Composable private fun SettingsCard(title: String, content: @Composable ColumnScope.() -> Unit) {
