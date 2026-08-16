@@ -43,6 +43,9 @@ class AppController(private val context: Context) {
         repeat(CW_MACRO_COUNT) { index -> add(sanitizeCwMacroText(prefs.getString("macro_text_$index", "") ?: "")) }
     }
     val presets = mutableStateListOf<RadioPreset>().apply { addAll(loadPresets()) }
+    val visibleLogbookColumns = mutableStateListOf<LogbookColumn>().apply {
+        addAll(decodeLogbookColumns(prefs.getString("logbook_columns", null)))
+    }
 
     fun setProfile(value: FieldProfile) {
         fieldProfile = value; prefs.edit().putString("profile", value.name).apply()
@@ -107,6 +110,20 @@ class AppController(private val context: Context) {
 
     fun nextPresetSlot(): Int? = (0 until 12).firstOrNull { slot -> presets.none { it.slot == slot } }
 
+    fun setLogbookColumnVisible(column: LogbookColumn, visible: Boolean) {
+        if (!visible && column in visibleLogbookColumns && visibleLogbookColumns.size == 1) return
+        val updated = visibleLogbookColumns.toMutableSet().apply {
+            if (visible) add(column) else remove(column)
+        }
+        visibleLogbookColumns.clear()
+        visibleLogbookColumns.addAll(LogbookColumn.entries.filter { it in updated })
+        persistLogbookColumns()
+    }
+
+    fun showAllLogbookColumns() {
+        visibleLogbookColumns.clear(); visibleLogbookColumns.addAll(LogbookColumn.entries); persistLogbookColumns()
+    }
+
     fun backupNow(): String = runCatching {
         val payload = JSONObject().put("version", 1).put("created_at", System.currentTimeMillis())
             .put("preferences", JSONObject(prefs.all))
@@ -150,6 +167,10 @@ class AppController(private val context: Context) {
         presets.forEach { rows.put(JSONObject().put("slot", it.slot).put("name", it.name)
             .put("frequency", it.frequencyHz).put("mode", it.mode).put("bandwidth", it.bandwidthHz).put("color", it.color)) }
         prefs.edit().putString("presets", rows.toString()).apply()
+    }
+
+    private fun persistLogbookColumns() {
+        prefs.edit().putString("logbook_columns", encodeLogbookColumns(visibleLogbookColumns)).apply()
     }
 
     companion object {

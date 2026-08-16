@@ -94,8 +94,6 @@ private enum class SettingsSection(val label: String) {
     SAFETY("Safety"), AUDIO("Audio"), HEALTH("Health"), DIAG("Diag"), ABOUT("About")
 }
 private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Station"), GENERAL("General"), NOTES("Notes"), QSL("QSL") }
-private enum class LogbookTab(val label: String) { LOGBOOK("Logbook"), FILTERS("Filters") }
-private enum class LogbookFilterTab(val label: String) { GENERAL("General"), QSL("QSL") }
 
 @Composable private fun RigWeaveApp() {
     val context = LocalContext.current
@@ -199,7 +197,7 @@ private fun navIcon(item: Destination) = when (item) {
     when (destination) {
         Destination.HOME -> HomeScreen(radio, app, send)
         Destination.RADIO -> RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, connect, send, direct, clearCwDecode)
-        Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog)
+        Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog, app)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(features, send)
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, wavelog, callbook, cty, audio, app, direct)
@@ -1624,9 +1622,8 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
         trailingContent = { Text(trailing, color = if (alert) Hold else Muted) }, colors = ListItemDefaults.colors(containerColor = Color.Transparent))
 }
 
-@Composable private fun LogbookScreen(state: RadioState, database: QsoDatabase, wavelog: WavelogController) {
-    var tab by remember { mutableStateOf(LogbookTab.LOGBOOK) }
-    var filterTab by remember { mutableStateOf(LogbookFilterTab.GENERAL) }
+@Composable private fun LogbookScreen(state: RadioState, database: QsoDatabase, wavelog: WavelogController, app: AppController) {
+    var showFilters by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf(LogbookFilter()) }
     var applied by remember { mutableStateOf(LogbookFilter()) }
     var fromDate by remember { mutableStateOf("") }; var toDate by remember { mutableStateOf("") }
@@ -1662,41 +1659,45 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
             Box(Modifier.weight(1f)) { Header(if (wavelog.logMode == LogMode.WAVELOG) "Wavelog logbook" else "Local logbook", state) }
             StatusChip(if (wavelog.logMode == LogMode.WAVELOG) "WAVELOG · TWO-WAY" else "LOCAL · TABLET", true)
             if (wavelog.logMode == LogMode.WAVELOG) Text(stationLabel, color = Hold, style = MaterialTheme.typography.labelLarge, maxLines = 1)
-            Text("${pageData.rows.size} / ${pageData.total} RESULTS", color = Ink, fontWeight = FontWeight.Bold)
-            CompactPager(pageData, applied.limit, { limit ->
-                draft = draft.copy(limit = limit); applied = applied.copy(limit = limit); page = 0; selectedId = null
-            }, { page = (page - 1).coerceAtLeast(0); selectedId = null },
-                { page = (page + 1).coerceAtMost(pageData.pageCount - 1); selectedId = null })
+        }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Button({ showFilters = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                Icon(Icons.Outlined.FilterAlt, null); Spacer(Modifier.width(6.dp))
+                Text("FILTERS${activeLogbookFilterCount(applied).takeIf { it > 0 }?.let { " · $it" }.orEmpty()}", fontWeight = FontWeight.Black)
+            }
             QuickFilterMenu(selected) { key ->
                 val updated = quickFilter(applied, selected ?: return@QuickFilterMenu, key)
                 if (key == "date") {
                     val date = Instant.ofEpochSecond(selected.createdAt).atZone(ZoneOffset.UTC).toLocalDate().toString()
                     fromDate = date; toDate = date
                 }
-                draft = updated; applied = updated; page = 0; selectedId = null; tab = LogbookTab.LOGBOOK
+                draft = updated; applied = updated; page = 0; selectedId = null
             }
+            LogbookColumnMenu(app)
+            if (activeLogbookFilterCount(applied) > 0) OutlinedButton({
+                val cleared = LogbookFilter(limit = applied.limit)
+                draft = cleared; applied = cleared; page = 0; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
+            }, modifier = Modifier.heightIn(min = 48.dp)) { Icon(Icons.Outlined.Clear, null); Spacer(Modifier.width(5.dp)); Text("CLEAR FILTERS") }
             OutlinedButton({ if (wavelog.logMode == LogMode.WAVELOG) wavelog.syncTwoWay(); refreshGeneration++ }, modifier = Modifier.heightIn(min = 48.dp)) {
                 Icon(Icons.Outlined.Refresh, null); Spacer(Modifier.width(6.dp)); Text(if (wavelog.logMode == LogMode.WAVELOG) "SYNC" else "REFRESH")
             }
+            Text("${pageData.rows.size} / ${pageData.total} RESULTS", color = Ink, fontWeight = FontWeight.Black, fontSize = 16.sp)
+            CompactPager(pageData, applied.limit, { limit ->
+                draft = draft.copy(limit = limit); applied = applied.copy(limit = limit); page = 0; selectedId = null
+            }, { page = (page - 1).coerceAtLeast(0); selectedId = null },
+                { page = (page + 1).coerceAtMost(pageData.pageCount - 1); selectedId = null })
         }
-        TabRow(tab.ordinal, containerColor = Panel, contentColor = Amber) {
-            LogbookTab.entries.forEach { item -> Tab(tab == item, { tab = item }, text = {
-                Text(if (item == LogbookTab.FILTERS && activeLogbookFilterCount(applied) > 0)
-                    "${item.label} · ${activeLogbookFilterCount(applied)}" else item.label, fontWeight = FontWeight.Bold)
-            }) }
+        LogbookTable(pageData.rows, selectedId, { selectedId = it }, applied, app.visibleLogbookColumns, Modifier.weight(1f)) { sort ->
+            val direction = if (applied.sort == sort && applied.direction == LogbookSortDirection.DESCENDING)
+                LogbookSortDirection.ASCENDING else LogbookSortDirection.DESCENDING
+            draft = draft.copy(sort = sort, direction = direction)
+            applied = applied.copy(sort = sort, direction = direction); page = 0; selectedId = null
         }
-        if (tab == LogbookTab.LOGBOOK) {
-            LogbookTable(pageData.rows, selectedId, { selectedId = it }, applied, Modifier.weight(1f)) { sort ->
-                val direction = if (applied.sort == sort && applied.direction == LogbookSortDirection.DESCENDING)
-                    LogbookSortDirection.ASCENDING else LogbookSortDirection.DESCENDING
-                draft = draft.copy(sort = sort, direction = direction)
-                applied = applied.copy(sort = sort, direction = direction); page = 0; selectedId = null
-            }
-        } else {
-            LogbookFilterPanel(filterTab, { filterTab = it }, draft, { draft = it }, fromDate, { fromDate = it },
-                toDate, { toDate = it }, filterError, onPreset = { preset ->
-                    val (from, to) = logbookDatePreset(preset); fromDate = from.toString(); toDate = to.toString(); filterError = ""
-                }, onApply = {
+        if (showFilters) LogbookFilterDialog(draft, { draft = it }, fromDate, { fromDate = it }, toDate, { toDate = it },
+            filterError, onPreset = { preset ->
+                val (from, to) = logbookDatePreset(preset); fromDate = from.toString(); toDate = to.toString(); filterError = ""
+            }, onApply = {
                     val from = fromDate.takeIf { it.isNotBlank() }?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
                     val to = toDate.takeIf { it.isNotBlank() }?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
                     if ((fromDate.isNotBlank() && from == null) || (toDate.isNotBlank() && to == null)) {
@@ -1707,12 +1708,33 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                         filterError = ""
                         applied = draft.copy(fromEpochSeconds = from?.atStartOfDay()?.toEpochSecond(ZoneOffset.UTC),
                             toEpochSecondsExclusive = to?.plusDays(1)?.atStartOfDay()?.toEpochSecond(ZoneOffset.UTC))
-                        draft = applied; page = 0; selectedId = null; tab = LogbookTab.LOGBOOK
+                        draft = applied; page = 0; selectedId = null; showFilters = false
                     }
                 }, onClear = {
                     val cleared = LogbookFilter(limit = applied.limit)
                     draft = cleared; applied = cleared; page = 0; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
-                }, modifier = Modifier.weight(1f))
+                }, onDismiss = { showFilters = false })
+    }
+}
+
+@Composable private fun LogbookColumnMenu(app: AppController) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton({ expanded = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+            Icon(Icons.Outlined.ViewColumn, null); Spacer(Modifier.width(6.dp))
+            Text("COLUMNS · ${app.visibleLogbookColumns.size}/${LogbookColumn.entries.size}", fontWeight = FontWeight.Black)
+            Icon(Icons.Outlined.ArrowDropDown, null)
+        }
+        DropdownMenu(expanded, { expanded = false }, modifier = Modifier.widthIn(min = 290.dp).heightIn(max = 640.dp)) {
+            LogbookColumn.entries.forEach { column ->
+                val checked = column in app.visibleLogbookColumns
+                DropdownMenuItem(text = { Text(column.label, fontSize = 16.sp) },
+                    leadingIcon = { Checkbox(checked, null) }, enabled = !checked || app.visibleLogbookColumns.size > 1,
+                    onClick = { app.setLogbookColumnVisible(column, !checked) })
+            }
+            HorizontalDivider()
+            DropdownMenuItem(text = { Text("Show all columns", fontWeight = FontWeight.Bold) },
+                leadingIcon = { Icon(Icons.Outlined.SelectAll, null) }, onClick = { app.showAllLogbookColumns() })
         }
     }
 }
@@ -1798,50 +1820,49 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
 }
 
 @Composable private fun LogbookTable(records: List<Qso>, selectedId: String?, select: (String) -> Unit,
-    filter: LogbookFilter, modifier: Modifier = Modifier, sort: (LogbookSort) -> Unit) {
+    filter: LogbookFilter, visibleColumns: List<LogbookColumn>, modifier: Modifier = Modifier, sort: (LogbookSort) -> Unit) {
     val horizontal = rememberScrollState()
     Box(modifier.fillMaxWidth().border(1.dp, Color(0xFF465159), RoundedCornerShape(8.dp)).horizontalScroll(horizontal)) {
-        Column(Modifier.width(1870.dp).fillMaxHeight()) {
-            Row(Modifier.fillMaxWidth().height(48.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
-                LogbookHeaderCell("DATE / TIME", 128, LogbookSort.TIME, filter, sort)
-                LogbookHeaderCell("DX", 94, LogbookSort.CALLSIGN, filter, sort)
-                LogbookHeaderCell("MODE", 70, LogbookSort.MODE, filter, sort)
-                LogbookHeaderCell("RST S", 58, null, filter, sort); LogbookHeaderCell("RST R", 58, null, filter, sort)
-                LogbookHeaderCell("BAND", 62, LogbookSort.BAND, filter, sort)
-                LogbookHeaderCell("FREQUENCY", 96, LogbookSort.FREQUENCY, filter, sort)
-                LogbookHeaderCell("GRID", 88, null, filter, sort)
-                LogbookHeaderCell("QSL", 64, null, filter, sort); LogbookHeaderCell("eQSL", 64, null, filter, sort)
-                LogbookHeaderCell("LoTW", 64, null, filter, sort); LogbookHeaderCell("CLUBLOG", 76, null, filter, sort)
-                LogbookHeaderCell("QRZ", 64, null, filter, sort)
-                LogbookHeaderCell("DXCC", 156, LogbookSort.DXCC, filter, sort)
-                LogbookHeaderCell("STATE", 64, null, filter, sort); LogbookHeaderCell("COUNTY", 118, null, filter, sort)
-                LogbookHeaderCell("IOTA", 90, null, filter, sort); LogbookHeaderCell("POTA", 102, null, filter, sort)
-                LogbookHeaderCell("SOTA", 102, null, filter, sort); LogbookHeaderCell("WWFF", 102, null, filter, sort)
-                LogbookHeaderCell("REGION", 110, null, filter, sort)
+        Column(Modifier.width(visibleColumns.sumOf { it.width }.dp).fillMaxHeight()) {
+            Row(Modifier.fillMaxWidth().height(60.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
+                visibleColumns.forEach { column -> LogbookHeaderCell(column.label, column.width, column.sort, filter, sort) }
             }
             if (records.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Icon(Icons.Outlined.SearchOff, null, tint = Muted, modifier = Modifier.size(34.dp))
                     Text("No QSOs match these filters", color = Ink, fontWeight = FontWeight.Bold)
-                    Text("Open Filters to widen the search.", color = Muted)
+                    Text("Adjust the filters above to widen the search.", color = Muted, fontSize = 17.sp)
                 }
             } else LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                 items(records.size, key = { records[it].id }) { index ->
                     val qso = records[index]; val selected = selectedId == qso.id
-                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    Row(Modifier.fillMaxWidth().heightIn(min = 60.dp)
                         .background(if (selected) Amber.copy(alpha = .16f) else if (index % 2 == 0) Color(0xFF181E22) else Color(0xFF222A2F))
                         .clickable { select(qso.id) }, verticalAlignment = Alignment.CenterVertically) {
-                        LogbookCell(Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("dd/MM/yy HH:mm")), 128)
-                        LogbookCell(qso.callsign, 94, Healthy, true); LogbookCell(qso.submode.ifBlank { qso.mode }, 70)
-                        LogbookCell(qso.rstSent, 58); LogbookCell(qso.rstReceived, 58); LogbookCell(qso.band, 62)
-                        LogbookCell("${qso.frequencyHz / 1_000} kHz", 96); LogbookCell(qso.grid, 88)
-                        LogbookQslCell(qso.qslSent, qso.qslReceived, 64); LogbookQslCell(qso.eqslSent, qso.eqslReceived, 64)
-                        LogbookQslCell(qso.lotwSent, qso.lotwReceived, 64); LogbookQslCell(qso.clublogSent, qso.clublogReceived, 76)
-                        LogbookQslCell(qso.qrzSent, qso.qrzReceived, 64)
-                        LogbookCell(qso.country.ifBlank { qso.dxcc }, 156, Healthy)
-                        LogbookCell(qso.state, 64); LogbookCell(qso.county, 118); LogbookCell(qso.iota, 90, Healthy)
-                        LogbookCell(qso.potaRef, 102, Healthy); LogbookCell(qso.sotaRef, 102, Healthy)
-                        LogbookCell(qso.wwffRef, 102, Healthy); LogbookCell(qso.region, 110)
+                        visibleColumns.forEach { column -> when (column) {
+                            LogbookColumn.DATE_TIME -> LogbookCell(Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC)
+                                .format(DateTimeFormatter.ofPattern("dd/MM/yy HH:mm")), column.width)
+                            LogbookColumn.CALLSIGN -> LogbookCell(qso.callsign, column.width, Healthy, true)
+                            LogbookColumn.MODE -> LogbookCell(qso.submode.ifBlank { qso.mode }, column.width)
+                            LogbookColumn.RST_SENT -> LogbookCell(qso.rstSent, column.width)
+                            LogbookColumn.RST_RECEIVED -> LogbookCell(qso.rstReceived, column.width)
+                            LogbookColumn.BAND -> LogbookCell(qso.band, column.width)
+                            LogbookColumn.FREQUENCY -> LogbookCell("${qso.frequencyHz / 1_000} kHz", column.width)
+                            LogbookColumn.GRID -> LogbookCell(qso.grid, column.width)
+                            LogbookColumn.QSL -> LogbookQslCell(qso.qslSent, qso.qslReceived, column.width)
+                            LogbookColumn.EQSL -> LogbookQslCell(qso.eqslSent, qso.eqslReceived, column.width)
+                            LogbookColumn.LOTW -> LogbookQslCell(qso.lotwSent, qso.lotwReceived, column.width)
+                            LogbookColumn.CLUBLOG -> LogbookQslCell(qso.clublogSent, qso.clublogReceived, column.width)
+                            LogbookColumn.QRZ -> LogbookQslCell(qso.qrzSent, qso.qrzReceived, column.width)
+                            LogbookColumn.DXCC -> LogbookCell(qso.country.ifBlank { qso.dxcc }, column.width, Healthy)
+                            LogbookColumn.STATE -> LogbookCell(qso.state, column.width)
+                            LogbookColumn.COUNTY -> LogbookCell(qso.county, column.width)
+                            LogbookColumn.IOTA -> LogbookCell(qso.iota, column.width, Healthy)
+                            LogbookColumn.POTA -> LogbookCell(qso.potaRef, column.width, Healthy)
+                            LogbookColumn.SOTA -> LogbookCell(qso.sotaRef, column.width, Healthy)
+                            LogbookColumn.WWFF -> LogbookCell(qso.wwffRef, column.width, Healthy)
+                            LogbookColumn.REGION -> LogbookCell(qso.region, column.width)
+                        } }
                     }
                 }
             }
@@ -1854,46 +1875,62 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
     Row(Modifier.width(width.dp).fillMaxHeight().then(if (column != null) Modifier.clickable { sort(column) } else Modifier)
         .border(width = 0.5.dp, color = Color(0xFF515A60)).padding(horizontal = 7.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(label, color = Ink, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+        Text(label, color = Ink, fontWeight = FontWeight.Black, fontSize = 17.sp, maxLines = 1)
         if (column != null && filter.sort == column) Icon(
             if (filter.direction == LogbookSortDirection.DESCENDING) Icons.Outlined.ArrowDownward else Icons.Outlined.ArrowUpward,
-            null, tint = Amber, modifier = Modifier.size(13.dp))
+            null, tint = Amber, modifier = Modifier.size(20.dp))
     }
 }
 
 @Composable private fun RowScope.LogbookCell(value: String, width: Int, color: Color = Ink, bold: Boolean = false) {
-    Box(Modifier.width(width.dp).heightIn(min = 48.dp).border(width = 0.5.dp, color = Color(0xFF39434A)).padding(horizontal = 7.dp),
+    Box(Modifier.width(width.dp).heightIn(min = 60.dp).border(width = 0.5.dp, color = Color(0xFF39434A)).padding(horizontal = 9.dp),
         contentAlignment = Alignment.CenterStart) {
         Text(value.ifBlank { "—" }, color = if (value.isBlank()) Muted.copy(alpha = .55f) else color,
-            fontWeight = if (bold) FontWeight.Black else FontWeight.Medium, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            fontWeight = if (bold) FontWeight.Black else FontWeight.Medium, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
 @Composable private fun RowScope.LogbookQslCell(sent: String, received: String, width: Int) {
-    Row(Modifier.width(width.dp).heightIn(min = 48.dp).border(width = 0.5.dp, color = Color(0xFF39434A)).padding(horizontal = 7.dp),
+    Row(Modifier.width(width.dp).heightIn(min = 60.dp).border(width = 0.5.dp, color = Color(0xFF39434A)).padding(horizontal = 9.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-        Text("▲", color = if (positiveLogStatus(sent)) Healthy else Danger, style = MaterialTheme.typography.labelMedium)
-        Text("▼", color = if (positiveLogStatus(received)) Healthy else Danger, style = MaterialTheme.typography.labelMedium)
+        Text("▲", color = if (positiveLogStatus(sent)) Healthy else Danger, fontSize = 18.sp)
+        Text("▼", color = if (positiveLogStatus(received)) Healthy else Danger, fontSize = 18.sp)
     }
 }
 
 private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf("Y", "YES", "S", "SENT", "UPLOADED", "1", "TRUE")
 
-@Composable private fun LogbookFilterPanel(selected: LogbookFilterTab, select: (LogbookFilterTab) -> Unit,
+@Composable private fun LogbookFilterDialog(
     draft: LogbookFilter, update: (LogbookFilter) -> Unit, fromDate: String, updateFrom: (String) -> Unit,
     toDate: String, updateTo: (String) -> Unit, error: String, onPreset: (String) -> Unit,
-    onApply: () -> Unit, onClear: () -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        TabRow(selected.ordinal, containerColor = Color(0xFF171D21), contentColor = Amber) {
-            LogbookFilterTab.entries.forEach { item -> Tab(selected == item, { select(item) }, text = { Text(item.label, fontWeight = FontWeight.Bold) }) }
-        }
-        if (selected == LogbookFilterTab.GENERAL) GeneralLogbookFilters(draft, update, fromDate, updateFrom, toDate, updateTo, onPreset, Modifier.weight(1f))
-        else QslLogbookFilters(draft, update, Modifier.weight(1f))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Button(onApply, modifier = Modifier.heightIn(min = 48.dp)) { Icon(Icons.Outlined.Search, null); Spacer(Modifier.width(6.dp)); Text("APPLY FILTERS") }
-            OutlinedButton(onClear, modifier = Modifier.heightIn(min = 48.dp)) { Icon(Icons.Outlined.Clear, null); Spacer(Modifier.width(6.dp)); Text("CLEAR ALL") }
-            if (error.isNotBlank()) Text(error, color = Danger, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.weight(1f)); Text("Numeric filters accept 500, >500, <=500, or 100-500", color = Muted, style = MaterialTheme.typography.labelSmall)
+    onApply: () -> Unit, onClear: () -> Unit, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxWidth(.94f).fillMaxHeight(.9f), color = Panel, shape = RoundedCornerShape(14.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF4A555D))) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column { Text("FILTER LOGBOOK", color = Amber, fontSize = 22.sp, fontWeight = FontWeight.Black)
+                        Text("General and QSL criteria apply together", color = Muted, fontSize = 15.sp) }
+                    Spacer(Modifier.weight(1f)); IconButton(onDismiss) { Icon(Icons.Outlined.Close, "Close filters") }
+                }
+                Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Column(Modifier.weight(1.55f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("GENERAL", color = Hold, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                        GeneralLogbookFilters(draft, update, fromDate, updateFrom, toDate, updateTo, onPreset, Modifier.weight(1f))
+                    }
+                    VerticalDivider(color = Color(0xFF465159))
+                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("QSL & SERVICES", color = Hold, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                        QslLogbookFilters(draft, update, Modifier.weight(1f))
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(onApply, modifier = Modifier.heightIn(min = 48.dp)) { Icon(Icons.Outlined.Search, null); Spacer(Modifier.width(6.dp)); Text("APPLY FILTERS") }
+                    OutlinedButton(onClear, modifier = Modifier.heightIn(min = 48.dp)) { Icon(Icons.Outlined.Clear, null); Spacer(Modifier.width(6.dp)); Text("CLEAR ALL") }
+                    if (error.isNotBlank()) Text(error, color = Danger, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.weight(1f)); Text("Numeric: 500, >500, <=500, or 100-500", color = Muted, style = MaterialTheme.typography.labelSmall)
+                }
+            }
         }
     }
 }
