@@ -1,0 +1,72 @@
+# Neural DX Watcher parity contract
+
+Canonical source: `F1SMV/Neural-DX-Watcher` v12.1, commit
+`fe3cba8ed9c0502f5dabdb2f64ebd990de986559` (2026-08-16).
+
+RigWeave implements the project as an Android-native DX workspace inside the
+existing Flightline interface. Flask, nginx, browser themes, and local web API
+tokens are deployment mechanics rather than operator features and are replaced
+by in-process controllers, encrypted preferences, SQLite, and Compose UI.
+
+## Operator surfaces
+
+- **Cockpit:** live DX feed; HF/VHF/UHF, band, mode, watchlist, and new-DXCC
+  filters; active-band rates and surge warnings; ranked opportunities; solar
+  SFI/A/Kp; watchlist tracking and expiry; manual cluster spot; My Signal from
+  PSK Reporter; personalized predictions with measured reliability; LoTW/local
+  worked-state opportunities; and 6 m activity heatmap.
+- **Map:** individual geolocated spots; time, count, band, and mode filters;
+  station detail and tune action; recenter; and Who Hears Me receiver view with
+  great-circle reach.
+- **AI Insight:** live tactical DX briefing, solar and activity summary,
+  DXCC/continent/band/mode log analysis, missing-entity opportunities,
+  watchlist recommendations, generated report status, and explicit on-demand
+  refresh. The deterministic local report always works; an optional configured
+  Perplexity key adds the upstream AI brief.
+- **World:** band and 15–360 minute window controls; anomaly-only and grey-line
+  overlays; observed region cells, expected baseline, anomaly ratio,
+  confidence/sample count, and an explanation/reality-check view.
+- **Briefing:** 12-hour cached DX-World, DXNews, NG3K ADXO, and QO-100 sources;
+  per-source status and items; operator reordering; manual refresh; DX mode;
+  callsign extraction; and one-tap watchlist addition.
+- **Satellites:** CelesTrak OMM/TLE refresh and cache; followed-satellite list;
+  searchable amateur catalogue; current latitude/longitude/altitude,
+  azimuth/elevation/range/visibility and footprint; 4/12/24-hour pass list with
+  AOS/TCA/LOS and maximum elevation; and cached SatNOGS uplink/downlink/mode
+  details.
+- **Weather Radio:** global HF/VHF heuristic synthesis with honesty labels;
+  Open-Meteo local HF and VHF/UHF conditions; pressure trend, humidity, wind,
+  precipitation, CAPE, 300 hPa wind, and tropo/ducting heuristic; WSPR.live HF,
+  VHF and 2 m confirmation; QRN/noise correlation; regional lightning state;
+  Quick VOACAP path reliability; 24-hour band activity; monthly
+  dl0tud beacon-reference refresh and nearby reception list; and actionable
+  weather/propagation alerts.
+
+## Shared behavior
+
+- Reuse RigWeave's single primary-plus-two-fallback cluster connection and
+  CTY.DAT resolver; never open a competing cluster stream.
+- Keep bounded live state and a durable indexed spot journal. Network caches
+  survive restarts and expose age, source, refresh, loading, unavailable, and
+  stale states without fabricating values.
+- Use the configured local log or selected Wavelog station for worked status.
+  A QSO is confirmed only by paper QSL or LoTW, as explicitly required for
+  RigWeave.
+- Watchlist/New DXCC/6 m alerts use Android notifications plus optional ntfy,
+  cooldowns, and foreground-presence suppression.
+- All callsign, spot, prediction, map, and satellite actions remain receive-only
+  until the operator explicitly confirms an existing RigWeave CAT tune or
+  cluster-post action.
+- QRZ/HamQTH/CTY enrichment remains QRZ.com first, then HamQTH, then CTY.DAT.
+- The earlier explicit **no WSJT-X yet** constraint remains in force. My Signal
+  and weather correlation use PSK Reporter/WSPR sources; no UDP listener is
+  introduced.
+
+## Acceptance
+
+- Every surface above has real data, loading, empty, stale, error, refresh, and
+  offline-cache states.
+- Filters and actions are covered by unit tests; persistence and migrations are
+  additive; network parsing is bounded; list/table rendering is paged or lazy.
+- Android debug build and tests pass, and the final APK is installed and
+  exercised on the connected Lenovo tablet. No iOS build is run.

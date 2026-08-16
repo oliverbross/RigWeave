@@ -11,7 +11,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
@@ -22,17 +24,30 @@ import java.time.Instant
 data class AndroidDXSpot(
     val id: String, val callsign: String, val spotter: String, val frequencyHz: Long,
     val receivedEpoch: Long, val band: String, val mode: String, val country: String, val continent: String,
-    val cqZone: Int, val comment: String,
+    val cqZone: Int, val ituZone: Int, val latitude: Double, val longitude: Double, val comment: String,
     val score: Int, val confidence: Int, val samples: Int, val watchlisted: Boolean,
     val workedCountry: Boolean, val workedCall: Boolean, val workedBand: Boolean,
     val workedMode: Boolean, val workedBandMode: Boolean, val recentDupe: Boolean,
     val distanceKm: Int, val bearingDegrees: Int, val pathState: String, val reason: String,
 )
 
+data class AndroidSolar(val valid: Boolean = false, val flux: Float = 0f, val aIndex: Float = 0f,
+    val kpIndex: Float = 0f, val observedEpoch: Long = 0L)
+
 data class AndroidDXBand(val band: String, val spots5m: Int, val spots60m: Int, val uniqueCalls: Int,
     val surgePercent: Int, val surge: Boolean)
 data class AndroidDXRegion(val region: String, val spots15m: Int, val spots60m: Int,
     val uniqueCalls: Int, val activityPercent: Int, val anomaly: Boolean)
+
+internal fun parseNoaaSummaryValue(text: String, keys: List<String>): Float? {
+    val parsed = JSONTokener(text).nextValue()
+    val rows = when(parsed) { is JSONObject -> listOf(parsed); is JSONArray -> (0 until parsed.length()).mapNotNull(parsed::optJSONObject); else -> emptyList() }
+    rows.asReversed().forEach { root ->
+        val names = root.keys().asSequence().toList()
+        keys.forEach { key -> names.firstOrNull { it.equals(key, true) }?.let { actual -> root.optString(actual).toFloatOrNull()?.let { return it } } }
+    }
+    return null
+}
 
 class FeatureController(private val context: Context) {
     private val handle = NativeCore.featureCreate()
@@ -48,6 +63,7 @@ class FeatureController(private val context: Context) {
     var fallback2Host by mutableStateOf(prefs.getString("fallback2_host", "") ?: "")
     var fallback2Port by mutableStateOf(prefs.getInt("fallback2_port", 7300))
     var clusterCallsign by mutableStateOf(prefs.getString("callsign", "") ?: "")
+    var watchlistText by mutableStateOf(prefs.getString("watchlist", "") ?: ""); private set
 
     var clusterStatus by mutableStateOf("DX cluster disconnected"); private set
     var spots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
@@ -58,8 +74,19 @@ class FeatureController(private val context: Context) {
     var dxTimeline by mutableStateOf(emptyList<List<Int>>()); private set
     var dxWorld by mutableStateOf(emptyList<List<Int>>()); private set
     var dxSummary by mutableStateOf("No live DX data"); private set
+    var solar by mutableStateOf(AndroidSolar()); private set
+    var learnedSpots by mutableStateOf(0); private set
+    var duplicateSpots by mutableStateOf(0); private set
+    var newestSpotEpoch by mutableStateOf(0L); private set
 
-    fun setWatchlist(value: String) { NativeCore.featureWatchlist(handle, value) }
+    init { NativeCore.featureWatchlist(handle, watchlistText) }
+
+    fun setWatchlist(value: String) {
+        watchlistText = value.lineSequence().flatMap { it.split(',', ' ', ';').asSequence() }
+            .map(String::trim).filter(String::isNotBlank).map(String::uppercase).distinct().take(32).joinToString("\n")
+        prefs.edit().putString("watchlist", watchlistText).apply()
+        NativeCore.featureWatchlist(handle, watchlistText)
+    }
 
     fun connectConfiguredCluster() {
         if (clusterHost.isNotBlank() && clusterPort in 1..65535 && clusterCallsign.isNotBlank()) {
@@ -120,13 +147,31 @@ class FeatureController(private val context: Context) {
 
     fun disconnectCluster() { clusterGeneration++; clusterSocket?.close(); clusterSocket = null; clusterStatus = "DX cluster disconnected" }
 
+    fun postSpot(callsign: String, frequencyKHz: Double, comment: String) {
+        val call = callsign.trim().uppercase()
+        if (call.isBlank() || frequencyKHz !in 100.0..1_300_000.0) return
+        val safeComment = comment.replace(Regex("[\\r\\n;]"), " ").trim().take(80)
+        scope.launch {
+            val socket = clusterSocket
+            if (socket == null || socket.isClosed) {
+                publishCluster("Cannot send spot · cluster is not connected")
+            } else runCatching {
+                val line = "DX %.1f %s %s\r\n".format(java.util.Locale.US, frequencyKHz, call, safeComment)
+                socket.getOutputStream().apply { write(line.toByteArray()); flush() }
+                publishCluster("Spot sent · $call")
+            }.onFailure { publishCluster("Spot send failed · connection retained for retry") }
+        }
+    }
+
     fun refreshSolar() {
         scope.launch {
             try {
                 val flux = summaryValue("https://services.swpc.noaa.gov/products/summary/10cm-flux.json", listOf("Flux", "flux"))
-                val kp = summaryValue("https://services.swpc.noaa.gov/products/summary/planetary-k-index.json", listOf("Kp", "kp_index", "KpIndex"))
-                NativeCore.featureSolar(handle, flux, 0f, kp, Instant.now().epochSecond); refreshDX()
-            } catch (error: Exception) { publishCluster("NOAA solar update failed: ${error.message}") }
+                val geomagnetic = summaryText("https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json")
+                val kp = parseNoaaSummaryValue(geomagnetic, listOf("Kp", "kp_index", "KpIndex")) ?: error("Unexpected NOAA Kp response")
+                val a = parseNoaaSummaryValue(geomagnetic, listOf("a_running", "A", "a_index")) ?: error("Unexpected NOAA A response")
+                NativeCore.featureSolar(handle, flux, a, kp, Instant.now().epochSecond); refreshDX()
+            } catch (_: Exception) { publishCluster("NOAA solar data unavailable · retained last values") }
         }
     }
 
@@ -144,7 +189,8 @@ class FeatureController(private val context: Context) {
                 add(AndroidDXSpot("${row.optString("callsign")}-$frequency-${row.optLong("receivedEpoch")}",
                     row.optString("callsign"), row.optString("spotter"), frequency, row.optLong("receivedEpoch"),
                     row.optString("band"), row.optString("mode"), row.optString("country"), row.optString("continent"),
-                    row.optInt("cqZone"), row.optString("comment"),
+                    row.optInt("cqZone"), row.optInt("ituZone"), row.optDouble("latitude"), row.optDouble("longitude"),
+                    row.optString("comment"),
                     row.optInt("score"), row.optInt("confidence"), row.optInt("samples"), row.optBoolean("watchlisted"),
                     row.optBoolean("workedCountry"), row.optBoolean("workedCall"), row.optBoolean("workedBand"),
                     row.optBoolean("workedMode"), row.optBoolean("workedBandMode"), row.optBoolean("recentDupe"),
@@ -175,17 +221,26 @@ class FeatureController(private val context: Context) {
             } }
         }
         val summary = "${root.optInt("spots5m")} / 5m · ${root.optInt("spots60m")} / 60m · ${root.optInt("watchlistHits")} watch"
+        val solarRow = root.optJSONObject("solar")
+        val parsedSolar = AndroidSolar(solarRow?.optBoolean("valid") == true, solarRow?.optDouble("flux")?.toFloat() ?: 0f,
+            solarRow?.optDouble("aIndex")?.toFloat() ?: 0f, solarRow?.optDouble("kpIndex")?.toFloat() ?: 0f,
+            Instant.now().epochSecond)
         withContext(Dispatchers.Main) {
             spots = loaded; liveSpots = live; watchSpots = watched; dxBands = bands; dxRegions = regions
-            dxTimeline = matrix("bandTimeline"); dxWorld = matrix("worldGrid"); dxSummary = summary
+            dxTimeline = matrix("bandTimeline"); dxWorld = matrix("worldGrid"); dxSummary = summary; solar = parsedSolar
+            learnedSpots = root.optInt("learnedSpots"); duplicateSpots = root.optInt("duplicateSpots")
+            newestSpotEpoch = root.optLong("newestSpotEpoch")
         }
     }
 
     private fun summaryValue(url: String, keys: List<String>): Float {
+        return parseNoaaSummaryValue(summaryText(url), keys)
+            ?: error("Unexpected NOAA response")
+    }
+
+    private fun summaryText(url: String): String {
         val connection = URL(url).openConnection(); connection.connectTimeout = 10_000; connection.readTimeout = 10_000
-        val root = JSONObject(connection.getInputStream().bufferedReader().use { it.readText() })
-        for (key in keys) if (root.has(key)) return root.getString(key).toFloat()
-        error("Unexpected NOAA response")
+        return connection.getInputStream().bufferedReader().use { it.readText() }
     }
 
     private suspend fun publishCluster(value: String) = withContext(Dispatchers.Main) { clusterStatus = value }

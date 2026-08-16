@@ -205,6 +205,9 @@ int rw_feature_dx_snapshot_json(const rw_feature_context *context, char *output,
                  << ",\"country\":" << quoted(row.spot.country)
                  << ",\"continent\":" << quoted(row.spot.continent)
                  << ",\"cqZone\":" << row.spot.cq_zone
+                 << ",\"ituZone\":" << row.spot.itu_zone
+                 << ",\"latitude\":" << row.spot.latitude
+                 << ",\"longitude\":" << row.spot.longitude
                  << ",\"comment\":" << quoted(row.spot.comment)
                  << ",\"score\":" << row.score << ",\"confidence\":" << row.confidence
                  << ",\"samples\":" << row.samples

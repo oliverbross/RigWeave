@@ -119,6 +119,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val transport = remember { UsbRadioTransport(context) }
     val database = remember { QsoDatabase(context) }
     val features = remember { FeatureController(context) }
+    val neuralDx = remember { NeuralDxController(context, database) }
     val wavelog = remember { WavelogController(context, database) }
     val app = remember { AppController(context) }
     val callbook = remember { CallbookController(context) { app.stationCallsign } }
@@ -176,7 +177,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         }
     }
     DisposableEffect(Unit) { onDispose {
-        scope.launch { transport.disconnect() }; audio.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
+        scope.launch { transport.disconnect() }; audio.close(); neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
         NativeCore.destroy(core); database.close()
     } }
     pendingRisk?.let { command ->
@@ -205,12 +206,12 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 Destination.entries.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
-            Screen(destination, radio, usbDetail, database, features, wavelog, callbook, cty, audio, app, connect, send, direct, clearCwDecode)
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, app, connect, send, direct, clearCwDecode)
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
             Destination.entries.forEach { item -> NavigationBarItem(destination == item, { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
-            Screen(destination, radio, usbDetail, database, features, wavelog, callbook, cty, audio, app, connect, send, direct, clearCwDecode)
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, app, connect, send, direct, clearCwDecode)
         } }
     }
 }
@@ -225,15 +226,15 @@ private fun navIcon(item: Destination) = when (item) {
 }
 
 @Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase,
-    features: FeatureController, wavelog: WavelogController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, app: AppController,
+    features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, app: AppController,
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, clearCwDecode: () -> Unit) {
     when (destination) {
         Destination.HOME -> HomeScreen(radio, app, send)
         Destination.RADIO -> RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, connect, send, direct, clearCwDecode)
         Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog, app)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
-        Destination.DX -> DXScreen(features, database, wavelog, cty, send)
-        Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, wavelog, callbook, cty, audio, app, direct)
+        Destination.DX -> DXScreen(neuralDx, features, database, wavelog, cty, app, send)
+        Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, app, direct)
     }
 }
 
@@ -2169,49 +2170,11 @@ private fun qslMethodLabel(code: String) = qslMethodChoices.firstOrNull { it.fir
 private fun modeCode(mode: String) = when (mode.uppercase()) { "LSB" -> "1"; "USB" -> "2"; "CW" -> "3"; "FM" -> "4"; "AM" -> "5"; else -> "6" }
 private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
 
-@Composable private fun DXScreen(features: FeatureController, database: QsoDatabase, wavelog: WavelogController,
-    cty: CtyController, send: (String) -> Unit) {
-    var view by remember { mutableStateOf(DXView.LIVE) }; var selected by remember { mutableStateOf<AndroidDXSpot?>(null) }
-    var previousQsoRecord by remember { mutableStateOf<AndroidCallbookRecord?>(null) }; var band by remember { mutableStateOf("ALL") }
-    Page {
-        Header("Unified DX intelligence"); Text(features.clusterStatus, color = Muted); Text(features.dxSummary, color = Amber)
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            DXView.entries.forEach { FilterChip(view == it, { view = it }, { Text(it.name) }) }
-        }
-        val source = when (view) { DXView.WATCH -> features.watchSpots; DXView.SMART -> features.spots; else -> features.liveSpots }
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            (listOf("ALL") + source.map { it.band }.filter { it.isNotBlank() }.distinct()).forEach { value -> FilterChip(band == value, { band = value }, { Text(value) }) }
-        }
-        when (view) {
-            DXView.BANDMAP -> features.dxBands.forEach { TableRow(it.band, "${it.uniqueCalls} calls · ${it.spots5m}/5m · ${it.spots60m}/60m", "${it.surgePercent}%", it.surge) }
-            DXView.PULSE -> features.dxRegions.forEach { TableRow(it.region, "${it.uniqueCalls} calls · ${it.spots15m}/15m · ${it.spots60m}/60m", "${it.activityPercent}%", it.anomaly) }
-            DXView.WORLD -> Text(if (features.dxWorld.isEmpty()) "No live world matrix yet" else "World activity cells: ${features.dxWorld.sumOf { it.size }}", color = Muted)
-            else -> {
-                val rows = source.filter { band == "ALL" || it.band == band }.take(20)
-                if (rows.isEmpty()) Text("No accepted live DX spots. Connect the cluster in Settings; no fixture data is shown.", color = Muted)
-                rows.forEach { spot -> Card(onClick = { selected = spot }, colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(12.dp).fillMaxWidth()) {
-                        Column(Modifier.weight(1f).heightIn(min = 48.dp)
-                            .semantics { contentDescription = "Previous QSOs for ${spot.callsign}" }
-                            .clickable(role = Role.Button) { previousQsoRecord = spot.previousQsoRecord(cty) },
-                            verticalArrangement = Arrangement.Center) {
-                            Text(spot.callsign, fontWeight = FontWeight.Black, color = if (spot.watchlisted) Hold else Healthy)
-                            Text(cty.lookup(spot.callsign)?.country.orEmpty().ifBlank { spot.country }, color = Muted)
-                        }
-                        Column(horizontalAlignment = Alignment.End) { Text(formatRadioFrequency(spot.frequencyHz), color = Amber, fontFamily = FontFamily.Monospace); Text("${spot.band} · ${spot.mode} · ${spot.score}", color = Muted) }
-                    }
-                } }
-            }
-        }
-    }
-    selected?.let { spot -> AlertDialog(onDismissRequest = { selected = null }, title = { Text(spot.callsign) },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("${formatRadioFrequency(spot.frequencyHz)} MHz · ${spot.band} · ${spot.mode}")
-            Text(listOf(spot.country, spot.continent, if (spot.distanceKm > 0) "${spot.distanceKm} km @ ${spot.bearingDegrees}°" else "").filter { it.isNotBlank() }.joinToString(" · "))
-            Text("Score ${spot.score} · confidence ${spot.confidence} · ${spot.samples} samples")
-            Text(spot.reason.ifBlank { spot.comment }.ifBlank { "No additional analysis" }, color = Muted)
-        } }, confirmButton = { Button({ send("FA%011d;".format(spot.frequencyHz)); selected = null }) { Text("Tune VFO A") } },
-        dismissButton = { TextButton({ selected = null }) { Text("Close") } })
+@Composable private fun DXScreen(neuralDx: NeuralDxController, features: FeatureController, database: QsoDatabase,
+    wavelog: WavelogController, cty: CtyController, app: AppController, send: (String) -> Unit) {
+    var previousQsoRecord by remember { mutableStateOf<AndroidCallbookRecord?>(null) }
+    NeuralDxScreen(neuralDx, features, database, wavelog, cty, app, send) { spot ->
+        previousQsoRecord = spot.previousQsoRecord(cty)
     }
     previousQsoRecord?.let { record ->
         PreviousQsosDialog(record, database, wavelog) { previousQsoRecord = null }
@@ -2625,26 +2588,33 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
 @Composable private fun FilterChoice(label: String, value: String, choices: List<Pair<String, String>>, change: (String) -> Unit) =
     ChoiceField(label, choices.firstOrNull { it.first == value }?.second ?: value, choices, value, change, Modifier.fillMaxWidth())
 
-@Composable private fun SettingsScreen(state: RadioState, detail: String, database: QsoDatabase, features: FeatureController, wavelog: WavelogController,
+@Composable private fun SettingsScreen(state: RadioState, detail: String, database: QsoDatabase, features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController,
     callbook: CallbookController, cty: CtyController,
     audio: AudioMonitorController, app: AppController, direct: (String) -> Unit) {
     var section by remember { mutableStateOf(SettingsSection.DEFAULT) }
     var host by remember { mutableStateOf(features.clusterHost) }; var port by remember { mutableStateOf(features.clusterPort.toString()) }
     var fallbackHost by remember { mutableStateOf(features.fallbackHost) }; var fallbackPort by remember { mutableStateOf(features.fallbackPort.toString()) }
     var fallback2Host by remember { mutableStateOf(features.fallback2Host) }; var fallback2Port by remember { mutableStateOf(features.fallback2Port.toString()) }
-    var callsign by remember { mutableStateOf(features.clusterCallsign) }; var watch by remember { mutableStateOf("") }; var raw by remember { mutableStateOf("") }
+    var callsign by remember { mutableStateOf(features.clusterCallsign) }; var watch by remember { mutableStateOf(features.watchlistText) }; var raw by remember { mutableStateOf("") }
     var stationCall by remember { mutableStateOf(app.stationCallsign) }; var stationName by remember { mutableStateOf(app.stationName) }
     var stationGrid by remember { mutableStateOf(app.stationGrid) }; var repeatSeconds by remember { mutableIntStateOf(app.cqRepeatSeconds) }
     var qrzEnabled by remember { mutableStateOf(callbook.qrzEnabled) }; var qrzUser by remember { mutableStateOf(callbook.qrzUsername) }
     var qrzPassword by remember { mutableStateOf(callbook.qrzPassword) }
     var hamQthEnabled by remember { mutableStateOf(callbook.hamQthEnabled) }; var hamQthUser by remember { mutableStateOf(callbook.hamQthUsername) }
     var hamQthPassword by remember { mutableStateOf(callbook.hamQthPassword) }
+    var systemMessage by remember { mutableStateOf("No recovery operation run this session") }
+    var dxNotifications by remember { mutableStateOf(neuralDx.notificationsEnabled) }
+    var ntfyUrl by remember { mutableStateOf(neuralDx.ntfyUrl) }; var ntfyToken by remember { mutableStateOf(neuralDx.ntfyToken) }
+    var perplexityKey by remember { mutableStateOf(neuralDx.perplexityKey) }; var briefingDxMode by remember { mutableStateOf(neuralDx.briefingDxMode) }
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        systemMessage = if (granted) "Neural DX notifications enabled" else "Notification permission was not granted"
+    }
     val macroLabels = remember { mutableStateListOf(*app.macroLabels.toTypedArray()) }
     val macroTexts = remember { mutableStateListOf(*app.macroTexts.toTypedArray()) }
     var profile by remember { mutableStateOf(app.fieldProfile) }; var brightness by remember { mutableFloatStateOf(app.brightness.toFloat()) }
     var autoDim by remember { mutableStateOf(app.autoDim) }; var tones by remember { mutableStateOf(app.alertTones) }
     var quiet by remember { mutableStateOf(app.quietAlerts) }; var program by remember { mutableStateOf(app.activationProgram) }
-    var activation by remember { mutableStateOf(app.activationReference) }; var systemMessage by remember { mutableStateOf("No recovery operation run this session") }
+    var activation by remember { mutableStateOf(app.activationReference) }
     var restorePayload by remember { mutableStateOf<String?>(null) }; val context = LocalContext.current
     val exportRecovery = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         uri?.let { runCatching { context.contentResolver.openOutputStream(it)?.bufferedWriter()?.use { writer -> writer.write(app.recoveryText()) } }
@@ -2716,6 +2686,28 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                 Button({ app.saveFieldSettings(profile, brightness.toInt(), autoDim, tones, quiet, program, activation) }) { Text("SAVE FIELD SETTINGS") }
                 OutlinedButton({ systemMessage = "Non-critical alerts snoozed for 15 minutes" }) { Text("SNOOZE 15") }
                 OutlinedButton({ systemMessage = "Non-critical alerts snoozed for 60 minutes" }) { Text("SNOOZE 60") }
+            }
+            HorizontalDivider()
+            Text("NEURAL DX WATCHER", color = Amber, fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                FilterChip(dxNotifications, { dxNotifications = !dxNotifications }, { Text("ANDROID ALERTS") })
+                FilterChip(briefingDxMode, { briefingDxMode = !briefingDxMode }, { Text("BRIEFING DX MODE") })
+                Text("Watchlist, new DXCC and 6m opening alerts use a 15-minute cooldown.", color = Muted)
+            }
+            OutlinedTextField(ntfyUrl, { ntfyUrl = it }, label = { Text("Optional ntfy HTTPS topic URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(ntfyToken, { ntfyToken = it }, label = { Text("Optional ntfy bearer token") },
+                    visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedTextField(perplexityKey, { perplexityKey = it }, label = { Text("Optional Perplexity API key · AI Insight") },
+                    visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button({
+                    neuralDx.saveSettings(dxNotifications, ntfyUrl, ntfyToken, perplexityKey, briefingDxMode)
+                    if (dxNotifications && android.os.Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    systemMessage = "Neural DX alert and insight settings saved"
+                }) { Text("SAVE NEURAL DX") }
+                OutlinedButton(neuralDx::testNtfy, enabled = ntfyUrl.startsWith("https://")) { Text("TEST NTFY") }
             }
         }
         if (section == SettingsSection.SAFETY) SettingsCard("TRANSMIT SAFETY") {

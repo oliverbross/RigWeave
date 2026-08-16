@@ -44,6 +44,11 @@ data class CallsignHistory(val rows: List<Qso>, val total: Int)
 data class DxccCell(val worked: Boolean = false, val confirmed: Boolean = false)
 data class DxccSummary(val dxcc: String, val country: String, val cells: Map<String, DxccCell>)
 data class StationInsight(val record: AndroidCallbookRecord, val history: CallsignHistory, val dxcc: DxccSummary)
+data class NeuralLogSummary(
+    val qsos: Int = 0, val calls: Int = 0, val dxccs: Int = 0, val confirmedDxccs: Int = 0,
+    val bands: Map<String, Int> = emptyMap(), val modes: Map<String, Int> = emptyMap(),
+    val continents: Map<String, Int> = emptyMap(), val countries: Map<String, Int> = emptyMap(),
+)
 
 val insightBands = listOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m")
 val insightModes = listOf("CW", "FT8", "RTTY", "SSB", "LSB", "USB")
@@ -227,6 +232,33 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         }
         return StationInsight(resolvedRecord, CallsignHistory(history, total),
             DxccSummary(resolvedRecord.dxcc, resolvedRecord.country, cells))
+    }
+
+    fun neuralLogSummary(stationId: String?): NeuralLogSummary {
+        val scope = stationScope(stationId)
+        val args = scope.second.toTypedArray()
+        val confirmed = "(UPPER(COALESCE(json_extract(details_json,'$.qslReceived'),'')) IN ('Y','V') OR " +
+            "UPPER(COALESCE(json_extract(details_json,'$.lotwReceived'),'')) IN ('Y','V'))"
+        fun scalar(expression: String): Int = readableDatabase.rawQuery(
+            "SELECT $expression FROM qso WHERE ${scope.first}", args).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        fun grouped(expression: String, limit: Int = 32): Map<String, Int> {
+            val output = linkedMapOf<String, Int>()
+            readableDatabase.rawQuery("SELECT $expression AS value, COUNT(*) AS total FROM qso " +
+                "WHERE ${scope.first} AND TRIM($expression)<>'' GROUP BY value ORDER BY total DESC LIMIT $limit", args).use { cursor ->
+                while (cursor.moveToNext()) output[cursor.getString(0).orEmpty()] = cursor.getInt(1)
+            }
+            return output
+        }
+        return NeuralLogSummary(
+            qsos = scalar("COUNT(*)"), calls = scalar("COUNT(DISTINCT UPPER(callsign))"),
+            dxccs = scalar("COUNT(DISTINCT NULLIF(UPPER(COALESCE(json_extract(details_json,'$.dxcc'),'')),''))"),
+            confirmedDxccs = scalar("COUNT(DISTINCT CASE WHEN $confirmed THEN NULLIF(UPPER(COALESCE(json_extract(details_json,'$.dxcc'),'')),'') END)"),
+            bands = grouped("LOWER(COALESCE(json_extract(details_json,'$.band'),''))"),
+            modes = grouped("UPPER(CASE WHEN COALESCE(json_extract(details_json,'$.submode'),'')<>'' " +
+                "THEN json_extract(details_json,'$.submode') ELSE mode END)"),
+            continents = grouped("UPPER(COALESCE(json_extract(details_json,'$.continent'),''))"),
+            countries = grouped("country", 12),
+        )
     }
 
     private fun stationScope(stationId: String?): Pair<String, List<String>> = if (stationId == null)
