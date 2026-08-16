@@ -308,13 +308,22 @@ private fun navIcon(item: Destination) = when (item) {
     var radioFeedback by remember { mutableStateOf<RadioFeedback?>(null) }
     var feedbackVisible by remember { mutableStateOf(false) }
     var feedbackGeneration by remember { mutableIntStateOf(0) }
+    var feedbackBaseline by remember { mutableStateOf<RadioState?>(null) }
     var stationInsight by remember { mutableStateOf<StationInsight?>(null) }
     var identityVisible by remember { mutableStateOf(false) }
     LaunchedEffect(state.revision) {
         val previous = previousState
         previousState = state
-        previous?.let { detectRadioFeedback(it, state) }?.let {
-            radioFeedback = it
+        if (!state.connected) {
+            radioFeedback = null
+            feedbackVisible = false
+            feedbackBaseline = null
+            return@LaunchedEffect
+        }
+        val burst = previous?.let { mergeRadioFeedbackBurst(feedbackBaseline, it, state) }
+        burst?.let {
+            feedbackBaseline = it.baseline
+            radioFeedback = it.feedback
             feedbackVisible = true
             feedbackGeneration++
         }
@@ -323,6 +332,7 @@ private fun navIcon(item: Destination) = when (item) {
         if (feedbackGeneration > 0) {
             delay(1_200)
             feedbackVisible = false
+            feedbackBaseline = null
         }
     }
     LaunchedEffect(wavelog.logMode, wavelog.stationId, stationInsight?.record?.callsign) {
@@ -460,6 +470,9 @@ private fun navIcon(item: Destination) = when (item) {
                     letterSpacing = 1.1.sp, maxLines = 1)
                 Text(feedback.value, color = Ink, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Black,
                     fontSize = 24.sp, maxLines = 1, softWrap = false)
+                if (feedback.details.isNotEmpty()) Text(feedback.details.joinToString("  ·  "), color = Healthy.copy(alpha = .9f),
+                    fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 11.sp,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text("KX3 LIVE", color = Healthy.copy(alpha = .72f), fontWeight = FontWeight.Bold, fontSize = 9.sp,
                     letterSpacing = .8.sp)
             }
@@ -795,7 +808,7 @@ private fun segmentMask(character: Char) = when (character) {
 }
 
 private enum class Kx3Adjustment(val title: String, val unit: String) {
-    AF("AF GAIN", "of 255"), RF("RF GAIN", "of 250"), MONITOR("MONITOR", "of 60"),
+    AF("AF GAIN", "of $KX3_AF_GAIN_MAX"), RF("RF GAIN", "of $KX3_RF_GAIN_MAX"), MONITOR("MONITOR", "of 60"),
     WIDTH("FILTER WIDTH", "Hz"), SHIFT("IF SHIFT", "Hz"), KEYER("KEYER SPEED", "WPM"),
     MIC("MIC GAIN", "of 60"), POWER("TX POWER", "W")
 }
@@ -833,9 +846,11 @@ private enum class Kx3Adjustment(val title: String, val unit: String) {
         Box(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxSize().padding(6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly) {
-                    InlineKx3Slider("AF", af, 0f..255f, { af = it }, { send("AG%03d;".format(af.toInt())) },
+                    InlineKx3Slider("AF", af, KX3_AF_GAIN_MIN.toFloat()..KX3_AF_GAIN_MAX.toFloat(),
+                        { af = it }, { send(kx3AfGainCommand(af.toInt())) },
                         state.connected) { open(Kx3Adjustment.AF) }
-                    InlineKx3Slider("RF", rf, 0f..250f, { rf = it }, { send("RG%03d;".format(rf.toInt())) },
+                    InlineKx3Slider("RF", rf, KX3_RF_GAIN_MIN.toFloat()..KX3_RF_GAIN_MAX.toFloat(),
+                        { rf = it }, { send(kx3RfGainCommand(rf.toInt())) },
                         state.connected) { open(Kx3Adjustment.RF) }
                     InlineKx3Slider("MON", monitor, 0f..60f, { monitor = it }, { send("ML%03d;".format(monitor.toInt())) },
                         state.connected) { open(Kx3Adjustment.MONITOR) }
@@ -870,7 +885,9 @@ private enum class Kx3Adjustment(val title: String, val unit: String) {
                         Kx3Adjustment.MIC -> mic; Kx3Adjustment.POWER -> power
                     }
                     val range = when (adjustment) {
-                        Kx3Adjustment.AF -> 0f..255f; Kx3Adjustment.RF -> 0f..250f; Kx3Adjustment.MONITOR -> 0f..60f
+                        Kx3Adjustment.AF -> KX3_AF_GAIN_MIN.toFloat()..KX3_AF_GAIN_MAX.toFloat()
+                        Kx3Adjustment.RF -> KX3_RF_GAIN_MIN.toFloat()..KX3_RF_GAIN_MAX.toFloat()
+                        Kx3Adjustment.MONITOR -> 0f..60f
                         Kx3Adjustment.WIDTH -> 100f..4000f; Kx3Adjustment.SHIFT -> 300f..3000f
                         Kx3Adjustment.KEYER -> 8f..50f; Kx3Adjustment.MIC -> 0f..60f; Kx3Adjustment.POWER -> 0f..12f
                     }
@@ -884,8 +901,8 @@ private enum class Kx3Adjustment(val title: String, val unit: String) {
                     }
                     fun finish() {
                         when (adjustment) {
-                            Kx3Adjustment.AF -> send("AG%03d;".format(af.toInt()))
-                            Kx3Adjustment.RF -> send("RG%03d;".format(rf.toInt()))
+                            Kx3Adjustment.AF -> send(kx3AfGainCommand(af.toInt()))
+                            Kx3Adjustment.RF -> send(kx3RfGainCommand(rf.toInt()))
                             Kx3Adjustment.MONITOR -> send("ML%03d;".format(monitor.toInt()))
                             Kx3Adjustment.WIDTH -> send("BW%04d;".format((width.toInt() / 10).coerceIn(0, 9999)))
                             Kx3Adjustment.SHIFT -> send("IS %04d;".format(shift.toInt()))
@@ -934,6 +951,10 @@ private enum class Kx3Adjustment(val title: String, val unit: String) {
             }
             Slider(value, change, enabled = enabled, valueRange = range, onValueChangeFinished = finish,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("MIN ${range.start.toInt()}", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Text("MAX ${range.endInclusive.toInt()}", color = Hold, fontSize = 10.sp, fontWeight = FontWeight.Black)
+            }
         }
     }
 }
@@ -1963,8 +1984,10 @@ private fun qslMethodLabel(code: String) = qslMethodChoices.firstOrNull { it.fir
     var power by remember(state.powerW) { mutableFloatStateOf(state.powerW.coerceIn(0, 12).toFloat()) }
     Card(colors = CardDefaults.cardColors(containerColor = Panel)) { Column(Modifier.padding(16.dp)) {
         Text("RADIO CONTROLS", color = Amber, fontWeight = FontWeight.Bold)
-        SliderLine("AF GAIN", af, 0f..255f, { af = it }, { send("AG%03d;".format(af.toInt())) })
-        SliderLine("RF GAIN", rf, 0f..255f, { rf = it }, { send("RG%03d;".format(rf.toInt())) })
+        SliderLine("AF GAIN", af, KX3_AF_GAIN_MIN.toFloat()..KX3_AF_GAIN_MAX.toFloat(),
+            { af = it }, { send(kx3AfGainCommand(af.toInt())) })
+        SliderLine("RF GAIN", rf, KX3_RF_GAIN_MIN.toFloat()..KX3_RF_GAIN_MAX.toFloat(),
+            { rf = it }, { send(kx3RfGainCommand(rf.toInt())) })
         SliderLine("BANDWIDTH", bw, 100f..4000f, { bw = it }, { send("BW%04d;".format(bw.toInt())) }, "${bw.toInt()} Hz")
         SliderLine("POWER LIMIT", power, 0f..12f, { power = it }, { send("PC%03d;".format(power.toInt())) }, "${power.toInt()} W")
     } }
