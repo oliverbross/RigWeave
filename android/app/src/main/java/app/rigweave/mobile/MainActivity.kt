@@ -106,6 +106,7 @@ private enum class LogbookFilterTab(val label: String) { GENERAL("General"), QSL
     val cty = remember { CtyController(context) }
     val audio = remember { AudioMonitorController(context) }
     val app = remember { AppController(context) }
+    val cwDecoder = remember { CwDecodeBuffer() }
     var radio by remember { mutableStateOf(NativeCore.parseState(NativeCore.state(core))) }
     var usbDetail by remember { mutableStateOf("No USB CAT adapter opened") }
     var destination by remember { mutableStateOf(Destination.HOME) }
@@ -113,7 +114,12 @@ private enum class LogbookFilterTab(val label: String) { GENERAL("General"), QSL
     val scope = rememberCoroutineScope()
     fun accept(result: UsbResult) {
         when (result) {
-            is UsbResult.Connected -> { NativeCore.feed(core, result.frames); radio = NativeCore.parseState(NativeCore.state(core)); usbDetail = result.detail }
+            is UsbResult.Connected -> {
+                cwDecoder.feed(result.cwFrames)
+                NativeCore.feed(core, result.frames)
+                radio = NativeCore.parseState(NativeCore.state(core)).copy(cwDecodedText = cwDecoder.text)
+                usbDetail = result.detail
+            }
             is UsbResult.PermissionRequired -> usbDetail = result.detail
             is UsbResult.Unavailable -> usbDetail = result.detail
         }
@@ -126,7 +132,17 @@ private enum class LogbookFilterTab(val label: String) { GENERAL("General"), QSL
             command in setOf("SWT11;", "SWH11;", "SWT44;", "SWT16;", "SWH16;")
         if (risky) pendingRisk = command else direct(command)
     }
-    LaunchedEffect(transport) { audio.refreshDevices(); while (true) { delay(450); transport.poll()?.let(::accept) } }
+    LaunchedEffect(transport) {
+        audio.refreshDevices()
+        while (true) { delay(450); transport.poll()?.let(::accept) }
+    }
+    LaunchedEffect(transport, radio.mode) {
+        while (isCwMacroMode(radio.mode)) { delay(90); transport.pollCwText()?.let(::accept) }
+    }
+    val clearCwDecode: () -> Unit = {
+        cwDecoder.clear()
+        radio = radio.copy(cwDecodedText = "")
+    }
     LaunchedEffect(radio.connected, radio.mode, app.cwMacrosArmed) {
         if (app.cwMacrosArmed && (!radio.connected || !isCwMacroMode(radio.mode))) {
             app.updateCwMacrosArmed(false)
@@ -149,12 +165,12 @@ private enum class LogbookFilterTab(val label: String) { GENERAL("General"), QSL
                 Destination.entries.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
-            Screen(destination, radio, usbDetail, database, features, wavelog, callbook, cty, audio, app, connect, send, direct)
+            Screen(destination, radio, usbDetail, database, features, wavelog, callbook, cty, audio, app, connect, send, direct, clearCwDecode)
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
             Destination.entries.forEach { item -> NavigationBarItem(destination == item, { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
-            Screen(destination, radio, usbDetail, database, features, wavelog, callbook, cty, audio, app, connect, send, direct)
+            Screen(destination, radio, usbDetail, database, features, wavelog, callbook, cty, audio, app, connect, send, direct, clearCwDecode)
         } }
     }
 }
@@ -170,10 +186,10 @@ private fun navIcon(item: Destination) = when (item) {
 
 @Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase,
     features: FeatureController, wavelog: WavelogController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, app: AppController,
-    connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit) {
+    connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, clearCwDecode: () -> Unit) {
     when (destination) {
         Destination.HOME -> HomeScreen(radio, app, send)
-        Destination.RADIO -> RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, connect, send, direct)
+        Destination.RADIO -> RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, connect, send, direct, clearCwDecode)
         Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(features, send)
@@ -246,7 +262,8 @@ private fun navIcon(item: Destination) = when (item) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable private fun RadioScreen(state: RadioState, detail: String, app: AppController, database: QsoDatabase,
-    wavelog: WavelogController, callbook: CallbookController, cty: CtyController, features: FeatureController, connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit) {
+    wavelog: WavelogController, callbook: CallbookController, cty: CtyController, features: FeatureController, connect: () -> Unit, send: (String) -> Unit,
+    direct: (String) -> Unit, clearCwDecode: () -> Unit) {
     BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF090B0C)).navigationBarsPadding().padding(10.dp)) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -259,10 +276,33 @@ private fun navIcon(item: Destination) = when (item) {
                     CompactLogger(state, database, wavelog, callbook, cty, app, send, Modifier.weight(1f).fillMaxWidth())
                 }
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (isCwMacroMode(state.mode)) {
+                        CwDecodeLine(state.cwDecodedText, state.connected, clearCwDecode,
+                            Modifier.fillMaxWidth().heightIn(min = 48.dp))
+                    }
                     CompactKx3TuningDeck(state, send, Modifier.fillMaxWidth().weight(1f))
                     LiveSpotsPanel(features, database, wavelog, send, Modifier.fillMaxWidth().weight(3f))
                 }
             }
+        }
+    }
+}
+
+@Composable private fun CwDecodeLine(text: String, connected: Boolean, clear: () -> Unit,
+    modifier: Modifier = Modifier) {
+    val display = text.takeLast(48).ifBlank { if (connected) "WAITING FOR KX3 TEXT…" else "CONNECT RADIO TO DECODE" }
+    Surface(onClick = clear, enabled = text.isNotEmpty(), color = Color(0xFF171307),
+        contentColor = Hold, shape = MaterialTheme.shapes.small,
+        border = androidx.compose.foundation.BorderStroke(1.dp, Amber.copy(alpha = .82f)), modifier = modifier) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("TEXT (CW)", color = Amber, fontWeight = FontWeight.Black, fontSize = 13.sp,
+                letterSpacing = .5.sp, maxLines = 1)
+            Box(Modifier.padding(horizontal = 11.dp).width(1.dp).height(22.dp).background(Amber.copy(alpha = .45f)))
+            Text(display, color = if (text.isEmpty()) Amber.copy(alpha = .78f) else Hold,
+                fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 17.sp,
+                maxLines = 1, softWrap = false, modifier = Modifier.weight(1f))
+            if (text.isNotEmpty()) Text("TAP TO CLEAR", color = Amber.copy(alpha = .72f),
+                fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
         }
     }
 }

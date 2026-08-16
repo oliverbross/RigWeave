@@ -29,6 +29,7 @@ data class RadioState(
     val keyerSpeed: Int = -1,
     val ifShiftHz: Int = -1,
     val revision: Long = 0,
+    val cwDecodedText: String = "",
 ) {
     val status get() = if (connected) "LIVE" else "OFFLINE"
     val frequencyText get() = if (connected) formatRadioFrequency(frequencyHz) + " MHz" else "—.——— MHz"

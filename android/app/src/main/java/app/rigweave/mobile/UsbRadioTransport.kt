@@ -13,7 +13,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 sealed interface UsbResult {
-    data class Connected(val frames: ByteArray, val detail: String) : UsbResult
+    data class Connected(val frames: ByteArray, val detail: String, val cwFrames: ByteArray = byteArrayOf()) : UsbResult
     data class PermissionRequired(val detail: String) : UsbResult
     data class Unavailable(val detail: String) : UsbResult
 }
@@ -97,24 +97,35 @@ class UsbRadioTransport(private val context: Context) {
         }
     } }
 
+    suspend fun pollCwText(): UsbResult? = withContext(Dispatchers.IO) { mutex.withLock {
+        if (port == null) return@withLock null
+        try {
+            val frames = exchange(listOf("DB;"), initialTimeout = 120, trailingTimeout = 40)
+            UsbResult.Connected(frames, "Live CW text", frames)
+        } catch (error: Exception) {
+            closeLocked()
+            UsbResult.Unavailable("USB/CAT failed: ${error.message ?: error.javaClass.simpleName}")
+        }
+    } }
+
     suspend fun disconnect() = withContext(Dispatchers.IO) { mutex.withLock { closeLocked() } }
 
-    private fun exchange(commands: List<String>): ByteArray {
+    private fun exchange(commands: List<String>, initialTimeout: Int = 350, trailingTimeout: Int = 35): ByteArray {
         val active = port ?: return byteArrayOf()
         if (commands.isEmpty()) return byteArrayOf()
         active.write(commands.joinToString("").toByteArray(Charsets.US_ASCII), 1_000)
-        return readFrames(active)
+        return readFrames(active, initialTimeout, trailingTimeout)
     }
 
-    private fun readFrames(active: UsbSerialPort): ByteArray {
+    private fun readFrames(active: UsbSerialPort, initialTimeout: Int = 350, trailingTimeout: Int = 35): ByteArray {
         val output = ArrayList<Byte>()
-        var timeout = 350
+        var timeout = initialTimeout
         repeat(12) {
             val buffer = ByteArray(512)
             val count = active.read(buffer, timeout).coerceAtLeast(0)
             if (count == 0) return output.toByteArray()
             repeat(count) { index -> output += buffer[index] }
-            timeout = 35
+            timeout = trailingTimeout
         }
         return output.toByteArray()
     }
