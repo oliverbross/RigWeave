@@ -55,6 +55,9 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -545,7 +548,7 @@ private enum class Kx3LcdPicker { BAND, MODE, FILTER }
     Surface(shape = MaterialTheme.shapes.small, border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF343839)), modifier = modifier) {
         Row(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFF8C945), Color(0xFFE3A00E)))).padding(8.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Kx3OriginalMeter(state, lcdInk, Modifier.fillMaxHeight().weight(.40f))
+            Kx3OriginalMeter(state, lcdInk, { picker = Kx3LcdPicker.FILTER }, Modifier.fillMaxHeight().weight(.40f))
             Column(Modifier.fillMaxHeight().weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Row(Modifier.fillMaxWidth().weight(.61f), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.fillMaxHeight().weight(1f).clickable(enabled = state.connected) { picker = Kx3LcdPicker.BAND }
@@ -656,35 +659,41 @@ private fun kx3FilterWidths(mode: String): List<Int> = when (mode) {
         dismissButton = { TextButton(dismiss) { Text("CLOSE") } })
 }
 
-@Composable private fun Kx3OriginalMeter(state: RadioState, ink: Color, modifier: Modifier = Modifier) {
+@Composable private fun Kx3OriginalMeter(state: RadioState, ink: Color, bandwidthAction: () -> Unit,
+    modifier: Modifier = Modifier) {
     val swrProgress = if (state.transmitting && state.swrTenths >= 10) (state.swrTenths - 10) / 25f else 0f
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Kx3BarMeter("S", "1  3  5  7  9  +20", state.meter / 21f, ink, Modifier.weight(1f).fillMaxHeight())
-            Kx3CwtMeter(state.cwt, ink, Modifier.weight(.72f).fillMaxHeight())
-        }
-        Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Kx3BarMeter("SWR", "1  1.5  2  3", swrProgress, ink, Modifier.weight(1f).fillMaxHeight())
-            Kx3BarMeter("RF", "0   5   10", state.rfOutputTenths / 120f, ink, Modifier.weight(1f).fillMaxHeight())
-        }
-        Canvas(Modifier.fillMaxWidth().weight(.68f)) {
-            val center = size.width * .42f
-            val halfWidth = (state.bandwidthHz.coerceIn(100, 4000) / 4000f) * size.width * .18f + size.width * .06f
-            val path = Path().apply {
-                moveTo(center - halfWidth, size.height * .76f)
-                lineTo(center - halfWidth * .68f, size.height * .24f)
-                lineTo(center + halfWidth * .68f, size.height * .24f)
-                lineTo(center + halfWidth, size.height * .76f)
+    Box(modifier) {
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Kx3BarMeter("S", "1  3  5  7  9  +20", state.meter / 21f, ink, Modifier.weight(1f).fillMaxHeight())
+                Kx3CwtMeter(state.cwt, ink, Modifier.weight(.72f).fillMaxHeight())
             }
-            drawPath(path, ink, style = Stroke(2.dp.toPx()))
-            drawLine(ink, Offset(size.width * .12f, size.height * .76f), Offset(size.width * .74f, size.height * .76f), 1.5.dp.toPx())
-            if (state.cwt) {
-                drawLine(ink, Offset(size.width * .86f, size.height * .2f), Offset(size.width * .86f, size.height * .76f), 2.dp.toPx())
-                drawCircle(ink, 2.5.dp.toPx(), Offset(size.width * .86f, size.height * .18f))
+            Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Kx3BarMeter("SWR", "1  1.5  2  3", swrProgress, ink, Modifier.weight(1f).fillMaxHeight())
+                Kx3BarMeter("RF", "0   5   10", state.rfOutputTenths / 120f, ink, Modifier.weight(1f).fillMaxHeight())
             }
+            Canvas(Modifier.fillMaxWidth().weight(.68f)) {
+                val center = size.width * .42f
+                val halfWidth = (state.bandwidthHz.coerceIn(100, 4000) / 4000f) * size.width * .18f + size.width * .06f
+                val path = Path().apply {
+                    moveTo(center - halfWidth, size.height * .76f)
+                    lineTo(center - halfWidth * .68f, size.height * .24f)
+                    lineTo(center + halfWidth * .68f, size.height * .24f)
+                    lineTo(center + halfWidth, size.height * .76f)
+                }
+                drawPath(path, ink, style = Stroke(2.dp.toPx()))
+                drawLine(ink, Offset(size.width * .12f, size.height * .76f), Offset(size.width * .74f, size.height * .76f), 1.5.dp.toPx())
+                if (state.cwt) {
+                    drawLine(ink, Offset(size.width * .86f, size.height * .2f), Offset(size.width * .86f, size.height * .76f), 2.dp.toPx())
+                    drawCircle(ink, 2.5.dp.toPx(), Offset(size.width * .86f, size.height * .18f))
+                }
+            }
+            Text("I   XFIL · ${displayBandwidth(state.bandwidthHz)}   FL2", color = ink, fontWeight = FontWeight.Black,
+                fontSize = 12.sp, maxLines = 1)
         }
-        Text("I   XFIL · ${displayBandwidth(state.bandwidthHz)}   FL2", color = ink, fontWeight = FontWeight.Black,
-            fontSize = 12.sp, maxLines = 1)
+        Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().fillMaxHeight(.30f)
+            .semantics { contentDescription = "Select filter width" }
+            .clickable(enabled = state.connected, role = Role.Button, onClick = bandwidthAction))
     }
 }
 
