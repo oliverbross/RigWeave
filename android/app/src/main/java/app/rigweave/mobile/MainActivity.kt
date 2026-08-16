@@ -17,7 +17,9 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
@@ -48,8 +50,11 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import kotlin.math.abs
@@ -85,6 +90,8 @@ private enum class SettingsSection(val label: String) {
     SAFETY("Safety"), AUDIO("Audio"), HEALTH("Health"), DIAG("Diag"), ABOUT("About")
 }
 private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Station"), GENERAL("General"), NOTES("Notes"), QSL("QSL") }
+private enum class LogbookTab(val label: String) { LOGBOOK("Logbook"), FILTERS("Filters") }
+private enum class LogbookFilterTab(val label: String) { GENERAL("General"), QSL("QSL") }
 
 @Composable private fun RigWeaveApp() {
     val context = LocalContext.current
@@ -1283,43 +1290,335 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
 }
 
 @Composable private fun LogbookScreen(state: RadioState, database: QsoDatabase, wavelog: WavelogController) {
-    var call by remember { mutableStateOf("") }; var name by remember { mutableStateOf("") }; var qth by remember { mutableStateOf("") }
-    var notes by remember { mutableStateOf("") }; var sent by remember { mutableStateOf("59") }; var received by remember { mutableStateOf("59") }
-    var message by remember { mutableStateOf("") }; var records by remember { mutableStateOf(database.list()) }
-    Page {
-        Header("Local-first logbook", state); Text("NEW QSO", color = Amber, fontWeight = FontWeight.Bold)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(call, { call = it.uppercase() }, label = { Text("Callsign") }, modifier = Modifier.weight(1f))
-            OutlinedTextField(name, { name = it }, label = { Text("Name") }, modifier = Modifier.weight(1f))
-            OutlinedTextField(qth, { qth = it }, label = { Text("QTH") }, modifier = Modifier.weight(1f))
+    var tab by remember { mutableStateOf(LogbookTab.LOGBOOK) }
+    var filterTab by remember { mutableStateOf(LogbookFilterTab.GENERAL) }
+    var draft by remember { mutableStateOf(LogbookFilter()) }
+    var applied by remember { mutableStateOf(LogbookFilter()) }
+    var fromDate by remember { mutableStateOf("") }; var toDate by remember { mutableStateOf("") }
+    var filterError by remember { mutableStateOf("") }; var selectedId by remember { mutableStateOf<String?>(null) }
+    var records by remember { mutableStateOf(emptyList<Qso>()) }
+    val scope = rememberCoroutineScope()
+    val reload = { scope.launch { records = withContext(Dispatchers.IO) { database.all() } } }
+
+    LaunchedEffect(wavelog.logMode, wavelog.stationId) {
+        if (wavelog.logMode == LogMode.WAVELOG) {
+            if (wavelog.configured && wavelog.stations.isEmpty()) wavelog.loadStations()
+            wavelog.syncTwoWay()
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(sent, { sent = it }, label = { Text("RST sent") }, modifier = Modifier.weight(1f))
-            OutlinedTextField(received, { received = it }, label = { Text("RST received") }, modifier = Modifier.weight(1f))
-            OutlinedTextField(notes, { notes = it }, label = { Text("Notes") }, modifier = Modifier.weight(2f))
+        records = withContext(Dispatchers.IO) { database.all() }
+    }
+    LaunchedEffect(wavelog.status) {
+        if (wavelog.status.startsWith("Two-way sync complete")) {
+            records = withContext(Dispatchers.IO) { database.all() }
         }
-        Button({
-            val now = wavelog.synchronizedNow()
-            if (call.isBlank() || !state.connected || state.frequencyHz <= 0) message = "Connect the radio and enter a callsign"
-            else { val id = NativeCore.qsoIdentity(call, DateTimeFormatter.ISO_INSTANT.format(now), state.frequencyHz, state.mode)
-                val qso = Qso(id, call, state.frequencyHz, state.mode, sent, received, now.epochSecond, name, qth, notes,
-                    band = bandForFrequency(state.frequencyHz), frequencyRxHz = state.frequencyHz,
-                    bandRx = bandForFrequency(state.frequencyHz), txPowerW = state.powerW,
-                    syncState = if (wavelog.logMode == LogMode.WAVELOG) "pending" else "local")
-                val saved = database.save(qso); message = if (saved) "Saved locally before sync" else "Immediate duplicate not saved"
-                if (saved) {
-                    if (wavelog.logMode == LogMode.WAVELOG) wavelog.enqueue(id, database.toADIF(qso))
-                    call = ""; records = database.list()
-                }
+    }
+
+    val sourceRecords = remember(records, wavelog.logMode, wavelog.stationId) {
+        if (wavelog.logMode == LogMode.LOCAL) records else records.filter {
+            it.stationProfileId == wavelog.stationId || it.syncState == "pending" ||
+                (it.stationProfileId.isBlank() && it.remoteId.isBlank())
+        }
+    }
+    val matching = remember(sourceRecords, applied) { filterLogbook(sourceRecords, applied.copy(limit = 5_000)) }
+    val visible = remember(matching, applied.limit) { matching.take(applied.limit) }
+    val selected = sourceRecords.firstOrNull { it.id == selectedId }
+    val stationLabel = wavelog.selectedStation?.label?.ifBlank { null }
+        ?: wavelog.stationId.takeIf { it.isNotBlank() }?.let { "Station $it" }
+        ?: "Station not selected"
+
+    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) { Header(if (wavelog.logMode == LogMode.WAVELOG) "Wavelog logbook" else "Local logbook", state) }
+            StatusChip(if (wavelog.logMode == LogMode.WAVELOG) "WAVELOG · TWO-WAY" else "LOCAL · TABLET", true)
+            if (wavelog.logMode == LogMode.WAVELOG) Text(stationLabel, color = Hold, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+            Text("${visible.size} / ${matching.size} RESULTS", color = Ink, fontWeight = FontWeight.Bold)
+            CompactSelect("Limit", applied.limit.toString(), listOf("250", "1000", "2500", "5000")) { value ->
+                val limit = value.toInt(); draft = draft.copy(limit = limit); applied = applied.copy(limit = limit)
             }
-        }, enabled = state.connected) { Text("Save QSO locally") }
-        Text(message, color = Muted); Text("LOCAL LOG · ${records.size}    WAVELOG · ${wavelog.contacts.size} cached · ${wavelog.pendingCount} queued", color = Amber)
-        records.take(25).forEach { qso -> ListItem(headlineContent = { Text(qso.callsign, fontWeight = FontWeight.Bold) },
-            supportingContent = { Text("${formatRadioFrequency(qso.frequencyHz)} MHz · ${qso.mode} · ${qso.name} ${qso.qth}".trim()) },
-            trailingContent = { Text(Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("MM-dd HH:mm"))) },
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent)) }
+            QuickFilterMenu(selected) { key ->
+                val updated = quickFilter(applied, selected ?: return@QuickFilterMenu, key)
+                if (key == "date") {
+                    val date = Instant.ofEpochSecond(selected.createdAt).atZone(ZoneOffset.UTC).toLocalDate().toString()
+                    fromDate = date; toDate = date
+                }
+                draft = updated; applied = updated; tab = LogbookTab.LOGBOOK
+            }
+            OutlinedButton({ if (wavelog.logMode == LogMode.WAVELOG) wavelog.syncTwoWay(); reload() }, modifier = Modifier.heightIn(min = 48.dp)) {
+                Icon(Icons.Outlined.Refresh, null); Spacer(Modifier.width(6.dp)); Text(if (wavelog.logMode == LogMode.WAVELOG) "SYNC" else "REFRESH")
+            }
+        }
+        TabRow(tab.ordinal, containerColor = Panel, contentColor = Amber) {
+            LogbookTab.entries.forEach { item -> Tab(tab == item, { tab = item }, text = {
+                Text(if (item == LogbookTab.FILTERS && activeLogbookFilterCount(applied) > 0)
+                    "${item.label} · ${activeLogbookFilterCount(applied)}" else item.label, fontWeight = FontWeight.Bold)
+            }) }
+        }
+        if (tab == LogbookTab.LOGBOOK) {
+            LogbookTable(visible, selectedId, { selectedId = it }, applied, Modifier.weight(1f)) { sort ->
+                val direction = if (applied.sort == sort && applied.direction == LogbookSortDirection.DESCENDING)
+                    LogbookSortDirection.ASCENDING else LogbookSortDirection.DESCENDING
+                draft = draft.copy(sort = sort, direction = direction)
+                applied = applied.copy(sort = sort, direction = direction)
+            }
+        } else {
+            LogbookFilterPanel(filterTab, { filterTab = it }, draft, { draft = it }, fromDate, { fromDate = it },
+                toDate, { toDate = it }, sourceRecords, filterError, onPreset = { preset ->
+                    val (from, to) = logbookDatePreset(preset); fromDate = from.toString(); toDate = to.toString(); filterError = ""
+                }, onApply = {
+                    val from = fromDate.takeIf { it.isNotBlank() }?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+                    val to = toDate.takeIf { it.isNotBlank() }?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+                    if ((fromDate.isNotBlank() && from == null) || (toDate.isNotBlank() && to == null)) {
+                        filterError = "Use ISO dates: YYYY-MM-DD"
+                    } else if (from != null && to != null && from > to) {
+                        filterError = "From date must not be after To date"
+                    } else {
+                        filterError = ""
+                        applied = draft.copy(fromEpochSeconds = from?.atStartOfDay()?.toEpochSecond(ZoneOffset.UTC),
+                            toEpochSecondsExclusive = to?.plusDays(1)?.atStartOfDay()?.toEpochSecond(ZoneOffset.UTC))
+                        draft = applied; tab = LogbookTab.LOGBOOK
+                    }
+                }, onClear = {
+                    val cleared = LogbookFilter(limit = applied.limit)
+                    draft = cleared; applied = cleared; fromDate = ""; toDate = ""; filterError = ""
+                }, modifier = Modifier.weight(1f))
+        }
     }
 }
+
+@Composable private fun CompactSelect(label: String, value: String, choices: List<String>, change: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton({ expanded = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+            Text("$label $value", fontWeight = FontWeight.Bold); Icon(Icons.Outlined.ArrowDropDown, null)
+        }
+        DropdownMenu(expanded, { expanded = false }) {
+            choices.forEach { choice -> DropdownMenuItem({ Text(choice) }, onClick = { change(choice); expanded = false },
+                trailingIcon = { if (choice == value) Icon(Icons.Outlined.Check, null) }) }
+        }
+    }
+}
+
+@Composable private fun QuickFilterMenu(selected: Qso?, apply: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton({ expanded = true }, enabled = selected != null, modifier = Modifier.heightIn(min = 48.dp)) {
+            Icon(Icons.Outlined.FilterAlt, null); Spacer(Modifier.width(6.dp)); Text("QUICK FILTER"); Icon(Icons.Outlined.ArrowDropDown, null)
+        }
+        DropdownMenu(expanded, { expanded = false }) {
+            listOf("date" to "Date", "callsign" to "Callsign", "dxcc" to "DXCC", "state" to "State",
+                "grid" to "Gridsquare", "mode" to "Mode", "band" to "Band", "iota" to "IOTA", "sota" to "SOTA",
+                "pota" to "POTA", "wwff" to "WWFF", "operator" to "Operator").forEach { (key, label) ->
+                val enabled = selected != null && (key == "date" || quickFilterValue(selected, key).isNotBlank())
+                DropdownMenuItem({ Text("Search $label") }, enabled = enabled, onClick = { apply(key); expanded = false })
+            }
+        }
+    }
+}
+
+private fun quickFilterValue(qso: Qso, key: String) = when (key) {
+    "callsign" -> qso.callsign; "dxcc" -> qso.dxcc; "state" -> qso.state; "grid" -> qso.grid
+    "mode" -> qso.mode; "band" -> qso.band; "iota" -> qso.iota; "sota" -> qso.sotaRef
+    "pota" -> qso.potaRef; "wwff" -> qso.wwffRef; "operator" -> qso.operatorCallsign; else -> ""
+}
+
+private fun quickFilter(base: LogbookFilter, qso: Qso, key: String): LogbookFilter = when (key) {
+    "date" -> {
+        val day = Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC).toLocalDate()
+        base.copy(fromEpochSeconds = day.atStartOfDay().toEpochSecond(ZoneOffset.UTC),
+            toEpochSecondsExclusive = day.plusDays(1).atStartOfDay().toEpochSecond(ZoneOffset.UTC))
+    }
+    "callsign" -> base.copy(callsign = qso.callsign); "dxcc" -> base.copy(dxcc = qso.dxcc)
+    "state" -> base.copy(state = qso.state); "grid" -> base.copy(grid = qso.grid); "mode" -> base.copy(mode = qso.mode)
+    "band" -> base.copy(band = qso.band); "iota" -> base.copy(iota = qso.iota); "sota" -> base.copy(sota = qso.sotaRef)
+    "pota" -> base.copy(pota = qso.potaRef); "wwff" -> base.copy(wwff = qso.wwffRef)
+    "operator" -> base.copy(operator = qso.operatorCallsign); else -> base
+}
+
+private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(ZoneOffset.UTC)): Pair<LocalDate, LocalDate> = when (preset) {
+    "Today" -> today to today; "Yesterday" -> today.minusDays(1) to today.minusDays(1)
+    "Last 7 Days" -> today.minusDays(6) to today; "Last 30 Days" -> today.minusDays(29) to today
+    "This Month" -> today.withDayOfMonth(1) to today
+    "Last Month" -> today.minusMonths(1).withDayOfMonth(1) to today.withDayOfMonth(1).minusDays(1)
+    "This Year" -> today.withDayOfYear(1) to today
+    "Last Year" -> today.minusYears(1).withDayOfYear(1) to today.withDayOfYear(1).minusDays(1)
+    else -> today to today
+}
+
+@Composable private fun LogbookTable(records: List<Qso>, selectedId: String?, select: (String) -> Unit,
+    filter: LogbookFilter, modifier: Modifier = Modifier, sort: (LogbookSort) -> Unit) {
+    val horizontal = rememberScrollState()
+    Box(modifier.fillMaxWidth().border(1.dp, Color(0xFF465159), RoundedCornerShape(8.dp)).horizontalScroll(horizontal)) {
+        Column(Modifier.width(1870.dp).fillMaxHeight()) {
+            Row(Modifier.fillMaxWidth().height(48.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
+                LogbookHeaderCell("DATE / TIME", 128, LogbookSort.TIME, filter, sort)
+                LogbookHeaderCell("DX", 94, LogbookSort.CALLSIGN, filter, sort)
+                LogbookHeaderCell("MODE", 70, LogbookSort.MODE, filter, sort)
+                LogbookHeaderCell("RST S", 58, null, filter, sort); LogbookHeaderCell("RST R", 58, null, filter, sort)
+                LogbookHeaderCell("BAND", 62, LogbookSort.BAND, filter, sort)
+                LogbookHeaderCell("FREQUENCY", 96, LogbookSort.FREQUENCY, filter, sort)
+                LogbookHeaderCell("GRID", 88, null, filter, sort)
+                LogbookHeaderCell("QSL", 64, null, filter, sort); LogbookHeaderCell("eQSL", 64, null, filter, sort)
+                LogbookHeaderCell("LoTW", 64, null, filter, sort); LogbookHeaderCell("CLUBLOG", 76, null, filter, sort)
+                LogbookHeaderCell("QRZ", 64, null, filter, sort)
+                LogbookHeaderCell("DXCC", 156, LogbookSort.DXCC, filter, sort)
+                LogbookHeaderCell("STATE", 64, null, filter, sort); LogbookHeaderCell("COUNTY", 118, null, filter, sort)
+                LogbookHeaderCell("IOTA", 90, null, filter, sort); LogbookHeaderCell("POTA", 102, null, filter, sort)
+                LogbookHeaderCell("SOTA", 102, null, filter, sort); LogbookHeaderCell("WWFF", 102, null, filter, sort)
+                LogbookHeaderCell("REGION", 110, null, filter, sort)
+            }
+            if (records.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Outlined.SearchOff, null, tint = Muted, modifier = Modifier.size(34.dp))
+                    Text("No QSOs match these filters", color = Ink, fontWeight = FontWeight.Bold)
+                    Text("Open Filters to widen the search.", color = Muted)
+                }
+            } else LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+                items(records.size, key = { records[it].id }) { index ->
+                    val qso = records[index]; val selected = selectedId == qso.id
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                        .background(if (selected) Amber.copy(alpha = .16f) else if (index % 2 == 0) Color(0xFF181E22) else Color(0xFF222A2F))
+                        .clickable { select(qso.id) }, verticalAlignment = Alignment.CenterVertically) {
+                        LogbookCell(Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("dd/MM/yy HH:mm")), 128)
+                        LogbookCell(qso.callsign, 94, Healthy, true); LogbookCell(qso.submode.ifBlank { qso.mode }, 70)
+                        LogbookCell(qso.rstSent, 58); LogbookCell(qso.rstReceived, 58); LogbookCell(qso.band, 62)
+                        LogbookCell("${qso.frequencyHz / 1_000} kHz", 96); LogbookCell(qso.grid, 88)
+                        LogbookQslCell(qso.qslSent, qso.qslReceived, 64); LogbookQslCell(qso.eqslSent, qso.eqslReceived, 64)
+                        LogbookQslCell(qso.lotwSent, qso.lotwReceived, 64); LogbookQslCell(qso.clublogSent, qso.clublogReceived, 76)
+                        LogbookQslCell(qso.qrzSent, qso.qrzReceived, 64)
+                        LogbookCell(qso.country.ifBlank { qso.dxcc }, 156, Healthy)
+                        LogbookCell(qso.state, 64); LogbookCell(qso.county, 118); LogbookCell(qso.iota, 90, Healthy)
+                        LogbookCell(qso.potaRef, 102, Healthy); LogbookCell(qso.sotaRef, 102, Healthy)
+                        LogbookCell(qso.wwffRef, 102, Healthy); LogbookCell(qso.region, 110)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun RowScope.LogbookHeaderCell(label: String, width: Int, column: LogbookSort?, filter: LogbookFilter,
+    sort: (LogbookSort) -> Unit) {
+    Row(Modifier.width(width.dp).fillMaxHeight().then(if (column != null) Modifier.clickable { sort(column) } else Modifier)
+        .border(width = 0.5.dp, color = Color(0xFF515A60)).padding(horizontal = 7.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(label, color = Ink, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+        if (column != null && filter.sort == column) Icon(
+            if (filter.direction == LogbookSortDirection.DESCENDING) Icons.Outlined.ArrowDownward else Icons.Outlined.ArrowUpward,
+            null, tint = Amber, modifier = Modifier.size(13.dp))
+    }
+}
+
+@Composable private fun RowScope.LogbookCell(value: String, width: Int, color: Color = Ink, bold: Boolean = false) {
+    Box(Modifier.width(width.dp).heightIn(min = 48.dp).border(width = 0.5.dp, color = Color(0xFF39434A)).padding(horizontal = 7.dp),
+        contentAlignment = Alignment.CenterStart) {
+        Text(value.ifBlank { "—" }, color = if (value.isBlank()) Muted.copy(alpha = .55f) else color,
+            fontWeight = if (bold) FontWeight.Black else FontWeight.Medium, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+    }
+}
+
+@Composable private fun RowScope.LogbookQslCell(sent: String, received: String, width: Int) {
+    Row(Modifier.width(width.dp).heightIn(min = 48.dp).border(width = 0.5.dp, color = Color(0xFF39434A)).padding(horizontal = 7.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+        Text("▲", color = if (positiveLogStatus(sent)) Healthy else Danger, style = MaterialTheme.typography.labelMedium)
+        Text("▼", color = if (positiveLogStatus(received)) Healthy else Danger, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf("Y", "YES", "S", "SENT", "UPLOADED", "1", "TRUE")
+
+@Composable private fun LogbookFilterPanel(selected: LogbookFilterTab, select: (LogbookFilterTab) -> Unit,
+    draft: LogbookFilter, update: (LogbookFilter) -> Unit, fromDate: String, updateFrom: (String) -> Unit,
+    toDate: String, updateTo: (String) -> Unit, records: List<Qso>, error: String, onPreset: (String) -> Unit,
+    onApply: () -> Unit, onClear: () -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        TabRow(selected.ordinal, containerColor = Color(0xFF171D21), contentColor = Amber) {
+            LogbookFilterTab.entries.forEach { item -> Tab(selected == item, { select(item) }, text = { Text(item.label, fontWeight = FontWeight.Bold) }) }
+        }
+        if (selected == LogbookFilterTab.GENERAL) GeneralLogbookFilters(draft, update, fromDate, updateFrom, toDate, updateTo, records, onPreset, Modifier.weight(1f))
+        else QslLogbookFilters(draft, update, Modifier.weight(1f))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Button(onApply, modifier = Modifier.heightIn(min = 48.dp)) { Icon(Icons.Outlined.Search, null); Spacer(Modifier.width(6.dp)); Text("APPLY FILTERS") }
+            OutlinedButton(onClear, modifier = Modifier.heightIn(min = 48.dp)) { Icon(Icons.Outlined.Clear, null); Spacer(Modifier.width(6.dp)); Text("CLEAR ALL") }
+            if (error.isNotBlank()) Text(error, color = Danger, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f)); Text("Numeric filters accept 500, >500, <=500, or 100-500", color = Muted, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+@Composable private fun GeneralLogbookFilters(filter: LogbookFilter, update: (LogbookFilter) -> Unit,
+    fromDate: String, updateFrom: (String) -> Unit, toDate: String, updateTo: (String) -> Unit,
+    records: List<Qso>, preset: (String) -> Unit, modifier: Modifier = Modifier) {
+    val modes = listOf("" to "All") + records.map { it.mode }.filter { it.isNotBlank() }.distinct().sorted().map { it to it }
+    val bands = listOf("" to "All") + records.map { it.band }.filter { it.isNotBlank() }.distinct().map { it to it }
+    LazyVerticalGrid(GridCells.Adaptive(210.dp), modifier, horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 4.dp)) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("DATE PRESETS", color = Hold, fontWeight = FontWeight.Black)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    listOf("Today", "Yesterday", "Last 7 Days", "Last 30 Days", "This Month", "Last Month", "This Year", "Last Year")
+                        .forEach { label -> OutlinedButton({ preset(label) }, modifier = Modifier.heightIn(min = 48.dp)) { Text(label) } }
+                }
+            }
+        }
+        item { FilterText("From · YYYY-MM-DD", fromDate, updateFrom) }; item { FilterText("To · YYYY-MM-DD", toDate, updateTo) }
+        item { FilterText("Dx / callsign", filter.callsign) { update(filter.copy(callsign = it.uppercase())) } }
+        item { FilterText("DXCC", filter.dxcc) { update(filter.copy(dxcc = it)) } }
+        item { FilterText("State", filter.state) { update(filter.copy(state = it.uppercase())) } }
+        item { FilterText("Gridsquare", filter.grid) { update(filter.copy(grid = it.uppercase())) } }
+        item { FilterChoice("Mode", filter.mode, modes) { update(filter.copy(mode = it)) } }
+        item { FilterChoice("Band", filter.band, bands) { update(filter.copy(band = it)) } }
+        item { FilterChoice("Propagation", filter.propagation, listOf("" to "All") + propagationChoices.drop(1)) { update(filter.copy(propagation = it)) } }
+        item { FilterText("County", filter.county) { update(filter.copy(county = it)) } }
+        item { FilterText("DOK", filter.dok) { update(filter.copy(dok = it.uppercase())) } }
+        item { FilterText("SOTA", filter.sota) { update(filter.copy(sota = it.uppercase())) } }
+        item { FilterText("POTA", filter.pota) { update(filter.copy(pota = it.uppercase())) } }
+        item { FilterText("IOTA", filter.iota) { update(filter.copy(iota = it.uppercase())) } }
+        item { FilterText("WWFF", filter.wwff) { update(filter.copy(wwff = it.uppercase())) } }
+        item { FilterText("Operator", filter.operator) { update(filter.copy(operator = it.uppercase())) } }
+        item { FilterText("Contest", filter.contest) { update(filter.copy(contest = it.uppercase())) } }
+        item { FilterChoice("Continent", filter.continent, listOf("" to "All") + continentChoices) { update(filter.copy(continent = it)) } }
+        item { FilterText("Comment", filter.comment) { update(filter.copy(comment = it)) } }
+        item { FilterText("Distance · km", filter.distance) { update(filter.copy(distance = it)) } }
+        item { FilterText("Duration · minutes", filter.duration) { update(filter.copy(duration = it)) } }
+        item { FilterChoice("Sort column", filter.sort.name, LogbookSort.entries.map { it.name to it.name.lowercase().replaceFirstChar { char -> char.uppercase() } }) {
+            update(filter.copy(sort = LogbookSort.valueOf(it))) } }
+        item { FilterChoice("Sort direction", filter.direction.name, LogbookSortDirection.entries.map { it.name to it.name.lowercase().replaceFirstChar { char -> char.uppercase() } }) {
+            update(filter.copy(direction = LogbookSortDirection.valueOf(it))) } }
+    }
+}
+
+@Composable private fun QslLogbookFilters(filter: LogbookFilter, update: (LogbookFilter) -> Unit, modifier: Modifier = Modifier) {
+    val qslStatuses = listOf("" to "All") + qslSentChoices
+    val serviceStatuses = listOf("" to "All", "Y" to "Yes", "N" to "No")
+    val methods = listOf("" to "All") + qslMethodChoices.drop(1)
+    LazyVerticalGrid(GridCells.Adaptive(210.dp), modifier, horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 4.dp)) {
+        item { FilterChoice("QSL sent", filter.qslSent, qslStatuses) { update(filter.copy(qslSent = it)) } }
+        item { FilterChoice("QSL received", filter.qslReceived, qslStatuses) { update(filter.copy(qslReceived = it)) } }
+        item { FilterChoice("QSL send method", filter.qslSentMethod, methods) { update(filter.copy(qslSentMethod = it)) } }
+        item { FilterChoice("QSL receive method", filter.qslReceivedMethod, methods) { update(filter.copy(qslReceivedMethod = it)) } }
+        item { FilterChoice("LoTW sent", filter.lotwSent, serviceStatuses) { update(filter.copy(lotwSent = it)) } }
+        item { FilterChoice("LoTW received", filter.lotwReceived, serviceStatuses) { update(filter.copy(lotwReceived = it)) } }
+        item { FilterChoice("Clublog sent", filter.clublogSent, serviceStatuses) { update(filter.copy(clublogSent = it)) } }
+        item { FilterChoice("Clublog received", filter.clublogReceived, serviceStatuses) { update(filter.copy(clublogReceived = it)) } }
+        item { FilterChoice("eQSL sent", filter.eqslSent, serviceStatuses) { update(filter.copy(eqslSent = it)) } }
+        item { FilterChoice("eQSL received", filter.eqslReceived, serviceStatuses) { update(filter.copy(eqslReceived = it)) } }
+        item { FilterChoice("DCL sent", filter.dclSent, serviceStatuses) { update(filter.copy(dclSent = it)) } }
+        item { FilterChoice("DCL received", filter.dclReceived, serviceStatuses) { update(filter.copy(dclReceived = it)) } }
+        item { FilterChoice("QRZ sent", filter.qrzSent, serviceStatuses) { update(filter.copy(qrzSent = it)) } }
+        item { FilterChoice("QRZ received", filter.qrzReceived, serviceStatuses) { update(filter.copy(qrzReceived = it)) } }
+        item { FilterText("QSL via", filter.qslVia) { update(filter.copy(qslVia = it)) } }
+        item { FilterChoice("QSL images", filter.qslImages, listOf("" to "All", "Y" to "Has images", "N" to "No images")) {
+            update(filter.copy(qslImages = it)) } }
+    }
+}
+
+@Composable private fun FilterText(label: String, value: String, change: (String) -> Unit) =
+    LogField(label, value, change, Modifier.fillMaxWidth())
+
+@Composable private fun FilterChoice(label: String, value: String, choices: List<Pair<String, String>>, change: (String) -> Unit) =
+    ChoiceField(label, choices.firstOrNull { it.first == value }?.second ?: value, choices, value, change, Modifier.fillMaxWidth())
 
 @Composable private fun SettingsScreen(state: RadioState, detail: String, database: QsoDatabase, features: FeatureController, wavelog: WavelogController,
     callbook: CallbookController, cty: CtyController,

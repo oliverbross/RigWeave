@@ -209,7 +209,7 @@ class WavelogController(private val context: Context, private val database: QsoD
                 contactRows(root).forEach { row ->
                     fun field(name: String): String {
                         val key = row.keys().asSequence().firstOrNull { it.equals(name, true) } ?: return ""
-                        return row.optString(key)
+                        return row.optString(key).takeUnless { it.equals("null", true) } ?: ""
                     }
                     val remoteId = field("COL_PRIMARY_KEY").ifBlank {
                         listOf(field("CALL"), field("QSO_DATE"), field("TIME_ON"), field("BAND"), field("MODE")).joinToString("-")
@@ -335,10 +335,13 @@ class WavelogController(private val context: Context, private val database: QsoD
     companion object {
         private const val keyAlias = "app.rigweave.mobile.wavelog"
         private val contactFields = listOf("CALL", "NAME", "BAND", "MODE", "SUBMODE",
-            "DXCC", "COUNTRY", "CONT", "CQZ", "ITUZ", "STATE", "EMAIL", "QSO_DATE", "TIME_ON", "FREQ", "FREQ_RX",
+            "DXCC", "COUNTRY", "CONT", "CQZ", "ITUZ", "STATE", "CNTY", "DARC_DOK", "EMAIL",
+            "QSO_DATE", "TIME_ON", "QSO_DATE_OFF", "TIME_OFF", "FREQ", "FREQ_RX", "DISTANCE", "CONTEST_ID",
             "BAND_RX", "RST_SENT", "RST_RCVD", "TX_PWR", "GRIDSQUARE", "QTH", "IOTA", "SOTA_REF", "WWFF_REF", "POTA_REF",
             "STATION_CALLSIGN", "OPERATOR", "MY_GRIDSQUARE", "MY_COUNTRY", "MY_DXCC", "MY_CQ_ZONE", "MY_ITU_ZONE", "MY_STATE",
             "MY_IOTA", "MY_SOTA_REF", "MY_WWFF_REF", "MY_POTA_REF", "RIG", "PROP_MODE", "ANT_PATH", "COMMENT", "NOTES",
-            "QSL_SENT", "QSL_SENT_VIA", "QSL_VIA", "QSLMSG")
+            "QSL_SENT", "QSL_RCVD", "QSL_SENT_VIA", "QSL_RCVD_VIA", "QSL_VIA", "QSLMSG",
+            "LOTW_QSL_SENT", "LOTW_QSL_RCVD", "EQSL_QSL_SENT", "EQSL_QSL_RCVD",
+            "CLUBLOG_QSO_UPLOAD_STATUS", "QRZCOM_QSO_UPLOAD_STATUS")
     }
 }

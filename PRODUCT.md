@@ -33,6 +33,8 @@ RigWeave is the native mobile successor to the M5Stack Tab5 KX3 Touch Remote: on
 - Radio state must be observed truth with explicit live, stale, disconnected, pending, and failed states.
 - TX, TUNE, ATU TUNE, and CW macro transmission are disabled by default, explicitly armed, never started automatically, and never blindly retried.
 - Local QSO durability outranks network synchronization; service failure degrades only that service.
+- Logbook follows the configured source: the complete tablet log in Local mode, or the selected station's two-way cached Wavelog log including offline queued QSOs. New QSOs are entered only from Radio.
+- Logbook filtering covers date presets, station and award fields, propagation, comments, numeric distance/duration expressions, QSL and online-service states, sorting, quick filters, and bounded result counts.
 - No demo radio state, fixture spots, fabricated worked state, credentials, or automatic test QSO.
 
 ## Brand Commitments

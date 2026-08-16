@@ -36,13 +36,20 @@ class QsoDatabaseInstrumentedTest {
             myCqZone = "29", myItuZone = "55", radioModel = "Elecraft KX3", dxcc = "150",
             continent = "OC", region = "Oceania", cqZone = "29", ituZone = "55", state = "NT",
             email = "test@example.invalid", propagationMode = "F2", antennaPath = "S", qslSent = "Q",
-            qslMethod = "E", qslVia = "TEST", qslMessage = "73", syncState = "pending")
+            qslMethod = "E", qslVia = "TEST", qslMessage = "73", submode = "USB", county = "DARWIN",
+            dok = "A01", contestId = "FIELD-DAY", distanceKm = 550.5, durationSeconds = 420,
+            qslReceived = "Y", qslReceivedMethod = "B", lotwSent = "Y", lotwReceived = "Y",
+            clublogSent = "Y", clublogReceived = "N", eqslSent = "Y", eqslReceived = "N",
+            dclSent = "N", dclReceived = "Y", qrzSent = "Y", qrzReceived = "N", qslImages = "front.jpg",
+            syncState = "pending")
 
         assertTrue(database.save(qso))
         assertFalse(database.save(qso.copy(id = "duplicate")))
         val adif = database.exportADIF()
         listOf("<CALL:7>VK0TEST", "<BAND:3>20m", "<TX_PWR:2>10", "<DXCC:3>150", "<CONT:2>OC",
-            "<PROP_MODE:2>F2", "<ANT_PATH:1>S", "<QSL_SENT:1>Q", "<QSLMSG:2>73").forEach { assertTrue(it, adif.contains(it)) }
+            "<PROP_MODE:2>F2", "<ANT_PATH:1>S", "<QSL_SENT:1>Q", "<QSLMSG:2>73", "<CNTY:6>DARWIN",
+            "<CONTEST_ID:9>FIELD-DAY", "<QSL_RCVD:1>Y", "<LOTW_QSL_SENT:1>Y",
+            "<QRZCOM_QSO_UPLOAD_STATUS:1>Y").forEach { assertTrue(it, adif.contains(it)) }
         val imported = database.importADIF(adif)
         assertTrue(imported.first == 0 && imported.second == 1)
     }

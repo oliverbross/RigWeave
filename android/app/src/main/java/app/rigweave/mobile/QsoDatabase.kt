@@ -24,6 +24,14 @@ data class Qso(
     val cqZone: String = "", val ituZone: String = "", val state: String = "", val email: String = "",
     val propagationMode: String = "", val antennaPath: String = "", val qslSent: String = "N",
     val qslMethod: String = "", val qslVia: String = "", val qslMessage: String = "",
+    val submode: String = "", val county: String = "", val dok: String = "", val contestId: String = "",
+    val distanceKm: Double = 0.0, val durationSeconds: Long = 0,
+    val qslReceived: String = "N", val qslReceivedMethod: String = "",
+    val lotwSent: String = "N", val lotwReceived: String = "N",
+    val clublogSent: String = "N", val clublogReceived: String = "N",
+    val eqslSent: String = "N", val eqslReceived: String = "N",
+    val dclSent: String = "N", val dclReceived: String = "N",
+    val qrzSent: String = "N", val qrzReceived: String = "N", val qslImages: String = "",
     val syncState: String = "local", val remoteId: String = "",
 )
 
@@ -82,7 +90,19 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             propagationMode = remote.propagationMode.ifBlank { existing.propagationMode },
             antennaPath = remote.antennaPath.ifBlank { existing.antennaPath },
             qslMethod = remote.qslMethod.ifBlank { existing.qslMethod }, qslVia = remote.qslVia.ifBlank { existing.qslVia },
-            qslMessage = remote.qslMessage.ifBlank { existing.qslMessage }, syncState = "synced",
+            qslMessage = remote.qslMessage.ifBlank { existing.qslMessage }, submode = remote.submode.ifBlank { existing.submode },
+            county = remote.county.ifBlank { existing.county }, dok = remote.dok.ifBlank { existing.dok },
+            contestId = remote.contestId.ifBlank { existing.contestId },
+            distanceKm = remote.distanceKm.takeIf { it > 0 } ?: existing.distanceKm,
+            durationSeconds = remote.durationSeconds.takeIf { it > 0 } ?: existing.durationSeconds,
+            qslReceived = remote.qslReceived.ifBlank { existing.qslReceived },
+            qslReceivedMethod = remote.qslReceivedMethod.ifBlank { existing.qslReceivedMethod },
+            lotwSent = remote.lotwSent.ifBlank { existing.lotwSent }, lotwReceived = remote.lotwReceived.ifBlank { existing.lotwReceived },
+            clublogSent = remote.clublogSent.ifBlank { existing.clublogSent }, clublogReceived = remote.clublogReceived.ifBlank { existing.clublogReceived },
+            eqslSent = remote.eqslSent.ifBlank { existing.eqslSent }, eqslReceived = remote.eqslReceived.ifBlank { existing.eqslReceived },
+            dclSent = remote.dclSent.ifBlank { existing.dclSent }, dclReceived = remote.dclReceived.ifBlank { existing.dclReceived },
+            qrzSent = remote.qrzSent.ifBlank { existing.qrzSent }, qrzReceived = remote.qrzReceived.ifBlank { existing.qrzReceived },
+            qslImages = remote.qslImages.ifBlank { existing.qslImages }, syncState = "synced",
             remoteId = remote.remoteId.ifBlank { existing.remoteId })
         update(merged); return false
     }
@@ -110,7 +130,17 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             "APP_RIGWEAVE_REGION" to qso.region, "CQZ" to qso.cqZone, "ITUZ" to qso.ituZone,
             "STATE" to qso.state, "EMAIL" to qso.email, "PROP_MODE" to qso.propagationMode,
             "ANT_PATH" to qso.antennaPath, "QSL_SENT" to qso.qslSent, "QSL_SENT_VIA" to qso.qslMethod,
-            "QSL_VIA" to qso.qslVia, "QSLMSG" to qso.qslMessage)
+            "QSL_VIA" to qso.qslVia, "QSLMSG" to qso.qslMessage, "SUBMODE" to qso.submode,
+            "CNTY" to qso.county, "DARC_DOK" to qso.dok, "CONTEST_ID" to qso.contestId,
+            "DISTANCE" to qso.distanceKm.takeIf { it > 0 }?.toString().orEmpty(),
+            "APP_RIGWEAVE_DURATION_SECONDS" to qso.durationSeconds.takeIf { it > 0 }?.toString().orEmpty(),
+            "QSL_RCVD" to qso.qslReceived, "QSL_RCVD_VIA" to qso.qslReceivedMethod,
+            "LOTW_QSL_SENT" to qso.lotwSent, "LOTW_QSL_RCVD" to qso.lotwReceived,
+            "CLUBLOG_QSO_UPLOAD_STATUS" to qso.clublogSent, "CLUBLOG_QSO_DOWNLOAD_STATUS" to qso.clublogReceived,
+            "EQSL_QSL_SENT" to qso.eqslSent, "EQSL_QSL_RCVD" to qso.eqslReceived,
+            "DCL_QSL_SENT" to qso.dclSent, "DCL_QSL_RCVD" to qso.dclReceived,
+            "QRZCOM_QSO_UPLOAD_STATUS" to qso.qrzSent, "QRZCOM_QSO_DOWNLOAD_STATUS" to qso.qrzReceived,
+            "APP_RIGWEAVE_QSL_IMAGES" to qso.qslImages)
         fields.forEach { (name, value) -> if (value.isNotBlank())
             adif = adif.replace("<EOR>", "<$name:${value.toByteArray(Charsets.UTF_8).size}>$value<EOR>") }
         return adif
@@ -138,6 +168,11 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             DateTimeFormatter.ofPattern("yyyyMMddHHmmss")).toEpochSecond(ZoneOffset.UTC) }.getOrNull()
         if (call.isBlank() || mode.isBlank() || frequency == null || epoch == null) return null
         val frequencyHz = (frequency * 1_000_000).toLong()
+        val offDate = field("QSO_DATE_OFF").ifBlank { date }; val offTime = field("TIME_OFF")
+        val offEpoch = offTime.takeIf { it.isNotBlank() }?.let { value -> runCatching {
+            LocalDateTime.parse(offDate + value.padEnd(6, '0').take(6), DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
+                .toEpochSecond(ZoneOffset.UTC)
+        }.getOrNull() }
         return Qso(
             id = field("APP_KX3TOUCH_UUID").ifBlank { if (remoteId.isBlank()) UUID.randomUUID().toString() else "wavelog-$stationProfileId-$remoteId" },
             callsign = call, frequencyHz = frequencyHz, mode = mode, rstSent = field("RST_SENT"),
@@ -155,8 +190,18 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             dxcc = field("DXCC"), continent = field("CONT"), region = field("APP_RIGWEAVE_REGION"),
             cqZone = field("CQZ"), ituZone = field("ITUZ"), state = field("STATE"), email = field("EMAIL"),
             propagationMode = field("PROP_MODE"), antennaPath = field("ANT_PATH"),
-            qslSent = field("QSL_SENT").ifBlank { "N" }, qslMethod = field("QSL_SENT_VIA"),
-            qslVia = field("QSL_VIA"), qslMessage = field("QSLMSG"), syncState = if (remoteId.isBlank()) "local" else "synced",
+            qslSent = field("QSL_SENT"), qslMethod = field("QSL_SENT_VIA"), qslVia = field("QSL_VIA"),
+            qslMessage = field("QSLMSG"), submode = field("SUBMODE"), county = field("CNTY"),
+            dok = field("DARC_DOK"), contestId = field("CONTEST_ID"), distanceKm = field("DISTANCE").toDoubleOrNull() ?: 0.0,
+            durationSeconds = field("APP_RIGWEAVE_DURATION_SECONDS").toLongOrNull()
+                ?: offEpoch?.minus(epoch)?.coerceAtLeast(0) ?: 0,
+            qslReceived = field("QSL_RCVD"), qslReceivedMethod = field("QSL_RCVD_VIA"),
+            lotwSent = field("LOTW_QSL_SENT"), lotwReceived = field("LOTW_QSL_RCVD"),
+            clublogSent = field("CLUBLOG_QSO_UPLOAD_STATUS"), clublogReceived = field("CLUBLOG_QSO_DOWNLOAD_STATUS"),
+            eqslSent = field("EQSL_QSL_SENT"), eqslReceived = field("EQSL_QSL_RCVD"),
+            dclSent = field("DCL_QSL_SENT"), dclReceived = field("DCL_QSL_RCVD"),
+            qrzSent = field("QRZCOM_QSO_UPLOAD_STATUS"), qrzReceived = field("QRZCOM_QSO_DOWNLOAD_STATUS"),
+            qslImages = field("APP_RIGWEAVE_QSL_IMAGES"), syncState = if (remoteId.isBlank()) "local" else "synced",
             remoteId = remoteId)
     }
 
@@ -183,16 +228,33 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     }
     private fun fromRow(id: String, call: String, frequency: Long, mode: String, sent: String, received: String,
         created: Long, name: String, qth: String, notes: String, country: String, raw: String): Qso {
-        val row = runCatching { JSONObject(raw) }.getOrElse { JSONObject() }; fun value(key: String) = row.optString(key)
-        return Qso(id, call, frequency, mode, sent, received, created, name, qth, notes, country,
-            value("band"), value("grid"), value("iota"), value("sotaRef"), value("wwffRef"), value("potaRef"), value("comment"),
-            row.optLong("frequencyRxHz"), value("bandRx"), row.optInt("txPowerW"), value("operatorCallsign"), value("stationCallsign"),
-            value("stationProfileId"), value("stationLocation"), value("myGrid"), value("myCountry"), value("myDxcc"),
-            value("myCqZone"), value("myItuZone"), value("myState"), value("myIota"), value("mySotaRef"), value("myWwffRef"),
-            value("myPotaRef"), value("radioModel"), value("dxcc"), value("continent"), value("region"), value("cqZone"),
-            value("ituZone"), value("state"), value("email"), value("propagationMode"), value("antennaPath"),
-            value("qslSent").ifBlank { "N" }, value("qslMethod"), value("qslVia"), value("qslMessage"),
-            value("syncState").ifBlank { "local" }, value("remoteId"))
+        val row = runCatching { JSONObject(raw) }.getOrElse { JSONObject() }
+        fun value(key: String) = row.optString(key).takeUnless { it.equals("null", true) } ?: ""
+        return Qso(
+            id = id, callsign = call, frequencyHz = frequency, mode = mode, rstSent = sent, rstReceived = received,
+            createdAt = created, name = name, qth = qth, notes = notes, country = country, band = value("band"),
+            grid = value("grid"), iota = value("iota"), sotaRef = value("sotaRef"), wwffRef = value("wwffRef"),
+            potaRef = value("potaRef"), comment = value("comment"), frequencyRxHz = row.optLong("frequencyRxHz"),
+            bandRx = value("bandRx"), txPowerW = row.optInt("txPowerW"), operatorCallsign = value("operatorCallsign"),
+            stationCallsign = value("stationCallsign"), stationProfileId = value("stationProfileId"),
+            stationLocation = value("stationLocation"), myGrid = value("myGrid"), myCountry = value("myCountry"),
+            myDxcc = value("myDxcc"), myCqZone = value("myCqZone"), myItuZone = value("myItuZone"),
+            myState = value("myState"), myIota = value("myIota"), mySotaRef = value("mySotaRef"),
+            myWwffRef = value("myWwffRef"), myPotaRef = value("myPotaRef"), radioModel = value("radioModel"),
+            dxcc = value("dxcc"), continent = value("continent"), region = value("region"), cqZone = value("cqZone"),
+            ituZone = value("ituZone"), state = value("state"), email = value("email"),
+            propagationMode = value("propagationMode"), antennaPath = value("antennaPath"),
+            qslSent = value("qslSent").ifBlank { "N" }, qslMethod = value("qslMethod"), qslVia = value("qslVia"),
+            qslMessage = value("qslMessage"), submode = value("submode"), county = value("county"), dok = value("dok"),
+            contestId = value("contestId"), distanceKm = row.optDouble("distanceKm", 0.0),
+            durationSeconds = row.optLong("durationSeconds"), qslReceived = value("qslReceived").ifBlank { "N" },
+            qslReceivedMethod = value("qslReceivedMethod"), lotwSent = value("lotwSent").ifBlank { "N" },
+            lotwReceived = value("lotwReceived").ifBlank { "N" }, clublogSent = value("clublogSent").ifBlank { "N" },
+            clublogReceived = value("clublogReceived").ifBlank { "N" }, eqslSent = value("eqslSent").ifBlank { "N" },
+            eqslReceived = value("eqslReceived").ifBlank { "N" }, dclSent = value("dclSent").ifBlank { "N" },
+            dclReceived = value("dclReceived").ifBlank { "N" }, qrzSent = value("qrzSent").ifBlank { "N" },
+            qrzReceived = value("qrzReceived").ifBlank { "N" }, qslImages = value("qslImages"),
+            syncState = value("syncState").ifBlank { "local" }, remoteId = value("remoteId"))
     }
     private fun details(qso: Qso) = JSONObject().apply {
         put("band", qso.band); put("grid", qso.grid); put("iota", qso.iota); put("sotaRef", qso.sotaRef)
@@ -207,6 +269,14 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         put("cqZone", qso.cqZone); put("ituZone", qso.ituZone); put("state", qso.state); put("email", qso.email)
         put("propagationMode", qso.propagationMode); put("antennaPath", qso.antennaPath)
         put("qslSent", qso.qslSent); put("qslMethod", qso.qslMethod); put("qslVia", qso.qslVia); put("qslMessage", qso.qslMessage)
+        put("submode", qso.submode); put("county", qso.county); put("dok", qso.dok); put("contestId", qso.contestId)
+        put("distanceKm", qso.distanceKm); put("durationSeconds", qso.durationSeconds)
+        put("qslReceived", qso.qslReceived); put("qslReceivedMethod", qso.qslReceivedMethod)
+        put("lotwSent", qso.lotwSent); put("lotwReceived", qso.lotwReceived)
+        put("clublogSent", qso.clublogSent); put("clublogReceived", qso.clublogReceived)
+        put("eqslSent", qso.eqslSent); put("eqslReceived", qso.eqslReceived)
+        put("dclSent", qso.dclSent); put("dclReceived", qso.dclReceived)
+        put("qrzSent", qso.qrzSent); put("qrzReceived", qso.qrzReceived); put("qslImages", qso.qslImages)
         put("syncState", qso.syncState); put("remoteId", qso.remoteId)
     }
 }
