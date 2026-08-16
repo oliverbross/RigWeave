@@ -49,6 +49,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -1259,67 +1261,154 @@ private fun qslMethodLabel(code: String) = qslMethodChoices.firstOrNull { it.fir
 
 @Composable private fun PresetsScreen(state: RadioState, app: AppController, send: (String) -> Unit) {
     var editing by remember { mutableStateOf<RadioPreset?>(null) }; var adding by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    var reordering by remember { mutableStateOf(false) }
+    val ordered = app.presets.sortedBy { it.slot }
+    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Header("Radio presets", state); Button({ adding = true }) { Text("ADD PRESET") }
-        }
-        Text("QUICK BAND", color = Muted, fontWeight = FontWeight.Bold)
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            listOf("160m" to 1_850_000L, "80m" to 3_550_000L, "40m" to 7_100_000L, "30m" to 10_120_000L,
-                "20m" to 14_200_000L, "17m" to 18_100_000L, "15m" to 21_250_000L, "12m" to 24_930_000L, "10m" to 28_400_000L, "6m" to 50_150_000L)
-                .forEach { (label, hz) -> OutlinedButton({ send("FA%011d;".format(hz)) }, enabled = state.connected) { Text(label) } }
-        }
-        Text("QUICK MODE", color = Muted, fontWeight = FontWeight.Bold)
-        Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            listOf("CW", "USB", "LSB", "AM", "DATA").forEach { mode -> FilterChip(state.mode == mode, { send("MD${modeCode(mode)};") }, { Text(mode) }, enabled = state.connected) }
+            Column(Modifier.weight(1f)) { Header("Radio presets", state)
+                Text("${ordered.size} / 12 memories · tap a preset to recall frequency, mode and filter", color = Muted) }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (ordered.size > 1) OutlinedButton({ reordering = !reordering }, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Icon(if (reordering) Icons.Outlined.Check else Icons.Outlined.SwapHoriz, null)
+                    Spacer(Modifier.width(7.dp)); Text(if (reordering) "DONE" else "REORDER")
+                }
+                Button({ adding = true }, enabled = app.nextPresetSlot() != null, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(7.dp)); Text("ADD PRESET")
+                }
+            }
         }
         if (app.presets.isEmpty()) Card(colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
-            Text("NO USER PRESETS YET\nTap ADD PRESET to save the current frequency, mode and filter.", color = Muted, modifier = Modifier.padding(24.dp))
-        } else LazyVerticalGrid(GridCells.Fixed(3), Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(app.presets) { preset -> Card(colors = CardDefaults.cardColors(containerColor = Color(preset.color))) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    Text(formatRadioFrequency(preset.frequencyHz), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Black, fontSize = 22.sp)
-                    Text("${preset.mode} · ${preset.bandwidthHz} Hz", color = Ink.copy(alpha = .8f))
-                    Row { Button({ send("FA%011d;MD%s;BW%04d;".format(preset.frequencyHz, modeCode(preset.mode), preset.bandwidthHz)) }, enabled = state.connected) { Text("APPLY") }
-                        TextButton({ editing = preset }) { Text("EDIT", color = Ink) } }
+            Column(Modifier.fillMaxWidth().padding(42.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.Outlined.Radio, null, tint = Amber, modifier = Modifier.size(38.dp))
+                Text("NO RADIO PRESETS YET", color = Ink, fontWeight = FontWeight.Black)
+                Text("Add a favourite frequency, mode and filter width for one-tap recall.", color = Muted)
+            }
+        } else LazyVerticalGrid(GridCells.Fixed(4), Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 8.dp)) {
+            items(ordered, key = { it.slot }) { preset ->
+                val index = ordered.indexOfFirst { it.slot == preset.slot }
+                Card(modifier = Modifier.clickable(enabled = state.connected && !reordering) {
+                    send("FA%011d;MD%s;BW%04d;".format(preset.frequencyHz, modeCode(preset.mode), preset.bandwidthHz / 10))
+                }, colors = CardDefaults.cardColors(containerColor = Color(preset.color)), border = androidx.compose.foundation.BorderStroke(
+                        if (reordering) 2.dp else 1.dp, if (reordering) Amber else Ink.copy(alpha = .2f))) {
+                    Column(Modifier.fillMaxWidth().padding(15.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Surface(color = Color.Black.copy(alpha = .2f), shape = MaterialTheme.shapes.small) {
+                                Text(radioPresetBandName(preset.frequencyHz).orEmpty(), color = Ink,
+                                    fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp))
+                            }
+                            Spacer(Modifier.weight(1f)); Text("MEM ${index + 1}", color = Ink.copy(alpha = .72f), style = MaterialTheme.typography.labelSmall)
+                            IconButton({ editing = preset }, modifier = Modifier.size(48.dp)) {
+                                Icon(Icons.Outlined.Edit, "Edit preset", tint = Ink)
+                            }
+                        }
+                        Text(formatRadioFrequency(preset.frequencyHz), color = Ink, fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Black, fontSize = 24.sp, maxLines = 1)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(preset.mode, color = Hold, fontWeight = FontWeight.Black)
+                            Box(Modifier.width(1.dp).height(18.dp).background(Ink.copy(alpha = .28f)))
+                            Text(radioPresetFilterLabel(preset.bandwidthHz), color = Ink, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.weight(1f))
+                            if (!reordering) Text(if (state.connected) "TAP TO RECALL" else "RADIO OFFLINE", color = Ink.copy(alpha = .68f),
+                                style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        }
+                        if (reordering) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            IconButton({ app.movePreset(preset.slot, -1) }, enabled = index > 0) { Icon(Icons.Outlined.ArrowBack, "Move left", tint = Ink) }
+                            IconButton({ app.movePreset(preset.slot, 1) }, enabled = index < ordered.lastIndex) { Icon(Icons.Outlined.ArrowForward, "Move right", tint = Ink) }
+                        }
+                    }
                 }
-            } }
+            }
         }
     }
     if (adding || editing != null) PresetDialog(state, app, editing, onClose = { adding = false; editing = null })
 }
 
 @Composable private fun PresetDialog(state: RadioState, app: AppController, preset: RadioPreset?, onClose: () -> Unit) {
-    var frequency by remember(preset) { mutableStateOf(preset?.let { formatRadioFrequency(it.frequencyHz) } ?: if (state.frequencyHz > 0) formatRadioFrequency(state.frequencyHz) else "") }
-    var mode by remember(preset) { mutableStateOf(preset?.mode ?: state.mode.ifBlank { "CW" }) }
-    var bandwidth by remember(preset) { mutableIntStateOf(preset?.bandwidthHz ?: state.bandwidthHz.coerceAtLeast(500)) }
+    val initialMode = preset?.mode ?: normalizeRadioPresetMode(state.mode)
+    var frequency by remember(preset) { mutableStateOf(preset?.let { formatRadioFrequency(it.frequencyHz) }
+        ?: state.frequencyHz.takeIf { radioPresetBandName(it) != null }?.let(::formatRadioFrequency).orEmpty()) }
+    var mode by remember(preset) { mutableStateOf(initialMode) }
+    var bandwidth by remember(preset) { mutableIntStateOf(preset?.bandwidthHz?.takeIf { it in radioPresetFilterWidths(initialMode) }
+        ?: radioPresetFilterWidths(initialMode)[3]) }
     var colorIndex by remember(preset) { mutableIntStateOf(AppController.presetColors.indexOf(preset?.color).coerceAtLeast(0)) }
-    val filters = when (mode) {
-        "CW" -> listOf(100, 200, 300, 400, 500, 1000); "DATA" -> listOf(200, 400, 500, 1000, 2000, 3000)
-        "AM" -> listOf(3000, 4000, 5000, 6000, 7000, 8000); else -> listOf(1800, 2100, 2400, 2700, 3000, 3500)
+    var error by remember(preset) { mutableStateOf("") }; var confirmDelete by remember { mutableStateOf(false) }
+    val parsed = parseRadioPresetFrequency(frequency); val band = parsed?.let(::radioPresetBandName)
+    val filters = radioPresetFilterWidths(mode)
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxWidth(.64f).widthIn(max = 820.dp), color = Color(0xFF20282E), shape = RoundedCornerShape(14.dp),
+            border = androidx.compose.foundation.BorderStroke(2.dp, Amber)) {
+            Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column { Text(if (preset == null) "ADD RADIO PRESET" else "EDIT RADIO PRESET", color = Amber,
+                        fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleLarge)
+                        Text("One tap recalls frequency, mode and KX3 filter width.", color = Muted) }
+                    Spacer(Modifier.weight(1f)); IconButton(onClose) { Icon(Icons.Outlined.Close, "Close") }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(frequency, { value -> frequency = value.filter { it.isDigit() || it == '.' }.take(12); error = "" },
+                        label = { Text("Frequency") }, placeholder = { Text("14.074.000") }, singleLine = true,
+                        supportingText = { Text(if (band != null) "$band amateur band" else "Examples: 14.074.000 · 14.074.0 · 7.074.00") },
+                        isError = frequency.isNotBlank() && (parsed == null || band == null), modifier = Modifier.weight(1.45f))
+                    ChoiceField("Mode", mode, radioPresetModes.map { it to it }, mode, { value ->
+                        mode = value; bandwidth = radioPresetFilterWidths(value)[3]; error = ""
+                    }, Modifier.weight(.78f))
+                    ChoiceField("Filter width", radioPresetFilterLabel(bandwidth), filters.map { it.toString() to radioPresetFilterLabel(it) },
+                        bandwidth.toString(), { bandwidth = it.toInt(); error = "" }, Modifier.weight(.95f))
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Text("BUTTON COLOUR", color = Muted, fontWeight = FontWeight.Bold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        AppController.presetColors.forEachIndexed { index, color ->
+                            Surface(onClick = { colorIndex = index }, color = Color(color), shape = RoundedCornerShape(10.dp),
+                                border = androidx.compose.foundation.BorderStroke(if (colorIndex == index) 4.dp else 1.dp,
+                                    if (colorIndex == index) Amber else Ink.copy(alpha = .35f)), modifier = Modifier.size(64.dp, 50.dp)) {
+                                if (colorIndex == index) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Outlined.Check, "Selected colour", tint = Ink)
+                                }
+                            }
+                        }
+                    }
+                }
+                Surface(color = Color(AppController.presetColors[colorIndex]), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(horizontal = 18.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(parsed?.let(::formatRadioFrequency) ?: "--.---.---", color = Ink, fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Black, fontSize = 22.sp)
+                        Spacer(Modifier.weight(1f)); Text("$mode  ·  ${radioPresetFilterLabel(bandwidth)}", color = Ink, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Text(when {
+                    error.isNotBlank() -> error
+                    frequency.isBlank() -> "Enter a frequency inside an amateur allocation from 160 m through 6 m."
+                    parsed == null -> "Use MHz notation such as 14.074.000, 14.074.0, 14.074 or 14074000."
+                    band == null -> "That frequency is outside the supported 160–6 m amateur bands."
+                    else -> "Ready to save · $band · filter choices follow $mode"
+                }, color = if (frequency.isNotBlank() && (parsed == null || band == null) || error.isNotBlank()) Danger else Healthy,
+                    fontWeight = FontWeight.SemiBold)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    if (preset != null) TextButton({ confirmDelete = true }) { Icon(Icons.Outlined.Delete, null, tint = Danger)
+                        Spacer(Modifier.width(5.dp)); Text("DELETE", color = Danger) }
+                    Spacer(Modifier.weight(1f)); TextButton(onClose) { Text("CANCEL") }
+                    Spacer(Modifier.width(8.dp)); Button({
+                        val slot = preset?.slot ?: app.nextPresetSlot()
+                        when {
+                            parsed == null -> error = "Enter a valid frequency."
+                            band == null -> error = "Choose a frequency inside an amateur band from 160 m through 6 m."
+                            slot == null -> error = "All 12 preset memories are full."
+                            else -> { app.savePreset(slot, parsed, mode, bandwidth, colorIndex); onClose() }
+                        }
+                    }) { Text(if (preset == null) "ADD PRESET" else "SAVE CHANGES") }
+                }
+            }
+        }
     }
-    AlertDialog(onDismissRequest = onClose, title = { Text(if (preset == null) "ADD PRESET" else "EDIT PRESET") },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedTextField(frequency, { frequency = it.filter { c -> c.isDigit() || c == '.' } }, label = { Text("Frequency · 14.200.000 or 14200000") }, singleLine = true)
-            Text("MODE", color = Muted); Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                listOf("CW", "USB", "LSB", "AM", "DATA").forEach { value -> FilterChip(mode == value, { mode = value; bandwidth = when (value) { "CW" -> 500; "AM" -> 6000; "DATA" -> 1000; else -> 2400 } }, { Text(value) }) }
-            }
-            Text("FILTER", color = Muted); Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                filters.forEach { value -> FilterChip(bandwidth == value, { bandwidth = value }, { Text("$value") }) }
-            }
-            Text("COLOUR", color = Muted); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AppController.presetColors.forEachIndexed { index, color -> Surface(color = Color(color), shape = CircleShape,
-                    modifier = Modifier.size(34.dp).border(if (colorIndex == index) 3.dp else 1.dp, if (colorIndex == index) Ink else Muted, CircleShape)
-                        .combinedClickable(onClick = { colorIndex = index }, onLongClick = {})) {} }
-            }
-            if (preset != null) Row { TextButton({ app.deletePreset(preset.slot); onClose() }) { Text("DELETE", color = Danger) }
-                TextButton({ app.movePreset(preset.slot, -1) }) { Text("MOVE LEFT") }; TextButton({ app.movePreset(preset.slot, 1) }) { Text("MOVE RIGHT") } }
-        } },
-        confirmButton = { Button({
-            val digits = frequency.filter(Char::isDigit); val hz = digits.toLongOrNull()?.let { if (it < 1_000_000) (frequency.toDoubleOrNull()?.times(1_000_000))?.toLong() else it }
-            if (hz != null) app.savePreset(preset?.slot ?: ((app.presets.maxOfOrNull { it.slot } ?: -1) + 1).coerceAtMost(11), hz, mode, bandwidth, colorIndex)
-            onClose()
-        }) { Text(if (preset == null) "ADD" else "SAVE") } }, dismissButton = { TextButton(onClose) { Text("CANCEL") } })
+    if (confirmDelete && preset != null) AlertDialog(onDismissRequest = { confirmDelete = false },
+        title = { Text("DELETE RADIO PRESET?", color = Danger) },
+        text = { Text("${formatRadioFrequency(preset.frequencyHz)} · ${preset.mode} · ${radioPresetFilterLabel(preset.bandwidthHz)}\nThis cannot be undone.") },
+        confirmButton = { Button({ app.deletePreset(preset.slot); confirmDelete = false; onClose() },
+            colors = ButtonDefaults.buttonColors(containerColor = Danger)) { Text("DELETE") } },
+        dismissButton = { TextButton({ confirmDelete = false }) { Text("KEEP PRESET") } })
 }
 
 private fun modeCode(mode: String) = when (mode.uppercase()) { "LSB" -> "1"; "USB" -> "2"; "CW" -> "3"; "FM" -> "4"; "AM" -> "5"; else -> "6" }

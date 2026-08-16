@@ -83,10 +83,13 @@ class AppController(private val context: Context) {
         presets.sortBy { it.slot }; persistPresets()
     }
 
-    fun deletePreset(slot: Int) { presets.removeAll { it.slot == slot }; persistPresets() }
+    fun deletePreset(slot: Int) {
+        val remaining = presets.filterNot { it.slot == slot }.sortedBy { it.slot }.mapIndexed { index, item -> item.copy(slot = index) }
+        presets.clear(); presets.addAll(remaining); persistPresets()
+    }
 
     fun savePreset(slot: Int, frequencyHz: Long, mode: String, bandwidthHz: Int, colorIndex: Int) {
-        if (slot !in 0 until 12 || frequencyHz !in 1_000_000L..54_000_000L) return
+        if (slot !in 0 until 12 || !isValidRadioPreset(frequencyHz, mode, bandwidthHz)) return
         presets.removeAll { it.slot == slot }
         presets += RadioPreset(slot, "", frequencyHz, mode, bandwidthHz, presetColors[colorIndex.coerceIn(0, 5)])
         presets.sortBy { it.slot }; persistPresets()
@@ -96,10 +99,11 @@ class AppController(private val context: Context) {
         val ordered = presets.sortedBy { it.slot }.toMutableList()
         val from = ordered.indexOfFirst { it.slot == slot }; val to = from + delta
         if (from !in ordered.indices || to !in ordered.indices) return
-        val first = ordered[from]; val second = ordered[to]
-        ordered[from] = second.copy(slot = first.slot); ordered[to] = first.copy(slot = second.slot)
-        presets.clear(); presets.addAll(ordered.sortedBy { it.slot }); persistPresets()
+        val moved = ordered.removeAt(from); ordered.add(to, moved)
+        presets.clear(); presets.addAll(ordered.mapIndexed { index, item -> item.copy(slot = index) }); persistPresets()
     }
+
+    fun nextPresetSlot(): Int? = (0 until 12).firstOrNull { slot -> presets.none { it.slot == slot } }
 
     fun backupNow(): String = runCatching {
         val payload = JSONObject().put("version", 1).put("created_at", System.currentTimeMillis())
