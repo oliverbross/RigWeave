@@ -165,5 +165,31 @@ class QsoDatabaseInstrumentedTest {
         assertEquals(DxccCell(true, true), remote.dxcc.cells["USB|80m"])
     }
 
+    @Test fun stationInsightUsesLogDetailsAndBoundsPreviousContacts() {
+        repeat(25) { index ->
+            assertTrue(database.save(Qso(
+                id = "history-$index", callsign = "OM0AAO", frequencyHz = 14_000_000L + index * 1_000L,
+                mode = "CW", rstSent = "599", rstReceived = "579", createdAt = 1_000L + index * 20L,
+                name = "Viliam Petrik", qth = "Ivanovce", country = "Slovak Republic", grid = "JN98WT",
+                dxcc = "504", continent = "EU", region = "Europe", cqZone = "15", ituZone = "28",
+                band = "20m", stationProfileId = "",
+            )))
+        }
+        val seed = AndroidCallbookRecord(
+            callsign = "OM0AAO", name = "", qth = "", country = "", grid = "", dxcc = "",
+            continent = "", region = "", cqZone = "", ituZone = "", state = "", email = "",
+            latitude = "", longitude = "",
+        )
+        val insight = database.stationInsight(seed, null)
+        assertEquals(25, insight.history.total)
+        assertEquals(20, insight.history.rows.size)
+        assertEquals("history-24", insight.history.rows.first().id)
+        assertEquals("Viliam Petrik", insight.record.name)
+        assertEquals("Ivanovce", insight.record.qth)
+        assertEquals("Slovak Republic", insight.record.country)
+        assertEquals("JN98WT", insight.record.grid)
+        assertEquals("504", insight.record.dxcc)
+    }
+
     companion object { private const val databaseName = "rigweave-instrumented.sqlite" }
 }

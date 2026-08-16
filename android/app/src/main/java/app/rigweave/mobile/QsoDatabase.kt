@@ -184,10 +184,21 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         val total = readableDatabase.rawQuery("SELECT COUNT(*) FROM qso WHERE $callWhere", callArgs).use {
             if (it.moveToFirst()) it.getInt(0) else 0
         }
-        val history = queryWhere("$callWhere ORDER BY created_at DESC LIMIT 50", callArgs)
+        val history = queryWhere("$callWhere ORDER BY created_at DESC LIMIT 20", callArgs)
+        val resolvedRecord = history.firstOrNull()?.let { latest ->
+            record.copy(
+                callsign = call,
+                name = record.name.ifBlank { latest.name }, qth = record.qth.ifBlank { latest.qth },
+                country = record.country.ifBlank { latest.country }, grid = record.grid.ifBlank { latest.grid },
+                dxcc = record.dxcc.ifBlank { latest.dxcc }, continent = record.continent.ifBlank { latest.continent },
+                region = record.region.ifBlank { latest.region }, cqZone = record.cqZone.ifBlank { latest.cqZone },
+                ituZone = record.ituZone.ifBlank { latest.ituZone }, state = record.state.ifBlank { latest.state },
+                email = record.email.ifBlank { latest.email }, source = record.source.ifBlank { "LOG" },
+            )
+        } ?: record.copy(callsign = call)
 
-        val numericDxcc = record.dxcc.trim().uppercase(java.util.Locale.US)
-        val country = record.country.trim().uppercase(java.util.Locale.US)
+        val numericDxcc = resolvedRecord.dxcc.trim().uppercase(java.util.Locale.US)
+        val country = resolvedRecord.country.trim().uppercase(java.util.Locale.US)
         val entityExpression = if (numericDxcc.isNotBlank())
             "UPPER(COALESCE(json_extract(details_json,'$.dxcc'),''))=?"
         else "UPPER(country)=?"
@@ -214,7 +225,8 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
                 }
             }
         }
-        return StationInsight(record, CallsignHistory(history, total), DxccSummary(record.dxcc, record.country, cells))
+        return StationInsight(resolvedRecord, CallsignHistory(history, total),
+            DxccSummary(resolvedRecord.dxcc, resolvedRecord.country, cells))
     }
 
     private fun stationScope(stationId: String?): Pair<String, List<String>> = if (stationId == null)
