@@ -141,5 +141,29 @@ class QsoDatabaseInstrumentedTest {
         assertEquals(SpotLogStatus("NC", "ATNO"), local["cached-wavelog"])
     }
 
+    @Test fun stationInsightScopesHistoryAndConfirmsOnlyPaperQslOrLotw() {
+        val base = Qso(id = "local-worked", callsign = "OM0AAO", frequencyHz = 14_200_000, mode = "SSB",
+            submode = "USB", rstSent = "59", rstReceived = "57", createdAt = 100, country = "Slovak Republic",
+            dxcc = "504", band = "20m", eqslReceived = "Y", qrzReceived = "Y", stationProfileId = "", syncState = "local")
+        assertTrue(database.save(base))
+        assertTrue(database.save(base.copy(id = "local-confirmed", callsign = "OM1TEST", frequencyHz = 7_030_000,
+            mode = "CW", submode = "", band = "40m", createdAt = 200, lotwReceived = "Y")))
+        assertTrue(database.save(base.copy(id = "remote-same-call", frequencyHz = 3_700_000, band = "80m",
+            createdAt = 300, stationProfileId = "7", qslReceived = "Y", syncState = "synced")))
+
+        val record = AndroidCallbookRecord("OM0AAO", "Viliam Petrik", "Ivanovce", "Slovak Republic", "JN98",
+            "504", "EU", "Europe", "15", "28", "", "", "", "", source = "QRZ")
+        val local = database.stationInsight(record, null)
+        assertEquals(1, local.history.total)
+        assertEquals(listOf("local-worked"), local.history.rows.map { it.id })
+        assertEquals(DxccCell(true, false), local.dxcc.cells["USB|20m"])
+        assertEquals(DxccCell(true, true), local.dxcc.cells["CW|40m"])
+        assertEquals(null, local.dxcc.cells["USB|80m"])
+
+        val remote = database.stationInsight(record, "7")
+        assertEquals(1, remote.history.total)
+        assertEquals(DxccCell(true, true), remote.dxcc.cells["USB|80m"])
+    }
+
     companion object { private const val databaseName = "rigweave-instrumented.sqlite" }
 }

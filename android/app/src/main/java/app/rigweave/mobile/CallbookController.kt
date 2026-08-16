@@ -24,59 +24,134 @@ data class AndroidCallbookRecord(
     val callsign: String, val name: String, val qth: String, val country: String, val grid: String,
     val dxcc: String, val continent: String, val region: String, val cqZone: String, val ituZone: String,
     val state: String, val email: String, val latitude: String, val longitude: String,
+    val address: String = "", val postalCode: String = "", val born: String = "", val imageUrl: String = "",
+    val qslManager: String = "", val qslText: String = "", val lotw: String = "", val eqsl: String = "",
+    val source: String = "",
 )
 
-class CallbookController(context: Context) {
+internal fun callbookRecordFromFields(fields: Map<String, String>, requestedCall: String, source: String): AndroidCallbookRecord {
+    val continent = (fields["continent"] ?: fields["cont"] ?: "").uppercase()
+    return AndroidCallbookRecord(
+        callsign = fields["call"] ?: fields["callsign"] ?: requestedCall,
+        name = listOfNotNull(fields["fname"], fields["name"], fields["nick"]).filter(String::isNotBlank).joinToString(" ").trim(),
+        qth = fields["addr2"] ?: fields["qth"] ?: "", country = fields["country"] ?: fields["land"] ?: "",
+        grid = fields["grid"] ?: "", dxcc = fields["dxcc"] ?: fields["adif"] ?: "", continent = continent,
+        region = continentNameForCallbook(continent), cqZone = fields["cqzone"] ?: fields["cq"] ?: "",
+        ituZone = fields["ituzone"] ?: fields["itu"] ?: "", state = fields["state"] ?: "", email = fields["email"] ?: "",
+        latitude = fields["lat"] ?: "", longitude = fields["lon"] ?: "", address = fields["addr1"] ?: fields["adr_name"] ?: "",
+        postalCode = fields["zip"] ?: fields["adr_zip"] ?: "", born = fields["born"] ?: "",
+        imageUrl = fields["image"] ?: fields["picture"] ?: "", qslManager = fields["qslmgr"] ?: fields["qsl_manager"] ?: "",
+        qslText = fields["mqsl"] ?: fields["qsl"] ?: "", lotw = fields["lotw"] ?: "", eqsl = fields["eqsl"] ?: "",
+        source = if (source == "QRZ") "QRZ.COM" else source,
+    )
+}
+
+internal fun mergeCallbookRecords(primary: AndroidCallbookRecord?, fallback: AndroidCallbookRecord): AndroidCallbookRecord {
+    if (primary == null) return fallback
+    fun choose(first: String, second: String) = first.ifBlank { second }
+    return AndroidCallbookRecord(
+        choose(primary.callsign, fallback.callsign), choose(primary.name, fallback.name), choose(primary.qth, fallback.qth),
+        choose(primary.country, fallback.country), choose(primary.grid, fallback.grid), choose(primary.dxcc, fallback.dxcc),
+        choose(primary.continent, fallback.continent), choose(primary.region, fallback.region), choose(primary.cqZone, fallback.cqZone),
+        choose(primary.ituZone, fallback.ituZone), choose(primary.state, fallback.state), choose(primary.email, fallback.email),
+        choose(primary.latitude, fallback.latitude), choose(primary.longitude, fallback.longitude), choose(primary.address, fallback.address),
+        choose(primary.postalCode, fallback.postalCode), choose(primary.born, fallback.born), choose(primary.imageUrl, fallback.imageUrl),
+        choose(primary.qslManager, fallback.qslManager), choose(primary.qslText, fallback.qslText), choose(primary.lotw, fallback.lotw),
+        choose(primary.eqsl, fallback.eqsl), primary.source.ifBlank { fallback.source },
+    )
+}
+
+private fun continentNameForCallbook(code: String) = mapOf("AF" to "Africa", "AN" to "Antarctica", "AS" to "Asia",
+    "EU" to "Europe", "NA" to "North America", "OC" to "Oceania", "SA" to "South America")[code].orEmpty()
+
+class CallbookController(context: Context, private val operatorCallsign: () -> String = { "" }) {
     private val scope = CoroutineScope(Job() + Dispatchers.IO)
     private val prefs = context.getSharedPreferences("callbook", Context.MODE_PRIVATE)
-    var provider by mutableStateOf(prefs.getString("provider", "QRZ") ?: "QRZ"); private set
-    var username by mutableStateOf(prefs.getString("username", "") ?: ""); private set
-    var password by mutableStateOf(decrypt(prefs.getString("password", "") ?: "")); private set
+    private val legacyProvider = prefs.getString("provider", "QRZ") ?: "QRZ"
+    private val legacyUsername = prefs.getString("username", "") ?: ""
+    private val legacyPassword = decrypt(prefs.getString("password", "") ?: "")
+    var qrzEnabled by mutableStateOf(prefs.getBoolean("qrz_enabled", legacyProvider == "QRZ" && legacyUsername.isNotBlank())); private set
+    var qrzUsername by mutableStateOf(prefs.getString("qrz_username", if (legacyProvider == "QRZ") legacyUsername else "") ?: ""); private set
+    var qrzPassword by mutableStateOf(decrypt(prefs.getString("qrz_password", "") ?: "").ifBlank { if (legacyProvider == "QRZ") legacyPassword else "" }); private set
+    var hamQthEnabled by mutableStateOf(prefs.getBoolean("hamqth_enabled", legacyProvider == "HamQTH" && legacyUsername.isNotBlank())); private set
+    var hamQthUsername by mutableStateOf(prefs.getString("hamqth_username", if (legacyProvider == "HamQTH") legacyUsername else "") ?: ""); private set
+    var hamQthPassword by mutableStateOf(decrypt(prefs.getString("hamqth_password", "") ?: "").ifBlank { if (legacyProvider == "HamQTH") legacyPassword else "" }); private set
     var status by mutableStateOf("Callbook not tested"); private set
-    private var session = ""
+    val provider get() = listOfNotNull("QRZ".takeIf { qrzEnabled }, "HamQTH".takeIf { hamQthEnabled }).joinToString(" + ").ifBlank { "CTY.DAT" }
+    val configured get() = (qrzEnabled && qrzUsername.isNotBlank() && qrzPassword.isNotBlank()) ||
+        (hamQthEnabled && hamQthUsername.isNotBlank() && hamQthPassword.isNotBlank())
+    private var qrzSession = ""
+    private var hamQthSession = ""
 
-    fun configure(provider: String, username: String, password: String) {
-        this.provider = if (provider == "HamQTH") "HamQTH" else "QRZ"
-        this.username = username.trim(); this.password = password; session = ""
-        prefs.edit().putString("provider", this.provider).putString("username", this.username)
-            .putString("password", encrypt(password)).apply()
+    fun configureQrz(enabled: Boolean, username: String, password: String) {
+        qrzEnabled = enabled; qrzUsername = username.trim(); qrzPassword = password; qrzSession = ""
+        prefs.edit().putBoolean("qrz_enabled", enabled).putString("qrz_username", qrzUsername)
+            .putString("qrz_password", encrypt(password)).apply()
+    }
+
+    fun configureHamQth(enabled: Boolean, username: String, password: String) {
+        hamQthEnabled = enabled; hamQthUsername = username.trim(); hamQthPassword = password; hamQthSession = ""
+        prefs.edit().putBoolean("hamqth_enabled", enabled).putString("hamqth_username", hamQthUsername)
+            .putString("hamqth_password", encrypt(password)).apply()
     }
 
     fun test() = scope.launch {
-        try { session = login(); publish("$provider connection passed") }
-        catch (error: Exception) { publish("$provider test failed: ${error.message}") }
+        val results = enabledSources().map { source -> source to runCatching { login(source) } }
+        results.forEach { (source, result) -> result.onSuccess { if (source == "QRZ") qrzSession = it else hamQthSession = it } }
+        val passed = results.filter { it.second.isSuccess }.map { it.first }
+        val failed = results.filter { it.second.isFailure }.map { (source, result) ->
+            "$source: ${safeFailure(result.exceptionOrNull())}"
+        }
+        publish(buildString {
+            if (passed.isNotEmpty()) append(passed.joinToString(" + ")).append(" connection passed")
+            if (failed.isNotEmpty()) { if (isNotEmpty()) append(" · "); append(failed.joinToString(" · ")) }
+            if (isEmpty()) append("Enable QRZ or HamQTH first")
+        })
     }
 
     fun lookup(callsign: String, completion: (AndroidCallbookRecord?) -> Unit) = scope.launch {
-        try {
-            if (session.isBlank()) session = login()
-            val call = callsign.trim().uppercase(); val fields = request(call)
-            val continent = (fields["continent"] ?: fields["cont"] ?: "").uppercase()
-            val record = AndroidCallbookRecord(fields["call"] ?: fields["callsign"] ?: call,
-                listOfNotNull(fields["fname"], fields["name"], fields["nick"]).joinToString(" ").trim(),
-                fields["addr2"] ?: fields["qth"] ?: "", fields["country"] ?: fields["land"] ?: "",
-                fields["grid"] ?: "", fields["dxcc"] ?: fields["adif"] ?: "", continent,
-                continentName(continent), fields["cqzone"] ?: fields["cq"] ?: "",
-                fields["ituzone"] ?: fields["itu"] ?: "", fields["state"] ?: "", fields["email"] ?: "",
-                fields["lat"] ?: "", fields["lon"] ?: "")
-            withContext(Dispatchers.Main) { status = "Live $provider result"; completion(record) }
-        } catch (error: Exception) { withContext(Dispatchers.Main) { status = error.message ?: "Callbook lookup failed"; completion(null) } }
+        val call = callsign.trim().uppercase()
+        val sources = enabledSources()
+        if (sources.isEmpty()) return@launch withContext(Dispatchers.Main) { status = "Callbook disabled · CTY.DAT fallback"; completion(null) }
+        var record: AndroidCallbookRecord? = null
+        val failures = mutableListOf<String>()
+        for (source in sources) {
+            val result = runCatching { lookupSource(source, call) }
+            record = result.getOrNull()
+            if (record != null) break
+            failures += "$source: ${safeFailure(result.exceptionOrNull())}"
+        }
+        withContext(Dispatchers.Main) {
+            status = if (record == null) failures.joinToString(" · ").ifBlank { "Callbook lookup failed" } + " · CTY.DAT fallback"
+                else "Live ${record.source} result"
+            completion(record)
+        }
     }
 
     fun close() = scope.cancel()
 
-    private fun login(): String {
-        require(username.isNotBlank() && password.isNotBlank()) { "$provider username and password required" }
-        val fields = if (provider == "HamQTH") xml("https://www.hamqth.com/xml.php?u=${encode(username)}&p=${encode(password)}")
+    private fun enabledSources() = listOfNotNull("QRZ".takeIf { qrzEnabled }, "HamQTH".takeIf { hamQthEnabled })
+
+    private fun login(source: String): String {
+        val username = if (source == "HamQTH") hamQthUsername else qrzXmlUsername()
+        val password = if (source == "HamQTH") hamQthPassword else qrzPassword
+        require(username.isNotBlank() && password.isNotBlank()) { "$source username and password required" }
+        val fields = if (source == "HamQTH") xml("https://www.hamqth.com/xml.php?u=${encode(username)}&p=${encode(password)}")
             else xml("https://xmldata.qrz.com/xml/current/?username=${encode(username)}&password=${encode(password)}&agent=RigWeave-0.1")
         fields["error"]?.let { error(it) }
-        return fields[if (provider == "HamQTH") "session_id" else "key"]?.takeIf(String::isNotBlank)
+        return fields[if (source == "HamQTH") "session_id" else "key"]?.takeIf(String::isNotBlank)
             ?: error("Callbook login returned no session")
     }
 
-    private fun request(call: String) = if (provider == "HamQTH")
-        xml("https://www.hamqth.com/xml.php?id=${encode(session)}&callsign=${encode(call)}&prg=RigWeave")
-    else xml("https://xmldata.qrz.com/xml/current/?s=${encode(session)}&callsign=${encode(call)}")
+    private fun lookupSource(source: String, call: String): AndroidCallbookRecord {
+        var session = if (source == "HamQTH") hamQthSession else qrzSession
+        if (session.isBlank()) session = login(source).also { if (source == "HamQTH") hamQthSession = it else qrzSession = it }
+        val fields = if (source == "HamQTH")
+            xml("https://www.hamqth.com/xml.php?id=${encode(session)}&callsign=${encode(call)}&prg=RigWeave")
+        else xml("https://xmldata.qrz.com/xml/current/?s=${encode(session)}&callsign=${encode(call)}")
+        fields["error"]?.let { error(it) }
+        return callbookRecordFromFields(fields, call, source)
+    }
 
     private fun xml(value: String): Map<String, String> {
         val connection = URL(value).openConnection() as HttpURLConnection
@@ -105,8 +180,22 @@ class CallbookController(context: Context) {
     }
 
     private suspend fun publish(value: String) = withContext(Dispatchers.Main) { status = value }
-    private fun continentName(code: String) = mapOf("AF" to "Africa", "AN" to "Antarctica", "AS" to "Asia",
-        "EU" to "Europe", "NA" to "North America", "OC" to "Oceania", "SA" to "South America")[code].orEmpty()
+    private fun qrzXmlUsername(): String = if ('@' !in qrzUsername) qrzUsername else
+        operatorCallsign().trim().uppercase(java.util.Locale.US).ifBlank { qrzUsername }
+    private fun safeFailure(error: Throwable?): String {
+        val message = error?.message.orEmpty().replace(Regex("[\r\n]+"), " ")
+        return when {
+            message.contains("username/password incorrect", ignoreCase = true) ->
+                message.substringAfter("Username/password incorrect", "").let { "Username/password incorrect$it" }.take(120)
+            message.contains("blocked until", ignoreCase = true) -> "Provider temporarily blocked repeated login attempts"
+            message.contains("subscription", ignoreCase = true) -> "Callbook subscription does not permit this lookup"
+            message.contains("callsign not found", ignoreCase = true) -> "Callsign not found"
+            error is java.net.SocketTimeoutException -> "Request timed out"
+            error is java.net.UnknownHostException -> "Network unavailable"
+            error is javax.net.ssl.SSLException -> "Secure connection failed"
+            else -> "Request failed (${error?.javaClass?.simpleName ?: "unknown error"})"
+        }
+    }
     private fun encode(value: String) = URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
     private fun secret(): SecretKey {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

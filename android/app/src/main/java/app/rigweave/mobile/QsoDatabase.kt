@@ -40,6 +40,22 @@ data class QsoPage(val rows: List<Qso>, val total: Int, val page: Int, val pageS
     val pageCount get() = logbookPageCount(total, pageSize)
 }
 
+data class CallsignHistory(val rows: List<Qso>, val total: Int)
+data class DxccCell(val worked: Boolean = false, val confirmed: Boolean = false)
+data class DxccSummary(val dxcc: String, val country: String, val cells: Map<String, DxccCell>)
+data class StationInsight(val record: AndroidCallbookRecord, val history: CallsignHistory, val dxcc: DxccSummary)
+
+val insightBands = listOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m")
+val insightModes = listOf("CW", "FT8", "RTTY", "SSB", "LSB", "USB")
+
+internal fun insightMode(mode: String, submode: String = ""): String {
+    val value = submode.ifBlank { mode }.trim().uppercase(java.util.Locale.US)
+    return when (value) {
+        "CW-R", "CWR" -> "CW"
+        else -> value
+    }
+}
+
 fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
     in 135_700L..137_800L -> "2200m"; in 472_000L..479_000L -> "630m"
     in 1_800_000L..2_000_000L -> "160m"; in 3_500_000L..4_000_000L -> "80m"
@@ -159,6 +175,51 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             spot.id to classifySpotStatus(spot, call, entity)
         }
     }
+
+    fun stationInsight(record: AndroidCallbookRecord, stationId: String?): StationInsight {
+        val scope = stationScope(stationId)
+        val call = record.callsign.trim().uppercase(java.util.Locale.US)
+        val callWhere = "UPPER(callsign)=? AND ${scope.first}"
+        val callArgs = (listOf(call) + scope.second).toTypedArray()
+        val total = readableDatabase.rawQuery("SELECT COUNT(*) FROM qso WHERE $callWhere", callArgs).use {
+            if (it.moveToFirst()) it.getInt(0) else 0
+        }
+        val history = queryWhere("$callWhere ORDER BY created_at DESC LIMIT 50", callArgs)
+
+        val numericDxcc = record.dxcc.trim().uppercase(java.util.Locale.US)
+        val country = record.country.trim().uppercase(java.util.Locale.US)
+        val entityExpression = if (numericDxcc.isNotBlank())
+            "UPPER(COALESCE(json_extract(details_json,'$.dxcc'),''))=?"
+        else "UPPER(country)=?"
+        val entityValue = numericDxcc.ifBlank { country }
+        val cells = mutableMapOf<String, DxccCell>()
+        if (entityValue.isNotBlank()) {
+            val confirmed = "(UPPER(COALESCE(json_extract(details_json,'$.qslReceived'),'')) IN ('Y','V') OR " +
+                "UPPER(COALESCE(json_extract(details_json,'$.lotwReceived'),'')) IN ('Y','V'))"
+            val sql = """SELECT UPPER(COALESCE(json_extract(details_json,'$.band'),'')),
+                UPPER(COALESCE(json_extract(details_json,'$.submode'),'')), UPPER(mode),
+                MAX(CASE WHEN $confirmed THEN 1 ELSE 0 END)
+                FROM qso WHERE $entityExpression AND ${scope.first}
+                GROUP BY 1,2,3""".trimIndent()
+            val args = (listOf(entityValue) + scope.second).toTypedArray()
+            readableDatabase.rawQuery(sql, args).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val band = cursor.getString(0).orEmpty().lowercase(java.util.Locale.US)
+                    val mode = insightMode(cursor.getString(2).orEmpty(), cursor.getString(1).orEmpty())
+                    if (band.isNotBlank() && mode.isNotBlank()) {
+                        val key = "$mode|$band"
+                        val old = cells[key] ?: DxccCell()
+                        cells[key] = DxccCell(worked = true, confirmed = old.confirmed || cursor.getInt(3) == 1)
+                    }
+                }
+            }
+        }
+        return StationInsight(record, CallsignHistory(history, total), DxccSummary(record.dxcc, record.country, cells))
+    }
+
+    private fun stationScope(stationId: String?): Pair<String, List<String>> = if (stationId == null)
+        "COALESCE(json_extract(details_json,'$.stationProfileId'),'')=''" to emptyList()
+    else "COALESCE(json_extract(details_json,'$.stationProfileId'),'')=?" to listOf(stationId)
 
     private fun dimensions(keyExpression: String, rawKeys: List<String>, stationId: String?): Map<String, WorkedDimensions> {
         val keys = rawKeys.map { it.normalizedStatusKey() }.filter(String::isNotBlank).distinct()

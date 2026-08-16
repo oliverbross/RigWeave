@@ -1,7 +1,9 @@
 package app.rigweave.mobile
 
 import android.Manifest
+import android.graphics.BitmapFactory
 import android.os.Bundle
+import android.util.LruCache
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -17,6 +19,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -44,6 +47,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -55,6 +59,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -68,6 +73,8 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
@@ -109,10 +116,10 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val database = remember { QsoDatabase(context) }
     val features = remember { FeatureController(context) }
     val wavelog = remember { WavelogController(context, database) }
-    val callbook = remember { CallbookController(context) }
+    val app = remember { AppController(context) }
+    val callbook = remember { CallbookController(context) { app.stationCallsign } }
     val cty = remember { CtyController(context) }
     val audio = remember { AudioMonitorController(context) }
-    val app = remember { AppController(context) }
     val cwDecoder = remember { CwDecodeBuffer() }
     var radio by remember { mutableStateOf(NativeCore.parseState(NativeCore.state(core))) }
     var usbDetail by remember { mutableStateOf("No USB CAT adapter opened") }
@@ -282,6 +289,8 @@ private fun navIcon(item: Destination) = when (item) {
     var radioFeedback by remember { mutableStateOf<RadioFeedback?>(null) }
     var feedbackVisible by remember { mutableStateOf(false) }
     var feedbackGeneration by remember { mutableIntStateOf(0) }
+    var stationInsight by remember { mutableStateOf<StationInsight?>(null) }
+    var identityVisible by remember { mutableStateOf(false) }
     LaunchedEffect(state.revision) {
         val previous = previousState
         previousState = state
@@ -297,6 +306,12 @@ private fun navIcon(item: Destination) = when (item) {
             feedbackVisible = false
         }
     }
+    LaunchedEffect(wavelog.logMode, wavelog.stationId, stationInsight?.record?.callsign) {
+        val current = stationInsight ?: return@LaunchedEffect
+        val stationScope = if (wavelog.logMode == LogMode.LOCAL) null
+            else wavelog.stationId.takeIf(String::isNotBlank) ?: "__NO_SELECTED_WAVELOG_STATION__"
+        stationInsight = withContext(Dispatchers.IO) { database.stationInsight(current.record, stationScope) }
+    }
     BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF090B0C)).navigationBarsPadding().padding(10.dp)) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -306,15 +321,25 @@ private fun navIcon(item: Destination) = when (item) {
             Row(Modifier.fillMaxWidth().weight(2f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     CwMacroStrip(state, app, send, Modifier.fillMaxWidth().height(54.dp))
-                    CompactLogger(state, database, wavelog, callbook, cty, app, send, Modifier.weight(1f).fillMaxWidth())
+                    CompactLogger(state, database, wavelog, callbook, cty, app, send,
+                        onInsight = { stationInsight = it; identityVisible = true },
+                        onInsightCleared = { stationInsight = null; identityVisible = false },
+                        modifier = Modifier.weight(1f).fillMaxWidth())
                 }
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (isCwMacroMode(state.mode)) {
-                        CwDecodeLine(state.cwDecodedText, state.connected, clearCwDecode,
-                            Modifier.fillMaxWidth().heightIn(min = 48.dp))
+                    val cwActive = isCwMacroMode(state.mode)
+                    Box(Modifier.fillMaxWidth().weight(if (cwActive) 1.2f else 1f)) {
+                        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (cwActive) CwDecodeLine(state.cwDecodedText, state.connected, clearCwDecode,
+                                Modifier.fillMaxWidth().heightIn(min = 48.dp))
+                            CompactKx3TuningDeck(state, send, Modifier.fillMaxWidth().weight(1f))
+                        }
+                        stationInsight?.takeIf { identityVisible }?.let { insight ->
+                            CallbookIdentityOverlay(insight.record, { identityVisible = false }, Modifier.fillMaxSize())
+                        }
                     }
-                    CompactKx3TuningDeck(state, send, Modifier.fillMaxWidth().weight(1f))
-                    LiveSpotsPanel(features, database, wavelog, cty, send, Modifier.fillMaxWidth().weight(3f))
+                    LiveSpotsPanel(features, database, wavelog, cty, send, stationInsight,
+                        Modifier.fillMaxWidth().weight(3f))
                 }
             }
         }
@@ -898,16 +923,99 @@ private enum class Kx3Adjustment(val title: String, val unit: String) {
     }
 }
 
-private enum class RadioActivityTab(val label: String) { SPOTS("LIVE DX SPOTS"), LOG("LOG") }
+@Composable private fun CallbookIdentityOverlay(record: AndroidCallbookRecord, close: () -> Unit,
+    modifier: Modifier = Modifier) {
+    Surface(color = Color(0xFF101517), shape = MaterialTheme.shapes.small,
+        border = androidx.compose.foundation.BorderStroke(1.dp, Healthy.copy(alpha = .8f)), modifier = modifier) {
+        Box(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxSize().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                RemoteCallbookImage(record.imageUrl, record.callsign, record.source, Modifier.fillMaxHeight().weight(1f))
+                Column(Modifier.fillMaxHeight().weight(2f).padding(end = 38.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(record.name.ifBlank { record.callsign }, color = Ink, fontWeight = FontWeight.Black,
+                        fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (record.name.isNotBlank()) IdentityLine("CALL", record.callsign, Healthy)
+                    IdentityLine("QTH", listOf(record.address, record.qth, record.postalCode, record.country)
+                        .filter(String::isNotBlank).distinct().joinToString(" · "))
+                    IdentityLine("GRID", record.grid)
+                    IdentityLine("E-MAIL", record.email, Healthy)
+                    IdentityLine("BORN", record.born)
+                    IdentityLine("QSL", listOf(record.qslText, record.qslManager.takeIf(String::isNotBlank)?.let { "via $it" }.orEmpty())
+                        .filter(String::isNotBlank).joinToString(" · "))
+                    IdentityLine("ENTITY", listOf(record.country, record.dxcc.takeIf(String::isNotBlank)?.let { "DXCC $it" }.orEmpty(),
+                        record.continent, record.cqZone.takeIf(String::isNotBlank)?.let { "CQ $it" }.orEmpty())
+                        .filter(String::isNotBlank).distinct().joinToString(" · "))
+                    IdentityLine("SOURCE", record.source.ifBlank { "CTY.DAT" }, Amber)
+                }
+            }
+            IconButton(close, Modifier.align(Alignment.TopEnd).size(48.dp)) {
+                Icon(Icons.Outlined.Close, contentDescription = "Close station details", tint = Ink)
+            }
+        }
+    }
+}
+
+@Composable private fun IdentityLine(label: String, value: String, color: Color = Ink) {
+    if (value.isBlank()) return
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(label, color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.width(48.dp))
+        Text(value, color = color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f))
+    }
+}
+
+private val callbookImageCache = object : LruCache<String, androidx.compose.ui.graphics.ImageBitmap>(16 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: androidx.compose.ui.graphics.ImageBitmap) = value.width * value.height * 4
+}
+
+@Composable private fun RemoteCallbookImage(imageUrl: String, callsign: String, source: String, modifier: Modifier = Modifier) {
+    val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, imageUrl) {
+        value = null
+        value = withContext(Dispatchers.IO) {
+            callbookImageCache.get(imageUrl)?.let { return@withContext it }
+            runCatching {
+                if (!imageUrl.startsWith("https://", ignoreCase = true)) return@runCatching null
+                val connection = URL(imageUrl).openConnection() as HttpURLConnection
+                connection.connectTimeout = 7_000; connection.readTimeout = 10_000
+                connection.instanceFollowRedirects = true
+                connection.inputStream.use { input ->
+                    val bytes = input.readNBytes(5 * 1024 * 1024)
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                    var sample = 1
+                    while (bounds.outWidth / sample > 1024 || bounds.outHeight / sample > 640) sample *= 2
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+                        ?.asImageBitmap()?.also { callbookImageCache.put(imageUrl, it) }
+                }
+            }.getOrNull()
+        }
+    }
+    Surface(color = Color(0xFF20282C), shape = RoundedCornerShape(5.dp), modifier = modifier) {
+        if (bitmap != null) Image(bitmap!!, contentDescription = "$source profile photo for $callsign",
+            contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Outlined.AccountCircle, null, tint = Muted, modifier = Modifier.size(38.dp))
+                Text(callsign, color = Ink, fontWeight = FontWeight.Black, fontSize = 13.sp)
+                Text("NO PROFILE PHOTO", color = Muted, fontSize = 9.sp)
+            }
+        }
+    }
+}
+
+private enum class RadioActivityTab(val label: String) {
+    SPOTS("LIVE DX SPOTS"), LOG("LOG"), DETAILS("QRZ/QSO DETAILS")
+}
 
 @Composable private fun LiveSpotsPanel(features: FeatureController, database: QsoDatabase, wavelog: WavelogController,
-    cty: CtyController, send: (String) -> Unit, modifier: Modifier = Modifier) {
+    cty: CtyController, send: (String) -> Unit, insight: StationInsight?, modifier: Modifier = Modifier) {
     var selected by remember { mutableStateOf(RadioActivityTab.SPOTS) }
     var logPage by remember { mutableStateOf(QsoPage(emptyList(), 0, 0, 50)) }
     var page by remember { mutableIntStateOf(0) }
     var pageSize by remember { mutableIntStateOf(50) }
     var spotStatuses by remember { mutableStateOf(emptyMap<String, SpotLogStatus>()) }
     val ctyRevision = cty.status
+    LaunchedEffect(insight?.record?.callsign) { if (insight != null) selected = RadioActivityTab.DETAILS }
     LaunchedEffect(wavelog.logMode, wavelog.stationId) { page = 0 }
     LaunchedEffect(selected, wavelog.logMode, wavelog.stationId, page, pageSize) {
         if (selected == RadioActivityTab.LOG && wavelog.logMode == LogMode.WAVELOG &&
@@ -955,14 +1063,16 @@ private enum class RadioActivityTab(val label: String) { SPOTS("LIVE DX SPOTS"),
         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF444B4E)), modifier = modifier) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().height(44.dp).background(Color(0xFF171D20)), verticalAlignment = Alignment.CenterVertically) {
-                TabRow(selected.ordinal, modifier = Modifier.width(330.dp).fillMaxHeight(), containerColor = Color.Transparent,
+                TabRow(selected.ordinal, modifier = Modifier.width(510.dp).fillMaxHeight(), containerColor = Color.Transparent,
                     contentColor = Amber, divider = {}) {
                     RadioActivityTab.entries.forEach { tab -> Tab(selected == tab, { selected = tab },
                         text = { Text(tab.label, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelMedium) }) }
                 }
                 Spacer(Modifier.weight(1f))
-                Text(if (selected == RadioActivityTab.SPOTS) features.clusterStatus else if (wavelog.logMode == LogMode.LOCAL)
-                    "LOCAL LOG · ${logPage.total}" else "WAVELOG · ${wavelog.selectedStation?.name ?: "STATION ${wavelog.stationId}"}",
+                Text(if (selected == RadioActivityTab.SPOTS) features.clusterStatus else if (selected == RadioActivityTab.DETAILS)
+                    insight?.let { "${it.record.callsign} · ${it.history.total} QSO${if (it.history.total == 1) "" else "S"}" } ?: "ENTER A CALLSIGN"
+                    else if (wavelog.logMode == LogMode.LOCAL) "LOCAL LOG · ${logPage.total}"
+                    else "WAVELOG · ${wavelog.selectedStation?.name ?: "STATION ${wavelog.stationId}"}",
                     color = if (selected == RadioActivityTab.SPOTS && features.liveSpots.isEmpty()) Muted else Healthy,
                     style = MaterialTheme.typography.labelSmall, maxLines = 1, modifier = Modifier.padding(horizontal = 10.dp))
                 if (selected == RadioActivityTab.LOG) {
@@ -970,11 +1080,128 @@ private enum class RadioActivityTab(val label: String) { SPOTS("LIVE DX SPOTS"),
                         { page = (page + 1).coerceAtMost(logPage.pageCount - 1) })
                 }
             }
-            if (selected == RadioActivityTab.SPOTS) {
-                LiveSpotTable(features.liveSpots.take(20), spotStatuses, cty, send, Modifier.fillMaxSize())
-            } else RadioLogTable(logPage.rows, Modifier.fillMaxSize())
+            when (selected) {
+                RadioActivityTab.SPOTS -> LiveSpotTable(features.liveSpots.take(20), spotStatuses, cty, send, Modifier.fillMaxSize())
+                RadioActivityTab.LOG -> RadioLogTable(logPage.rows, Modifier.fillMaxSize())
+                RadioActivityTab.DETAILS -> QrzQsoDetails(insight, Modifier.fillMaxSize())
+            }
         }
     }
+}
+
+private enum class InsightTab(val label: String) { HISTORY("Worked Before"), DXCC("DXCC Matrix") }
+
+@Composable private fun QrzQsoDetails(insight: StationInsight?, modifier: Modifier = Modifier) {
+    if (insight == null) {
+        Box(modifier, contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Icon(Icons.Outlined.PersonSearch, null, tint = Muted, modifier = Modifier.size(34.dp))
+                Text("Enter a callsign in Log QSO", color = Ink, fontWeight = FontWeight.Bold)
+                Text("Callbook identity, worked history and DXCC status will appear here.", color = Muted, fontSize = 12.sp)
+            }
+        }
+        return
+    }
+    var tab by remember(insight.record.callsign) { mutableStateOf(InsightTab.HISTORY) }
+    Column(modifier) {
+        Row(Modifier.fillMaxWidth().height(56.dp).background(Color(0xFF1A2023)).padding(horizontal = 9.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            InsightTab.entries.forEach { item ->
+                FilterChip(tab == item, { tab = item }, {
+                    Text(item.label, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = .25.sp,
+                        modifier = Modifier.padding(horizontal = 7.dp))
+                }, modifier = Modifier.height(48.dp).width(if (item == InsightTab.HISTORY) 148.dp else 132.dp))
+            }
+            Spacer(Modifier.weight(1f))
+            Text("CONFIRMED = PAPER QSL OR LoTW", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        }
+        when (tab) {
+            InsightTab.HISTORY -> CallsignHistoryTable(insight, Modifier.fillMaxSize())
+            InsightTab.DXCC -> DxccMatrix(insight.dxcc, Modifier.fillMaxSize())
+        }
+    }
+}
+
+private data class InsightColumn(val label: String, val weight: Float)
+
+@Composable private fun CallsignHistoryTable(insight: StationInsight, modifier: Modifier = Modifier) {
+    val columns = listOf(InsightColumn("Date / UTC", 1.5f), InsightColumn("Callsign", 1.25f),
+        InsightColumn("Mode", .8f), InsightColumn("RST S", .7f), InsightColumn("RST R", .7f),
+        InsightColumn("Band", .65f), InsightColumn("QSL", .55f), InsightColumn("LoTW", .55f))
+    Column(modifier) {
+        Text("Worked Before  ·  ${insight.history.total} QSO${if (insight.history.total == 1) "" else "s"}",
+            color = Ink, fontWeight = FontWeight.Black, fontSize = 14.sp, letterSpacing = .15.sp,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+        Row(Modifier.fillMaxWidth().height(34.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
+            columns.forEach { column -> InsightCell(column.label, column.weight, header = true) }
+        }
+        if (insight.history.rows.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("No previous QSO with ${insight.record.callsign} in this configured log.", color = Muted)
+        } else LazyColumn(Modifier.fillMaxSize()) {
+            items(insight.history.rows, key = { it.id }) { qso ->
+                val time = Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC)
+                Row(Modifier.fillMaxWidth().height(42.dp).background(if (qso.createdAt % 2L == 0L) Color(0xFF171D20) else Color(0xFF20272B)),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    InsightCell(time.format(DateTimeFormatter.ofPattern("dd/MM/yy HH:mm")), columns[0].weight)
+                    InsightCell(qso.callsign, columns[1].weight, Healthy, true)
+                    InsightCell(qso.submode.ifBlank { qso.mode }, columns[2].weight)
+                    InsightCell(qso.rstSent, columns[3].weight)
+                    InsightCell(qso.rstReceived, columns[4].weight)
+                    InsightCell(qso.band.ifBlank { bandForFrequency(qso.frequencyHz) }, columns[5].weight)
+                    InsightCell(qso.qslReceived.confirmationGlyph(), columns[6].weight, qso.qslReceived.confirmationColor())
+                    InsightCell(qso.lotwReceived.confirmationGlyph(), columns[7].weight, qso.lotwReceived.confirmationColor())
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun RowScope.InsightCell(value: String, weight: Float, color: Color = Ink, bold: Boolean = false,
+    header: Boolean = false) {
+    Text(value, color = if (header) Ink else color, fontSize = if (header) 12.sp else 13.sp,
+        fontWeight = if (header || bold) FontWeight.Bold else FontWeight.Medium, maxLines = 1,
+        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(weight).padding(horizontal = 6.dp))
+}
+
+private fun String.confirmationGlyph() = if (uppercase() in setOf("Y", "V")) "C" else "—"
+private fun String.confirmationColor() = if (uppercase() in setOf("Y", "V")) Healthy else Muted
+
+@Composable private fun DxccMatrix(summary: DxccSummary, modifier: Modifier = Modifier) {
+    Column(modifier.padding(top = 4.dp)) {
+        Text("DXCC ${summary.country.ifBlank { summary.dxcc }} · W = worked · C = confirmed",
+            color = Ink, fontWeight = FontWeight.Black, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+        BoxWithConstraints(Modifier.fillMaxWidth().border(1.dp, Color(0xFF424B50), RoundedCornerShape(4.dp))) {
+            val modeWidth = 54.dp
+            val bandWidth = (maxWidth - modeWidth) / insightBands.size
+            Column(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth().height(30.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
+                    MatrixLabel("MODE", modeWidth)
+                    insightBands.forEach { MatrixLabel(it, bandWidth) }
+                }
+                insightModes.forEachIndexed { index, mode ->
+                    Row(Modifier.fillMaxWidth().height(34.dp)
+                        .background(if (index % 2 == 0) Color(0xFF171D20) else Color(0xFF242B2F)),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        MatrixLabel(mode, modeWidth)
+                        insightBands.forEach { band ->
+                            val cell = summary.cells["$mode|$band"]
+                            val label = when { cell?.confirmed == true -> "C"; cell?.worked == true -> "W"; else -> "—" }
+                            val color = when (label) { "C" -> Healthy; "W" -> Danger; else -> Color.Transparent }
+                            Box(Modifier.width(bandWidth).height(27.dp).padding(horizontal = 2.dp, vertical = 1.dp)
+                                .background(color, RoundedCornerShape(2.dp)), contentAlignment = Alignment.Center) {
+                                Text(label, color = if (label == "—") Muted else Color.White,
+                                    fontWeight = FontWeight.Black, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun MatrixLabel(value: String, width: Dp) = Box(Modifier.width(width).fillMaxHeight(), contentAlignment = Alignment.Center) {
+    Text(value, color = Ink, fontWeight = FontWeight.Bold, fontSize = 10.sp, maxLines = 1)
 }
 
 private data class SpotColumn(val label: String, val width: Dp, val mono: Boolean = false)
@@ -1201,7 +1428,8 @@ private fun spotStatusColor(status: String?): Color = when (status) {
 }
 
 @Composable private fun CompactLogger(state: RadioState, database: QsoDatabase, wavelog: WavelogController,
-    callbook: CallbookController, cty: CtyController, app: AppController, send: (String) -> Unit, modifier: Modifier = Modifier) {
+    callbook: CallbookController, cty: CtyController, app: AppController, send: (String) -> Unit,
+    onInsight: (StationInsight) -> Unit, onInsightCleared: () -> Unit, modifier: Modifier = Modifier) {
     var tab by remember { mutableStateOf(QsoEditorTab.QSO) }
     var call by remember { mutableStateOf("") }; var sent by remember { mutableStateOf("59") }; var received by remember { mutableStateOf("59") }
     var name by remember { mutableStateOf("") }; var qth by remember { mutableStateOf("") }; var grid by remember { mutableStateOf("") }
@@ -1215,6 +1443,7 @@ private fun spotStatusColor(status: String?): Color = when (status) {
     var qslVia by remember { mutableStateOf("") }; var qslMessage by remember { mutableStateOf("") }
     var enrichment by remember { mutableStateOf("Enter a callsign") }; var status by remember { mutableStateOf("LOCAL FIRST") }
     var lookupGeneration by remember { mutableStateOf(0) }
+    val lookupScope = rememberCoroutineScope()
     val selectedStation = wavelog.selectedStation
     val utc = wavelog.synchronizedNow().atZone(ZoneOffset.UTC)
     fun clear() {
@@ -1223,13 +1452,16 @@ private fun spotStatusColor(status: String?): Color = when (status) {
         comment = ""; notes = ""; country = ""; dxcc = ""; continent = ""; region = ""; cqZone = ""; ituZone = ""
         stateName = ""; email = ""; propagation = ""; antennaPath = ""; qslSent = "N"; qslMethod = ""; qslVia = ""; qslMessage = ""
         enrichment = "Enter a callsign"; tab = QsoEditorTab.QSO
+        onInsightCleared()
     }
-    fun applyCty() {
-        cty.lookup(call)?.let { row ->
+    fun applyCty(): Boolean {
+        val row = cty.lookup(call) ?: return false
+        val contributed = (country.isBlank() && row.country.isNotBlank()) || (dxcc.isBlank() && row.dxcc.isNotBlank()) ||
+            (continent.isBlank() && row.continent.isNotBlank()) || (region.isBlank() && row.region.isNotBlank()) ||
+            (cqZone.isBlank() && row.cqZone.isNotBlank()) || (ituZone.isBlank() && row.ituZone.isNotBlank())
             country = country.ifBlank { row.country }; dxcc = dxcc.ifBlank { row.dxcc }; continent = continent.ifBlank { row.continent }
             region = region.ifBlank { row.region }; cqZone = cqZone.ifBlank { row.cqZone }; ituZone = ituZone.ifBlank { row.ituZone }
-            enrichment = "CTY.DAT fallback"
-        }
+        return contributed
     }
     fun enrich() {
         val requestedCall = call.trim().uppercase()
@@ -1238,16 +1470,31 @@ private fun spotStatusColor(status: String?): Color = when (status) {
         enrichment = "Looking up $requestedCall…"
         callbook.lookup(requestedCall) { row ->
             if (generation != lookupGeneration || call.trim().uppercase() != requestedCall) return@lookup
-            if (row == null) applyCty() else {
+            if (row == null) {
+                applyCty(); enrichment = "CTY.DAT fallback"
+            } else {
                 name = row.name.ifBlank { name }; qth = row.qth.ifBlank { qth }; country = row.country.ifBlank { country }; grid = row.grid.ifBlank { grid }
                 dxcc = row.dxcc.ifBlank { dxcc }; continent = row.continent.ifBlank { continent }; region = row.region.ifBlank { region }
                 cqZone = row.cqZone.ifBlank { cqZone }; ituZone = row.ituZone.ifBlank { ituZone }; stateName = row.state.ifBlank { stateName }
-                email = row.email.ifBlank { email }; applyCty(); enrichment = "${callbook.provider} + CTY.DAT"
+                email = row.email.ifBlank { email }
+                enrichment = row.source + if (applyCty()) " · CTY.DAT supplemented" else ""
+            }
+            val resolved = (row ?: AndroidCallbookRecord(requestedCall, name, qth, country, grid, dxcc, continent,
+                region, cqZone, ituZone, stateName, email, "", "", source = "CTY.DAT")).copy(
+                callsign = requestedCall, name = name, qth = qth, country = country, grid = grid, dxcc = dxcc,
+                continent = continent, region = region, cqZone = cqZone, ituZone = ituZone, state = stateName,
+                email = email, source = row?.source ?: "CTY.DAT")
+            val stationId = if (wavelog.logMode == LogMode.LOCAL) null
+                else wavelog.stationId.takeIf(String::isNotBlank) ?: "__NO_SELECTED_WAVELOG_STATION__"
+            lookupScope.launch {
+                val insight = withContext(Dispatchers.IO) { database.stationInsight(resolved, stationId) }
+                if (generation == lookupGeneration && call.trim().uppercase() == requestedCall) onInsight(insight)
             }
         }
     }
     LaunchedEffect(call) {
         lookupGeneration++
+        onInsightCleared()
         val candidate = call.trim()
         if (candidate.length >= 3) { delay(700); if (candidate == call.trim()) enrich() }
     }
@@ -2184,8 +2431,10 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
     var callsign by remember { mutableStateOf(features.clusterCallsign) }; var watch by remember { mutableStateOf("") }; var raw by remember { mutableStateOf("") }
     var stationCall by remember { mutableStateOf(app.stationCallsign) }; var stationName by remember { mutableStateOf(app.stationName) }
     var stationGrid by remember { mutableStateOf(app.stationGrid) }; var repeatSeconds by remember { mutableIntStateOf(app.cqRepeatSeconds) }
-    var callbookProvider by remember { mutableStateOf(callbook.provider) }; var callbookUser by remember { mutableStateOf(callbook.username) }
-    var callbookPassword by remember { mutableStateOf(callbook.password) }
+    var qrzEnabled by remember { mutableStateOf(callbook.qrzEnabled) }; var qrzUser by remember { mutableStateOf(callbook.qrzUsername) }
+    var qrzPassword by remember { mutableStateOf(callbook.qrzPassword) }
+    var hamQthEnabled by remember { mutableStateOf(callbook.hamQthEnabled) }; var hamQthUser by remember { mutableStateOf(callbook.hamQthUsername) }
+    var hamQthPassword by remember { mutableStateOf(callbook.hamQthPassword) }
     val macroLabels = remember { mutableStateListOf(*app.macroLabels.toTypedArray()) }
     val macroTexts = remember { mutableStateListOf(*app.macroTexts.toTypedArray()) }
     var profile by remember { mutableStateOf(app.fieldProfile) }; var brightness by remember { mutableFloatStateOf(app.brightness.toFloat()) }
@@ -2318,12 +2567,20 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             }
             Text("QRZ.COM / HAMQTH ENRICHMENT", color = Amber, fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                listOf("QRZ", "HamQTH").forEach { value -> FilterChip(callbookProvider == value, { callbookProvider = value }, { Text(value) }) }
-                OutlinedTextField(callbookUser, { callbookUser = it }, label = { Text("Username") }, modifier = Modifier.weight(1f))
-                OutlinedTextField(callbookPassword, { callbookPassword = it }, label = { Text("Password") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.weight(1f))
-                Button({ callbook.configure(callbookProvider, callbookUser, callbookPassword) }) { Text("SAVE") }
+                FilterChip(qrzEnabled, { qrzEnabled = !qrzEnabled }, { Text("QRZ.COM") })
+                OutlinedTextField(qrzUser, { qrzUser = it }, label = { Text("QRZ account email / username") }, singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedTextField(qrzPassword, { qrzPassword = it }, label = { Text("QRZ password") }, singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(), modifier = Modifier.weight(1f))
             }
-            Text("The logger Enrich action fills Name and QTH before SQLite save and Wavelog queueing.", color = Muted)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                FilterChip(hamQthEnabled, { hamQthEnabled = !hamQthEnabled }, { Text("HAMQTH") })
+                OutlinedTextField(hamQthUser, { hamQthUser = it }, label = { Text("HamQTH username") }, singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedTextField(hamQthPassword, { hamQthPassword = it }, label = { Text("HamQTH password") }, singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(), modifier = Modifier.weight(1f))
+                Button({ callbook.configureQrz(qrzEnabled, qrzUser, qrzPassword)
+                    callbook.configureHamQth(hamQthEnabled, hamQthUser, hamQthPassword) }) { Text("SAVE") }
+            }
+            Text("Automatic lookup order: QRZ.COM → HamQTH → CTY.DAT. Email-style QRZ accounts use the configured station callsign for XML access; CTY.DAT supplements missing entity and zone fields.", color = Muted)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedButton(cty::update) { Text("UPDATE CTY.DAT") }; Text(cty.status, color = Muted)
             }
@@ -2347,7 +2604,8 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         if (section == SettingsSection.DIAG) SettingsCard("CAT DIAGNOSTICS") {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(wavelog::testConnection) { Text("TEST WAVELOG") }
-                OutlinedButton({ callbook.configure(callbookProvider, callbookUser, callbookPassword); callbook.test() }) { Text("TEST QRZ / HAMQTH") }
+                OutlinedButton({ callbook.configureQrz(qrzEnabled, qrzUser, qrzPassword)
+                    callbook.configureHamQth(hamQthEnabled, hamQthUser, hamQthPassword); callbook.test() }) { Text("TEST QRZ / HAMQTH") }
                 OutlinedButton(wavelog::loadStations) { Text("LOAD STATIONS") }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
