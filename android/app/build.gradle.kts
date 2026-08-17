@@ -68,6 +68,7 @@ dependencies {
     implementation("com.github.mik3y:usb-serial-for-android:3.11.0")
     implementation("org.maplibre.gl:android-sdk:13.0.2")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation(composeBom)
