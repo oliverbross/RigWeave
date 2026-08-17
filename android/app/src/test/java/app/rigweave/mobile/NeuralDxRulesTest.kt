@@ -46,4 +46,20 @@ class NeuralDxRulesTest {
         assertEquals(0.001236, rows.single().eccentricity, 0.0000001)
         assertEquals(12.5369911, rows.single().meanMotion, 0.0000001)
     }
+
+    @Test fun mapFootprintsRemainGeographicAndSplitAtDateLine() {
+        val circle = geodesicCircle(0.0, 179.0, 1_000.0)
+        assertEquals(73, circle.size)
+        assertTrue(circle.all { it.latitude in -90.0..90.0 && it.longitude in -180.0..180.0 })
+        val segments = splitAtDateline(circle)
+        assertTrue(segments.size >= 2)
+        assertTrue(segments.all { segment -> segment.zipWithNext().all { (a, b) -> kotlin.math.abs(a.longitude - b.longitude) <= 180.0 } })
+        val polygons = splitPolygonAtDateline(circle)
+        assertTrue(polygons.size >= 2)
+        assertTrue(polygons.all { polygon ->
+            polygon.size >= 3 &&
+                polygon.all { it.longitude in -180.0..180.0 } &&
+                polygon.zipWithNext().all { (a, b) -> kotlin.math.abs(a.longitude - b.longitude) <= 180.0 }
+        })
+    }
 }
