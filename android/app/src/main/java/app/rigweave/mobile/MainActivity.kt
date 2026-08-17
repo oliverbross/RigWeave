@@ -2377,7 +2377,7 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
 @Composable private fun DXScreen(neuralDx: NeuralDxController, features: FeatureController, database: QsoDatabase,
     wavelog: WavelogController, callbook: CallbookController, cty: CtyController, app: AppController, send: (String) -> Unit) {
     var previousQsoRecord by remember { mutableStateOf<AndroidCallbookRecord?>(null) }
-    NeuralDxScreen(neuralDx, features, database, wavelog, cty, app, send) { spot ->
+    NeuralDxScreen(neuralDx, features, database, wavelog, callbook, cty, app, send) { spot ->
         previousQsoRecord = spot.previousQsoRecord(cty)
     }
     previousQsoRecord?.let { record ->

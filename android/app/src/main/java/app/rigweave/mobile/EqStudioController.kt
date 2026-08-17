@@ -23,15 +23,50 @@ class EqStudioController(
     var conflict by mutableStateOf<EqSnapshot?>(null); private set
     var lastSuggestion by mutableStateOf<EqSuggestion?>(null); private set
     var lastIntent by mutableStateOf<EqIntent?>(null); private set
+    private var snapshotsByPath by mutableStateOf(emptyMap<EqPath, EqSnapshot>())
+    private var tracesByPath by mutableStateOf(emptyMap<EqPath, List<String>>())
 
     val dirtyBands: Int get() = radioSnapshot?.curve?.let { baseline -> draft?.changedBands(baseline)?.size } ?: 0
     val canUseHardware: Boolean get() = radioState().connected && radioState().model.uppercase().contains("KX3")
 
     fun selectPath(value: EqPath) {
         if (path == value) return
-        path = value; radioSnapshot = null; draft = null; loadedProfile = null; conflict = null
-        operation = if (radioState().connected) EqOperationState.STALE else EqOperationState.DISCONNECTED
-        message = "Read the ${value.name} curve from the radio"
+        path = value; loadedProfile = null; conflict = null
+        val cached = snapshotsByPath[value]
+        radioSnapshot = cached; draft = cached?.curve; trace = tracesByPath[value].orEmpty()
+        context = cached?.context ?: EqContext.UNKNOWN
+        contextSource = cached?.contextSource ?: "Read CAT state to resolve the active EQ bucket"
+        operation = when { !radioState().connected -> EqOperationState.DISCONNECTED; cached != null -> EqOperationState.LIVE_VERIFIED; else -> EqOperationState.STALE }
+        message = if (cached != null) "LIVE / VERIFIED · ${value.name} loaded automatically from KX3" else "Read the ${value.name} curve from the radio"
+    }
+
+    suspend fun readBothFromRadio() {
+        operation = EqOperationState.READING; message = "Automatically reading RX and TX EQ from the KX3…"; conflict = null
+        runCatching {
+            transport.exclusiveEqTransaction { io ->
+                val firmware = runCatching { io.query("RVM;", "RVM") }.getOrNull()?.removeSuffix(";")
+                val reads = linkedMapOf<EqPath, EqReadResult>()
+                val unavailable = linkedMapOf<EqPath, String>()
+                EqPath.entries.forEach { targetPath ->
+                    runCatching {
+                        val resolved = resolveLiveContext(io, targetPath, radioState())
+                        require(resolved.first.writable) { resolved.first.label }
+                        io.readKx3Eq(targetPath, radioState().model, firmware, resolved.first, resolved.second)
+                    }.onSuccess { reads[targetPath] = it }
+                        .onFailure { unavailable[targetPath] = it.message ?: "Unavailable" }
+                }
+                require(reads.isNotEmpty()) { unavailable.entries.joinToString(" · ") { "${it.key.name}: ${it.value}" } }
+                reads to unavailable
+            }
+        }.onSuccess { (results, unavailable) ->
+            snapshotsByPath = (snapshotsByPath - unavailable.keys) + results.mapValues { it.value.snapshot }
+            tracesByPath = (tracesByPath - unavailable.keys) + results.mapValues { it.value.trace }
+            loadVerifiedPath(path)
+            operation = if (snapshotsByPath[path] != null) EqOperationState.LIVE_VERIFIED else EqOperationState.STALE
+            message = if (unavailable.isEmpty()) "LIVE / VERIFIED · RX and TX exact values loaded automatically from KX3"
+                else "LIVE / VERIFIED · ${results.keys.joinToString(" + ") { it.name }} loaded · " +
+                    unavailable.entries.joinToString(" · ") { "${it.key.name} unavailable: ${it.value}" }
+        }.onFailure { fail(it) }
     }
 
     suspend fun readFromRadio() {
@@ -45,6 +80,7 @@ class EqStudioController(
                 io.readKx3Eq(path, radioState().model, firmware, context, contextSource)
             }
         }.onSuccess { result ->
+            snapshotsByPath = snapshotsByPath + (path to result.snapshot); tracesByPath = tracesByPath + (path to result.trace)
             radioSnapshot = result.snapshot; draft = result.snapshot.curve; trace = result.trace
             operation = EqOperationState.LIVE_VERIFIED; message = "LIVE / VERIFIED · eight exact values read from KX3"
         }.onFailure { fail(it) }
@@ -110,6 +146,7 @@ class EqStudioController(
             }
         }.onSuccess { result ->
             radioSnapshot = result.verified; draft = result.verified?.curve; trace = result.trace; conflict = null
+            result.verified?.let { snapshotsByPath = snapshotsByPath + (path to it); tracesByPath = tracesByPath + (path to result.trace) }
             operation = EqOperationState.LIVE_VERIFIED; message = "VERIFIED · all eight KX3 values match the intended curve"
         }.onFailure { fail(it) }
     }
@@ -131,6 +168,12 @@ class EqStudioController(
     }
 
     fun closeSession() { audio.clear() }
+
+    private fun loadVerifiedPath(value: EqPath) {
+        val snapshot = snapshotsByPath[value] ?: return
+        radioSnapshot = snapshot; draft = snapshot.curve; trace = tracesByPath[value].orEmpty()
+        context = snapshot.context; contextSource = snapshot.contextSource
+    }
 
     private fun fail(error: Throwable) {
         operation = EqOperationState.FAILED

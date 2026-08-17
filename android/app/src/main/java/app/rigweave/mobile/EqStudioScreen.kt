@@ -28,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,6 +64,9 @@ private val EqRed = Color(0xFFE4544D)
     var saveDialog by remember { mutableStateOf(false) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) controller.audio.startCapture(controller.radioSnapshot, pendingCapturePause)
+    }
+    LaunchedEffect(controller, radio.connected, radio.model) {
+        if (controller.canUseHardware) controller.readBothFromRadio()
     }
     DisposableEffect(Unit) { onDispose { controller.closeSession() } }
     controller.conflict?.let { changed ->

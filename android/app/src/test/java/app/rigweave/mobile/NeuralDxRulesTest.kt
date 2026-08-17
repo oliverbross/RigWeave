@@ -16,6 +16,14 @@ class NeuralDxRulesTest {
         assertNull(maidenheadCenter("JN8"))
     }
 
+    @Test fun dxDistanceUsesConfiguredAndCallbookGrids() {
+        val distance = dxDistanceKm("JN88TQ", "FN31PR")
+        assertNotNull(distance)
+        assertTrue(distance!! in 6_500..7_500)
+        assertNull(dxDistanceKm("", "FN31PR"))
+        assertNull(dxDistanceKm("JN88TQ", "", "0", "0"))
+    }
+
     @Test fun tropoHeuristicNeverFabricatesMissingMeasurements() {
         assertEquals(null to null, tropoIndex(null, 4.0, 80, 0.0))
         val (index, risk) = tropoIndex(20.0, 19.0, 90, 20.0)

@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.util.LruCache
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -82,15 +83,16 @@ class CallbookController(context: Context, private val operatorCallsign: () -> S
         (hamQthEnabled && hamQthUsername.isNotBlank() && hamQthPassword.isNotBlank())
     private var qrzSession = ""
     private var hamQthSession = ""
+    private val lookupCache = LruCache<String, AndroidCallbookRecord>(128)
 
     fun configureQrz(enabled: Boolean, username: String, password: String) {
-        qrzEnabled = enabled; qrzUsername = username.trim(); qrzPassword = password; qrzSession = ""
+        qrzEnabled = enabled; qrzUsername = username.trim(); qrzPassword = password; qrzSession = ""; lookupCache.evictAll()
         prefs.edit().putBoolean("qrz_enabled", enabled).putString("qrz_username", qrzUsername)
             .putString("qrz_password", encrypt(password)).apply()
     }
 
     fun configureHamQth(enabled: Boolean, username: String, password: String) {
-        hamQthEnabled = enabled; hamQthUsername = username.trim(); hamQthPassword = password; hamQthSession = ""
+        hamQthEnabled = enabled; hamQthUsername = username.trim(); hamQthPassword = password; hamQthSession = ""; lookupCache.evictAll()
         prefs.edit().putBoolean("hamqth_enabled", enabled).putString("hamqth_username", hamQthUsername)
             .putString("hamqth_password", encrypt(password)).apply()
     }
@@ -111,6 +113,9 @@ class CallbookController(context: Context, private val operatorCallsign: () -> S
 
     fun lookup(callsign: String, completion: (AndroidCallbookRecord?) -> Unit) = scope.launch {
         val call = callsign.trim().uppercase()
+        lookupCache.get(call)?.let { cached ->
+            return@launch withContext(Dispatchers.Main) { status = "Cached ${cached.source} result"; completion(cached) }
+        }
         val sources = enabledSources()
         if (sources.isEmpty()) return@launch withContext(Dispatchers.Main) { status = "Callbook disabled · CTY.DAT fallback"; completion(null) }
         var record: AndroidCallbookRecord? = null
@@ -124,6 +129,7 @@ class CallbookController(context: Context, private val operatorCallsign: () -> S
         withContext(Dispatchers.Main) {
             status = if (record == null) failures.joinToString(" · ").ifBlank { "Callbook lookup failed" } + " · CTY.DAT fallback"
                 else "Live ${record.source} result"
+            record?.let { lookupCache.put(call, it) }
             completion(record)
         }
     }

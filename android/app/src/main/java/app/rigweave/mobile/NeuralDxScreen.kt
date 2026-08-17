@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneOffset
@@ -67,6 +68,7 @@ fun NeuralDxScreen(
     features: FeatureController,
     database: QsoDatabase,
     wavelog: WavelogController,
+    callbook: CallbookController,
     cty: CtyController,
     app: AppController,
     tune: (String) -> Unit,
@@ -120,7 +122,7 @@ fun NeuralDxScreen(
         HorizontalDivider(color = Color(0xFF465159))
         val pageModifier = Modifier.fillMaxWidth().weight(1f).clipToBounds().testTag("dx-page-${page.name.lowercase()}")
         when (page) {
-            NeuralDxPage.COCKPIT -> DxCockpit(controller, features, database, wavelog, cty, tune, previousQsos, pageModifier)
+            NeuralDxPage.COCKPIT -> DxCockpit(controller, features, database, wavelog, callbook, cty, stationGrid, tune, previousQsos, pageModifier)
             NeuralDxPage.MAP -> DxMap(controller,controller.enrichedSpots.ifEmpty { features.liveSpots }, cty, stationGrid, tune, previousQsos, pageModifier)
             NeuralDxPage.INSIGHT -> DxInsightPage(controller, features, pageModifier)
             NeuralDxPage.WORLD -> DxWorldPage(controller, features, pageModifier)
@@ -133,22 +135,53 @@ fun NeuralDxScreen(
 }
 
 @Composable private fun DxCockpit(controller: NeuralDxController, features: FeatureController, database: QsoDatabase,
-    wavelog: WavelogController, cty: CtyController, tune: (String) -> Unit, previousQsos: (AndroidDXSpot) -> Unit,
+    wavelog: WavelogController, callbook: CallbookController, cty: CtyController, stationGrid: String,
+    tune: (String) -> Unit, previousQsos: (AndroidDXSpot) -> Unit,
     modifier: Modifier) {
     var mode by remember { mutableStateOf("COCKPIT") }; var band by remember { mutableStateOf("ALL") }
     var radioMode by remember { mutableStateOf("ALL") }; var watchOnly by remember { mutableStateOf(false) }
     var newOnly by remember { mutableStateOf(false) }; var selected by remember { mutableStateOf<AndroidDXSpot?>(null) }
     var watchSearch by remember { mutableStateOf("") }
     var manual by remember { mutableStateOf(false) }; var statuses by remember { mutableStateOf(emptyMap<String, SpotLogStatus>()) }
+    val distances = remember(stationGrid) { mutableStateMapOf<String, Int>() }
+    val distanceLookups = remember(stationGrid) { mutableStateMapOf<String, Boolean>() }
     val stationId = wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }
-    LaunchedEffect(features.liveSpots, stationId, database.changeToken(), cty.dataRevision) {
-        statuses = withContext(Dispatchers.IO) { database.spotStatuses(features.liveSpots.map { spot ->
-            val entity = cty.lookup(spot.callsign); SpotLogIdentity(spot.id, spot.callsign, spot.band, spot.mode,
-                entity?.dxcc.orEmpty(), entity?.country.orEmpty().ifBlank { spot.country }) }, stationId) }
+    LaunchedEffect(features.liveSpots, stationId, wavelog.logMode, wavelog.configured, cty.dataRevision) {
+        if (features.liveSpots.isEmpty() ||
+            (wavelog.logMode == LogMode.WAVELOG && (!wavelog.configured || stationId.isNullOrBlank()))) {
+            statuses = emptyMap()
+            return@LaunchedEffect
+        }
+        val identities = features.liveSpots.map { it.toSpotLogIdentity(cty.lookup(it.callsign)) }
+        var observedRevision = Long.MIN_VALUE
+        while (true) {
+            val revision = database.changeToken()
+            if (revision != observedRevision) {
+                statuses = withContext(Dispatchers.IO) { database.spotStatuses(identities, stationId) }
+                observedRevision = revision
+            }
+            delay(2_000)
+        }
     }
     val rows = features.liveSpots.filter { spot ->
         (band == "ALL" || spot.band == band) && (radioMode == "ALL" || spot.mode == radioMode) &&
             (!watchOnly || spot.watchlisted) && (!newOnly || statuses[spot.id]?.dxccStatus in setOf("ATNO", "W/NB", "C/NB"))
+    }
+    LaunchedEffect(stationGrid, rows.map { it.callsign }, callbook.configured) {
+        if (maidenheadCenter(stationGrid) == null) return@LaunchedEffect
+        rows.distinctBy { it.callsign.uppercase(Locale.US) }.take(24).forEach { spot ->
+            val call = spot.callsign.uppercase(Locale.US)
+            val direct = dxDistanceKm(stationGrid, "", spot.latitude.toString(), spot.longitude.toString())
+            if (direct != null) {
+                distances[call] = direct
+            } else if (callbook.configured && distanceLookups.put(call, true) == null) {
+                callbook.lookup(call) { record ->
+                    record?.let {
+                        dxDistanceKm(stationGrid, it.grid, it.latitude, it.longitude)?.let { km -> distances[call] = km }
+                    }
+                }.join()
+            }
+        }
     }
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -161,7 +194,7 @@ fun NeuralDxScreen(
             Text("${rows.size} LIVE", color = DxCyan, fontWeight = FontWeight.Black)
         }
         if (mode == "COCKPIT") Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            DxSpotFeed(rows, statuses, cty, selected = { selected = it }, previousQsos, Modifier.weight(1.55f).fillMaxHeight())
+            DxSpotFeed(rows, statuses, distances, cty, selected = { selected = it }, previousQsos, Modifier.weight(1.55f).fillMaxHeight())
             LazyColumn(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 item { DxSection("ACTIVE BANDS · 24H") { controller.bandActivity.entries.take(12).forEach { DxBar(it.key, it.value, controller.bandActivity.values.maxOrNull() ?: 1) } } }
                 item { DxSection("PERSONALIZED PREDICTIONS") {
@@ -187,39 +220,39 @@ fun NeuralDxScreen(
                 } }
                 item { DxHeatmap(controller.heatmap6m) }
             }
-        } else if (mode == "SMART") DxSmartFeed(rows, statuses, cty, { selected = it }, previousQsos, Modifier.weight(1f))
-        else DxSpotTable(rows, statuses, cty, { selected = it }, previousQsos, Modifier.weight(1f))
+        } else if (mode == "SMART") DxSmartFeed(rows, statuses, distances, cty, { selected = it }, previousQsos, Modifier.weight(1f))
+        else DxSpotTable(rows, statuses, distances, cty, { selected = it }, previousQsos, Modifier.weight(1f))
     }
     selected?.let { DxSpotDialog(it, cty, statuses[it.id], { selected = null }, { tune("FA%011d;".format(it.frequencyHz)); selected = null }) }
     if (manual) ManualSpotDialog(features) { manual = false }
 }
 
-@Composable private fun DxSpotFeed(rows: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>, cty: CtyController,
+@Composable private fun DxSpotFeed(rows: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>, distances: Map<String, Int>, cty: CtyController,
     selected: (AndroidDXSpot) -> Unit, previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
     DxSection("DX FEED · WORKED STATUS · DISTANCE · SCORE", modifier) {
         DxSpotHeader()
         LazyColumn(Modifier.fillMaxSize()) { items(rows, key = { it.id }) { spot ->
-            DxSpotRow(spot, statuses[spot.id], cty, selected, previous)
+            DxSpotRow(spot, statuses[spot.id], distances[spot.callsign.uppercase(Locale.US)], cty, selected, previous)
         } }
     }
 }
 
-@Composable private fun DxSmartFeed(rows: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>, cty: CtyController,
+@Composable private fun DxSmartFeed(rows: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>, distances: Map<String, Int>, cty: CtyController,
     selected: (AndroidDXSpot) -> Unit, previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
     DxSection("SMART PRIORITY · HIGHEST OPPORTUNITY FIRST", modifier) {
         DxSpotHeader()
         LazyColumn(Modifier.fillMaxSize()) { items(rows.sortedByDescending { it.score }, key = { it.id }) { spot ->
-            DxSpotRow(spot, statuses[spot.id], cty, selected, previous, smart = true)
+            DxSpotRow(spot, statuses[spot.id], distances[spot.callsign.uppercase(Locale.US)], cty, selected, previous, smart = true)
         } }
     }
 }
 
-@Composable private fun DxSpotTable(rows: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>, cty: CtyController,
+@Composable private fun DxSpotTable(rows: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>, distances: Map<String, Int>, cty: CtyController,
     selected: (AndroidDXSpot) -> Unit, previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
     DxSection("CLASSIC CLUSTER TABLE · ${rows.size} LIVE", modifier) {
         DxSpotHeader()
         LazyColumn(Modifier.fillMaxSize()) { items(rows, key = { it.id }) { spot ->
-            DxSpotRow(spot, statuses[spot.id], cty, selected, previous)
+            DxSpotRow(spot, statuses[spot.id], distances[spot.callsign.uppercase(Locale.US)], cty, selected, previous)
         } }
     }
 }
@@ -231,7 +264,7 @@ fun NeuralDxScreen(
     DxFlexCell("SCORE",.48f,DxInk,true);DxFlexCell("COMMENT / REASON",1.72f,DxInk,true)
 }
 
-@Composable private fun DxSpotRow(spot:AndroidDXSpot,status:SpotLogStatus?,cty:CtyController,selected:(AndroidDXSpot)->Unit,
+@Composable private fun DxSpotRow(spot:AndroidDXSpot,status:SpotLogStatus?,calculatedDistanceKm:Int?,cty:CtyController,selected:(AndroidDXSpot)->Unit,
     previous:(AndroidDXSpot)->Unit,smart:Boolean=false){
     val entity=cty.lookup(spot.callsign);val country=entity?.country.orEmpty().ifBlank{spot.country}.ifBlank{"Unknown"}
     Row(Modifier.fillMaxWidth().height(48.dp).clickable(role=Role.Button){selected(spot)}
@@ -240,7 +273,7 @@ fun NeuralDxScreen(
         DxFlexCell(spot.band,.5f,DxInk);DxFlexCell(spot.mode,.55f,DxInk);DxFlexCell(formatMHz(spot.frequencyHz),.76f,DxAmber)
         DxFlexCell(country,1.42f,DxInk);DxFlexCell(entity?.cqZone.orEmpty().ifBlank{spot.cqZone.takeIf{it>0}?.toString().orEmpty()},.36f,DxInk)
         DxFlexCell(spot.spotter,.82f,DxMuted);DxFlexCell(status?.callStatus.orEmpty(),.34f,DxGreen,true);DxFlexCell(status?.dxccStatus.orEmpty(),.46f,if(status?.dxccStatus=="ATNO")DxRed else DxYellow,true)
-        DxFlexCell(spot.distanceKm.takeIf{it>0}?.toString().orEmpty(),.52f,DxMuted);DxFlexCell(spot.score.toString(),.48f,scoreColor(spot.score),true)
+        DxFlexCell(spot.distanceKm.takeIf{it>0}?.toString() ?: calculatedDistanceKm?.toString().orEmpty(),.52f,DxMuted);DxFlexCell(spot.score.toString(),.48f,scoreColor(spot.score),true)
         DxFlexCell(spot.reason.ifBlank{spot.comment},1.72f,DxMuted)
     };HorizontalDivider(color=Color(0xFF303940))
 }

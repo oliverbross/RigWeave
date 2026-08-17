@@ -168,6 +168,28 @@ internal fun maidenheadCenter(raw: String): GeoPoint? {
     return GeoPoint(lat, lon)
 }
 
+internal fun dxDistanceKm(
+    stationGrid: String,
+    remoteGrid: String,
+    remoteLatitude: String = "",
+    remoteLongitude: String = "",
+): Int? {
+    val origin = maidenheadCenter(stationGrid) ?: return null
+    val target = maidenheadCenter(remoteGrid) ?: run {
+        val latitude = remoteLatitude.toDoubleOrNull()
+        val longitude = remoteLongitude.toDoubleOrNull()
+        if (latitude == null || longitude == null || latitude !in -90.0..90.0 || longitude !in -180.0..180.0 ||
+            (latitude == 0.0 && longitude == 0.0)) return null
+        GeoPoint(latitude, longitude)
+    }
+    val p1 = Math.toRadians(origin.latitude)
+    val p2 = Math.toRadians(target.latitude)
+    val deltaLatitude = p2 - p1
+    val deltaLongitude = Math.toRadians(target.longitude - origin.longitude)
+    val haversine = sin(deltaLatitude / 2).pow(2) + cos(p1) * cos(p2) * sin(deltaLongitude / 2).pow(2)
+    return (6371.0 * 2 * atan2(sqrt(haversine), sqrt(1 - haversine))).roundToInt()
+}
+
 internal fun tropoIndex(surface: Double?, at850: Double?, humidity: Int?, cape: Double?): Pair<Int?, String?> {
     if (surface == null || at850 == null) return null to null
     val inversion = 8.5 - (surface - at850)
@@ -393,8 +415,7 @@ class NeuralDxController(private val context: Context, private val database: Qso
                 longitude = entity.longitude.takeUnless { it == 0.0 } ?: row.longitude) } ?: row }
             withContext(Dispatchers.Main) { enrichedSpots = enriched }
             val fresh = store.ingest(enriched)
-            val statuses = database.spotStatuses(enriched.map { SpotLogIdentity(it.id, it.callsign, it.band, it.mode,
-                cty.lookup(it.callsign)?.dxcc.orEmpty(), cty.lookup(it.callsign)?.country.orEmpty().ifBlank { it.country }) }, stationId)
+            val statuses = database.spotStatuses(enriched.map { it.toSpotLogIdentity(cty.lookup(it.callsign)) }, stationId)
             fresh.forEach { spot ->
                 val state = statuses[spot.id]
                 if (spot.watchlisted) deliverAlert("Watchlist · ${spot.callsign}", "${spot.band} ${spot.mode} · ${spot.country}", "watch:${spot.callsign}")

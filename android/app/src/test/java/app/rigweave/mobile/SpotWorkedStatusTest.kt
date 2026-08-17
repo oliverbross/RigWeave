@@ -37,4 +37,12 @@ class SpotWorkedStatusTest {
         assertEquals("DATA", canonicalSpotMode("MFSK"))
         assertEquals("FT8", canonicalSpotMode("FT8"))
     }
+
+    @Test fun dxFeedIdentityKeepsLogDimensionsInTheirNamedFields() {
+        val identity = spotLogIdentity("live", "OM0RX", "504", "Slovak Republic", "20m", "CW")
+        assertEquals("504", identity.dxcc)
+        assertEquals("Slovak Republic", identity.country)
+        assertEquals("20m", identity.band)
+        assertEquals("CW", identity.mode)
+    }
 }

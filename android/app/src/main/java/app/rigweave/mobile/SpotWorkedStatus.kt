@@ -11,6 +11,14 @@ data class SpotLogIdentity(
     val mode: String,
 )
 
+internal fun spotLogIdentity(id: String, callsign: String, dxcc: String, country: String, band: String, mode: String) = SpotLogIdentity(
+    id = id, callsign = callsign, dxcc = dxcc, country = country, band = band, mode = mode,
+)
+
+internal fun AndroidDXSpot.toSpotLogIdentity(entity: AndroidCtyRecord?): SpotLogIdentity = spotLogIdentity(
+    id, callsign, entity?.dxcc.orEmpty(), entity?.country.orEmpty().ifBlank { country }, band, mode,
+)
+
 data class WorkedDimensions(
     val any: Boolean = false,
     val confirmedAny: Boolean = false,
