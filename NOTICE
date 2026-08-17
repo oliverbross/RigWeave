@@ -33,3 +33,9 @@ Names including Nexus, KD9TAW, Elecraft, FlexRadio, POTA, SOTA, WWFF, Wavelog,
 QRZ, HamQTH, and other vendors, services, or organisations are used only to
 identify interoperability targets or external services. No endorsement,
 affiliation, sponsorship, or trademark licence is implied.
+
+Android POTA Chase consumes the public Parks on the Air activator-spot API and
+worldwide park catalogue from api.pota.app and pota.app. POTA names and park
+data remain attributable to Parks on the Air. RigWeave is an independent
+application and does not imply official hunter credit, affiliation, or
+authoritative park boundaries.

@@ -2,7 +2,7 @@
 
 RigWeave is a radio-native portable operating cockpit that connects discovery, tuning, operating, logging, synchronisation, and progress without requiring fabricated state or permanent network access.
 
-The current repository contains two native mobile clients—an iPad-focused SwiftUI client and an Android Jetpack Compose client—over a shared C++17 core. Elecraft KX3/KX2 is the current radio family. Android implements KX3 EQ Studio and SSB voice macros; these capabilities are not claimed for Apple or unqualified KX2 writes. Desktop, FlexRadio, QMX, and portable-programme workflows remain planned work.
+The current repository contains two native mobile clients—an iPad-focused SwiftUI client and an Android Jetpack Compose client—over a shared C++17 core. Elecraft KX3/KX2 is the current radio family. Android implements KX3 EQ Studio, SSB voice macros, and POTA Chase; these capabilities are not claimed for Apple or unqualified KX2 writes. Desktop, FlexRadio, QMX, Portable Activate, SOTA, and WWFF remain planned work.
 
 ## Current implementation
 
@@ -10,8 +10,8 @@ The current repository contains two native mobile clients—an iPad-focused Swif
 |---|---|---|
 | Shared core | KX3/KX2 CAT parsing and safety classes, ADIF, CTY, spot/DX analysis, operator intelligence, panadapter DSP, Wavelog retry policy, and bounded WSJT-X parsing behind a C ABI | core/include, core/portable, core/src |
 | Apple | SwiftUI app, Objective-C++ bridge, base USBDriverKit KXUSB transport, local SQLite/ADIF, callbook, Wavelog, cluster/DX, and physical-I/Q panadapter | ios/RigWeave, ios/CP210xDriver |
-| Android | Compose app, JNI bridge, USB serial, local SQLite/ADIF, callbook, Wavelog, CW and SSB voice macros, hardware-backed KX3 EQ Studio, DX/Neural DX surfaces, MapLibre maps, audio monitoring, and a dedicated KX3 stereo-I/Q panadapter behind one exclusive audio-owner contract | android/app/src/main |
-| Planned | Further KX3/KX2 Studio hardening and platform parity, Portable Chase/Activate, Sync and Progress, FlexRadio SmartLink, Qt/QML desktop, then QMX and broader integrations | docs/ROADMAP.md |
+| Android | Compose app, JNI bridge, USB serial, local SQLite/ADIF, callbook, Wavelog, CW and SSB voice macros, hardware-backed KX3 EQ Studio, POTA Chase with live/cache/offline states and an offline park catalogue, DX/Neural DX surfaces, MapLibre maps, audio monitoring, and a dedicated KX3 stereo-I/Q panadapter behind one exclusive audio-owner contract | android/app/src/main |
+| Planned | Further KX3/KX2 Studio hardening and platform parity, SOTA/WWFF Chase extensions, Portable Activate, Sync and Progress, FlexRadio SmartLink, Qt/QML desktop, then QMX and broader integrations | docs/ROADMAP.md |
 
 The Apple Xcode targets are configured for device family 2 (iPad), deployment target iOS 17, and should not be described as proven iPhone support.
 

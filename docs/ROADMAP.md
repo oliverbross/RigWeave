@@ -45,14 +45,14 @@ This is the normative product order. A phase starts only after separate owner au
 - Android Phase 1A/1B/1C are implemented and integrated behind one exclusive audio-owner contract.
 - Android panadapter software/device behavior is fail-closed; physical KX3 quadrature-I/Q RF acceptance remains deferred.
 - iPadOS KX3 Studio parity for EQ Studio and SSB voice macros is the next candidate.
-- Phase 2 is not authorised by this closure.
+- The owner deferred iPadOS Studio parity and explicitly authorised Android POTA Chase as Phase 2A. This supersedes the former next-candidate ordering without rewriting Phase 1 evidence.
 
 ## Phase 2 — Portable Chase v1
 
-- POTA, SOTA, and WWFF only.
-- Source-stamped offline reference databases and a safe updater.
-- Unified activity stream, local worked status, opportunity ranking, panadapter overlays, and operator-confirmed tune.
-- Decide Nexus propagation/needs/provider reuse component by component from the Phase 0 assessment.
+- **Phase 2A implemented on Android:** POTA live activator feed; honest live/cache/stale states; source-stamped replaceable park database; offline search and nearby; local worked labels; deterministic recommendation reasons; joined list/map selection; operator-confirmed receive-only tune; and the existing logger/Wavelog handoff.
+- SOTA and WWFF remain later Phase 2 extensions after the POTA product shape is reviewed.
+- Panadapter spot overlays are not part of Phase 2A.
+- No Nexus source or dependency is incorporated.
 
 **Gate:** Data access/licensing confirmed; no false universal coverage.
 

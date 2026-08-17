@@ -23,7 +23,7 @@ Dense radio information is intentional. Do not turn the operator console into a 
 
 ## Current surface truth
 
-Android implements the KX3-style console plus the broader Neural DX workspace. Apple implements a native iPad-focused navigation and radio/log/DX/panadapter flow. Their destination sets need not be forced into artificial parity; durable behaviour and evidence must remain clear.
+Android implements the KX3-style console, the broader Neural DX workspace, and POTA Chase. Apple implements a native iPad-focused navigation and radio/log/DX/panadapter flow. Their destination sets need not be forced into artificial parity; durable behaviour and evidence must remain clear.
 
 On Android, Panadapter is a first-class expanded destination and a segmented Radio subview on compact layouts so the existing six-item bottom navigation remains stable. The Flightline instrument keeps spectrum/waterfall dominant and unscrolled, offers a draggable split or either pane alone, and separates view gestures from explicit marker QSY actions. Setup and diagnostics may scroll; the live instrument does not.
 
@@ -33,7 +33,8 @@ On Android, Panadapter is a first-class expanded destination and a segmented Rad
 - Typography: Android system sans for navigation, forms, and actions; monospace only for frequency, CAT, meters, time, and tabular measurements.
 - Shape: 8–12 dp instrument and panel radii; small state chips may be pill-shaped. Dense operational content uses regions and tables, not nested decorative cards.
 - Controls: every paired control presents primary tap text and secondary yellow hold text. Minimum target 48 dp with clear pressed, disabled, armed, pending, and error states.
-- Navigation: Material navigation rail/drawer on expanded width; navigation bar on compact width. The compact bar retains Home, Radio, Logbook, Presets, DX, and Settings. EQ is a first-class expanded destination and a prominent Radio/Settings Audio route on compact layouts, with a normal back path.
+- Navigation: Material navigation rail/drawer on expanded width; navigation bar on compact width. The compact bar retains Home, Radio, Logbook, Presets, DX, and Settings. EQ and Portable are first-class expanded destinations; compact layouts reach EQ through Radio/Settings Audio and POTA Chase through Home.
+- POTA Chase: wide tablets use a filter rail, stable ranked list, and shared map/detail cockpit; compact layouts use Live, Map, and Parks destinations. Graphite surfaces, restrained status colour, explicit freshness, and selection-before-tune keep the decision path readable without turning rows into bright cards.
 - EQ Studio: a Flightline audio bench, not a music-player equalizer. Graphite instrument regions hold exact green radio readback, yellow local draft state, amber response/measurement plots, real waveform/spectrum data, source/baseline provenance, touch-safe eight-band controls, and a fixed apply-and-verify action. Compact layouts stack the same workflow without shrinking the controls into narrow faders.
 - Motion: short Material fade-through/shared-axis transitions only where state or destination changes. No decorative entrance choreography.
 - Safety: transmit state overrides ordinary color and hierarchy with redundant red text, full-width warning, and permanent emergency RX access.
