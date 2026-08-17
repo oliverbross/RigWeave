@@ -5,6 +5,19 @@ import kotlin.math.abs
 enum class PanadapterLifecycle { STOPPED, STARTING, LIVE, ROUTE_LOST, REPLAY, ERROR }
 enum class PanadapterWindow(val nativeValue: Int) { BLACKMAN_HARRIS(0), HANN(1), NUTTALL(2), RECTANGULAR(3), FLAT_TOP(4) }
 enum class PanadapterPalette { FLIGHTLINE, VIRIDIS, GREYSCALE }
+enum class PanadapterFormatState {
+    ROUTE_UNPROVEN,
+    ROUTE_PROVEN_FORMAT_PENDING,
+    TRUE_96K_STEREO,
+    TRUE_48K_STEREO,
+    RESAMPLED_48_TO_96,
+    OTHER_RESAMPLED_PATH,
+    UNSUPPORTED_MONO_OR_CONVERTED_CHANNEL_PATH,
+    ROUTE_LOST,
+}
+enum class PanadapterIqState { UNVERIFIED, CHANNELS_HEALTHY_ORIENTATION_UNVERIFIED, VERIFIED_UNCALIBRATED, CALIBRATED, INVALID }
+enum class PanadapterCalibrationState { UNCALIBRATED, DEVICE_BOUND, INVALID_FOR_PATH }
+enum class PanadapterDisplayState { UNAVAILABLE, HEALTHY, SATURATED, INSUFFICIENT_VALID_BINS }
 
 data class PanadapterSettings(
     val requestedRate: Int = 96_000,
@@ -19,7 +32,7 @@ data class PanadapterSettings(
     val averageFrames: Int = 2,
     val peakHold: Boolean = false,
     val peakDecayDbPerSecond: Float = 0f,
-    val genericKx3Flatness: Boolean = true,
+    val genericKx3Flatness: Boolean = false,
     val swapIq: Boolean = false,
     val invertI: Boolean = false,
     val invertQ: Boolean = false,
@@ -29,8 +42,8 @@ data class PanadapterSettings(
     val zoomDecimation: Int = 1,
     val zoomOffsetHz: Float = 0f,
     val waterfallRows: Int = 384,
-    val waterfallMinDb: Float = -120f,
-    val waterfallMaxDb: Float = -45f,
+    val waterfallMinDb: Float = -110f,
+    val waterfallMaxDb: Float = -55f,
     val waterfallGamma: Float = 0.85f,
     val waterfallLineRate: Int = 25,
     val palette: PanadapterPalette = PanadapterPalette.FLIGHTLINE,
@@ -46,7 +59,7 @@ data class PanadapterSettings(
     val iqCorrectionEnabled: Boolean = false,
     val calibrationDeviceKey: String = "",
     val calibrationRate: Int = 0,
-    val autoLevel: Boolean = false,
+    val autoLevel: Boolean = true,
     val levelAttack: Float = .35f,
     val levelRelease: Float = .08f,
     val waterfallAverageFrames: Int = 2,
@@ -90,7 +103,7 @@ data class PanadapterSettings(
     )
 
     fun encode(): String = listOf(
-        "v=1", "rate=$requestedRate", "fallback=$allow48kFallback", "fft=$fftSize", "overlap=$overlapPercent", "window=${window.name}",
+        "v=2", "rate=$requestedRate", "fallback=$allow48kFallback", "fft=$fftSize", "overlap=$overlapPercent", "window=${window.name}",
         "floor=$displayFloorDb", "top=$displayTopDb", "attack=$attack", "release=$release", "average=$averageFrames",
         "peak_hold=$peakHold", "peak_decay=$peakDecayDbPerSecond", "flatness=$genericKx3Flatness", "swap=$swapIq",
         "invert_i=$invertI", "invert_q=$invertQ", "conjugate=$conjugate", "i_trim=$iTrim", "q_trim=$qTrim",
@@ -112,28 +125,35 @@ data class PanadapterSettings(
         fun decode(value: String?): PanadapterSettings = runCatching {
             val row = value?.split(';')?.mapNotNull { field -> field.indexOf('=').takeIf { it > 0 }?.let { field.substring(0, it) to field.substring(it + 1) } }?.toMap()
                 ?: return@runCatching PanadapterSettings()
-            require(row["v"]?.toIntOrNull() == 1)
+            val version = row["v"]?.toIntOrNull() ?: 1
+            require(version in 1..2)
             fun int(name: String, fallback: Int) = row[name]?.toIntOrNull() ?: fallback
             fun float(name: String, fallback: Float) = row[name]?.toFloatOrNull() ?: fallback
             fun bool(name: String, fallback: Boolean = false) = row[name]?.toBooleanStrictOrNull() ?: fallback
-            PanadapterSettings(
+            val decoded = PanadapterSettings(
                 int("rate", 96_000), bool("fallback", true), int("fft", 4_096), int("overlap", 50),
                 enumValueOf<PanadapterWindow>(row["window"] ?: PanadapterWindow.BLACKMAN_HARRIS.name),
                 float("floor", -120f), float("top", -20f), float("attack", .78f), float("release", .16f), int("average", 2),
-                bool("peak_hold"), float("peak_decay", 0f), bool("flatness", true), bool("swap"), bool("invert_i"), bool("invert_q"), bool("conjugate"),
+                bool("peak_hold"), float("peak_decay", 0f), bool("flatness", false), bool("swap"), bool("invert_i"), bool("invert_q"), bool("conjugate"),
                 float("i_trim", 1f), float("q_trim", 1f), int("zoom", 1), float("zoom_offset", 0f), int("wf_rows", 384),
                 float("wf_min", -120f), float("wf_max", -45f), float("wf_gamma", .85f), int("wf_rate", 25),
                 enumValueOf<PanadapterPalette>(row["palette"] ?: PanadapterPalette.FLIGHTLINE.name),
                 bool("spots", true), bool("floor_line", true), int("center_mask", 0), bool("awake"), int("qsy_step", 10),
                 float("iq_ar", 1f), float("iq_ai", 0f), float("iq_br", 0f), float("iq_bi", 0f), bool("iq_enabled"),
                 row["cal_device"] ?: "", int("cal_rate", 0),
-                bool("auto_level"), float("level_attack", .35f), float("level_release", .08f), int("wf_average", 2),
+                bool("auto_level", true), float("level_attack", .35f), float("level_release", .08f), int("wf_average", 2),
                 bool("measured_flatness"), row["flat_offsets"] ?: "", row["flat_gains"] ?: "",
                 row["flat_device"] ?: "", int("flat_rate", 0), row["flat_radio"] ?: "", row["flat_epoch"]?.toLongOrNull() ?: 0,
                 bool("level_enabled"), float("level_offset", 0f), row["level_frequency"]?.toLongOrNull() ?: 0,
                 row["level_device"] ?: "", int("level_rate", 0), row["level_radio"] ?: "", row["level_band"] ?: "",
                 row["level_epoch"]?.toLongOrNull() ?: 0, float("level_uncertainty", 0f), row["level_notes"] ?: "",
             ).validated()
+            if (version == 1) decoded.copy(
+                genericKx3Flatness = false,
+                autoLevel = true,
+                waterfallMinDb = -110f,
+                waterfallMaxDb = -55f,
+            ).validated() else decoded
         }.getOrDefault(PanadapterSettings())
     }
 }
@@ -182,9 +202,68 @@ data class PanadapterRouteProof(
     val deviceFormat: String = "Unavailable",
     val audioSource: Int = 0,
     val sessionId: Int = 0,
+    val clientRate: Int = 0,
+    val clientChannels: Int = 0,
+    val clientChannelMask: Int = 0,
+    val clientEncoding: Int = 0,
+    val deviceRate: Int = 0,
+    val deviceChannels: Int = 0,
+    val deviceChannelMask: Int = 0,
+    val deviceEncoding: Int = 0,
+    val activeConfigurationAvailable: Boolean = false,
+    val activeDevice: String = "None",
+    val clientSilenced: Boolean = false,
+    val clientEffects: String = "Unavailable",
+    val deviceEffects: String = "Unavailable",
+    val stateOverride: PanadapterFormatState? = null,
 ) {
-    val verified: Boolean get() = preferredAccepted && requestedDevice == actualDevice && configuredChannels >= 2 && configuredRate in setOf(48_000, 96_000)
+    val state: PanadapterFormatState get() = stateOverride ?: classifyPanadapterFormat(this)
+    val routeVerified: Boolean get() = preferredAccepted && requestedDevice == actualDevice && requestedDevice == activeDevice
+    val verified: Boolean get() = state == PanadapterFormatState.TRUE_48K_STEREO || state == PanadapterFormatState.TRUE_96K_STEREO
+    val physicalRate: Int get() = if (verified) deviceRate else 0
+    val conversionPresent: Boolean get() = clientRate != deviceRate || clientChannels != deviceChannels || clientEncoding != deviceEncoding
 }
+
+internal fun classifyPanadapterFormat(proof: PanadapterRouteProof): PanadapterFormatState {
+    if (proof.stateOverride != null) return proof.stateOverride
+    if (!proof.preferredAccepted || proof.requestedDevice != proof.actualDevice ||
+        proof.requestedDevice != proof.activeDevice) return PanadapterFormatState.ROUTE_UNPROVEN
+    if (!proof.activeConfigurationAvailable || proof.clientRate <= 0 || proof.deviceRate <= 0)
+        return PanadapterFormatState.ROUTE_PROVEN_FORMAT_PENDING
+    if (proof.clientChannels != 2 || proof.deviceChannels != 2 || proof.configuredChannels != 2 ||
+        proof.clientEncoding != proof.deviceEncoding)
+        return PanadapterFormatState.UNSUPPORTED_MONO_OR_CONVERTED_CHANNEL_PATH
+    if (proof.clientRate == 96_000 && proof.deviceRate == 48_000)
+        return PanadapterFormatState.RESAMPLED_48_TO_96
+    if (proof.clientRate != proof.deviceRate)
+        return PanadapterFormatState.OTHER_RESAMPLED_PATH
+    return when (proof.deviceRate) {
+        96_000 -> PanadapterFormatState.TRUE_96K_STEREO
+        48_000 -> PanadapterFormatState.TRUE_48K_STEREO
+        else -> PanadapterFormatState.OTHER_RESAMPLED_PATH
+    }
+}
+
+data class PanadapterDisplayMetrics(
+    val rawFloorDb: Float = Float.NaN,
+    val stabilizedFloorDb: Float = Float.NaN,
+    val spectrumFloorDb: Float = -110f,
+    val spectrumTopDb: Float = -55f,
+    val waterfallBlackDb: Float = -108f,
+    val waterfallTopDb: Float = -58f,
+    val fractionBelowBlack: Float = 0f,
+    val usefulColorFraction: Float = 0f,
+    val waterfallSaturatedFraction: Float = 0f,
+    val validBinFraction: Float = 0f,
+    val validBinCount: Int = 0,
+    val medianDb: Float = Float.NaN,
+    val highPercentileDb: Float = Float.NaN,
+    val peakToFloorDb: Float = Float.NaN,
+    val inBandToInvalidPowerDb: Float = Float.NaN,
+    val combSpacingHz: Float = Float.NaN,
+    val combPersistence: Float = 0f,
+    val state: PanadapterDisplayState = PanadapterDisplayState.UNAVAILABLE,
+)
 
 data class PanadapterFrame(
     val sequence: Long,
@@ -210,6 +289,7 @@ data class PanadapterFrame(
     val trace: FloatArray,
     val waterfall: FloatArray,
     val peakHold: FloatArray,
+    val validMask: BooleanArray = BooleanArray(trace.size) { true },
 )
 
 data class PanadapterMarker(val frequencyHz: Long, val levelDb: Float, val callsign: String? = null)
@@ -220,6 +300,24 @@ data class PanadapterCalibrationCandidate(
     val knownOffsetHz: Float,
     val rejectionBeforeDb: Float,
     val rejectionAfterDb: Float? = null,
+    val measuredOffsetHz: Float = Float.NaN,
+    val axisErrorHz: Float = Float.NaN,
+    val desiredLevelDb: Float = Float.NaN,
+    val imageLevelDb: Float = Float.NaN,
+    val gainImbalanceDb: Float = Float.NaN,
+    val phaseErrorDegrees: Float = Float.NaN,
+    val dcSpurRelativeFloorDb: Float = Float.NaN,
+)
+
+data class PanadapterSpurCapture(
+    val stage: String,
+    val capturedEpochMs: Long,
+    val formatState: PanadapterFormatState,
+    val physicalRate: Int,
+    val floorDb: Float,
+    val combSpacingHz: Float,
+    val combPersistence: Float,
+    val saturatedFraction: Float,
 )
 
 data class PassbandEdges(val lowOffsetHz: Float, val highOffsetHz: Float)

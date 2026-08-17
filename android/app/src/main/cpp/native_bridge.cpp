@@ -241,7 +241,7 @@ Java_app_rigweave_mobile_NativePanadapter_snapshot(JNIEnv *env, jobject, jlong h
     jlongArray meta, jfloatArray metrics, jfloatArray trace, jfloatArray waterfall,
     jfloatArray peakHold) {
     if (meta == nullptr || metrics == nullptr || trace == nullptr || waterfall == nullptr || peakHold == nullptr ||
-        env->GetArrayLength(meta) < 9 || env->GetArrayLength(metrics) < 10) return 0;
+        env->GetArrayLength(meta) < 9 || env->GetArrayLength(metrics) < 14) return 0;
     const jsize capacity = std::min({env->GetArrayLength(trace), env->GetArrayLength(waterfall),
                                     env->GetArrayLength(peakHold)});
     jfloat *traceValues = env->GetFloatArrayElements(trace, nullptr);
@@ -260,13 +260,14 @@ Java_app_rigweave_mobile_NativePanadapter_snapshot(JNIEnv *env, jobject, jlong h
         value.sample_rate, value.effective_sample_rate, value.fft_size, value.hop_size,
         value.zoom_decimation
     };
-    const jfloat metricValues[10] = {
+    const jfloat metricValues[14] = {
         value.zoom_offset_hz, value.enbw_bins, value.rbw_hz, value.peak_db, value.floor_db,
         value.i_rms_db, value.q_rms_db, value.iq_correlation, value.clipped_fraction,
-        value.duplicate_correlation
+        value.duplicate_correlation, value.raw_floor_db, value.stabilized_floor_db,
+        value.valid_bin_fraction, static_cast<jfloat>(value.valid_bin_count)
     };
     env->SetLongArrayRegion(meta, 0, 9, metaValues);
-    env->SetFloatArrayRegion(metrics, 0, 10, metricValues);
+    env->SetFloatArrayRegion(metrics, 0, 14, metricValues);
     return count;
 }
 

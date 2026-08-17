@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "created_at": 1786971829572,
+  "sample_rate": 48000,
+  "channels": 2,
+  "encoding": "PCM_SIGNED_16_LE",
+  "selected_product": "USB Advanced Audio Device",
+  "selected_usb": "0d8c:8810",
+  "settings": "v=2;rate=48000;fallback=false;fft=2048;overlap=75;window=RECTANGULAR;floor=-120.0;top=-20.0;attack=0.78;release=0.16;average=9;peak_hold=false;peak_decay=0.0;flatness=false;swap=false;invert_i=false;invert_q=false;conjugate=false;i_trim=1.0;q_trim=1.0;zoom=1;zoom_offset=0.0;wf_rows=384;wf_min=-110.0;wf_max=-55.0;wf_gamma=0.85;wf_rate=25;palette=FLIGHTLINE;spots=true;floor_line=true;center_mask=0;awake=false;qsy_step=10;iq_ar=1.0;iq_ai=0.0;iq_br=0.0;iq_bi=0.0;iq_enabled=false;cal_device=;cal_rate=0;auto_level=true;level_attack=0.35;level_release=0.08;wf_average=2;measured_flatness=false;flat_offsets=;flat_gains=;flat_device=;flat_rate=0;flat_radio=;flat_epoch=0;level_enabled=true;level_offset=-8.385788;level_frequency=0;level_device=11|card=2;level_rate=96000;level_radio=KX3;level_band=;level_epoch=1786959360656;level_uncertainty=1.0;level_notes="
+}

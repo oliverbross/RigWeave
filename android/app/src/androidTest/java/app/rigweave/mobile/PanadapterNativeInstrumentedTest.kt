@@ -24,7 +24,7 @@ class PanadapterNativeInstrumentedTest {
                 pcm[index * 2 + 1] = (sin(phase) * .5 * Short.MAX_VALUE).toInt().toShort()
             }
             assertTrue(NativePanadapter.push(handle, pcm, pcm.size, false))
-            val meta = LongArray(9); val metrics = FloatArray(10)
+            val meta = LongArray(9); val metrics = FloatArray(14)
             val trace = FloatArray(4_096); val waterfall = FloatArray(4_096); val peak = FloatArray(4_096)
             assertEquals(4_096, NativePanadapter.snapshot(handle, meta, metrics, trace, waterfall, peak))
             assertEquals(1L, meta[0]); assertEquals(4_096L, meta[1]); assertEquals(96_000L, meta[4])

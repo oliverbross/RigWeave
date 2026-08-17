@@ -62,7 +62,7 @@ void PanadapterDsp::rebuild_configuration() {
     instantaneous_power_.assign(size, 0.0F); averaged_power_.assign(size, 0.0F);
     trace_db_.assign(size, kFloorDb); waterfall_db_.assign(size, kFloorDb);
     peak_hold_db_.assign(size, kFloorDb); floor_scratch_.assign(size, kFloorDb);
-    bins_.assign(size, 0U); bit_reverse_.assign(size, 0U); twiddles_.assign(size / 2U, {});
+    bins_.assign(size, 0U); valid_mask_.assign(size, 0U); bit_reverse_.assign(size, 0U); twiddles_.assign(size / 2U, {});
     unsigned bits{};
     while ((std::size_t{1} << bits) < size) ++bits;
     for (std::size_t i = 0; i < size; ++i) {
@@ -131,6 +131,7 @@ void PanadapterDsp::reset() {
     snapshot_.fft_size = config_.fft_size;
     snapshot_.hop_size = config_.fft_size * (100U - config_.overlap_percent) / 100U;
     snapshot_.zoom_decimation = config_.zoom_decimation; snapshot_.zoom_offset_hz = config_.zoom_offset_hz;
+    snapshot_.floor_db = snapshot_.raw_floor_db = snapshot_.stabilized_floor_db = kFloorDb;
     rebuild_window();
 }
 
@@ -232,9 +233,28 @@ void PanadapterDsp::transform() {
         const float scaled = (trace_db_[x] - config_.display_floor_db) / (config_.display_top_db - config_.display_floor_db);
         bins_[x] = static_cast<std::uint8_t>(std::clamp(scaled * 255.0F, 0.0F, 255.0F));
     }
-    const std::size_t guard = std::max<std::size_t>(4U, fft_data_.size() / 100U); std::size_t count{};
-    for (std::size_t i = guard; i + guard < trace_db_.size(); ++i) if (std::abs(static_cast<long>(i) - static_cast<long>(trace_db_.size() / 2U)) > 2L) floor_scratch_[count++] = trace_db_[i];
-    if (count > 0U) { const std::size_t percentile = count / 4U; std::nth_element(floor_scratch_.begin(), floor_scratch_.begin() + percentile, floor_scratch_.begin() + count); snapshot_.floor_db = floor_scratch_[percentile]; }
+    const std::size_t guard = std::max<std::size_t>(4U, fft_data_.size() / 50U); std::size_t count{};
+    const std::size_t centre = trace_db_.size() / 2U;
+    std::fill(valid_mask_.begin(), valid_mask_.end(), 0U);
+    for (std::size_t i = guard; i + guard < trace_db_.size(); ++i) {
+        if (std::abs(static_cast<long>(i) - static_cast<long>(centre)) <= 3L || !std::isfinite(trace_db_[i])) continue;
+        valid_mask_[i] = 1U;
+        floor_scratch_[count++] = trace_db_[i];
+    }
+    snapshot_.valid_bin_count = static_cast<std::uint32_t>(count);
+    snapshot_.valid_bin_fraction = static_cast<float>(count) / static_cast<float>(trace_db_.size());
+    if (count >= trace_db_.size() / 4U) {
+        // The 35th valid-band percentile is insensitive to narrow carriers and never sees masked dark edges.
+        const std::size_t percentile = static_cast<std::size_t>(0.35F * static_cast<float>(count - 1U));
+        std::nth_element(floor_scratch_.begin(), floor_scratch_.begin() + percentile, floor_scratch_.begin() + count);
+        snapshot_.raw_floor_db = floor_scratch_[percentile];
+        const float alpha = snapshot_.transforms == 0U ? 1.0F :
+            (snapshot_.raw_floor_db > snapshot_.stabilized_floor_db ? 0.08F : 0.018F);
+        snapshot_.stabilized_floor_db += alpha * (snapshot_.raw_floor_db - snapshot_.stabilized_floor_db);
+        snapshot_.floor_db = snapshot_.stabilized_floor_db;
+    } else {
+        snapshot_.raw_floor_db = snapshot_.stabilized_floor_db = snapshot_.floor_db = kFloorDb;
+    }
     if (metric_count_ > 0U) {
         const double pi = metric_i_power_ / static_cast<double>(metric_count_), pq = metric_q_power_ / static_cast<double>(metric_count_);
         snapshot_.i_rms_db = finite_db(static_cast<float>(pi)); snapshot_.q_rms_db = finite_db(static_cast<float>(pq));

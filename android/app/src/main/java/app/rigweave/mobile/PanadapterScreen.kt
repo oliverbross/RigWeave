@@ -80,14 +80,18 @@ fun PanadapterScreen(
     var spectrumFraction by rememberSaveable { mutableFloatStateOf(.41f) }
     var displayMode by rememberSaveable { mutableIntStateOf(0) }
     var immersive by rememberSaveable { mutableStateOf(false) }
-    var autoFloorDb by remember { mutableFloatStateOf(controller.settings.displayFloorDb) }
-    var autoTopDb by remember { mutableFloatStateOf(controller.settings.displayTopDb) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) controller.start() else message = "RECORD_AUDIO permission denied"
     }
     val frame = controller.frame
     val center = controller.effectiveCenter()
-    val span = (frame?.effectiveSampleRate ?: controller.settings.requestedRate).toFloat() / viewZoom
+    val provenSpan = frame?.effectiveSampleRate ?: controller.routeProof.physicalRate
+    val usableSpan = provenSpan * controller.displayMetrics.validBinFraction
+    val span = (provenSpan.takeIf { it > 0 } ?: controller.settings.requestedRate).toFloat() / viewZoom
+    val autoFloorDb = if (controller.settings.autoLevel && controller.displayMetrics.stabilizedFloorDb.isFinite())
+        controller.displayMetrics.spectrumFloorDb else controller.settings.displayFloorDb
+    val autoTopDb = if (controller.settings.autoLevel && controller.displayMetrics.stabilizedFloorDb.isFinite())
+        controller.displayMetrics.spectrumTopDb else controller.settings.displayTopDb
     val visibleStart = center - span / 2f + viewPan
     val visibleEnd = center + span / 2f + viewPan
     val visibleSpots = remember(spots, visibleStart, visibleEnd, controller.settings.showSpots) {
@@ -95,22 +99,6 @@ fun PanadapterScreen(
     }
 
     LaunchedEffect(radio.revision) { controller.observeRadioState(radio) }
-    LaunchedEffect(frame?.sequence, controller.settings.autoLevel) {
-        val current = frame ?: return@LaunchedEffect
-        if (controller.settings.autoLevel) {
-            val targetFloor = (current.floorDb - 6f).coerceIn(-140f, -55f)
-            val targetTop = (current.peakDb + 6f).coerceIn(targetFloor + 30f, 0f)
-            fun approach(value: Float, target: Float): Float {
-                val rate = if (target > value) controller.settings.levelAttack else controller.settings.levelRelease
-                return value + rate * (target - value)
-            }
-            autoFloorDb = approach(autoFloorDb, targetFloor)
-            autoTopDb = approach(autoTopDb, targetTop).coerceAtLeast(autoFloorDb + 20f)
-        } else {
-            autoFloorDb = controller.settings.displayFloorDb
-            autoTopDb = controller.settings.displayTopDb
-        }
-    }
     DisposableEffect(Unit) { onDispose { controller.stop() } }
     DisposableEffect(controller.lifecycle, controller.settings.keepScreenAwake) {
         view.keepScreenOn = controller.lifecycle == PanadapterLifecycle.LIVE && controller.settings.keepScreenAwake
@@ -133,6 +121,7 @@ fun PanadapterScreen(
         PanadapterHeader(controller, radio, compact, onControls,
             onStart = { if (controller.hasRecordPermission()) controller.start() else permission.launch(Manifest.permission.RECORD_AUDIO) },
             onStop = { controller.stop() }, onInspector = { inspector = true }, onDiagnostics = { diagnostics = true })
+        PanadapterTruthStrip(controller)
 
         if (radio.transmitting) {
             Surface(color = PanDanger, modifier = Modifier.fillMaxWidth()) {
@@ -168,7 +157,8 @@ fun PanadapterScreen(
                             if (activeMarker == 0) markerAHz = frequency else markerBHz = frequency
                         }
                     })
-            Text("${if (viewZoom > 1f) "VIEW ${"%.1f".format(viewZoom)}× · " else ""}${"%.1f".format(span / 1000f)} kHz span",
+            Text("${if (provenSpan > 0) "TRUE" else "REQUESTED"} · ${if (viewZoom > 1f) "VIEW ${"%.1f".format(viewZoom)}× · " else ""}${"%.1f".format(span / 1000f)} kHz nominal" +
+                if (usableSpan > 0f) " · ${"%.1f".format(usableSpan / 1000f)} kHz usable" else "",
                 color = PanMuted, fontFamily = FontFamily.Monospace, fontSize = 10.sp,
                 modifier = Modifier.align(Alignment.TopEnd).padding(6.dp))
         }
@@ -207,9 +197,12 @@ fun PanadapterScreen(
         AlertDialog(onDismissRequest = { message = controller.cancelCalibration() },
             title = { Text("Confirm I/Q calibration") },
             text = { Text("Known tone ${if (candidate.knownOffsetHz >= 0) "+" else ""}${"%.0f".format(candidate.knownOffsetHz)} Hz\n" +
+                "Measured ${"%+.1f".format(candidate.measuredOffsetHz)} Hz · axis error ${"%+.1f".format(candidate.axisErrorHz)} Hz\n" +
+                "Desired ${"%.1f".format(candidate.desiredLevelDb)} dBFS · image ${"%.1f".format(candidate.imageLevelDb)} dBFS\n" +
+                "Gain imbalance ${"%+.2f".format(candidate.gainImbalanceDb)} dB · phase error ${"%+.2f".format(candidate.phaseErrorDegrees)}°\n" +
                 "Image rejection ${"%.1f".format(candidate.rejectionBeforeDb)} → ${"%.1f".format(candidate.rejectionAfterDb)} dB\n\n" +
-                "Save this stable device-bound correction profile?") },
-            confirmButton = { Button({ message = controller.confirmCalibration() }) { Text("Save profile") } },
+                "Verify this offset. A device-bound profile is saved only after a stable opposite-offset proof.") },
+            confirmButton = { Button({ message = controller.confirmCalibration() }) { Text("Verify offset") } },
             dismissButton = { TextButton({ message = controller.cancelCalibration() }) { Text("Reject") } })
     }
     controller.levelCalibrationCandidate?.let { candidate ->
@@ -220,6 +213,26 @@ fun PanadapterScreen(
                 "This profile is valid only for the current USB input, sample rate, radio/band and unchanged physical/system input gain.") },
             confirmButton = { Button({ message = controller.confirmLevelCalibration() }) { Text("Save measured profile") } },
             dismissButton = { TextButton({ message = controller.cancelLevelCalibration() }) { Text("Reject") } })
+    }
+}
+
+@Composable
+private fun PanadapterTruthStrip(controller: PanadapterController) {
+    val proof = controller.routeProof
+    val metrics = controller.displayMetrics
+    val iq = controller.iqState()
+    val usableKhz = proof.physicalRate * metrics.validBinFraction / 1000f
+    val periodicSpurs = metrics.combPersistence > .6f && metrics.combSpacingHz.isFinite()
+    val danger = proof.state in setOf(PanadapterFormatState.RESAMPLED_48_TO_96,
+        PanadapterFormatState.OTHER_RESAMPLED_PATH, PanadapterFormatState.UNSUPPORTED_MONO_OR_CONVERTED_CHANNEL_PATH) ||
+        metrics.state == PanadapterDisplayState.SATURATED || iq == PanadapterIqState.INVALID
+    Surface(color = when { danger -> PanDanger.copy(alpha = .22f); periodicSpurs -> PanAmber.copy(alpha = .14f); else -> PanRaised.copy(alpha = .70f) }, modifier = Modifier.fillMaxWidth()) {
+        Text("ROUTE ${if (proof.routeVerified) "OK" else "UNPROVEN"} · FORMAT ${proof.state.name.replace('_', ' ')} · " +
+            "USABLE ${if (usableKhz > 0f) "%.1f kHz".format(usableKhz) else "UNPROVEN"} · I/Q ${iq.name.replace('_', ' ')} · " +
+            "DISPLAY ${metrics.state.name.replace('_', ' ')}" +
+            if (periodicSpurs) " · PERIODIC SPURS ${"%.0f".format(metrics.combSpacingHz)} Hz" else "",
+            color = when { danger -> PanDanger; periodicSpurs -> PanAmber; else -> PanMuted }, fontFamily = FontFamily.Monospace, fontSize = 9.sp,
+            maxLines = 2, modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp))
     }
 }
 
@@ -240,6 +253,13 @@ private fun PanadapterHeader(controller: PanadapterController, radio: RadioState
         Text(if (radio.effectiveRxHz > 0) formatRadioFrequency(radio.effectiveRxHz) else "RF STALE",
             color = if (controller.effectiveCenter() > 0) PanInk else PanDanger, fontFamily = FontFamily.Monospace,
             fontSize = if (compact) 13.sp else 17.sp, fontWeight = FontWeight.Bold)
+        listOf(48_000 to "48K", 96_000 to "96K").forEach { (rate, label) ->
+            FilterChip(
+                selected = controller.settings.requestedRate == rate,
+                onClick = { controller.updateSettings(controller.settings.copy(requestedRate = rate)) },
+                label = { Text(label, fontFamily = FontFamily.Monospace) },
+            )
+        }
         IconButton(onDiagnostics) { Icon(Icons.Outlined.MonitorHeart, "Diagnostics", tint = PanMuted) }
         IconButton(onInspector) { Icon(Icons.Outlined.Tune, "Panadapter settings", tint = PanAmber) }
         if (controller.lifecycle == PanadapterLifecycle.LIVE || controller.lifecycle == PanadapterLifecycle.STARTING)
@@ -278,6 +298,10 @@ private fun SpectrumCanvas(frame: PanadapterFrame?, radio: RadioState, center: L
         repeat(6) { index ->
             val y = size.height * index / 5f
             drawLine(PanRaised.copy(alpha = .45f), Offset(0f, y), Offset(size.width, y), 1f)
+            drawIntoCanvas { canvas ->
+                annotationPaint.color = PanMuted.toArgb(); annotationPaint.textSize = 18f
+                canvas.nativeCanvas.drawText("%.0f dBFS".format(topDb - (topDb - floorDb) * index / 5f), 5f, (y + 18f).coerceAtMost(size.height - 4f), annotationPaint)
+            }
         }
         if (center > 0 && radio.bandwidthHz > 0) {
             val passband = panadapterPassband(radio)
@@ -287,27 +311,25 @@ private fun SpectrumCanvas(frame: PanadapterFrame?, radio: RadioState, center: L
         }
         val source = frame?.trace
         if (source != null && source.isNotEmpty()) {
-            val path = Path()
             val pointCount = minOf(1_200, source.size, size.width.toInt()).coerceAtLeast(2)
-            val visibleBinsPerPoint = source.size * span / frame.effectiveSampleRate / pointCount
-            val radius = max(1, (visibleBinsPerPoint * .55f).toInt())
-            for (point in 0 until pointCount) {
-                val normalized = point.toFloat() / (pointCount - 1)
-                val offsetHz = (normalized - .5f) * span + viewPan
-                val binCenter = ((offsetHz / frame.effectiveSampleRate + .5f) * source.size).toInt()
-                var db = -140f
-                for (bin in (binCenter - radius).coerceAtLeast(0)..(binCenter + radius).coerceAtMost(source.lastIndex)) db = max(db, source[bin])
+            val firstBin = (((viewPan - span / 2f) / frame.effectiveSampleRate + .5f) * source.size).toInt().coerceIn(0, source.lastIndex)
+            val lastBin = (((viewPan + span / 2f) / frame.effectiveSampleRate + .5f) * source.size).toInt().coerceIn(firstBin + 1, source.size)
+            val buckets = reducePanadapterBuckets(source, firstBin, lastBin, pointCount)
+            val path = Path()
+            for (point in buckets.indices) {
+                val normalized = point.toFloat() / (buckets.size - 1).coerceAtLeast(1)
+                val db = buckets[point].displayDb
                 val y = ((topDb - db) / (topDb - floorDb) * size.height).coerceIn(0f, size.height)
                 val x = normalized * size.width
                 if (point == 0) path.moveTo(x, y) else path.lineTo(x, y)
             }
             drawPath(path, PanAmber, style = Stroke(2.2f))
             if (settings.peakHold && frame.peakHold.isNotEmpty()) {
+                val peakBuckets = reducePanadapterBuckets(frame.peakHold, firstBin, lastBin, pointCount)
                 val peakPath = Path()
-                for (point in 0 until pointCount) {
-                    val normalized = point.toFloat() / (pointCount - 1)
-                    val bin = ((((normalized - .5f) * span + viewPan) / frame.effectiveSampleRate + .5f) * frame.peakHold.size).toInt().coerceIn(0, frame.peakHold.lastIndex)
-                    val y = ((topDb - frame.peakHold[bin]) / (topDb - floorDb) * size.height).coerceIn(0f, size.height)
+                for (point in peakBuckets.indices) {
+                    val normalized = point.toFloat() / (peakBuckets.size - 1).coerceAtLeast(1)
+                    val y = ((topDb - peakBuckets[point].highDb) / (topDb - floorDb) * size.height).coerceIn(0f, size.height)
                     val x = normalized * size.width
                     if (point == 0) peakPath.moveTo(x, y) else peakPath.lineTo(x, y)
                 }
@@ -315,6 +337,18 @@ private fun SpectrumCanvas(frame: PanadapterFrame?, radio: RadioState, center: L
             }
             val floorY = ((topDb - frame.floorDb) / (topDb - floorDb) * size.height).coerceIn(0f, size.height)
             if (settings.showFloor) drawLine(PanHealthy.copy(alpha = .55f), Offset(0f, floorY), Offset(size.width, floorY), 1f)
+            if (frame.validMask.isNotEmpty()) {
+                val validFirst = frame.validMask.indexOfFirst { it }
+                val validLast = frame.validMask.indexOfLast { it }
+                if (validFirst >= 0) {
+                    val validLeftHz = (validFirst.toFloat() / frame.validMask.size - .5f) * frame.effectiveSampleRate
+                    val validRightHz = ((validLast + 1f) / frame.validMask.size - .5f) * frame.effectiveSampleRate
+                    val x1 = ((validLeftHz - (viewPan - span / 2f)) / span * size.width).coerceIn(0f, size.width)
+                    val x2 = ((validRightHz - (viewPan - span / 2f)) / span * size.width).coerceIn(0f, size.width)
+                    if (x1 > 0f) drawRect(PanMuted.copy(alpha = .18f), Offset.Zero, Size(x1, size.height))
+                    if (x2 < size.width) drawRect(PanMuted.copy(alpha = .18f), Offset(x2, 0f), Size(size.width - x2, size.height))
+                }
+            }
         }
         if (center > 0) {
             if (settings.centerMaskBins > 0 && frame != null) {
@@ -403,6 +437,9 @@ private fun PanadapterActionStrip(controller: PanadapterController, radio: Radio
         CompositionLocalProvider(LocalContentColor provides PanInk) {
             Row(modifier, verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = if (compact) Arrangement.SpaceEvenly else Arrangement.spacedBy(6.dp)) {
+                TextButton({ controller.setAutoDisplay(!controller.settings.autoLevel) }) {
+                    Text(if (controller.settings.autoLevel) "AUTO DISPLAY" else "MANUAL")
+                }
                 if (markerAHz > 0) TextButton(onTuneA, enabled = !radio.transmitting) { Text("QSY A") }
                 if (markerBHz > 0) TextButton(onTuneB, enabled = !radio.transmitting) { Text("QSY B") }
                 IconButton(onUndo, enabled = controller.lastQsy != null) { Icon(Icons.AutoMirrored.Outlined.Undo, "Undo last panadapter QSY") }
@@ -552,6 +589,12 @@ private fun PanadapterDiagnostics(controller: PanadapterController, radio: Radio
             DiagnosticRow("Requested", proof.requestedDevice)
             DiagnosticRow("Actual", proof.actualDevice)
             DiagnosticRow("Rate / channels", "${proof.configuredRate} Hz / ${proof.configuredChannels}")
+            DiagnosticRow("Format proof", proof.state.name)
+            DiagnosticRow("Client numeric", "${proof.clientRate} Hz / ${proof.clientChannels} ch / enc ${proof.clientEncoding} / mask 0x${proof.clientChannelMask.toString(16)}")
+            DiagnosticRow("Device numeric", "${proof.deviceRate} Hz / ${proof.deviceChannels} ch / enc ${proof.deviceEncoding} / mask 0x${proof.deviceChannelMask.toString(16)}")
+            DiagnosticRow("Conversion", proof.conversionPresent.toString())
+            DiagnosticRow("Client silenced", proof.clientSilenced.toString())
+            DiagnosticRow("Client / device effects", "${proof.clientEffects} / ${proof.deviceEffects}")
             DiagnosticRow("Client format", proof.clientFormat)
             DiagnosticRow("Device format", proof.deviceFormat)
             DiagnosticRow("Audio source/session", "${proof.audioSource} / ${proof.sessionId}")
@@ -563,6 +606,20 @@ private fun PanadapterDiagnostics(controller: PanadapterController, radio: Radio
             DiagnosticRow("I / Q RMS", "${"%.1f".format(frame?.iRmsDb ?: -140f)} / ${"%.1f".format(frame?.qRmsDb ?: -140f)} dBFS")
             DiagnosticRow("Correlation / duplicate", "${"%.4f".format(frame?.iqCorrelation ?: 0f)} / ${"%.4f".format(frame?.duplicateCorrelation ?: 0f)}")
             DiagnosticRow("Peak / floor", "${"%.1f".format(frame?.peakDb ?: -140f)} / ${"%.1f".format(frame?.floorDb ?: -140f)} dBFS")
+            DiagnosticRow("Raw / stable floor", "${"%.1f".format(controller.displayMetrics.rawFloorDb)} / ${"%.1f".format(controller.displayMetrics.stabilizedFloorDb)} dBFS")
+            DiagnosticRow("Waterfall black / top", "${"%.1f".format(controller.displayMetrics.waterfallBlackDb)} / ${"%.1f".format(controller.displayMetrics.waterfallTopDb)} dBFS")
+            DiagnosticRow("Saturated / valid", "${"%.2f".format(controller.displayMetrics.waterfallSaturatedFraction * 100)}% / ${"%.1f".format(controller.displayMetrics.validBinFraction * 100)}%")
+            DiagnosticRow("Display / I Q / calibration", "${controller.displayMetrics.state} / ${controller.iqState()} / ${controller.calibrationState()}")
+            DiagnosticRow("Comb", if (controller.displayMetrics.combPersistence > .5f) "${"%.1f".format(controller.displayMetrics.combSpacingHz)} Hz · ${"%.0f".format(controller.displayMetrics.combPersistence * 100)}% persistent" else "not persistent")
+            Text("SPUR DIAGNOSTIC", color = PanAmber, fontWeight = FontWeight.Bold)
+            Text("A: safely terminate/short the sound-card input with KX3 disconnected. B: connect KX3 I/Q with its antenna path safely terminated. C: restore normal station receive. Wait for stable metrics before retaining each stage.", color = PanMuted, fontSize = 9.sp)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("A", "B", "C").forEach { stage ->
+                    OutlinedButton({ onMessage(controller.captureSpurStage(stage)) }) {
+                        Text("CAPTURE $stage${if (controller.spurCaptures.containsKey(stage)) " ✓" else ""}")
+                    }
+                }
+            }
             DiagnosticRow("Measured flatness", if (controller.measuredFlatnessActive()) "ACTIVE · device/rate/radio matched" else "INACTIVE / profile mismatch")
             DiagnosticRow("Level calibration", if (controller.levelCalibrationActive())
                 "ACTIVE · ${"%+.1f".format(controller.settings.dbfsToDbmOffset)} dB · ±${"%.1f".format(controller.settings.levelCalibrationUncertaintyDb)} dB"

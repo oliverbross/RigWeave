@@ -50,6 +50,10 @@ struct PanadapterSnapshot {
     float rbw_hz{};
     float peak_db{-140.0F};
     float floor_db{-140.0F};
+    float raw_floor_db{-140.0F};
+    float stabilized_floor_db{-140.0F};
+    float valid_bin_fraction{};
+    std::uint32_t valid_bin_count{};
     float i_rms_db{-140.0F};
     float q_rms_db{-140.0F};
     float iq_correlation{};
@@ -75,6 +79,7 @@ public:
     const std::vector<float>& db_bins() const { return trace_db_; }
     const std::vector<float>& waterfall_db() const { return waterfall_db_; }
     const std::vector<float>& peak_hold_db() const { return peak_hold_db_; }
+    const std::vector<std::uint8_t>& valid_mask() const { return valid_mask_; }
     const PanadapterSnapshot& snapshot() const { return snapshot_; }
     const PanadapterConfig& config() const { return config_; }
     PanWindow window() const { return config_.window; }
@@ -106,6 +111,7 @@ private:
     std::vector<float> peak_hold_db_{};
     std::vector<float> floor_scratch_{};
     std::vector<std::uint8_t> bins_{};
+    std::vector<std::uint8_t> valid_mask_{};
     std::vector<std::size_t> bit_reverse_{};
     std::vector<std::complex<float>> twiddles_{};
     std::complex<float> dc_{};

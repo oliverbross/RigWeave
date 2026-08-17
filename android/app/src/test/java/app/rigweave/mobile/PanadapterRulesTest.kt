@@ -25,6 +25,17 @@ class PanadapterRulesTest {
         assertEquals(10, invalid.qsyStepHz)
     }
 
+    @Test fun legacyDisplayDefaultsMigrateToRfHonestSettings() {
+        val migrated = PanadapterSettings.decode(
+            "v=1;rate=96000;flatness=true;auto_level=false;wf_min=-120;wf_max=-45",
+        )
+        assertFalse(migrated.genericKx3Flatness)
+        assertTrue(migrated.autoLevel)
+        assertEquals(-110f, migrated.waterfallMinDb)
+        assertEquals(-55f, migrated.waterfallMaxDb)
+        assertTrue(migrated.encode().startsWith("v=2;"))
+    }
+
     @Test fun measuredFlatnessIsValidatedSymmetricAndInterpolated() {
         val settings = PanadapterSettings(measuredFlatnessOffsetsCsv = "0,12000,48000",
             measuredFlatnessGainsCsv = "0,1,4")
@@ -36,14 +47,57 @@ class PanadapterRulesTest {
     }
 
     @Test fun routeProofRequiresExactPreferredStereoProductionFormat() {
-        assertTrue(PanadapterRouteProof("fingerprint", true, "fingerprint", 96_000,
-            96_000, 2, 2, 4096).verified)
-        assertFalse(PanadapterRouteProof("fingerprint", true, "other", 96_000,
-            96_000, 2, 2, 4096).verified)
-        assertFalse(PanadapterRouteProof("fingerprint", true, "fingerprint", 96_000,
-            96_000, 1, 2, 4096).verified)
-        assertFalse(PanadapterRouteProof("fingerprint", true, "fingerprint", 96_000,
-            44_100, 2, 2, 4096).verified)
+        fun proof(clientRate: Int = 96_000, deviceRate: Int = 96_000, actual: String = "fingerprint",
+            clientChannels: Int = 2, deviceChannels: Int = 2, available: Boolean = true) = PanadapterRouteProof(
+            requestedDevice = "fingerprint", preferredAccepted = true, actualDevice = actual,
+            requestedRate = 96_000, configuredRate = clientRate, configuredChannels = clientChannels,
+            encoding = 2, bufferFrames = 4096, clientRate = clientRate, clientChannels = clientChannels,
+            clientEncoding = 2, deviceRate = deviceRate, deviceChannels = deviceChannels,
+            deviceEncoding = 2, activeConfigurationAvailable = available, activeDevice = actual)
+        assertEquals(PanadapterFormatState.TRUE_96K_STEREO, proof().state)
+        assertEquals(PanadapterFormatState.RESAMPLED_48_TO_96, proof(deviceRate = 48_000).state)
+        assertEquals(PanadapterFormatState.TRUE_48K_STEREO, proof(clientRate = 48_000, deviceRate = 48_000).state)
+        assertEquals(PanadapterFormatState.ROUTE_UNPROVEN, proof(actual = "other").state)
+        assertEquals(PanadapterFormatState.ROUTE_PROVEN_FORMAT_PENDING, proof(available = false).state)
+        assertEquals(PanadapterFormatState.UNSUPPORTED_MONO_OR_CONVERTED_CHANNEL_PATH,
+            proof(clientChannels = 1, deviceChannels = 1).state)
+        assertTrue(proof().verified)
+        assertFalse(proof(deviceRate = 48_000).verified)
+    }
+
+    @Test fun validBandAnalysisRejectsDarkEdgesAndFlagsSaturation() {
+        val analyzer = PanadapterDisplayAnalyzer()
+        val values = FloatArray(1024) { index -> if (index in 256 until 768) -78f else -138f }
+        // Stable profile detection deliberately requires multiple frames so signals cannot move the mask.
+        var result = analyzer.analyze(values, 96_000, PanadapterSettings())
+        repeat(70) { result = analyzer.analyze(values, 96_000, PanadapterSettings()) }
+        assertTrue(result.metrics.validBinFraction in .45f..0.55f)
+        assertTrue(result.metrics.stabilizedFloorDb > -90f)
+        assertTrue(result.metrics.inBandToInvalidPowerDb > 40f)
+        assertFalse(result.validMask[100])
+        assertTrue(result.validMask[500])
+    }
+
+    @Test fun nonOverlappingReductionPreservesWeakAndStrongNarrowSignals() {
+        val values = FloatArray(16) { -100f }
+        values[3] = -94f
+        values[12] = -60f
+        val buckets = reducePanadapterBuckets(values, 0, values.size, 4)
+        assertEquals(4, buckets.size)
+        assertTrue(buckets[0].displayDb > -99f)
+        assertTrue(buckets[3].highDb > -61f)
+        assertTrue(buckets[1].highDb < -99f)
+    }
+
+    @Test fun periodicCombIsReportedWithoutSuppressingItsPeaks() {
+        val analyzer = PanadapterDisplayAnalyzer()
+        val values = FloatArray(1_024) { -100f }
+        for (index in 64 until values.size - 64 step 64) values[index] = -60f
+        var result = analyzer.analyze(values, 48_000, PanadapterSettings())
+        repeat(70) { result = analyzer.analyze(values, 48_000, PanadapterSettings()) }
+        assertEquals(3_000f, result.metrics.combSpacingHz, 50f)
+        assertTrue(result.metrics.combPersistence > .5f)
+        assertEquals(-60f, values[512], .001f)
     }
 
     @Test fun passbandUsesModeDirectionBandwidthAndShift() {
