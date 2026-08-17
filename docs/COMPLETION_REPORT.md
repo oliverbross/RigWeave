@@ -1,5 +1,7 @@
 # First Working Slice Completion Report
 
+> **Historical evidence snapshot.** This report records the original first-iPad working-slice result and must not be read as a current whole-product status page. Current platform/build status is maintained in [phase-0/PHASE0_AUDIT.md](phase-0/PHASE0_AUDIT.md) and [phase-0/ACTUAL_FEATURE_INVENTORY.md](phase-0/ACTUAL_FEATURE_INVENTORY.md). Phase 0 did not repeat the physical tests below.
+
 ## Verdict
 
 `PASS` for the first physical iPad working slice: source implementation, signed packaging, installation, DriverKit PL2303GC transport, real KX3 CAT, and physical stereo I/Q capture are proven. Authenticated external services and Android hardware remain separate acceptance work.

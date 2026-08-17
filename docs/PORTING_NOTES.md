@@ -1,18 +1,15 @@
-# Porting Notes
+# Porting and provenance notes
 
-| Original source | RigWeave destination | Treatment | Reason |
+**Status:** Current provenance register with historical source paths. Local paths are evidence clues, not redistribution grants; future release review must resolve immutable source commits and applicable notices.
+
+| Origin/reference | RigWeave destination | Relationship | Phase 0 disposition |
 |---|---|---|---|
-| `/Users/oliver/Documents/M5Stack Core2/kx3-tab5-remote/components/kx3_core` | `core/portable/{include,src}/kx3/{cat_parser,protocol,cty,spot}.*` | Copied owner-authored portable code | CAT parsing/protocol, CTY resolution, and cluster-spot parsing are standard C++ with no ESP-IDF dependency. |
-| `/Users/oliver/Documents/M5Stack Core2/kx3-tab5-remote/components/adif` | `core/portable/{include,src}/kx3/adif.*` | Copied owner-authored portable code | Deterministic identity, ADIF, and Wavelog JSON payload generation. |
-| `/Users/oliver/Documents/M5Stack Core2/kx3-tab5-remote/components/dx_analysis` | `core/portable/{include,src}/kx3/dx_analysis.*` | Copied owner-authored portable code | Bounded spot ranking, watchlists, solar state, band activity, and opportunities. |
-| `/Users/oliver/Documents/M5Stack Core2/kx3-tab5-remote/components/operator_intel` | `core/portable/{include,src}/kx3/{operator_intel,wsjtx_protocol}.*` | Copied owner-authored portable code | Worked status, propagation context, and bounded WSJT-X parsing. |
-| `/Users/oliver/Documents/M5Stack Core2/kx3-tab5-remote/components/panadapter` | `core/portable/{include,src}/kx3/panadapter_dsp.*` | Copied owner-authored portable code | FFT, windowing, smoothing, and I/Q metrics receive only physical PCM from the platform audio layer. |
-| QMX Panadapter, AetherSDR, and Thetis display research | `core/portable/src/panadapter_dsp.cpp`, `ios/RigWeave/{FeatureModel,ContentView}.swift`, Android `FeatureController.kt` and `MainActivity.kt` | Reworked, not copied | Correct dBFS normalization, live noise-floor scaling, scrolling waterfall history, frequency-axis alignment, palette/range controls, and native accelerated composition. |
-| `/Users/oliver/Documents/M5Stack Core2/kx3-tab5-remote/components/sync_queue` | `core/portable/{include,src}/kx3/sync_queue.*` | Copied owner-authored portable code | HTTP outcome classification, URL normalization, and bounded retry policy. |
-| Portable modules above | `core/src/features.cpp`, `core/include/rigweave/core.h` | Adapted | Stable C ABI used directly by Swift and JNI without importing embedded platform glue. |
-| `/Users/oliver/Documents/Projects/OM0RX KX3 - Wavelog master/ios/CP210xDriver` | `ios/CP210xDriver` | Superseded | The legacy target/bundle identity is retained for the approved profile, but its CP2102/USBSerial implementation was replaced by base USBDriverKit PL2303GC control and bulk transfers plus an iPad app user client. |
-| Tab5 KX3-style radio deck and full CAT state | `ios/RigWeave`, `android/app/src/main` | Native parity implementation | SwiftUI and Compose preserve the dual VFO, CWT scale, RX/TX meters, radio flags, gains, bandwidth, power, and command surface while replacing LVGL orchestration. |
-| Tab5 local/Wavelog logbook | iOS and Android QSO stores and Wavelog controllers | Native parity implementation | Local SQLite journals and whole-log ADIF export coexist with station discovery, durable uploads, and cursor-based remote-log caching. |
-| Tab5 Neural DX graphical views | shared `features.cpp` JSON plus native DX screens | Native parity implementation | LIVE, SMART, BANDMAP, PULSE, WORLD, and WATCH consume real cluster analysis, including timeline, region, world-grid, live, opportunity, and watch activity data. |
+| Owner repository kx3-tab5-remote, components kx3_core | core/portable kx3 protocol/parser and core C ABI | Recorded as owner-authored portable reuse | Keep; record the exact origin commit before public distribution |
+| kx3-tab5-remote ADIF, DX analysis, operator intelligence, panadapter and sync components | core/portable/include/kx3 and core/portable/src | Recorded as copied/adapted owner-authored code | Keep file layout; provenance is REVIEW_REQUIRED until immutable origin commits/copyright are captured |
+| QMX Panadapter, AetherSDR, and Thetis research | shared DSP and native client presentation | Behavioural/reworked research; no copied source asserted | Retain as reference-only unless a later component review proves otherwise |
+| OM0RX KX3/Wavelog Apple DriverKit work | ios/CP210xDriver and ios/RigWeave | Superseded/continued owner code | Preserve bundle/profile identity; record immutable origin before distribution |
+| Tab5 KX3-style control and logbook behaviour | Apple and Android native clients | Native parity implementation | Preserve working behaviour; no speculative namespace relocation |
+| Neural DX Watcher product research | Android Neural DX surfaces and shared analysis | Behavioural parity contract | Current Android scope is documented in neural-dx-watcher-parity.md |
+| Nexus at the commit recorded in phase-0/LICENSING_AND_NEXUS_ASSESSMENT.md | None | External upstream/reference only | No source, binary, dependency, or derived implementation imported in Phase 0 |
 
-No ESP-IDF USB host code, LVGL code, firmware output, credentials, personal logs, or managed third-party source was copied into this repository. TCP, UDP, HTTP, secure credential storage, audio capture, persistence, and UI are native platform implementations.
+Some radio-neutral modules remain under the mixed kx3 directory. This is historical layout, not proof that they are KX3-specific. Extract by touch only when a real second implementation requires it.

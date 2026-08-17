@@ -1,18 +1,28 @@
-# RigWeave Flightline Design System
+# RigWeave Flightline design system
 
-## Direction contract
+## Direction
 
-**THESIS** — RigWeave is a wide field instrument where live radio truth dominates; it refuses the generic dashboard of interchangeable cards.
+RigWeave is one coherent field instrument across SwiftUI, Compose, and the planned Qt/QML desktop client. The visual language is shared; navigation, focus, dialogs, menus, keyboard, pointer, windowing, and accessibility follow each platform.
 
-**OWN WORLD** — A graphite chassis frames one amber instrument display. Off-white tap labels, yellow hold labels, green observed health, and red transmit safety create a stable operational vocabulary.
+The instrument is a low-glare graphite chassis around an amber measurement surface. Off-white carries primary labels, yellow carries secondary/hold meaning, green signals healthy observed state, and red is reserved for safety and transmit state. Colour is always reinforced by text, shape, symbol, or state wording.
 
-**STORY** — Confirm CAT and frequency first, operate from tactile control banks, keep logging within reach, and move into DX or service detail without losing radio state.
+Dense radio information is intentional. Do not turn the operator console into a grid of decorative dashboard cards. Spectrum and waterfall are operational instrumentation where they are implemented, not ambient animation.
 
-**FIRST VIEWPORT** — On expanded landscape, status, dual VFO truth, meters, essential controls, logging, and tuning form one no-scroll radio console beside persistent navigation.
+## Durable rules
 
-**FORM** — Android Material 3 structure carries the Tab5 Flightline composition. Navigation and dialogs remain native; the instrument face, control pairs, state rails, and dense tables preserve the source grammar.
+- Live radio truth dominates hierarchy: dual VFO, mode, split/RIT/XIT, meters, gain, bandwidth, power, and connection state remain legible.
+- Interpret the KX3 faceplate without copying its physical limitations. Keep the amber hierarchy, raised control language, off-white primary labels, and yellow secondary labels.
+- Use platform-appropriate touch targets and accessibility APIs. Android targets at least 48 dp; Apple follows current Human Interface Guidelines and Dynamic Type/VoiceOver behaviour.
+- Compact, portrait, landscape, multi-window, keyboard, and pointer layouts must reveal unavailable controls rather than silently clipping them.
+- Potentially transmitting controls require explicit state, confirmation where appropriate, and an immediately available abort/Emergency RX path.
+- No colour-only status, fabricated signal animation, placeholder QSO, or generated spectrum.
+- The panadapter axis follows live CAT and the physical audio sample rate. Empty/offline input stays visibly offline.
+- Future desktop panels may resize or detach, but no desktop implementation is implied by this contract.
+- Before public binary distribution, an About/Licences surface must make GPL and applicable third-party notices readily accessible.
 
-## Durable visual rules
+## Current surface truth
+
+Android implements the KX3-style console plus the broader Neural DX workspace. Apple implements a native iPad-focused navigation and radio/log/DX/panadapter flow. Their destination sets need not be forced into artificial parity; durable behaviour and evidence must remain clear.
 
 - Scene: field and station operation in mixed or low ambient light requires a dark, low-glare chassis with a high-contrast warm instrument face.
 - Color strategy: restrained graphite application shell plus a committed amber radio region. Amber is measurement surface, not decorative accent.
@@ -29,3 +39,5 @@
 - Responsive: expanded landscape restructures into an instrument console; compact layouts preserve every core action through vertical regions and horizontal control strips rather than scaling the Tab5 geometry.
 - Radio console: interpret the physical Elecraft KX3 faceplate rather than arranging generic application cards. The amber LCD follows the original KX3 hierarchy: a compact seven-segment VFO A in the upper-right, a smaller VFO B below it, boxed A/B and mode/TX indicators at the edge, separate S/CWT and SWR/RF meters at upper-left, the filter trapezoid below, and dense ANT/ATU/RIT, AGC/PRE/ATTN/CWT/XFIL/BW truth between them. Compact 4 × 3 key banks flank the display and the twelve receive keys form one strip below; every key uses the real radio's raised rounded gray cap, beveled tonal face, bright edge, off-white primary legend, and yellow secondary legend. The lower-right tuning deck mirrors the three non-VFO rotary groups: AF/RF/MON, PBT I/WID plus PBT II/SHT and NORM, and KEYER/MIC/PWR, with live CAT values for each direct control. Tapping VFO A opens 160–10 m band recall, tapping the mode legend opens supported non-digital modes, and tapping BW opens the six Tab5-derived widths appropriate to the active mode. The VFO tracks horizontal drag smoothly in both directions and sends frequency changes continuously during rotation, while retaining Android semantics and touch targets.
 - Transmit safety: there is no persistent `TX DISABLED` rail. Potentially transmitting controls retain their existing per-action confirmation and Emergency RX remains continuously available.
+
+The Phase 0 documentation and licensing work changed no navigation or operator-facing UI.

@@ -1,0 +1,18 @@
+RigWeave
+
+RigWeave is licensed under the GNU General Public License version 3 only
+(SPDX: GPL-3.0-only). The complete licence is in COPYING.
+
+Individual files and incorporated third-party components retain their own
+copyright, licence, attribution, trademark, and notice requirements.
+See docs/phase-0/LICENSING_AND_NEXUS_ASSESSMENT.md for the Phase 0
+dependency/provenance assessment. Each distributed release must also provide
+release-specific dependency, notice, build, and corresponding-source records.
+
+Nexus was evaluated as an external upstream/reference. No Nexus source, binary,
+dependency, submodule, or derived implementation is incorporated by Phase 0.
+
+Names including Nexus, KD9TAW, Elecraft, FlexRadio, POTA, SOTA, WWFF, Wavelog,
+QRZ, HamQTH, and other vendors, services, or organisations are used only to
+identify interoperability targets or external services. No endorsement,
+affiliation, sponsorship, or trademark licence is implied.

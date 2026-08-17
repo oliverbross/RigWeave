@@ -1,6 +1,14 @@
 # RigWeave working rules
 
-- Mobile implementation, build, and device validation are Android-only until the owner explicitly re-enables iOS work.
-- Do not edit, build, test, archive, or install the iOS app as part of Android tasks.
-- Finish each requested change by building the Android app, installing it on the connected Android tablet, then committing and pushing the completed task to the private GitHub project.
-- Preserve tablet-local storage; do not introduce SD-card dependencies.
+- Read the task scope and nearest instructions before editing. Preserve unrelated owner work and use a feature branch or isolated worktree.
+- Apple and Android are active first-class clients. SwiftUI and Compose remain native UIs; a platform-specific task does not require unrelated edits to the other client.
+- Put behaviour in shared C++ only when it is genuinely platform-neutral. Preserve the working KX3/KX2 protocol, bindings, and storage paths.
+- State exactly which clients were implemented and validated. Distinguish source review, automated tests, build, simulator/emulator, physical device, physical radio, physical audio, and authenticated service evidence.
+- Run only focused builds/tests required by the changed scope. Do not require unavailable hardware, sign-in, credentials, SDK licence acceptance, or profile creation merely to claim a source build.
+- Never add fake radio/service/spectrum/QSO state. Transmit-capable actions must be explicit, bounded, operator-initiated, abortable, and never blindly retried.
+- Preserve app-private/local-first storage and existing user data. Avoid speculative abstractions, broad refactors, and schema changes without an authorised migration.
+- This repository is GPL-3.0-only. Preserve file-level copyright, SPDX identifiers, licences, and notices.
+- Never paste or adapt external code without recording source URL, immutable upstream commit, original path, licence, copyright notice, modification note, dependency impact, and applicable NOTICE entries.
+- Do not import Nexus or another upstream unless the task authorises the selected component and integration strategy. Never imply upstream endorsement.
+- Flex, desktop, QMX, portable-programme, and Nexus-reuse work is not authorised unless the task explicitly says so.
+- Do not merge, deploy, release, distribute, submit to a store, or publish without owner authorisation.
