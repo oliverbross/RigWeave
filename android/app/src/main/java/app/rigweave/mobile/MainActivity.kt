@@ -85,6 +85,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.util.Locale
 import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
@@ -111,7 +112,7 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PRESETS("Presets"), DX("DX"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     DEFAULT("Default"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
@@ -124,6 +125,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val core = remember { NativeCore.create() }
     val transport = remember { UsbRadioTransport(context) }
     val database = remember { QsoDatabase(context) }
+    val pota = remember { PotaController(context, database) }
     val features = remember { FeatureController(context) }
     val neuralDx = remember { NeuralDxController(context, database) }
     val wavelog = remember { WavelogController(context, database) }
@@ -146,6 +148,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         }) }
     var usbDetail by remember { mutableStateOf("No USB CAT adapter opened") }
     var destination by remember { mutableStateOf(Destination.HOME) }
+    var pendingPotaDraft by remember { mutableStateOf<PotaLogDraft?>(null) }
     var pendingRisk by remember { mutableStateOf<String?>(null) }
     var pendingVoiceSlot by remember { mutableStateOf<Int?>(null) }
     var voiceArmedMode by remember { mutableStateOf<String?>(null) }
@@ -220,7 +223,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     DisposableEffect(Unit) { onDispose {
         app.disarmAll(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); audio.close()
         scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
-        NativeCore.destroy(core); database.close()
+        pota.close(); NativeCore.destroy(core); database.close()
     } }
     pendingRisk?.let { command ->
         val cwMacro = command.startsWith("KY ")
@@ -263,16 +266,20 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 Destination.entries.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
-            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app, transport,
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, pota, pendingPotaDraft, { pendingPotaDraft = null }, foreground, app, transport,
                 voiceStore, voiceAudio, voiceTx, eqStudio, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
-                connect, send, direct, requestVoice, clearCwDecode)
+                connect, send, direct, requestVoice, clearCwDecode, { spot -> executePotaTune(radio.connected, spot, direct) },
+                { spot -> if (executePotaTune(radio.connected, spot, direct)) { pendingPotaDraft = toPotaLogDraft(spot); destination = Destination.RADIO } },
+                { destination = Destination.PORTABLE })
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
-            Destination.entries.filterNot { it == Destination.EQ || it == Destination.PANADAPTER }.forEach { item -> NavigationBarItem(destination == item, { destination = item },
+            Destination.entries.filterNot { it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE }.forEach { item -> NavigationBarItem(destination == item, { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
-            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app, transport,
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, pota, pendingPotaDraft, { pendingPotaDraft = null }, foreground, app, transport,
                 voiceStore, voiceAudio, voiceTx, eqStudio, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
-                connect, send, direct, requestVoice, clearCwDecode)
+                connect, send, direct, requestVoice, clearCwDecode, { spot -> executePotaTune(radio.connected, spot, direct) },
+                { spot -> if (executePotaTune(radio.connected, spot, direct)) { pendingPotaDraft = toPotaLogDraft(spot); destination = Destination.RADIO } },
+                { destination = Destination.PORTABLE })
         } }
     }
 }
@@ -285,31 +292,35 @@ private fun navIcon(item: Destination) = when (item) {
     Destination.LOGBOOK -> Icons.AutoMirrored.Outlined.List
     Destination.PRESETS -> Icons.Outlined.Bookmarks
     Destination.DX -> Icons.Outlined.Public
+    Destination.PORTABLE -> Icons.Outlined.Hiking
     Destination.SETTINGS -> Icons.Outlined.Settings
 }
 
 @Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase,
-    features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController, app: AppController,
+    features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
+    pota: PotaController, potaDraft: PotaLogDraft?, consumePotaDraft: () -> Unit, foreground: Boolean, app: AppController,
     transport: UsbRadioTransport, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
     eqStudio: EqStudioController, compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
-    connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit) {
+    connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
+    tunePota: (PotaSpot) -> Unit, tuneLogPota: (PotaSpot) -> Unit, openPortable: () -> Unit) {
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     when (destination) {
-        Destination.HOME -> HomeScreen(radio, app, send)
-        Destination.RADIO -> if (!compact) RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode)
+        Destination.HOME -> HomeScreen(radio, app, send, openPortable)
+        Destination.RADIO -> if (!compact) RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode, potaDraft, consumePotaDraft, pota::notifyQsoChanged)
         else Column(Modifier.fillMaxSize()) {
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                 SegmentedButton(!compactPanadapter, { compactPanadapter = false }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Controls") }
                 SegmentedButton(compactPanadapter, { compactPanadapter = true }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("Panadapter") }
             }
             if (compactPanadapter) PanadapterScreen(panadapter, radio, features.liveSpots, true) { compactPanadapter = false }
-            else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode)
+            else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode, potaDraft, consumePotaDraft, pota::notifyQsoChanged)
         }
         Destination.PANADAPTER -> PanadapterScreen(panadapter, radio, features.liveSpots, compact)
         Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
         Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog, app)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, cty, app, send)
+        Destination.PORTABLE -> PotaChaseScreen(pota, radio, app.stationGrid, foreground, compact, tunePota, tuneLogPota)
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
             transport, voiceStore, voiceAudio, voiceTx, openEq, connect, direct)
     }
@@ -352,8 +363,9 @@ private fun navIcon(item: Destination) = when (item) {
     }
 }
 
-@Composable private fun HomeScreen(state: RadioState, app: AppController, send: (String) -> Unit) = Page {
+@Composable private fun HomeScreen(state: RadioState, app: AppController, send: (String) -> Unit, openPortable: () -> Unit) = Page {
     Header("Field dashboard", state)
+    OutlinedButton(openPortable, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Icon(Icons.Outlined.Hiking, null); Spacer(Modifier.width(8.dp)); Text("PORTABLE · POTA CHASE") }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         FieldProfile.entries.forEach { profile -> FilterChip(app.fieldProfile == profile, { app.setProfile(profile) }, { Text(profile.name) }) }
     }
@@ -382,7 +394,8 @@ private fun navIcon(item: Destination) = when (item) {
 @Composable private fun RadioScreen(state: RadioState, detail: String, app: AppController, database: QsoDatabase,
     wavelog: WavelogController, callbook: CallbookController, cty: CtyController, features: FeatureController,
     voiceStore: VoiceMacroStore, voiceTx: VoiceMacroTransmitController, openEq: () -> Unit, connect: () -> Unit, send: (String) -> Unit,
-    direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit) {
+    direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
+    potaDraft: PotaLogDraft?, consumePotaDraft: () -> Unit, onQsoSaved: () -> Unit) {
     var previousState by remember { mutableStateOf<RadioState?>(null) }
     var radioFeedback by remember { mutableStateOf<RadioFeedback?>(null) }
     var feedbackVisible by remember { mutableStateOf(false) }
@@ -434,7 +447,7 @@ private fun navIcon(item: Destination) = when (item) {
                         isVoiceMacroMode(state.mode) -> VoiceMacroStrip(state, voiceStore, voiceTx, requestVoice,
                             Modifier.fillMaxWidth().heightIn(min = 54.dp))
                     }
-                    CompactLogger(state, database, wavelog, callbook, cty, app, send,
+                    CompactLogger(state, database, wavelog, callbook, cty, app, send, potaDraft, consumePotaDraft, onQsoSaved,
                         onInsight = { stationInsight = it; identityVisible = true },
                         onInsightCleared = { stationInsight = null; identityVisible = false },
                         modifier = Modifier.weight(1f).fillMaxWidth())
@@ -1712,6 +1725,7 @@ private fun spotStatusColor(status: String?): Color = when (status) {
 
 @Composable private fun CompactLogger(state: RadioState, database: QsoDatabase, wavelog: WavelogController,
     callbook: CallbookController, cty: CtyController, app: AppController, send: (String) -> Unit,
+    potaDraft: PotaLogDraft?, consumePotaDraft: () -> Unit, onQsoSaved: () -> Unit,
     onInsight: (StationInsight) -> Unit, onInsightCleared: () -> Unit, modifier: Modifier = Modifier) {
     var tab by remember { mutableStateOf(QsoEditorTab.QSO) }
     var call by remember { mutableStateOf("") }; var sent by remember { mutableStateOf("59") }; var received by remember { mutableStateOf("59") }
@@ -1726,6 +1740,9 @@ private fun spotStatusColor(status: String?): Color = when (status) {
     var qslVia by remember { mutableStateOf("") }; var qslMessage by remember { mutableStateOf("") }
     var enrichment by remember { mutableStateOf("Enter a callsign") }; var status by remember { mutableStateOf("LOCAL FIRST") }
     var lookupGeneration by remember { mutableStateOf(0) }
+    var logFrequencyMHz by remember { mutableStateOf(if (state.frequencyHz > 0) "%.6f".format(Locale.US, state.frequencyHz / 1_000_000.0) else "") }
+    var logMode by remember { mutableStateOf(state.mode.takeUnless { it == "--" }.orEmpty()) }
+    var potaChaseDraft by remember { mutableStateOf(false) }
     val lookupScope = rememberCoroutineScope()
     val selectedStation = wavelog.selectedStation
     val utc = wavelog.synchronizedNow().atZone(ZoneOffset.UTC)
@@ -1734,8 +1751,22 @@ private fun spotStatusColor(status: String?): Color = when (status) {
         call = ""; sent = "59"; received = "59"; name = ""; qth = ""; grid = ""; iota = ""; sota = ""; wwff = ""; pota = ""
         comment = ""; notes = ""; country = ""; dxcc = ""; continent = ""; region = ""; cqZone = ""; ituZone = ""
         stateName = ""; email = ""; propagation = ""; antennaPath = ""; qslSent = "N"; qslMethod = ""; qslVia = ""; qslMessage = ""
+        logFrequencyMHz = if (state.frequencyHz > 0) "%.6f".format(Locale.US, state.frequencyHz / 1_000_000.0) else ""; logMode = state.mode.takeUnless { it == "--" }.orEmpty(); potaChaseDraft = false
         enrichment = "Enter a callsign"; tab = QsoEditorTab.QSO
         onInsightCleared()
+    }
+    LaunchedEffect(state.frequencyHz, state.mode, potaChaseDraft) {
+        if (!potaChaseDraft) {
+            if (state.frequencyHz > 0) logFrequencyMHz = "%.6f".format(Locale.US, state.frequencyHz / 1_000_000.0)
+            if (state.mode.isNotBlank() && state.mode != "--") logMode = state.mode
+        }
+    }
+    LaunchedEffect(potaDraft?.token) {
+        val draft = potaDraft ?: return@LaunchedEffect
+        call = draft.callsign; pota = draft.potaRef; qth = listOf(draft.parkName, draft.location).filter(String::isNotBlank).joinToString(" · ")
+        comment = draft.comment; logFrequencyMHz = "%.6f".format(Locale.US, draft.frequencyHz / 1_000_000.0); logMode = draft.mode
+        potaChaseDraft = true; status = "POTA DRAFT · REVIEW BEFORE SAVE"; tab = QsoEditorTab.QSO
+        consumePotaDraft()
     }
     fun applyCty(): Boolean {
         val row = cty.lookup(call) ?: return false
@@ -1809,8 +1840,8 @@ private fun spotStatusColor(status: String?): Color = when (status) {
                                 style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
                         }
                         InstrumentStrip(Amber) {
-                            LiveField("Mode", state.mode.ifBlank { "—" }, Modifier.width(72.dp)); LiveField("Band", bandForFrequency(state.frequencyHz), Modifier.width(72.dp))
-                            LiveField("Frequency", if (state.frequencyHz > 0) formatRadioFrequency(state.frequencyHz) else "—", Modifier.width(118.dp))
+                            LogField("Mode", logMode, { logMode = it.uppercase().take(12) }, Modifier.width(82.dp)); LiveField("Band", bandForFrequency((logFrequencyMHz.toDoubleOrNull()?.times(1_000_000))?.toLong() ?: 0), Modifier.width(72.dp))
+                            LogField("Frequency MHz", logFrequencyMHz, { value -> logFrequencyMHz = value.filter { it.isDigit() || it == '.' }.take(12) }, Modifier.width(132.dp))
                             LogField("RST S", sent, { sent = it.take(3) }, Modifier.width(68.dp)); LogField("RST R", received, { received = it.take(3) }, Modifier.width(68.dp))
                             LogField("Name", name, { name = it }, Modifier.weight(1f))
                         }
@@ -1866,26 +1897,27 @@ private fun spotStatusColor(status: String?): Color = when (status) {
             Row(Modifier.fillMaxWidth().padding(10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(::clear, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("CLEAR") }
                 Button({
-                    val now = wavelog.synchronizedNow(); val id = NativeCore.qsoIdentity(call, DateTimeFormatter.ISO_INSTANT.format(now), state.frequencyHz, state.mode)
+                    val now = wavelog.synchronizedNow(); val qsoFrequency = (logFrequencyMHz.toDoubleOrNull()?.times(1_000_000))?.toLong() ?: 0L; val qsoMode = logMode.trim().uppercase()
+                    val id = NativeCore.qsoIdentity(call, DateTimeFormatter.ISO_INSTANT.format(now), qsoFrequency, qsoMode)
                     applyCty(); val station = wavelog.selectedStation
-                    val qso = Qso(id, call, state.frequencyHz, state.mode, sent, received, now.epochSecond, name, qth, notes, country,
-                        band = bandForFrequency(state.frequencyHz), grid = grid, iota = iota, sotaRef = sota, wwffRef = wwff, potaRef = pota,
-                        comment = comment, frequencyRxHz = state.frequencyHz, bandRx = bandForFrequency(state.frequencyHz), txPowerW = state.powerW,
+                    val qso = Qso(id, call, qsoFrequency, qsoMode, sent, received, now.epochSecond, name, qth, notes, country,
+                        band = bandForFrequency(qsoFrequency), grid = grid, iota = iota, sotaRef = sota, wwffRef = wwff, potaRef = pota,
+                        comment = comment, frequencyRxHz = qsoFrequency, bandRx = bandForFrequency(qsoFrequency), txPowerW = state.powerW,
                         operatorCallsign = app.stationCallsign.ifBlank { station?.callsign.orEmpty() }, stationCallsign = station?.callsign ?: app.stationCallsign,
                         stationProfileId = if (wavelog.logMode == LogMode.WAVELOG) wavelog.stationId else "", stationLocation = station?.name ?: app.stationName,
                         myGrid = station?.grid ?: app.stationGrid, myCountry = station?.country.orEmpty(), myDxcc = station?.dxcc.orEmpty(),
                         myCqZone = station?.cqZone.orEmpty(), myItuZone = station?.ituZone.orEmpty(), myState = station?.state.orEmpty(),
-                        myIota = station?.iota.orEmpty(), mySotaRef = station?.sotaRef.orEmpty(), myWwffRef = station?.wwffRef.orEmpty(), myPotaRef = station?.potaRef.orEmpty(),
+                        myIota = station?.iota.orEmpty(), mySotaRef = station?.sotaRef.orEmpty(), myWwffRef = station?.wwffRef.orEmpty(), myPotaRef = if (potaChaseDraft) "" else station?.potaRef.orEmpty(),
                         radioModel = "Elecraft KX3", dxcc = dxcc, continent = continent, region = region, cqZone = cqZone,
                         ituZone = ituZone, state = stateName, email = email, propagationMode = propagation, antennaPath = antennaPath,
                         qslSent = qslSent, qslMethod = qslMethod, qslVia = qslVia, qslMessage = qslMessage,
                         syncState = if (wavelog.logMode == LogMode.WAVELOG) "pending" else "local")
-                    if (call.isBlank() || !state.connected || state.frequencyHz <= 0) status = "CALL / LIVE CAT REQUIRED"
+                    if (call.isBlank() || !state.connected || qsoFrequency <= 0 || qsoMode.isBlank()) status = "CALL / FREQUENCY / MODE / LIVE CAT REQUIRED"
                     else if (!database.save(qso)) status = "DUPLICATE NOT SAVED"
                     else {
                         if (wavelog.logMode == LogMode.WAVELOG) { wavelog.enqueue(id, database.toADIF(qso)); status = "SAVED · TWO-WAY SYNC QUEUED" }
                         else status = "SAVED · LOCAL ADIF"
-                        clear()
+                        onQsoSaved(); clear()
                     }
                 }, enabled = state.connected && call.isNotBlank(), modifier = Modifier.weight(2f).heightIn(min = 48.dp)) {
                     Text(if (wavelog.logMode == LogMode.WAVELOG) "SAVE & SYNC QSO" else "SAVE LOCAL QSO", fontWeight = FontWeight.Black)
