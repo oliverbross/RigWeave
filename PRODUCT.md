@@ -18,10 +18,11 @@ RigWeave is local-first. Radio control and local logging must remain useful with
 
 The clients do not have identical surface coverage. Android currently contains the larger Neural DX workspace plus the implemented KX3 EQ Studio and SSB voice macros; Apple contains the physically proven iPad KXUSB and stereo-I/Q path. Cross-platform claims must name the client and evidence level.
 
-- Retained compact destinations: Home, Radio, Logbook, Presets, DX, and Settings. Expanded navigation also exposes EQ as a first-class destination; compact layouts open EQ Studio from Radio or Settings → Audio without adding a seventh bottom-bar item.
+- Retained compact destinations: Home, Radio, Logbook, Presets, DX, and Settings. Expanded navigation also exposes EQ and Portable as first-class destinations; compact layouts open EQ Studio from Radio or Settings → Audio and POTA Chase from Home without adding bottom-bar items.
 - Android EQ Studio reads exact KX3 RX/TX curves, keeps radio/draft/profile state separate, records one finite local audio sample, previews an approximate eight-band response with matched/blind A/B, and applies only through an exclusive CAT transaction with exact readback verification. It never keys the transmitter or claims to reproduce Elecraft's undocumented DSP topology.
 - Panadapter, raw Spots destination, and Digital/WSJT-X are explicitly deferred and absent from navigation.
 - The consolidated DX destination owns live cluster browsing and analyzed DX views.
+- Android Portable → POTA Chase joins live activator spots, local worked intelligence, deterministic recommendation reasons, MapLibre selection, an explicit offline worldwide park catalogue, receive-only CAT tuning, and an editable draft in the existing logger. It does not claim official POTA credit or upload hunter logs.
 - Radio state must be observed truth with explicit live, stale, disconnected, pending, and failed states.
 - TX, TUNE, ATU TUNE, and CW macro transmission are disabled by default, explicitly armed, never started automatically, and never blindly retried.
 - Local QSO durability outranks network synchronization; service failure degrades only that service.
@@ -32,7 +33,7 @@ The clients do not have identical surface coverage. Android currently contains t
 ## Approved direction
 
 1. KX3/KX2 Studio: preserve and harden the implemented Android KX3 EQ Studio, profiles, voice macros, and dedicated KX3 panadapter; extend other clients and KX2 write or wideband-I/Q claims only after their platform and hardware gates.
-2. Portable Chase for POTA, SOTA, and WWFF.
+2. Extend the implemented Android POTA Chase shape with SOTA and WWFF only after the POTA vertical slice is reviewed.
 3. Portable Activate.
 4. Sync and Progress.
 5. FlexRadio SmartLink through legitimate official interfaces and authentication.
