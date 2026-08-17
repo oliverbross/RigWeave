@@ -49,6 +49,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -56,6 +57,8 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -1916,10 +1919,10 @@ private fun spotStatusColor(status: String?): Color = when (status) {
         focusedLabelColor = Hold, unfocusedLabelColor = Hold, focusedTextColor = Ink, unfocusedTextColor = Ink))
 
 @Composable private fun ChoiceField(label: String, display: String, choices: List<Pair<String, String>>, selected: String,
-    change: (String) -> Unit, modifier: Modifier = Modifier) {
+    change: (String) -> Unit, modifier: Modifier = Modifier, compact: Boolean = false) {
     var expanded by remember { mutableStateOf(false) }
     Box(modifier) {
-        OutlinedButton({ expanded = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).background(Color(0xFF1A2024), MaterialTheme.shapes.extraLarge), contentPadding = PaddingValues(horizontal = 12.dp)) {
+        OutlinedButton({ expanded = true }, modifier = Modifier.fillMaxWidth().heightIn(min = if (compact) 48.dp else 56.dp).background(Color(0xFF1A2024), MaterialTheme.shapes.extraLarge), contentPadding = PaddingValues(horizontal = 12.dp, vertical = if (compact) 4.dp else 8.dp)) {
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start) { Text(label, color = Muted, style = MaterialTheme.typography.labelSmall); Text(display.ifBlank { "None" }, maxLines = 1) }
             Icon(Icons.Outlined.ArrowDropDown, null)
         }
@@ -2496,7 +2499,7 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
     val horizontal = rememberScrollState()
     Box(modifier.fillMaxWidth().border(1.dp, Color(0xFF465159), RoundedCornerShape(8.dp)).horizontalScroll(horizontal)) {
         Column(Modifier.width(visibleColumns.sumOf { it.width }.dp).fillMaxHeight()) {
-            Row(Modifier.fillMaxWidth().height(60.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().height(LOGBOOK_HEADER_HEIGHT_DP.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
                 visibleColumns.forEach { column -> LogbookHeaderCell(column.label, column.width, column.sort, filter, sort) }
             }
             if (records.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
@@ -2508,7 +2511,7 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
             } else LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                 items(records.size, key = { records[it].id }) { index ->
                     val qso = records[index]; val selected = selectedId == qso.id
-                    Row(Modifier.fillMaxWidth().heightIn(min = 60.dp)
+                    Row(Modifier.fillMaxWidth().height(LOGBOOK_ROW_HEIGHT_DP.dp)
                         .background(if (selected) Amber.copy(alpha = .16f) else if (index % 2 == 0) Color(0xFF181E22) else Color(0xFF222A2F))
                         .clickable { select(qso.id) }, verticalAlignment = Alignment.CenterVertically) {
                         visibleColumns.forEach { column -> when (column) {
@@ -2546,8 +2549,9 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
 @Composable private fun RowScope.LogbookHeaderCell(label: String, width: Int, column: LogbookSort?, filter: LogbookFilter,
     sort: (LogbookSort) -> Unit) {
     Row(Modifier.width(width.dp).fillMaxHeight().then(if (column != null) Modifier.clickable { sort(column) } else Modifier)
-        .border(width = 0.5.dp, color = Color(0xFF515A60)).padding(horizontal = 7.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        .border(width = 0.5.dp, color = Color(0xFF515A60)).padding(horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = if (column == null) Arrangement.Center else Arrangement.spacedBy(3.dp)) {
         Text(label, color = Ink, fontWeight = FontWeight.Black, fontSize = 17.sp, maxLines = 1)
         if (column != null && filter.sort == column) Icon(
             if (filter.direction == LogbookSortDirection.DESCENDING) Icons.Outlined.ArrowDownward else Icons.Outlined.ArrowUpward,
@@ -2560,19 +2564,19 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
     val interaction = if (onClick == null) Modifier else Modifier
         .semantics { contentDescription = actionLabel }
         .clickable(role = Role.Button, onClick = onClick)
-    Box(Modifier.width(width.dp).heightIn(min = 60.dp).border(width = 0.5.dp, color = Color(0xFF39434A))
-        .then(interaction).padding(horizontal = 9.dp),
+    Box(Modifier.width(width.dp).height(LOGBOOK_ROW_HEIGHT_DP.dp).border(width = 0.5.dp, color = Color(0xFF39434A))
+        .then(interaction).padding(horizontal = 6.dp),
         contentAlignment = Alignment.CenterStart) {
         Text(value.ifBlank { "—" }, color = if (value.isBlank()) Muted.copy(alpha = .55f) else color,
-            fontWeight = if (bold) FontWeight.Black else FontWeight.Medium, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            fontWeight = if (bold) FontWeight.Black else FontWeight.Medium, fontSize = LOGBOOK_ROW_FONT_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
 @Composable private fun RowScope.LogbookQslCell(sent: String, received: String, width: Int) {
-    Row(Modifier.width(width.dp).heightIn(min = 60.dp).border(width = 0.5.dp, color = Color(0xFF39434A)).padding(horizontal = 9.dp),
+    Row(Modifier.width(width.dp).height(LOGBOOK_ROW_HEIGHT_DP.dp).border(width = 0.5.dp, color = Color(0xFF39434A)).padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-        Text("▲", color = if (positiveLogStatus(sent)) Healthy else Danger, fontSize = 18.sp)
-        Text("▼", color = if (positiveLogStatus(received)) Healthy else Danger, fontSize = 18.sp)
+        Text("▲", color = if (positiveLogStatus(sent)) Healthy else Danger, fontSize = LOGBOOK_ROW_FONT_SP.sp)
+        Text("▼", color = if (positiveLogStatus(received)) Healthy else Danger, fontSize = LOGBOOK_ROW_FONT_SP.sp)
     }
 }
 
@@ -2773,6 +2777,10 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                 OutlinedTextField(stationGrid, { stationGrid = it.uppercase() }, label = { Text("Grid") }, modifier = Modifier.weight(1f))
             }
             Button({ app.saveLocalSettings(stationCall, stationName, stationGrid, repeatSeconds, macroLabels, macroTexts) }) { Text("SAVE DEFAULTS") }
+            HorizontalDivider()
+            Column(Modifier.testTag("settings-default-cty"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                CtyUpdatePanel(cty)
+            }
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(macroKind == "CW", { macroKind = "CW" }, { Text("CW") })
@@ -2781,7 +2789,13 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                 if (macroKind == "CW") {
                     val configuredMacros = macroTexts.count(String::isNotBlank)
                     Text("$configuredMacros of $CW_MACRO_COUNT configured · blank messages stay hidden on the Radio screen.", color = Muted)
-                    repeat(CW_MACRO_COUNT) { index -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.fillMaxWidth().testTag("settings-cw-macro-grid"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Spacer(Modifier.width(42.dp))
+                        Text("BUTTON LABEL", color = Amber, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                        Text("CW MESSAGE", color = Amber, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(3f))
+                    }
+                    repeat(CW_MACRO_COUNT) { index -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Surface(color = if (macroTexts[index].isBlank()) Color(0xFF303638) else Hold.copy(alpha = .18f),
                             shape = RoundedCornerShape(6.dp), modifier = Modifier.size(42.dp)) {
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -2794,6 +2808,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                             label = { Text("CW message") }, supportingText = { Text("${macroTexts[index].length} / $CW_MACRO_TEXT_MAX") },
                             singleLine = true, modifier = Modifier.weight(3f))
                     } }
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("CQ repeat"); Slider(repeatSeconds.toFloat(), { repeatSeconds = it.toInt() },
                             valueRange = CQ_REPEAT_MIN_SECONDS.toFloat()..CQ_REPEAT_MAX_SECONDS.toFloat(), steps = 3,
@@ -2978,33 +2993,54 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                     callbook.configureHamQth(hamQthEnabled, hamQthUser, hamQthPassword) }) { Text("SAVE") }
             }
             Text("Automatic lookup order: QRZ.COM → HamQTH → CTY.DAT. Email-style QRZ accounts use the configured station callsign for XML access; CTY.DAT supplements missing entity and zone fields.", color = Muted)
-            CtyUpdatePanel(cty)
         }
         if (section == SettingsSection.AUDIO) SettingsCard("USB AUDIO ROUTES") {
-            Button(openEq, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("OPEN EQ STUDIO") }
-            Text("EQ capture uses the selected USB input or a clearly labelled built-in reference mic, with explicit audio ownership and finite local recording.", color = Muted)
-            HorizontalDivider()
-            AudioCard(audio)
-            HorizontalDivider()
-            Text("RX MONITOR INPUT", color = Amber, fontWeight = FontWeight.Bold)
-            if (audio.inputCandidates.isEmpty()) Text("No eligible USB input", color = Muted)
-            else ChoiceField("USB input", audio.selectedRx?.label ?: "Selection required",
-                audio.inputCandidates.map { it.sessionId.toString() to it.label }, audio.selectedRx?.sessionId?.toString().orEmpty(), {
-                voiceTx.stop("RX audio route changed"); app.updateVoiceMacrosArmed(false); audio.selectRxInput(it.toInt())
-            })
-            Text("VOICE MACRO TX OUTPUT", color = Amber, fontWeight = FontWeight.Bold)
-            if (audio.txOutputCandidates.isEmpty()) Text("No eligible USB output", color = Muted)
-            else ChoiceField("DigiRig USB output", audio.selectedTx?.label ?: "Selection required",
-                audio.txOutputCandidates.map { it.sessionId.toString() to it.label }, audio.selectedTx?.sessionId?.toString().orEmpty(), {
-                voiceTx.stop("Voice TX route changed"); app.updateVoiceMacrosArmed(false); audio.selectTxOutput(it.toInt())
-            })
-            Text("RECORDING INPUT  Built-in tablet microphone", color = Muted)
-            Text("PREVIEW OUTPUT  Built-in tablet speaker", color = Muted)
-            SliderLine("VOICE MACRO TX LEVEL", app.voiceTxLevel, 0.02f..1f, app::updateVoiceTxLevel, {}, "${(app.voiceTxLevel * 100).toInt()}%")
-            Text("Controls PCM sent to DigiRig, not RF power. Begin into a dummy load at minimum safe RF power; adjust this level and KX3 MIC gain for clean ALC without overdrive.", color = Hold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(audio::refreshDevices) { Text("RESCAN DEVICES") }
-                Text(audio.routeStatus, color = Muted, modifier = Modifier.align(Alignment.CenterVertically))
+            BoxWithConstraints(Modifier.fillMaxWidth().testTag("settings-audio-layout")) {
+                val expandedAudioLayout = maxWidth >= 900.dp
+                @Composable fun ReceivePanel(modifier: Modifier) {
+                    Card(modifier, colors = CardDefaults.cardColors(containerColor = Raised)) {
+                        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                            Text("INPUT & MONITOR", color = Amber, fontWeight = FontWeight.Bold)
+                            AudioCard(audio)
+                            Text("RX MONITOR INPUT", color = Amber, fontWeight = FontWeight.Bold)
+                            if (audio.inputCandidates.isEmpty()) Text("No eligible USB input", color = Muted)
+                            else ChoiceField("USB input", audio.selectedRx?.label ?: "Selection required",
+                                audio.inputCandidates.map { it.sessionId.toString() to it.label }, audio.selectedRx?.sessionId?.toString().orEmpty(), {
+                                voiceTx.stop("RX audio route changed"); app.updateVoiceMacrosArmed(false); audio.selectRxInput(it.toInt())
+                            }, compact = true)
+                            OutlinedButton(audio::refreshDevices, modifier = Modifier.heightIn(min = 44.dp)) { Text("RESCAN DEVICES") }
+                            Text(audio.routeStatus, color = Muted)
+                        }
+                    }
+                }
+                @Composable fun CapturePanel(modifier: Modifier) {
+                    Card(modifier, colors = CardDefaults.cardColors(containerColor = Raised)) {
+                        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                            Text("CAPTURE & VOICE TX", color = Amber, fontWeight = FontWeight.Bold)
+                            Button(openEq, modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)) { Text("OPEN EQ STUDIO") }
+                            Text("EQ capture uses the selected USB input or a clearly labelled built-in reference mic.", color = Muted)
+                            Text("VOICE MACRO TX OUTPUT", color = Amber, fontWeight = FontWeight.Bold)
+                            if (audio.txOutputCandidates.isEmpty()) Text("No eligible USB output", color = Muted)
+                            else ChoiceField("DigiRig USB output", audio.selectedTx?.label ?: "Selection required",
+                                audio.txOutputCandidates.map { it.sessionId.toString() to it.label }, audio.selectedTx?.sessionId?.toString().orEmpty(), {
+                                voiceTx.stop("Voice TX route changed"); app.updateVoiceMacrosArmed(false); audio.selectTxOutput(it.toInt())
+                            }, compact = true)
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Text("RECORD  Tablet mic", color = Muted, modifier = Modifier.weight(1f))
+                                Text("PREVIEW  Tablet speaker", color = Muted, modifier = Modifier.weight(1f))
+                            }
+                            SliderLine("VOICE MACRO TX LEVEL", app.voiceTxLevel, 0.02f..1f, app::updateVoiceTxLevel, {}, "${(app.voiceTxLevel * 100).toInt()}%")
+                            Text("Controls PCM sent to DigiRig, not RF power. Start into a dummy load at minimum safe RF power and adjust for clean ALC.", color = Hold)
+                        }
+                    }
+                }
+                if (expandedAudioLayout) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ReceivePanel(Modifier.weight(1f))
+                    CapturePanel(Modifier.weight(1f))
+                } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ReceivePanel(Modifier.fillMaxWidth())
+                    CapturePanel(Modifier.fillMaxWidth())
+                }
             }
         }
         if (section == SettingsSection.HEALTH) SettingsCard("SYSTEM HEALTH") {
@@ -3048,6 +3084,18 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             Text("Radio. Spectrum. Spots. Logs.", color = Amber)
             Text("Local-first tablet control and logging. Wavelog, callbook, CTY.DAT and DX-cluster integrations are optional.", color = Muted)
             Text("WSJT-X is intentionally not exposed in Settings yet.", color = Muted)
+            HorizontalDivider()
+            Row(Modifier.fillMaxWidth().testTag("settings-developer-information"), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Image(painterResource(R.drawable.oliver_bross_om0rx), "Oliver Bross, OM0RX", contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(132.dp).clip(RoundedCornerShape(12.dp)))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text("ABOUT THE DEVELOPER", color = Amber, fontWeight = FontWeight.Bold)
+                    Text("Oliver Bross · OM0RX", color = Ink, fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleLarge)
+                    Text("Amateur radio operator licensed since 2000 · JN88TQ", color = Muted)
+                    Text("RigWeave is built by a radio amateur for real portable and station operating.", color = Muted)
+                    Text("stationpilot.app", color = Hold, fontWeight = FontWeight.Bold)
+                }
+            }
         }
     }
     restorePayload?.let { payload -> AlertDialog(onDismissRequest = { restorePayload = null }, title = { Text("RESTORE REVIEW") },

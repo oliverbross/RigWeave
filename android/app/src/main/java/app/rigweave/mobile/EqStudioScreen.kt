@@ -85,16 +85,16 @@ private val EqRed = Color(0xFFE4544D)
                 Column(Modifier.weight(1.25f).fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     EqCurvesPanel(controller)
                     EqBandEditor(controller)
-                    EqApplyPanel(controller, scope)
                 }
                 Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     EqMeasurementPanel(controller)
                     EqAssistantPanel(controller)
+                    EqApplyPanel(controller, scope)
                 }
             } else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 EqWorkflowPanel(controller, permission::launch) { pendingCapturePause = it }
                 EqCurvesPanel(controller); EqBandEditor(controller); EqMeasurementPanel(controller)
-                EqAssistantPanel(controller); EqProfilesPanel(controller, { saveDialog = true }); EqApplyPanel(controller, scope)
+                EqAssistantPanel(controller); EqApplyPanel(controller, scope); EqProfilesPanel(controller, { saveDialog = true })
             }
         }
     }
