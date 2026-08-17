@@ -384,7 +384,7 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app, send)
         Destination.PORTABLE -> PortableWorkspaceScreen(portable, activation, radio, app.stationGrid, foreground, compact,
             app, database, wavelog, callbook, cty, tunePortable, tuneLogPortable, openLogbook)
-        Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, app,
+        Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
             transport, flex, voiceStore, voiceAudio, voiceTx, openEq, openSync, connect, direct)
     }
 }
@@ -3132,7 +3132,8 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
 
 @Composable private fun SettingsScreen(state: RadioState, detail: String, database: QsoDatabase, features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController,
     callbook: CallbookController, cty: CtyController,
-    audio: AudioMonitorController, app: AppController, transport: UsbRadioTransport, flex: FlexRadioController, voiceStore: VoiceMacroStore,
+    audio: AudioMonitorController, panadapter: PanadapterController, app: AppController, transport: UsbRadioTransport,
+    flex: FlexRadioController, voiceStore: VoiceMacroStore,
     voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, openEq: () -> Unit, openSync: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
     var section by remember { mutableStateOf(SettingsSection.RADIO) }
@@ -3630,7 +3631,8 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                             if (audio.inputCandidates.isEmpty()) Text("No eligible USB input", color = Muted)
                             else ChoiceField("USB input", audio.selectedRx?.label ?: "Selection required",
                                 audio.inputCandidates.map { it.sessionId.toString() to it.label }, audio.selectedRx?.sessionId?.toString().orEmpty(), {
-                                voiceTx.stop("RX audio route changed"); app.updateVoiceMacrosArmed(false); audio.selectRxInput(it.toInt())
+                                voiceTx.stop("RX audio route changed"); app.updateVoiceMacrosArmed(false)
+                                panadapter.stop("RX audio route selection changed"); audio.selectRxInput(it.toInt())
                             }, compact = true)
                             OutlinedButton(audio::refreshDevices, modifier = Modifier.heightIn(min = 44.dp)) { Text("RESCAN DEVICES") }
                             Text(audio.routeStatus, color = Muted)

@@ -200,6 +200,8 @@ fun parseFreshTq(frames: ByteArray): Boolean? {
 }
 
 interface VoiceTxSequenceIo {
+    fun acquireAudio(): String?
+    fun releaseAudio()
     suspend fun queryTq(): Boolean?
     suspend fun prepareAndVerifyRoute()
     suspend fun sendTx()
@@ -214,42 +216,48 @@ interface VoiceTxSequenceIo {
 data class VoiceTxSequenceResult(val success: Boolean, val message: String, val radioMayStillBeTx: Boolean = false)
 
 suspend fun executeVoiceTxSequence(io: VoiceTxSequenceIo): VoiceTxSequenceResult {
-    var ownsTx = false
-    var rxConfirmed = false
-    var rxAttempts = 0
-    when (val preflight = try { io.queryTq() } catch (error: Throwable) {
-        return VoiceTxSequenceResult(false, error.message ?: "Fresh TQ0 preflight failed")
-    }) {
-        false -> Unit
-        true -> return VoiceTxSequenceResult(false, "Radio is already transmitting; RigWeave did not take ownership")
-        null -> return VoiceTxSequenceResult(false, "Fresh TQ0 preflight response was not received")
-    }
-    var result = try {
-        io.prepareAndVerifyRoute()
-        ownsTx = true
-        io.sendTx()
-        if (!io.confirmTq(true)) error("TX was not confirmed by fresh TQ1")
-        io.writeLeadSilence()
-        io.writeSpeech()
-        io.writeTailSilence()
-        io.haltAudio()
-        io.sendRx()
-        rxAttempts++
-        rxConfirmed = io.confirmTq(false)
-        if (!rxConfirmed) error("RX was not confirmed by fresh TQ0")
-        VoiceTxSequenceResult(true, "Voice macro sent and RX confirmed")
-    } catch (error: Throwable) {
-        VoiceTxSequenceResult(false, error.message ?: error.javaClass.simpleName)
-    } finally {
-        if (ownsTx && !rxConfirmed) {
-            runCatching { io.haltAudio() }
-            while (!rxConfirmed && rxAttempts < 2) {
-                rxAttempts++
-                runCatching { io.sendRx() }
-                rxConfirmed = runCatching { io.confirmTq(false) }.getOrDefault(false)
+    val leaseFailure = io.acquireAudio()
+    if (leaseFailure != null) return VoiceTxSequenceResult(false, leaseFailure)
+    try {
+        var ownsTx = false
+        var rxConfirmed = false
+        var rxAttempts = 0
+        when (val preflight = try { io.queryTq() } catch (error: Throwable) {
+            return VoiceTxSequenceResult(false, error.message ?: "Fresh TQ0 preflight failed")
+        }) {
+            false -> Unit
+            true -> return VoiceTxSequenceResult(false, "Radio is already transmitting; RigWeave did not take ownership")
+            null -> return VoiceTxSequenceResult(false, "Fresh TQ0 preflight response was not received")
+        }
+        var result = try {
+            io.prepareAndVerifyRoute()
+            ownsTx = true
+            io.sendTx()
+            if (!io.confirmTq(true)) error("TX was not confirmed by fresh TQ1")
+            io.writeLeadSilence()
+            io.writeSpeech()
+            io.writeTailSilence()
+            io.haltAudio()
+            io.sendRx()
+            rxAttempts++
+            rxConfirmed = io.confirmTq(false)
+            if (!rxConfirmed) error("RX was not confirmed by fresh TQ0")
+            VoiceTxSequenceResult(true, "Voice macro sent and RX confirmed")
+        } catch (error: Throwable) {
+            VoiceTxSequenceResult(false, error.message ?: error.javaClass.simpleName)
+        } finally {
+            if (ownsTx && !rxConfirmed) {
+                runCatching { io.haltAudio() }
+                while (!rxConfirmed && rxAttempts < 2) {
+                    rxAttempts++
+                    runCatching { io.sendRx() }
+                    rxConfirmed = runCatching { io.confirmTq(false) }.getOrDefault(false)
+                }
             }
         }
+        if (!result.success) result = result.copy(radioMayStillBeTx = ownsTx && !rxConfirmed)
+        return result
+    } finally {
+        runCatching { io.releaseAudio() }
     }
-    if (!result.success) result = result.copy(radioMayStillBeTx = ownsTx && !rxConfirmed)
-    return result
 }

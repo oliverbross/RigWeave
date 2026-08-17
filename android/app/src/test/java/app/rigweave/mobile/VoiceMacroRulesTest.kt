@@ -103,14 +103,22 @@ class VoiceMacroRulesTest {
         val io = FakeTxIo()
         val result = executeVoiceTxSequence(io)
         assertTrue(result.success)
-        assertEquals(listOf("query", "route", "tx", "confirm-tx", "lead", "speech", "tail", "halt", "rx", "confirm-rx"), io.events)
+        assertEquals(listOf("lease", "query", "route", "tx", "confirm-tx", "lead", "speech", "tail", "halt", "rx", "confirm-rx", "release"), io.events)
     }
 
     @Test fun preflightExistingTxIsNotSeizedOrReleased() = runBlocking {
         val io = FakeTxIo(preflight = true)
         val result = executeVoiceTxSequence(io)
         assertFalse(result.success)
-        assertEquals(listOf("query"), io.events)
+        assertEquals(listOf("lease", "query", "release"), io.events)
+    }
+
+    @Test fun failedAudioLeaseSendsNoPttAndDoesNotReleaseAnotherOwner() = runBlocking {
+        val io = FakeTxIo(leaseFailure = "PANADAPTER owns the shared audio route")
+        val result = executeVoiceTxSequence(io)
+        assertFalse(result.success)
+        assertEquals(listOf("lease"), io.events)
+        assertFalse(io.events.contains("tx"))
     }
 
     @Test fun failuresAfterTxAlwaysAttemptAtMostTwoDefensiveReleases() = runBlocking {
@@ -119,6 +127,7 @@ class VoiceMacroRulesTest {
             val result = executeVoiceTxSequence(io)
             assertFalse("$phase should fail", result.success)
             assertTrue("$phase did not request RX", io.events.count { it == "rx" } in 1..2)
+            assertEquals("$phase did not release its lease exactly once", 1, io.events.count { it == "release" })
         }
     }
 
@@ -139,6 +148,7 @@ class VoiceMacroRulesTest {
         assertFalse(result.success)
         assertFalse(io.events.contains("tx"))
         assertFalse(io.events.contains("rx"))
+        assertEquals(1, io.events.count { it == "release" })
     }
 
     private class FakeTxIo(
@@ -146,9 +156,12 @@ class VoiceMacroRulesTest {
         private val failAt: String? = null,
         private val neverConfirmRx: Boolean = false,
         private val failureMessage: String = "failed",
+        private val leaseFailure: String? = null,
     ) : VoiceTxSequenceIo {
         val events = mutableListOf<String>()
         private fun event(name: String) { events += name; if (failAt == name) error("$failureMessage at $name") }
+        override fun acquireAudio(): String? { event("lease"); return leaseFailure }
+        override fun releaseAudio() = event("release")
         override suspend fun queryTq(): Boolean? { event("query"); return preflight }
         override suspend fun prepareAndVerifyRoute() = event("route")
         override suspend fun sendTx() = event("tx")
