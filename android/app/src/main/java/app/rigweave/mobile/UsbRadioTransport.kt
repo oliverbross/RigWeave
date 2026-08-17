@@ -6,13 +6,19 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
-import android.hardware.usb.UsbManager
 import android.hardware.usb.UsbDeviceConnection
+import android.hardware.usb.UsbManager
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import com.hoho.android.usbserial.driver.UsbSerialDriver
 import com.hoho.android.usbserial.driver.UsbSerialPort
+import com.hoho.android.usbserial.driver.UsbSerialPort.ControlLine
 import com.hoho.android.usbserial.driver.UsbSerialProber
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -23,93 +29,179 @@ sealed interface UsbResult {
     data class Unavailable(val detail: String) : UsbResult
 }
 
+data class SerialDeviceDescriptor(
+    val sessionKey: String,
+    val stableKey: String,
+    val driverFamily: String,
+    val manufacturer: String,
+    val product: String,
+    val vidPid: String,
+    val serialNumber: String,
+    val portIndex: Int,
+    val deviceAddress: String,
+) {
+    val label: String get() = listOf(driverFamily, manufacturer.takeIf(String::isNotBlank), product.takeIf(String::isNotBlank), vidPid,
+        serialNumber.takeIf(String::isNotBlank)?.let { "S/N $it" }, "port $portIndex", deviceAddress)
+        .filterNotNull().filter(String::isNotBlank).joinToString(" · ")
+}
+
+data class FreshTqResponse(val frames: ByteArray, val transmitting: Boolean?)
+
 class UsbRadioTransport(private val context: Context) {
     companion object { const val ACTION_USB_PERMISSION = "app.rigweave.mobile.USB_PERMISSION" }
+    private data class Candidate(val descriptor: SerialDeviceDescriptor, val driver: UsbSerialDriver, val portIndex: Int)
+
     private val manager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+    private val prefs = context.getSharedPreferences("rigweave-usb", Context.MODE_PRIVATE)
     private val mutex = Mutex()
     private var connection: UsbDeviceConnection? = null
     private var port: UsbSerialPort? = null
+    private var sessionSelection: String? = null
     private val fastQueries = listOf("FA;", "FB;", "IF;", "TQ;", "SM;", "SW;", "PO;", "AG;", "RG;", "BW;",
         "PC;", "ML;", "MG;", "KS;", "IS;")
     private val slowQueries = listOf("MD;", "DS;", "GT;", "PA;", "RA;", "RT;", "XT;", "FR;", "FT;")
     private val instrumentQueries = fastQueries + slowQueries
     private val connectQueries = listOf("K3;", "OM;", "ID;", "K31;", "AI2;") + instrumentQueries
     private var pollCount = 0
+    @Volatile private var voiceOperationExclusive = false
 
-    fun discovered(): List<String> = UsbSerialProber.getDefaultProber().findAllDrivers(manager).map {
-        "VID:%04X PID:%04X".format(it.device.vendorId, it.device.productId)
+    var candidates by mutableStateOf(emptyList<SerialDeviceDescriptor>()); private set
+    var selected by mutableStateOf<SerialDeviceDescriptor?>(null); private set
+    var controlLineStatus by mutableStateOf("RTS/DTR not checked"); private set
+    val isConnected: Boolean get() = port?.isOpen == true
+
+    fun beginVoiceOperation() { voiceOperationExclusive = true }
+    fun endVoiceOperation() { voiceOperationExclusive = false }
+
+    fun discovered(): List<String> = refreshCandidates().map(SerialDeviceDescriptor::label)
+
+    fun refreshCandidates(): List<SerialDeviceDescriptor> {
+        candidates = candidateRecords().map(Candidate::descriptor)
+        return candidates
     }
 
+    suspend fun selectCandidate(sessionKey: String) = withContext(Dispatchers.IO) { mutex.withLock {
+        closeLocked()
+        val candidate = candidateRecords().firstOrNull { it.descriptor.sessionKey == sessionKey }
+        sessionSelection = candidate?.descriptor?.sessionKey
+        if (candidate == null) prefs.edit().remove("cat_stable_key").apply()
+        else prefs.edit().putString("cat_stable_key", candidate.descriptor.stableKey).apply()
+        selected = candidate?.descriptor
+        refreshCandidates()
+    } }
+
     suspend fun connect(): UsbResult = withContext(Dispatchers.IO) { mutex.withLock {
-        if (port?.isOpen == true) {
-            return@withLock UsbResult.Connected(byteArrayOf(), "Elecraft KX3 is already connected")
-        }
-        val driver = UsbSerialProber.getDefaultProber().findAllDrivers(manager).firstOrNull()
-            ?: return@withLock UsbResult.Unavailable("No supported USB serial adapter detected")
-        if (!awaitPermission(driver.device)) {
+        if (port?.isOpen == true) return@withLock UsbResult.Connected(byteArrayOf(), "CAT is already connected · ${selected?.label.orEmpty()}")
+        val available = candidateRecords()
+        candidates = available.map(Candidate::descriptor)
+        val explicit = sessionSelection?.let { key -> available.firstOrNull { it.descriptor.sessionKey == key } }
+        val policy = chooseStableCandidate(available, prefs.getString("cat_stable_key", null)) { it.descriptor.stableKey }
+        val choice = explicit ?: policy.selected
+        if (choice == null) return@withLock UsbResult.Unavailable(if (available.size > 1) "${policy.reason} in Settings · Safety" else policy.reason)
+        if (!awaitPermission(choice.driver.device)) {
             return@withLock UsbResult.PermissionRequired("USB permission was not granted · tap Connect to try again")
         }
         closeLocked()
-        val openedConnection = manager.openDevice(driver.device)
+        val refreshed = candidateRecords().firstOrNull {
+            it.driver.device.deviceId == choice.driver.device.deviceId && it.portIndex == choice.portIndex
+        } ?: choice
+        val openedConnection = manager.openDevice(refreshed.driver.device)
             ?: return@withLock UsbResult.Unavailable("USB device could not be opened")
-        val openedPort = driver.ports.firstOrNull() ?: run {
-            openedConnection.close()
-            return@withLock UsbResult.Unavailable("No serial port exposed")
+        val openedPort = refreshed.driver.ports.getOrNull(refreshed.portIndex) ?: run {
+            openedConnection.close(); return@withLock UsbResult.Unavailable("Selected serial port is no longer available")
         }
         try {
             openedPort.open(openedConnection)
             openedPort.setParameters(38_400, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+            deassertControlLines(openedPort)
             connection = openedConnection
             port = openedPort
             pollCount = 0
+            selected = refreshed.descriptor
+            prefs.edit().putString("cat_stable_key", refreshed.descriptor.stableKey).apply()
             val frames = exchange(connectQueries)
-            UsbResult.Connected(frames, "Connected at 38,400 baud · VID:%04X PID:%04X".format(driver.device.vendorId, driver.device.productId))
+            UsbResult.Connected(frames, "Connected at 38,400 baud · ${refreshed.descriptor.label} · $controlLineStatus")
         } catch (error: Exception) {
+            runCatching { deassertControlLines(openedPort) }
             runCatching { openedPort.close() }
             openedConnection.close()
-            connection = null
-            port = null
-            UsbResult.Unavailable("USB/CAT failed: ${error.message ?: error.javaClass.simpleName}")
+            connection = null; port = null; selected = null
+            UsbResult.Unavailable("USB/CAT failed closed: ${error.message ?: error.javaClass.simpleName}")
         }
     } }
 
     suspend fun send(command: String): UsbResult = withContext(Dispatchers.IO) { mutex.withLock {
         val active = port ?: return@withLock UsbResult.Unavailable("Connect the USB serial adapter first")
-        val normalized = command.trim().let { if (it.endsWith(';')) it else "$it;" }
-        if (normalized == ";") return@withLock UsbResult.Unavailable("CAT command is empty")
+        val normalized = normalize(command) ?: return@withLock UsbResult.Unavailable("CAT command is empty")
+        if (voiceOperationExclusive && normalized != "RX;") return@withLock UsbResult.Unavailable("Voice macro owns CAT until RX cleanup completes")
         try {
             active.write(normalized.toByteArray(Charsets.US_ASCII), 1_000)
             val frames = readFrames(active) + exchange(instrumentQueries)
             UsbResult.Connected(frames, "Sent $normalized")
-        } catch (error: Exception) {
-            closeLocked()
-            UsbResult.Unavailable("USB/CAT failed: ${error.message ?: error.javaClass.simpleName}")
+        } catch (error: Exception) { failLocked(error) }
+    } }
+
+    suspend fun sendFast(command: String): ByteArray = withContext(Dispatchers.IO) { mutex.withLock {
+        val active = port ?: error("CAT adapter is disconnected")
+        val normalized = normalize(command) ?: error("CAT command is empty")
+        try {
+            active.write(normalized.toByteArray(Charsets.US_ASCII), 500)
+            readFrames(active, 100, 30)
+        } catch (error: Exception) { closeLocked(); throw error }
+    } }
+
+    suspend fun queryTqFresh(): FreshTqResponse = withContext(Dispatchers.IO) { mutex.withLock {
+        try {
+            val frames = exchangeFresh("TQ;", initialTimeout = 180, trailingTimeout = 35)
+            FreshTqResponse(frames, parseFreshTq(frames))
+        } catch (error: Exception) { closeLocked(); throw error }
+    } }
+
+    suspend fun confirmTq(expected: Boolean, timeoutMillis: Long = 1_000): FreshTqResponse = withContext(Dispatchers.IO) { mutex.withLock {
+        val started = System.currentTimeMillis()
+        val all = ArrayList<Byte>()
+        var value: Boolean? = null
+        while (System.currentTimeMillis() - started < timeoutMillis) {
+            val frames = exchangeFresh("TQ;", initialTimeout = 120, trailingTimeout = 25)
+            frames.forEach(all::add)
+            value = parseFreshTq(frames)
+            if (value == expected) break
+            delay(70)
         }
+        FreshTqResponse(all.toByteArray(), value.takeIf { it == expected })
     } }
 
     suspend fun poll(): UsbResult? = withContext(Dispatchers.IO) { mutex.withLock {
-        if (port == null) return@withLock null
+        if (port == null || voiceOperationExclusive) return@withLock null
         try {
             val queries = if (pollCount++ % 6 == 0) instrumentQueries else fastQueries
-            UsbResult.Connected(exchange(queries), "Live CAT state")
-        } catch (error: Exception) {
-            closeLocked()
-            UsbResult.Unavailable("USB/CAT failed: ${error.message ?: error.javaClass.simpleName}")
-        }
+            UsbResult.Connected(exchange(queries), "Live CAT state · ${selected?.label.orEmpty()}")
+        } catch (error: Exception) { failLocked(error) }
     } }
 
     suspend fun pollCwText(): UsbResult? = withContext(Dispatchers.IO) { mutex.withLock {
-        if (port == null) return@withLock null
+        if (port == null || voiceOperationExclusive) return@withLock null
         try {
             val frames = exchange(listOf("DB;"), initialTimeout = 120, trailingTimeout = 40)
             UsbResult.Connected(frames, "Live CW text", frames)
-        } catch (error: Exception) {
-            closeLocked()
-            UsbResult.Unavailable("USB/CAT failed: ${error.message ?: error.javaClass.simpleName}")
-        }
+        } catch (error: Exception) { failLocked(error) }
     } }
 
     suspend fun disconnect() = withContext(Dispatchers.IO) { mutex.withLock { closeLocked() } }
+
+    private fun candidateRecords(): List<Candidate> = UsbSerialProber.getDefaultProber().findAllDrivers(manager).flatMap { driver ->
+        driver.ports.indices.map { portIndex ->
+            val device = driver.device
+            val serial = if (manager.hasPermission(device)) runCatching { device.serialNumber.orEmpty() }.getOrDefault("") else ""
+            val family = driver.javaClass.simpleName.removeSuffix("SerialDriver").ifBlank { "USB serial" }
+            val manufacturer = device.manufacturerName.orEmpty()
+            val product = device.productName.orEmpty()
+            val vidPid = "%04X:%04X".format(device.vendorId, device.productId)
+            val stable = listOf(family, manufacturer, product, vidPid, serial, portIndex.toString()).joinToString("|")
+            Candidate(SerialDeviceDescriptor("${device.deviceId}:$portIndex", stable, family, manufacturer, product,
+                vidPid, serial, portIndex, device.deviceName), driver, portIndex)
+        }
+    }
 
     private suspend fun awaitPermission(device: UsbDevice): Boolean {
         if (manager.hasPermission(device)) return true
@@ -123,31 +215,35 @@ class UsbRadioTransport(private val context: Context) {
                 result.complete(intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false))
             }
         }
-        ContextCompat.registerReceiver(
-            context,
-            receiver,
-            IntentFilter(ACTION_USB_PERMISSION),
-            ContextCompat.RECEIVER_NOT_EXPORTED,
-        )
+        ContextCompat.registerReceiver(context, receiver, IntentFilter(ACTION_USB_PERMISSION), ContextCompat.RECEIVER_NOT_EXPORTED)
         return try {
-            val permissionIntent = Intent(ACTION_USB_PERMISSION).setPackage(context.packageName)
-            val pendingIntent = PendingIntent.getBroadcast(
-                context,
-                device.deviceId,
-                permissionIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
+            val pendingIntent = PendingIntent.getBroadcast(context, device.deviceId,
+                Intent(ACTION_USB_PERMISSION).setPackage(context.packageName), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             manager.requestPermission(device, pendingIntent)
             result.await()
-        } finally {
-            runCatching { context.unregisterReceiver(receiver) }
-        }
+        } finally { runCatching { context.unregisterReceiver(receiver) } }
+    }
+
+    private fun deassertControlLines(active: UsbSerialPort) {
+        val supported = active.supportedControlLines
+        if (ControlLine.RTS in supported) active.rts = false
+        if (ControlLine.DTR in supported) active.dtr = false
+        val activeLines = if (ControlLine.RTS in supported || ControlLine.DTR in supported) active.controlLines else emptySet()
+        require(ControlLine.RTS !in activeLines && ControlLine.DTR !in activeLines) { "RTS/DTR could not be confirmed inactive" }
+        controlLineStatus = "RTS/DTR confirmed inactive"
     }
 
     private fun exchange(commands: List<String>, initialTimeout: Int = 350, trailingTimeout: Int = 35): ByteArray {
         val active = port ?: return byteArrayOf()
         if (commands.isEmpty()) return byteArrayOf()
         active.write(commands.joinToString("").toByteArray(Charsets.US_ASCII), 1_000)
+        return readFrames(active, initialTimeout, trailingTimeout)
+    }
+
+    private fun exchangeFresh(command: String, initialTimeout: Int, trailingTimeout: Int): ByteArray {
+        val active = port ?: return byteArrayOf()
+        readFrames(active, initialTimeout = 1, trailingTimeout = 1)
+        active.write(command.toByteArray(Charsets.US_ASCII), 500)
         return readFrames(active, initialTimeout, trailingTimeout)
     }
 
@@ -164,10 +260,16 @@ class UsbRadioTransport(private val context: Context) {
         return output.toByteArray()
     }
 
+    private fun normalize(command: String): String? = command.trim().let { if (it.endsWith(';')) it else "$it;" }.takeUnless { it == ";" }
+
+    private fun failLocked(error: Exception): UsbResult.Unavailable {
+        closeLocked()
+        return UsbResult.Unavailable("USB/CAT failed: ${error.message ?: error.javaClass.simpleName}")
+    }
+
     private fun closeLocked() {
-        runCatching { port?.close() }
+        port?.let { active -> runCatching { deassertControlLines(active) }; runCatching { active.close() } }
         connection?.close()
-        port = null
-        connection = null
+        port = null; connection = null; selected = null
     }
 }

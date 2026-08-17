@@ -24,6 +24,8 @@ class AppController(private val context: Context) {
     var fieldProfile by mutableStateOf(runCatching { FieldProfile.valueOf(prefs.getString("profile", "DAY")!!) }.getOrDefault(FieldProfile.DAY)); private set
     var transmitArmed by mutableStateOf(false); private set
     var cwMacrosArmed by mutableStateOf(false); private set
+    var voiceMacrosArmed by mutableStateOf(false); private set
+    var voiceTxLevel by mutableStateOf(prefs.getFloat("voice_tx_level", 0.20f).coerceIn(0.02f, 1f)); private set
     var stationCallsign by mutableStateOf(prefs.getString("station_call", "") ?: ""); private set
     var stationName by mutableStateOf(prefs.getString("station_name", "") ?: ""); private set
     var stationGrid by mutableStateOf(prefs.getString("station_grid", "") ?: ""); private set
@@ -42,6 +44,11 @@ class AppController(private val context: Context) {
     val macroTexts = mutableStateListOf<String>().apply {
         repeat(CW_MACRO_COUNT) { index -> add(sanitizeCwMacroText(prefs.getString("macro_text_$index", "") ?: "")) }
     }
+    val voiceMacroLabels = mutableStateListOf<String>().apply {
+        repeat(VOICE_MACRO_COUNT) { index ->
+            add(sanitizeVoiceMacroLabel(prefs.getString("voice_macro_label_$index", defaultVoiceMacroLabel(index)).orEmpty(), index))
+        }
+    }
     val presets = mutableStateListOf<RadioPreset>().apply { addAll(loadPresets()) }
     val visibleLogbookColumns = mutableStateListOf<LogbookColumn>().apply {
         addAll(decodeLogbookColumns(prefs.getString("logbook_columns", null)))
@@ -53,6 +60,22 @@ class AppController(private val context: Context) {
 
     fun updateTransmitArmed(value: Boolean) { transmitArmed = value }
     fun updateCwMacrosArmed(value: Boolean) { cwMacrosArmed = value }
+    fun updateVoiceMacrosArmed(value: Boolean) { voiceMacrosArmed = value }
+    fun updateVoiceTxLevel(value: Float) {
+        voiceTxLevel = value.coerceIn(0.02f, 1f)
+        prefs.edit().putFloat("voice_tx_level", voiceTxLevel).apply()
+    }
+    fun saveVoiceMacroLabels(labels: List<String>) {
+        val editor = prefs.edit()
+        repeat(VOICE_MACRO_COUNT) { index ->
+            voiceMacroLabels[index] = sanitizeVoiceMacroLabel(labels.getOrNull(index).orEmpty(), index)
+            editor.putString("voice_macro_label_$index", voiceMacroLabels[index])
+        }
+        editor.apply()
+    }
+    fun disarmAll() {
+        transmitArmed = false; cwMacrosArmed = false; voiceMacrosArmed = false
+    }
 
     fun saveLocalSettings(call: String, name: String, grid: String, repeat: Int,
         labels: List<String>, texts: List<String>) {

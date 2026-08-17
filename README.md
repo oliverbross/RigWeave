@@ -81,6 +81,8 @@ An emulator can validate navigation and local logging, but cannot prove USB seri
 
 The Android source also binds the full portable feature engine through JNI and supplies the same KX3-style live CAT deck, local ADIF journal/import/export, Wavelog discovery/upload/full-log cache, six graphical DX views, real TCP DX-cluster, NOAA, and `AudioRecord` physical-input panadapter paths with matching Compose screens. Android SDK licences were accepted with the owner's explicit approval and NDK `28.2.13676358` is installed under the SDK used by Gradle.
 
+Android also includes six SSB voice-macro slots for exact USB/LSB operation. Recordings remain in private tablet storage, preview is verified against the built-in speaker, and transmission uses an explicitly selected DigiRig USB output with left-channel speech/right-channel silence. PTT is owned only by verified Elecraft CAT (`TQ0 -> TX -> TQ1 -> audio -> RX -> TQ0`); RTS/DTR are kept inactive. Multiple CAT or USB-audio candidates require explicit selection. See [`docs/VOICE_MACROS_ANDROID.md`](docs/VOICE_MACROS_ANDROID.md) for setup, privacy limits, calibration, and the operator-controlled dummy-load checklist.
+
 ## Panadapter architecture
 
 The mobile panadapter consumes physical stereo I/Q only. Its shared FFT path now uses independent DC removal, coherent-gain-normalized complex magnitudes, Blackman-Harris windowing, FFT shift, and asymmetric dB-domain attack/release smoothing. It does not infer an I/Q calibration transform from each live frame.
@@ -103,4 +105,4 @@ core/build/rigweave_core_tests
 - Physical CAT passes through the enabled DriverKit extension and real Elecraft KXUSB (`067B:23A3`): build 38 opened the PL2303GC at 38,400 8N1, identified the connected radio as KX3, and read VFO A at 21.1366 MHz. A physical UI test connected in Settings, navigated through Home and Radio, returned to Settings, and verified that CAT and frequency stayed live.
 - Physical ICUSBAUDIO2D stereo I/Q passes at 48 kHz: more than 1.2 million live frames reached the shared 1,024-bin spectrum pipeline during the build-30 soak. The DSP now matches Tab5's proven analogue I/Q imbalance correction and complex-tone image-rejection test; every PCM frame is processed while SwiftUI presentation is bounded to about 9 FPS.
 - The saved `OM0RX-6` profile was exercised against `cluster.om0rx.com:7300` on the physical iPad: login, `sh/dx 50`, parsing, shared-core snapshot generation, and populated Spots UI passed with real records. Wavelog authentication still requires a configured API key and station profile.
-- No Android hardware or emulator proof has been completed in this repository.
+- Android voice-macro JVM tests and debug APK build are software evidence only. Connected-tablet launch and receive-only checks, plus every operator-controlled dummy-load/RF acceptance item, must be reported separately and must not be inferred from the build.
