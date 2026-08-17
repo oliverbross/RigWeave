@@ -17,12 +17,13 @@ V1 deliberately uses Elecraft CAT PTT. It does not use DigiRig RTS, DTR, CM108 G
 Elecraft defines `TX;` as entering transmit like PTT/XMIT, `RX;` as terminating transmit, and `TQ0;`/`TQ1;` as the compact receive/transmit status response. RigWeave therefore uses a fresh-response sequence:
 
 1. require exact USB or LSB mode, foreground state, CAT, a valid recording, and a unique selected USB output;
-2. require a fresh `TQ0;` without taking ownership of an already-transmitting radio;
-3. preload and validate the complete macro;
-4. start with digital silence and verify the actual Android route is the selected USB sink;
-5. send `TX;`, require fresh `TQ1;`, add 175 ms lead silence, then stream speech on left with right held at zero;
-6. add 125 ms trailing silence, flush audio, send `RX;`, and require fresh `TQ0;`;
-7. on Stop, backgrounding, route/focus loss, CAT error, watchdog, or exception, halt non-zero audio and make up to two RX/verification attempts from non-cancellable cleanup.
+2. acquire the exclusive `VOICE_TX` audio lease, pausing only a running receive monitor through the central coordinator; reject every other owner before PTT;
+3. require a fresh `TQ0;` without taking ownership of an already-transmitting radio;
+4. preload and validate the complete macro;
+5. start with digital silence and verify the actual Android route is the selected USB sink;
+6. send `TX;`, require fresh `TQ1;`, add 175 ms lead silence, then stream speech on left with right held at zero;
+7. add 125 ms trailing silence, flush audio, send `RX;`, and require fresh `TQ0;`;
+8. on Stop, backgrounding, route/focus loss, CAT error, watchdog, or exception, halt non-zero audio, make up to two RX/verification attempts from non-cancellable cleanup, and release the lease exactly once.
 
 If RX still cannot be confirmed, RigWeave shows a persistent warning instructing the operator to use the radio's physical RX/XMIT control or remove PTT.
 
@@ -45,6 +46,8 @@ Settings -> Safety lists every supported serial port with driver family, reporte
 RigWeave first uses one exact persisted stable signature, otherwise auto-selects only when exactly one eligible candidate exists. Multiple candidates or duplicate saved identities require an explicit choice. Transient Android device IDs are used only to remember the current attachment/session. Rescanning is event-driven through Android audio-device callbacks, with manual Rescan actions available.
 
 Changing CAT or voice TX selection disconnects/aborts the active operation and clears all transmit arms. A selected route disappearing or becoming ambiguous fails closed.
+
+The receive monitor, panadapter, EQ capture/playback, voice record/import/preview, and voice TX are mutually exclusive. Only a running receive monitor may be deliberately paused and restored; active non-monitor work is never stolen or queued for automatic restart.
 
 ## Record, import, preview, and storage
 

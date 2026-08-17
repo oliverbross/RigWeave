@@ -1,6 +1,6 @@
 # Panadapter and waterfall design
 
-**Status:** Shared DSP plus production Android implementation; Apple evidence remains separate.
+**Status:** Shared DSP plus integrated fail-closed Android implementation; Apple evidence remains separate. Physical Android KX3 quadrature-I/Q RF acceptance is deferred.
 
 ## Signal contract
 
@@ -17,6 +17,8 @@ Apple feeds the core from AVAudioSession in ios/RigWeave/FeatureModel.swift and 
 - Newest waterfall history stays aligned with the current frequency frame.
 - Noise floor, black level, dynamic range, palette, and I/Q reversal are explicit.
 - No physical input means an offline/empty instrument.
+- New or missing Android settings request 48 kHz. Explicit saved 48 kHz and 96 kHz choices round-trip unchanged; both controls remain visible, and Android-reported 96 kHz is not a claim of 96 kHz useful RF width.
+- With stale/offline CAT the header shows `RF STALE`, the truth strip shows `CAT OFFLINE · RELATIVE OFFSETS ONLY`, absolute labels stay hidden, and QSY is blocked.
 
 ## Evidence
 
@@ -30,6 +32,6 @@ Apple feeds the core from AVAudioSession in ios/RigWeave/FeatureModel.swift and 
 - Measure axis/calibration accuracy against known RF/audio sources.
 - Reconfirm I/Q orientation, image rejection, frequency alignment, and device persistence on each supported interface.
 - Separate capture proof, DSP proof, rendered-axis proof, and monitoring/playback proof.
-- Phase 1A must harden this implementation rather than rewrite it.
+- The retained Android StarTech/KX3 diagnostic showed about 0.10 dB median mirror rejection, about 7.72 dB channel imbalance, and no observed spectrum movement during the recorded VFO diagnostic topology. These are deferred-hardware findings, not accepted quadrature I/Q.
 
 Historical research references and owner-local paths are retained in [PORTING_NOTES.md](PORTING_NOTES.md); they are provenance clues, not imported Phase 0 code.

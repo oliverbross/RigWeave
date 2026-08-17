@@ -9,7 +9,7 @@ RigWeave is local-first. Radio control and local logging must remain useful with
 ## Current product
 
 - Native Apple mobile client using SwiftUI. The current target and physical evidence are iPad-focused; iPhone support is not claimed.
-- Native Android client using Jetpack Compose, including a dedicated production KX3 receive-I/Q panadapter with explicit stereo-route proof, shared native DSP, CAT-synchronized spectrum/waterfall, calibration, diagnostics and bounded replay.
+- Native Android client using Jetpack Compose, including a dedicated KX3 receive-I/Q panadapter with explicit stereo-route proof, shared native DSP, CAT-synchronized spectrum/waterfall, calibration, diagnostics and bounded replay. Its software/device path is integrated and fail-closed; physical KX3 quadrature-I/Q RF acceptance is deferred.
 - Shared C++17 core exposed through a C ABI.
 - Deep Elecraft KX3/KX2 integration: observed CAT state, radio controls, transport adapters, safety classification, logging, real spectrum paths, and DX intelligence.
 - Local SQLite journals and ADIF workflows.
@@ -20,7 +20,7 @@ The clients do not have identical surface coverage. Android currently contains t
 
 - Retained compact destinations: Home, Radio, Logbook, Presets, DX, and Settings. Expanded navigation also exposes EQ as a first-class destination; compact layouts open EQ Studio from Radio or Settings → Audio without adding a seventh bottom-bar item.
 - Android EQ Studio reads exact KX3 RX/TX curves, keeps radio/draft/profile state separate, records one finite local audio sample, previews an approximate eight-band response with matched/blind A/B, and applies only through an exclusive CAT transaction with exact readback verification. It never keys the transmitter or claims to reproduce Elecraft's undocumented DSP topology.
-- Panadapter, raw Spots destination, and Digital/WSJT-X are explicitly deferred and absent from navigation.
+- Panadapter is implemented on Android as an expanded destination and compact Radio subview. Portable spot overlays and Digital/WSJT-X remain deferred.
 - The consolidated DX destination owns live cluster browsing and analyzed DX views.
 - Radio state must be observed truth with explicit live, stale, disconnected, pending, and failed states.
 - TX, TUNE, ATU TUNE, and CW macro transmission are disabled by default, explicitly armed, never started automatically, and never blindly retried.

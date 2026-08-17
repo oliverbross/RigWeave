@@ -17,6 +17,7 @@ Dense radio information is intentional. Do not turn the operator console into a 
 - Potentially transmitting controls require explicit state, confirmation where appropriate, and an immediately available abort/Emergency RX path.
 - No colour-only status, fabricated signal animation, placeholder QSO, or generated spectrum.
 - The panadapter axis follows live CAT and the physical audio sample rate. Empty/offline input stays visibly offline.
+- Android monitor, panadapter, EQ capture/playback, voice record/import/preview, and voice TX are mutually exclusive audio owners. Only the monitor may be paused and restored by the central coordinator; no other owner is preempted.
 - Future desktop panels may resize or detach, but no desktop implementation is implied by this contract.
 - Before public binary distribution, an About/Licences surface must make GPL and applicable third-party notices readily accessible.
 
