@@ -61,7 +61,7 @@ TX normal-SSB proof (USB selected explicitly through the ordinary Radio UI, then
 - Preferred capture is 48 kHz PCM16 mono; 44.1 kHz is the fallback.
 - The controller attempts `UNPROCESSED`, then `VOICE_RECOGNITION`, with the selected USB input preferred. Built-in mic is explicitly labelled reference-only.
 - AGC, noise suppression, and echo cancellation are disabled where available and the UI reports OFF, PARTIAL, or UNKNOWN based on observed effect state.
-- Audio ownership prevents monitor, voice-macro, and EQ capture/playback pipelines from contending. A running monitor requires the explicit **Pause and Use for EQ** action and is restored afterward when appropriate.
+- One central audio coordinator prevents monitor, panadapter, voice record/import/preview, voice TX, and EQ capture/playback from contending. A running monitor requires the explicit **Pause and Use for EQ** action and is restored once by that coordinator; EQ never preempts another non-monitor owner.
 - Eight one-octave-style peaking filters (Q 1.15) approximate the documented KX3 centres. This is not an Elecraft DSP emulation.
 - Waveform envelope, averaged spectrum, response curve, clipping, peak, speech-active RMS, crest factor, noise floor, usable speech, and band energy all derive from captured PCM.
 - A/B uses the same PCM, speech-active RMS matching by default, static headroom reduction when required, short fades, and optional blind labels.

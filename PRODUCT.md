@@ -9,7 +9,7 @@ RigWeave is local-first. Radio control and local logging must remain useful with
 ## Current product
 
 - Native Apple mobile client using SwiftUI. The current target and physical evidence are iPad-focused; iPhone support is not claimed.
-- Native Android client using Jetpack Compose, including a dedicated production KX3 receive-I/Q panadapter with explicit stereo-route proof, shared native DSP, CAT-synchronized spectrum/waterfall, calibration, diagnostics and bounded replay.
+- Native Android client using Jetpack Compose, including a dedicated KX3 receive-I/Q panadapter with explicit stereo-route proof, shared native DSP, CAT-synchronized spectrum/waterfall, calibration, diagnostics and bounded replay. Its software/device path is integrated and fail-closed; physical KX3 quadrature-I/Q RF acceptance is deferred.
 - Shared C++17 core exposed through a C ABI.
 - Deep Elecraft KX3/KX2 integration: observed CAT state, radio controls, transport adapters, safety classification, logging, real spectrum paths, and DX intelligence.
 - Local SQLite journals and ADIF workflows.
@@ -21,7 +21,7 @@ The clients do not have identical surface coverage. Android currently contains t
 
 - Retained compact destinations: Home, Radio, Logbook, Presets, DX, and Settings. Expanded navigation also exposes EQ and Portable as first-class destinations; compact layouts open EQ Studio from Radio or Settings → Audio and Portable Chase from Home without adding bottom-bar items.
 - Android EQ Studio reads exact KX3 RX/TX curves, keeps radio/draft/profile state separate, records one finite local audio sample, previews an approximate eight-band response with matched/blind A/B, and applies only through an exclusive CAT transaction with exact readback verification. It never keys the transmitter or claims to reproduce Elecraft's undocumented DSP topology.
-- Panadapter, raw Spots destination, and Digital/WSJT-X are explicitly deferred and absent from navigation.
+- Panadapter is implemented on Android as an expanded destination and compact Radio subview. Portable spot overlays and Digital/WSJT-X remain deferred.
 - The consolidated DX destination owns live cluster browsing and analyzed DX views.
 - Android Portable → Portable Chase preserves the POTA vertical slice and adds unified programme filtering, WWFF Spotline/agendas, a safely replaceable offline SOTA summit catalogue, conservative grouping, programme-correct worked intelligence, MapLibre selection, receive-only CAT tuning, and an editable multi-reference draft in the existing logger. SOTA live is explicitly unavailable pending the current programme API approval; the app does not use the deprecated endpoint or fabricate fallback activity.
 - Android Portable → Activate provides one recoverable local POTA session, explicit boundary acknowledgement, CAT-optional fast logging into the existing journal, editable P2P handoff, per-UTC-day progress, multi-own-park/P2P ADIF expansion, file sharing, and official-site browser handoffs. It does not post spots, upload logs, or initiate transmission.

@@ -39,6 +39,14 @@ This is the normative product order. A phase starts only after separate owner au
 - Digirig-compatible routing only where physically supported.
 - Explicit PTT, timeout, abort, and no unattended transmission.
 
+### Android Phase 1 closure status
+
+- Phase 0 is complete.
+- Android Phase 1A/1B/1C are implemented and integrated behind one exclusive audio-owner contract.
+- Android panadapter software/device behavior is fail-closed; physical KX3 quadrature-I/Q RF acceptance remains deferred.
+- iPadOS KX3 Studio parity for EQ Studio and SSB voice macros is the next candidate.
+- Phase 2 is not authorised by this closure.
+
 ## Phase 2 — Portable Chase v1
 
 - POTA, SOTA, and WWFF only.
