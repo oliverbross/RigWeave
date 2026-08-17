@@ -27,7 +27,8 @@ RigWeave is the native mobile successor to the M5Stack Tab5 KX3 Touch Remote: on
 
 ## Capabilities and Constraints
 
-- Retained destinations: Home, Radio, Logbook, Presets, DX, and Settings. Radio owns the complete KX3 control surface.
+- Retained compact destinations: Home, Radio, Logbook, Presets, DX, and Settings. Expanded navigation also exposes EQ as a first-class destination; compact layouts open EQ Studio from Radio or Settings → Audio without adding a seventh bottom-bar item.
+- Android EQ Studio reads exact KX3 RX/TX curves, keeps radio/draft/profile state separate, records one finite local audio sample, previews an approximate eight-band response with matched/blind A/B, and applies only through an exclusive CAT transaction with exact readback verification. It never keys the transmitter or claims to reproduce Elecraft's undocumented DSP topology.
 - Panadapter, raw Spots destination, and Digital/WSJT-X are explicitly deferred and absent from navigation.
 - The consolidated DX destination owns live cluster browsing and analyzed DX views.
 - Radio state must be observed truth with explicit live, stale, disconnected, pending, and failed states.

@@ -73,12 +73,17 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import kotlin.math.abs
 
 class MainActivity : ComponentActivity() {
@@ -105,7 +110,7 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), LOGBOOK("Logbook"), PRESETS("Presets"), DX("DX"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), EQ("EQ"), LOGBOOK("Logbook"), PRESETS("Presets"), DX("DX"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     DEFAULT("Default"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
@@ -127,9 +132,22 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val audio = remember { AudioMonitorController(context) }
     val cwDecoder = remember { CwDecodeBuffer() }
     var radio by remember { mutableStateOf(NativeCore.parseState(NativeCore.state(core))) }
+    val voiceStore = remember { VoiceMacroStore(context) { app.voiceMacroLabels.toList() } }
+    val voiceAudio = remember { VoiceMacroAudioController(context, audio, voiceStore) }
+    val eqAudio = remember { EqAudioController(context, audio) }
+    val eqProfiles = remember { EqProfileStore(context) }
+    val eqStudio = remember { EqStudioController(transport, { radio }, eqAudio, eqProfiles) }
+    var foreground by remember { mutableStateOf(true) }
+    val voiceTx = remember { VoiceMacroTransmitController(context, transport, audio, voiceStore, app,
+        radioState = { radio }, foreground = { foreground }, audioOperationIdle = { voiceAudio.state is VoiceAudioState.Idle }, onFrames = { frames ->
+            NativeCore.feed(core, frames)
+            radio = NativeCore.parseState(NativeCore.state(core)).copy(cwDecodedText = cwDecoder.text)
+        }) }
     var usbDetail by remember { mutableStateOf("No USB CAT adapter opened") }
     var destination by remember { mutableStateOf(Destination.HOME) }
     var pendingRisk by remember { mutableStateOf<String?>(null) }
+    var pendingVoiceSlot by remember { mutableStateOf<Int?>(null) }
+    var voiceArmedMode by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     fun accept(result: UsbResult) {
         when (result) {
@@ -139,11 +157,12 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 radio = NativeCore.parseState(NativeCore.state(core)).copy(cwDecodedText = cwDecoder.text)
                 usbDetail = result.detail
             }
-            is UsbResult.PermissionRequired -> usbDetail = result.detail
-            is UsbResult.Unavailable -> usbDetail = result.detail
+            is UsbResult.PermissionRequired -> { usbDetail = result.detail; app.disarmAll(); voiceTx.stop("CAT permission unavailable") }
+            is UsbResult.Unavailable -> { usbDetail = result.detail; app.disarmAll(); voiceTx.stop("CAT disconnected or unavailable") }
         }
     }
     suspend fun connectKx3() {
+        app.disarmAll(); voiceTx.stop("CAT reconnect clears voice macro arm")
         usbDetail = "Connecting to Elecraft KX3…"
         accept(transport.connect())
     }
@@ -176,8 +195,28 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
             app.updateCwMacrosArmed(false)
         }
     }
+    LaunchedEffect(radio.connected, radio.mode, app.voiceMacrosArmed) {
+        if (app.voiceMacrosArmed && (!radio.connected || !isVoiceMacroMode(radio.mode) || radio.mode != voiceArmedMode)) {
+            app.updateVoiceMacrosArmed(false); voiceTx.stop("CAT or exact sideband mode changed")
+        }
+    }
+    LaunchedEffect(radio.connected) { eqStudio.onConnectionChanged(radio.connected) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event -> when (event) {
+            Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> foreground = true
+            Lifecycle.Event.ON_STOP, Lifecycle.Event.ON_DESTROY -> {
+                foreground = false; app.disarmAll(); voiceAudio.stopCurrent(); voiceTx.stop("App left foreground; defensive RX cleanup requested")
+            }
+            else -> Unit
+        } }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(voiceAudio) { voiceAudio.onFailure = { app.updateVoiceMacrosArmed(false) } }
     DisposableEffect(Unit) { onDispose {
         scope.launch { transport.disconnect() }; audio.close(); neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
+        voiceAudio.close(); voiceTx.close(); eqAudio.close(); app.disarmAll()
         NativeCore.destroy(core); database.close()
     } }
     pendingRisk?.let { command ->
@@ -199,6 +238,21 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         } },
         dismissButton = { TextButton({ pendingRisk = null }) { Text("Cancel") } },
     ) }
+    pendingVoiceSlot?.let { slot ->
+        val item = voiceStore.slots.getOrNull(slot)
+        AlertDialog(onDismissRequest = { pendingVoiceSlot = null }, title = { Text("Arm & send voice macro?") },
+            text = { Text("${item?.label ?: "M${slot + 1}"} · ${(item?.durationMillis ?: 0) / 1_000f}s\n${audio.selectedTx?.name ?: "No selected USB output"}\n\nCAT PTT → DigiRig USB audio → KX3 MIC") },
+            confirmButton = { Button({
+                if (radio.connected && isVoiceMacroMode(radio.mode) && item?.exists == true && audio.selectedTxDevice() != null && foreground) {
+                    app.updateVoiceMacrosArmed(true); voiceArmedMode = radio.mode; voiceTx.send(slot)
+                }
+                pendingVoiceSlot = null
+            }, enabled = radio.connected && isVoiceMacroMode(radio.mode) && item?.exists == true && audio.selectedTxDevice() != null) { Text("Arm & send") } },
+            dismissButton = { TextButton({ pendingVoiceSlot = null }) { Text("Cancel") } })
+    }
+    val requestVoice: (Int) -> Unit = { slot ->
+        if (app.voiceMacrosArmed && voiceArmedMode == radio.mode) voiceTx.send(slot) else pendingVoiceSlot = slot
+    }
     BoxWithConstraints(Modifier.fillMaxSize().background(Chassis)) {
         if (maxWidth >= 700.dp) Row(Modifier.fillMaxSize()) {
             NavigationRail(containerColor = Panel) {
@@ -206,12 +260,16 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 Destination.entries.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
-            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, app, connect, send, direct, clearCwDecode)
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, app, transport,
+                voiceStore, voiceAudio, voiceTx, eqStudio, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
+                connect, send, direct, requestVoice, clearCwDecode)
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
-            Destination.entries.forEach { item -> NavigationBarItem(destination == item, { destination = item },
+            Destination.entries.filterNot { it == Destination.EQ }.forEach { item -> NavigationBarItem(destination == item, { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
-            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, app, connect, send, direct, clearCwDecode)
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, app, transport,
+                voiceStore, voiceAudio, voiceTx, eqStudio, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
+                connect, send, direct, requestVoice, clearCwDecode)
         } }
     }
 }
@@ -219,6 +277,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
 private fun navIcon(item: Destination) = when (item) {
     Destination.HOME -> Icons.Outlined.Home
     Destination.RADIO -> Icons.Outlined.SettingsInputAntenna
+    Destination.EQ -> Icons.Outlined.Equalizer
     Destination.LOGBOOK -> Icons.AutoMirrored.Outlined.List
     Destination.PRESETS -> Icons.Outlined.Bookmarks
     Destination.DX -> Icons.Outlined.Public
@@ -227,14 +286,18 @@ private fun navIcon(item: Destination) = when (item) {
 
 @Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase,
     features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, app: AppController,
-    connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, clearCwDecode: () -> Unit) {
+    transport: UsbRadioTransport, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
+    eqStudio: EqStudioController, compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
+    connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit) {
     when (destination) {
         Destination.HOME -> HomeScreen(radio, app, send)
-        Destination.RADIO -> RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, connect, send, direct, clearCwDecode)
+        Destination.RADIO -> RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode)
+        Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
         Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog, app)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, cty, app, send)
-        Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, app, direct)
+        Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, app,
+            transport, voiceStore, voiceAudio, voiceTx, openEq, connect, direct)
     }
 }
 
@@ -303,8 +366,9 @@ private fun navIcon(item: Destination) = when (item) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable private fun RadioScreen(state: RadioState, detail: String, app: AppController, database: QsoDatabase,
-    wavelog: WavelogController, callbook: CallbookController, cty: CtyController, features: FeatureController, connect: () -> Unit, send: (String) -> Unit,
-    direct: (String) -> Unit, clearCwDecode: () -> Unit) {
+    wavelog: WavelogController, callbook: CallbookController, cty: CtyController, features: FeatureController,
+    voiceStore: VoiceMacroStore, voiceTx: VoiceMacroTransmitController, openEq: () -> Unit, connect: () -> Unit, send: (String) -> Unit,
+    direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit) {
     var previousState by remember { mutableStateOf<RadioState?>(null) }
     var radioFeedback by remember { mutableStateOf<RadioFeedback?>(null) }
     var feedbackVisible by remember { mutableStateOf(false) }
@@ -346,11 +410,16 @@ private fun navIcon(item: Destination) = when (item) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Kx3StatusRail(state, detail, connect, direct)
+                OutlinedButton(openEq, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("EQ STUDIO · READ · CAPTURE · COMPARE · APPLY & VERIFY") }
                 CompactKx3Face(state, send, radioFeedback, feedbackVisible, Modifier.fillMaxWidth().weight(1f))
             }
             Row(Modifier.fillMaxWidth().weight(2f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    CwMacroStrip(state, app, send, Modifier.fillMaxWidth().height(54.dp))
+                    when {
+                        isCwMacroMode(state.mode) -> CwMacroStrip(state, app, send, Modifier.fillMaxWidth().height(54.dp))
+                        isVoiceMacroMode(state.mode) -> VoiceMacroStrip(state, voiceStore, voiceTx, requestVoice,
+                            Modifier.fillMaxWidth().heightIn(min = 54.dp))
+                    }
                     CompactLogger(state, database, wavelog, callbook, cty, app, send,
                         onInsight = { stationInsight = it; identityVisible = true },
                         onInsightCleared = { stationInsight = null; identityVisible = false },
@@ -372,6 +441,26 @@ private fun navIcon(item: Destination) = when (item) {
                         Modifier.fillMaxWidth().weight(3f))
                 }
             }
+        }
+    }
+}
+
+@Composable private fun VoiceMacroStrip(state: RadioState, store: VoiceMacroStore,
+    tx: VoiceMacroTransmitController, send: (Int) -> Unit, modifier: Modifier = Modifier) {
+    val configured = store.slots.filter(VoiceMacroSlot::exists)
+    if (!isVoiceMacroMode(state.mode) || configured.isEmpty()) return
+    Surface(color = Color(0xFF15191A), shape = MaterialTheme.shapes.small,
+        border = androidx.compose.foundation.BorderStroke(1.dp, Amber.copy(alpha = .72f)), modifier = modifier) {
+        Column(Modifier.fillMaxWidth().padding(3.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(Modifier.fillMaxWidth().height(48.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                configured.forEach { slot ->
+                    Kx3DirectKey(slot.label, state.connected && !tx.isBusy, { send(slot.index) }, Modifier.weight(1f),
+                        secondary = true, risky = true, compact = true)
+                }
+                if (tx.isBusy) Button(tx::forceRx, colors = ButtonDefaults.buttonColors(containerColor = Danger),
+                    modifier = Modifier.heightIn(min = 48.dp)) { Text("STOP / RX") }
+            }
+            if (tx.isBusy) LinearProgressIndicator({ tx.progress }, Modifier.fillMaxWidth(), color = Danger)
         }
     }
 }
@@ -2590,7 +2679,9 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
 
 @Composable private fun SettingsScreen(state: RadioState, detail: String, database: QsoDatabase, features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController,
     callbook: CallbookController, cty: CtyController,
-    audio: AudioMonitorController, app: AppController, direct: (String) -> Unit) {
+    audio: AudioMonitorController, app: AppController, transport: UsbRadioTransport, voiceStore: VoiceMacroStore,
+    voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, openEq: () -> Unit,
+    reconnect: () -> Unit, direct: (String) -> Unit) {
     var section by remember { mutableStateOf(SettingsSection.DEFAULT) }
     var host by remember { mutableStateOf(features.clusterHost) }; var port by remember { mutableStateOf(features.clusterPort.toString()) }
     var fallbackHost by remember { mutableStateOf(features.fallbackHost) }; var fallbackPort by remember { mutableStateOf(features.fallbackPort.toString()) }
@@ -2611,10 +2702,21 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
     }
     val macroLabels = remember { mutableStateListOf(*app.macroLabels.toTypedArray()) }
     val macroTexts = remember { mutableStateListOf(*app.macroTexts.toTypedArray()) }
+    val voiceLabels = remember { mutableStateListOf(*app.voiceMacroLabels.toTypedArray()) }
+    var macroKind by remember { mutableStateOf("CW") }
+    var pendingImportSlot by remember { mutableStateOf<Int?>(null) }
+    var pendingRecordSlot by remember { mutableStateOf<Int?>(null) }
+    var pendingDeleteSlot by remember { mutableStateOf<Int?>(null) }
+    val settingsScope = rememberCoroutineScope()
+    var pendingCatKey by remember { mutableStateOf<String?>(null) }
+    var catSelectionDirty by remember { mutableStateOf(false) }
     var profile by remember { mutableStateOf(app.fieldProfile) }; var brightness by remember { mutableFloatStateOf(app.brightness.toFloat()) }
     var autoDim by remember { mutableStateOf(app.autoDim) }; var tones by remember { mutableStateOf(app.alertTones) }
     var quiet by remember { mutableStateOf(app.quietAlerts) }; var program by remember { mutableStateOf(app.activationProgram) }
     var activation by remember { mutableStateOf(app.activationReference) }
+    LaunchedEffect(transport.selected?.sessionKey, transport.candidates) {
+        if (!catSelectionDirty) pendingCatKey = transport.selected?.sessionKey
+    }
     var restorePayload by remember { mutableStateOf<String?>(null) }; val context = LocalContext.current
     val exportRecovery = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         uri?.let { runCatching { context.contentResolver.openOutputStream(it)?.bufferedWriter()?.use { writer -> writer.write(app.recoveryText()) } }
@@ -2634,12 +2736,23 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             .onSuccess { result -> systemMessage = "ADIF import · ${result.first} added · ${result.second} skipped" }
             .onFailure { error -> systemMessage = "ADIF import failed: ${error.message}" } }
     }
+    val importVoice = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val slot = pendingImportSlot
+        pendingImportSlot = null
+        if (uri != null && slot != null) runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBoundedVoiceWave() } ?: error("WAV could not be opened") }
+            .onSuccess { voiceAudio.importWave(slot, it) }.onFailure { systemMessage = "WAV import failed: ${it.message}" }
+    }
+    val recordVoicePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val slot = pendingRecordSlot
+        pendingRecordSlot = null
+        if (granted && slot != null) voiceAudio.startRecording(slot) else if (!granted) systemMessage = "Microphone permission was not granted"
+    }
     Page {
         Header("Complete station settings", state)
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             SettingsSection.entries.forEach { item -> FilterChip(section == item, { section = item }, { Text(item.label) }) }
         }
-        if (section == SettingsSection.DEFAULT || section == SettingsSection.MACROS) SettingsCard(if (section == SettingsSection.DEFAULT) "LOCAL STATION" else "CW MACROS") {
+        if (section == SettingsSection.DEFAULT || section == SettingsSection.MACROS) SettingsCard(if (section == SettingsSection.DEFAULT) "LOCAL STATION" else "MACROS") {
             if (section == SettingsSection.DEFAULT) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(stationCall, { stationCall = it.uppercase() }, label = { Text("Callsign") }, modifier = Modifier.weight(1f))
@@ -2648,28 +2761,71 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             }
             Button({ app.saveLocalSettings(stationCall, stationName, stationGrid, repeatSeconds, macroLabels, macroTexts) }) { Text("SAVE DEFAULTS") }
             } else {
-            val configuredMacros = macroTexts.count(String::isNotBlank)
-            Text("$configuredMacros of $CW_MACRO_COUNT configured · blank messages stay hidden on the Radio screen.", color = Muted)
-            repeat(CW_MACRO_COUNT) { index -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Surface(color = if (macroTexts[index].isBlank()) Color(0xFF303638) else Hold.copy(alpha = .18f),
-                    shape = RoundedCornerShape(6.dp), modifier = Modifier.size(42.dp)) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("${index + 1}", color = if (macroTexts[index].isBlank()) Muted else Hold, fontWeight = FontWeight.Black)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(macroKind == "CW", { macroKind = "CW" }, { Text("CW") })
+                    FilterChip(macroKind == "VOICE", { macroKind = "VOICE" }, { Text("VOICE") })
+                }
+                if (macroKind == "CW") {
+                    val configuredMacros = macroTexts.count(String::isNotBlank)
+                    Text("$configuredMacros of $CW_MACRO_COUNT configured · blank messages stay hidden on the Radio screen.", color = Muted)
+                    repeat(CW_MACRO_COUNT) { index -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(color = if (macroTexts[index].isBlank()) Color(0xFF303638) else Hold.copy(alpha = .18f),
+                            shape = RoundedCornerShape(6.dp), modifier = Modifier.size(42.dp)) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("${index + 1}", color = if (macroTexts[index].isBlank()) Muted else Hold, fontWeight = FontWeight.Black)
+                            }
+                        }
+                        OutlinedTextField(macroLabels[index], { macroLabels[index] = sanitizeCwMacroLabel(it) },
+                            label = { Text("Button label") }, placeholder = { Text("M${index + 1}") }, singleLine = true, modifier = Modifier.weight(1f))
+                        OutlinedTextField(macroTexts[index], { macroTexts[index] = sanitizeCwMacroText(it) },
+                            label = { Text("CW message") }, supportingText = { Text("${macroTexts[index].length} / $CW_MACRO_TEXT_MAX") },
+                            singleLine = true, modifier = Modifier.weight(3f))
+                    } }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("CQ repeat"); Slider(repeatSeconds.toFloat(), { repeatSeconds = it.toInt() },
+                            valueRange = CQ_REPEAT_MIN_SECONDS.toFloat()..CQ_REPEAT_MAX_SECONDS.toFloat(), steps = 3,
+                            modifier = Modifier.weight(1f)); Text("$repeatSeconds s")
+                        FilterChip(app.cwMacrosArmed, { app.updateCwMacrosArmed(!app.cwMacrosArmed) }, { Text(if (app.cwMacrosArmed) "CW ARMED" else "CW SAFE") })
+                    }
+                    Button({ app.saveLocalSettings(stationCall, stationName, stationGrid, repeatSeconds, macroLabels, macroTexts) }) { Text("SAVE CW MACROS") }
+                } else {
+                    Text("Six private, device-local WAV slots · recordings are not included in JSON settings recovery.", color = Hold)
+                    repeat(VOICE_MACRO_COUNT) { index ->
+                        val slot = voiceStore.slots.getOrNull(index) ?: VoiceMacroSlot(index, voiceLabels[index], false)
+                        val recording = (voiceAudio.state as? VoiceAudioState.Recording)?.slot == index
+                        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Raised)) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp).heightIn(min = 58.dp),
+                                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("${index + 1}", color = if (slot.exists) Hold else Muted, fontWeight = FontWeight.Black,
+                                    modifier = Modifier.width(18.dp))
+                                OutlinedTextField(voiceLabels[index], { voiceLabels[index] = sanitizeVoiceMacroLabel(it, index) },
+                                    label = { Text("Voice label") }, singleLine = true, modifier = Modifier.width(164.dp))
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    VoiceWaveform(slot.waveform, Modifier.fillMaxWidth().height(30.dp))
+                                    if (recording) LinearProgressIndicator({ voiceAudio.level }, Modifier.fillMaxWidth().height(4.dp), color = Danger)
+                                }
+                                Text(if (slot.exists) "%.1fs".format(slot.durationMillis / 1_000f) else "EMPTY", color = Muted,
+                                    fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelMedium, modifier = Modifier.width(54.dp))
+                                if (recording) Button(voiceAudio::stopCurrent, modifier = Modifier.heightIn(min = 48.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Danger), contentPadding = PaddingValues(horizontal = 14.dp)) { Text("STOP") }
+                                else OutlinedButton({ pendingRecordSlot = index; recordVoicePermission.launch(Manifest.permission.RECORD_AUDIO) },
+                                    enabled = !voiceTx.isBusy && voiceAudio.state is VoiceAudioState.Idle,
+                                    modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text("RECORD") }
+                                OutlinedButton({ voiceAudio.preview(index) }, enabled = slot.exists && !voiceTx.isBusy && voiceAudio.state is VoiceAudioState.Idle,
+                                    modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text("PREVIEW") }
+                                OutlinedButton({ pendingImportSlot = index; importVoice.launch(arrayOf("audio/wav", "audio/x-wav", "application/octet-stream")) },
+                                    enabled = !voiceTx.isBusy && voiceAudio.state is VoiceAudioState.Idle,
+                                    modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text("IMPORT") }
+                                OutlinedButton({ pendingDeleteSlot = index }, enabled = slot.exists && !voiceTx.isBusy,
+                                    modifier = Modifier.heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 12.dp)) { Text("DELETE") }
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Button({ app.saveVoiceMacroLabels(voiceLabels); voiceStore.refresh(); systemMessage = "Voice macro labels saved" }) { Text("SAVE VOICE LABELS") }
+                        Text(voiceAudio.status, color = if (voiceAudio.state is VoiceAudioState.Idle) Muted else Hold)
                     }
                 }
-                OutlinedTextField(macroLabels[index], { macroLabels[index] = sanitizeCwMacroLabel(it) },
-                    label = { Text("Button label") }, placeholder = { Text("M${index + 1}") }, singleLine = true, modifier = Modifier.weight(1f))
-                OutlinedTextField(macroTexts[index], { macroTexts[index] = sanitizeCwMacroText(it) },
-                    label = { Text("CW message") }, supportingText = { Text("${macroTexts[index].length} / $CW_MACRO_TEXT_MAX") },
-                    singleLine = true, modifier = Modifier.weight(3f))
-            } }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("CQ repeat"); Slider(repeatSeconds.toFloat(), { repeatSeconds = it.toInt() },
-                    valueRange = CQ_REPEAT_MIN_SECONDS.toFloat()..CQ_REPEAT_MAX_SECONDS.toFloat(), steps = 3,
-                    modifier = Modifier.weight(1f)); Text("$repeatSeconds s")
-                FilterChip(app.cwMacrosArmed, { app.updateCwMacrosArmed(!app.cwMacrosArmed) }, { Text(if (app.cwMacrosArmed) "CW ARMED" else "CW SAFE") })
-            }
-            Button({ app.saveLocalSettings(stationCall, stationName, stationGrid, repeatSeconds, macroLabels, macroTexts) }) { Text("SAVE MACROS") }
             }
         }
         if (section == SettingsSection.ALERTS) SettingsCard("FIELD / DISPLAY / ALERTS") {
@@ -2711,12 +2867,37 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             }
         }
         if (section == SettingsSection.SAFETY) SettingsCard("TRANSMIT SAFETY") {
-            Text("ATU/TX and CW macro arms are session-only. They clear when the app, CAT, or USB session ends. CQ repeat stops on disconnect, disarm, or leaving CW.", color = Hold)
+            Text("ATU/TX, CW and voice macro arms are session-only. Voice also clears on exact mode, route, focus, lifecycle, CAT, USB or audio failure.", color = Hold)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 FilterChip(app.transmitArmed, { app.updateTransmitArmed(!app.transmitArmed) }, { Text(if (app.transmitArmed) "ATU / TX ARMED" else "ATU / TX SAFE") })
                 FilterChip(app.cwMacrosArmed, { app.updateCwMacrosArmed(!app.cwMacrosArmed) }, { Text(if (app.cwMacrosArmed) "CW MACROS ARMED" else "CW MACROS SAFE") })
-                Button({ direct("RX;"); app.updateTransmitArmed(false); app.updateCwMacrosArmed(false) }, enabled = state.connected,
+                FilterChip(app.voiceMacrosArmed, {}, { Text(if (app.voiceMacrosArmed) "VOICE MACROS ARMED" else "VOICE MACROS SAFE") }, enabled = false)
+                Button({ voiceTx.forceRx(); direct("RX;"); app.disarmAll() }, enabled = state.connected,
                     colors = ButtonDefaults.buttonColors(containerColor = Healthy, contentColor = Chassis)) { Text("FORCE RX & DISARM") }
+            }
+            HorizontalDivider()
+            Text("CAT ADAPTER", color = Amber, fontWeight = FontWeight.Bold)
+            if (transport.candidates.isEmpty()) Text("No supported serial adapter detected", color = Muted)
+            else {
+                val pendingCat = transport.candidates.firstOrNull { it.sessionKey == pendingCatKey }
+                ChoiceField("Selected CAT adapter", pendingCat?.label ?: "Selection required",
+                    transport.candidates.map { it.sessionKey to it.label }, pendingCatKey.orEmpty(), { key ->
+                    pendingCatKey = key
+                    catSelectionDirty = key != transport.selected?.sessionKey
+                })
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button({
+                    val key = pendingCatKey ?: return@Button
+                    settingsScope.launch {
+                        voiceTx.stop("CAT adapter selection changed"); app.disarmAll(); transport.selectCandidate(key); reconnect()
+                        catSelectionDirty = false
+                        systemMessage = "CAT adapter selection saved"
+                    }
+                }, enabled = catSelectionDirty && pendingCatKey != null) { Text("SAVE CAT ADAPTER") }
+                OutlinedButton({ transport.refreshCandidates() }) { Text("RESCAN CAT") }
+                Text(if (catSelectionDirty) "Unsaved CAT selection" else if (transport.selected != null) "Saved · ${transport.controlLineStatus}" else transport.controlLineStatus,
+                    color = if (catSelectionDirty) Hold else Muted, modifier = Modifier.align(Alignment.CenterVertically))
             }
         }
         if (section == SettingsSection.CLUSTER) SettingsCard("DX CLUSTER") {
@@ -2779,7 +2960,33 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             Text("Automatic lookup order: QRZ.COM → HamQTH → CTY.DAT. Email-style QRZ accounts use the configured station callsign for XML access; CTY.DAT supplements missing entity and zone fields.", color = Muted)
             CtyUpdatePanel(cty)
         }
-        if (section == SettingsSection.AUDIO) SettingsCard("USB RECEIVE AUDIO") { AudioCard(audio) }
+        if (section == SettingsSection.AUDIO) SettingsCard("USB AUDIO ROUTES") {
+            Button(openEq, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("OPEN EQ STUDIO") }
+            Text("EQ capture uses the selected USB input or a clearly labelled built-in reference mic, with explicit audio ownership and finite local recording.", color = Muted)
+            HorizontalDivider()
+            AudioCard(audio)
+            HorizontalDivider()
+            Text("RX MONITOR INPUT", color = Amber, fontWeight = FontWeight.Bold)
+            if (audio.inputCandidates.isEmpty()) Text("No eligible USB input", color = Muted)
+            else ChoiceField("USB input", audio.selectedRx?.label ?: "Selection required",
+                audio.inputCandidates.map { it.sessionId.toString() to it.label }, audio.selectedRx?.sessionId?.toString().orEmpty(), {
+                voiceTx.stop("RX audio route changed"); app.updateVoiceMacrosArmed(false); audio.selectRxInput(it.toInt())
+            })
+            Text("VOICE MACRO TX OUTPUT", color = Amber, fontWeight = FontWeight.Bold)
+            if (audio.txOutputCandidates.isEmpty()) Text("No eligible USB output", color = Muted)
+            else ChoiceField("DigiRig USB output", audio.selectedTx?.label ?: "Selection required",
+                audio.txOutputCandidates.map { it.sessionId.toString() to it.label }, audio.selectedTx?.sessionId?.toString().orEmpty(), {
+                voiceTx.stop("Voice TX route changed"); app.updateVoiceMacrosArmed(false); audio.selectTxOutput(it.toInt())
+            })
+            Text("RECORDING INPUT  Built-in tablet microphone", color = Muted)
+            Text("PREVIEW OUTPUT  Built-in tablet speaker", color = Muted)
+            SliderLine("VOICE MACRO TX LEVEL", app.voiceTxLevel, 0.02f..1f, app::updateVoiceTxLevel, {}, "${(app.voiceTxLevel * 100).toInt()}%")
+            Text("Controls PCM sent to DigiRig, not RF power. Begin into a dummy load at minimum safe RF power; adjust this level and KX3 MIC gain for clean ALC without overdrive.", color = Hold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(audio::refreshDevices) { Text("RESCAN DEVICES") }
+                Text(audio.routeStatus, color = Muted, modifier = Modifier.align(Alignment.CenterVertically))
+            }
+        }
         if (section == SettingsSection.HEALTH) SettingsCard("SYSTEM HEALTH") {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 HealthTile("UI", "RUNNING", true, Modifier.weight(1f)); HealthTile("CAT / USB", if (state.connected) "LIVE" else "OFFLINE", state.connected, Modifier.weight(1f))
@@ -2796,6 +3003,12 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             Text(systemMessage, color = Muted)
         }
         if (section == SettingsSection.DIAG) SettingsCard("CAT DIAGNOSTICS") {
+            Text("CAT · ${transport.selected?.label ?: "not selected"}", color = Muted)
+            Text("RTS/DTR · ${transport.controlLineStatus}", color = Muted)
+            Text("RX USB · ${audio.selectedRx?.label ?: "not selected"}", color = Muted)
+            Text("VOICE TX USB · ${audio.selectedTx?.label ?: "not selected"}", color = Muted)
+            Text("VOICE STATE · ${voiceTx.state} · ${voiceTx.status}", color = Muted)
+            voiceTx.diagnostics.takeLast(8).forEach { Text(it, color = Muted, fontFamily = FontFamily.Monospace) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(wavelog::testConnection) { Text("TEST WAVELOG") }
                 OutlinedButton({ callbook.configureQrz(qrzEnabled, qrzUser, qrzPassword)
@@ -2821,6 +3034,39 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         text = { Text("${app.reviewRecovery(payload)}\n\nRestoring replaces saved station, preset, control-order, field, and connection preferences. Live radio state and QSOs are not changed.") },
         confirmButton = { Button({ systemMessage = app.restoreRecovery(payload); restorePayload = null }, colors = ButtonDefaults.buttonColors(containerColor = Danger)) { Text("RESTORE SETTINGS") } },
         dismissButton = { TextButton({ restorePayload = null }) { Text("CANCEL") } }) }
+    pendingDeleteSlot?.let { slot -> AlertDialog(onDismissRequest = { pendingDeleteSlot = null }, title = { Text("Delete voice macro?") },
+        text = { Text("Delete ${voiceStore.slots.getOrNull(slot)?.label ?: "M${slot + 1}"} from private tablet storage? This cannot be undone.") },
+        confirmButton = { Button({ voiceAudio.delete(slot); pendingDeleteSlot = null }, colors = ButtonDefaults.buttonColors(containerColor = Danger)) { Text("DELETE") } },
+        dismissButton = { TextButton({ pendingDeleteSlot = null }) { Text("CANCEL") } }) }
+}
+
+private fun InputStream.readBoundedVoiceWave(maximumBytes: Int = 32 * 1024 * 1024): ByteArray {
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(16 * 1024)
+    var total = 0
+    while (true) {
+        val count = read(buffer)
+        if (count < 0) break
+        total += count
+        require(total <= maximumBytes) { "WAV file exceeds the safe import limit" }
+        output.write(buffer, 0, count)
+    }
+    return output.toByteArray()
+}
+
+@Composable private fun VoiceWaveform(peaks: List<Float>, modifier: Modifier = Modifier) {
+    Canvas(modifier.background(Color(0xFF111519), RoundedCornerShape(4.dp))) {
+        if (peaks.isEmpty()) {
+            drawLine(Muted.copy(alpha = .4f), Offset(0f, size.height / 2), Offset(size.width, size.height / 2), 1f)
+        } else {
+            val step = size.width / peaks.size
+            peaks.forEachIndexed { index, peak ->
+                val height = peak.coerceIn(0f, 1f) * size.height
+                drawLine(Hold, Offset((index + .5f) * step, (size.height - height) / 2),
+                    Offset((index + .5f) * step, (size.height + height) / 2), maxOf(1f, step * .55f))
+            }
+        }
+    }
 }
 
 @Composable private fun CtyUpdatePanel(cty: CtyController) {
