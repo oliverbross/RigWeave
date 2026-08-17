@@ -431,7 +431,7 @@ private fun navIcon(item: Destination) = when (item) {
                 CompactKx3Face(state, send, radioFeedback, feedbackVisible, Modifier.fillMaxWidth().weight(1f))
             }
             Row(Modifier.fillMaxWidth().weight(2f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(Modifier.weight(.8f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     when {
                         isCwMacroMode(state.mode) -> CwMacroStrip(state, app, send, Modifier.fillMaxWidth().height(54.dp))
                         isVoiceMacroMode(state.mode) -> VoiceMacroStrip(state, voiceStore, voiceTx, requestVoice,
@@ -442,7 +442,7 @@ private fun navIcon(item: Destination) = when (item) {
                         onInsightCleared = { stationInsight = null; identityVisible = false },
                         modifier = Modifier.weight(1f).fillMaxWidth())
                 }
-                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.weight(1.2f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     val cwActive = isCwMacroMode(state.mode)
                     Box(Modifier.fillMaxWidth().weight(if (cwActive) 1.2f else 1f)) {
                         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1575,7 +1575,7 @@ private fun AndroidDXSpot.previousQsoRecord(cty: CtyController): AndroidCallbook
         fontSize = PREVIOUS_QSO_BODY_FONT_SP.sp, lineHeight = 21.sp)
 }
 
-private data class SpotColumn(val label: String, val width: Dp, val mono: Boolean = false)
+private data class SpotColumn(val label: String, val width: Dp, val mono: Boolean = false, val centered: Boolean = false)
 
 @Composable private fun LiveSpotTable(spots: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>,
     cty: CtyController, send: (String) -> Unit, previousQsos: (AndroidDXSpot) -> Unit,
@@ -1583,12 +1583,12 @@ private data class SpotColumn(val label: String, val width: Dp, val mono: Boolea
     BoxWithConstraints(modifier) {
         val minimumWidth = 760.dp
         val tableWidth = if (maxWidth > minimumWidth) maxWidth else minimumWidth
-        val commentWidth = 166.dp + if (maxWidth > minimumWidth) maxWidth - minimumWidth else 0.dp
+        val commentWidth = 126.dp + if (maxWidth > minimumWidth) maxWidth - minimumWidth else 0.dp
         val columns = listOf(
-            SpotColumn("Date", 44.dp, true), SpotColumn("Time", 68.dp, true), SpotColumn("Band", 36.dp),
-            SpotColumn("Freq", 76.dp, true), SpotColumn("Callsign", 72.dp), SpotColumn("Mode", 42.dp),
-            SpotColumn("Country", 86.dp), SpotColumn("CQ", 28.dp, true), SpotColumn("DX de", 66.dp),
-            SpotColumn("CS", 32.dp, true), SpotColumn("DS", 44.dp, true), SpotColumn("Comment", commentWidth))
+            SpotColumn("Date", 56.dp, true), SpotColumn("Time", 80.dp, true), SpotColumn("Band", 36.dp, centered = true),
+            SpotColumn("Freq", 92.dp, true), SpotColumn("Callsign", 72.dp), SpotColumn("Mode", 42.dp),
+            SpotColumn("Country", 86.dp), SpotColumn("CQ", 28.dp, true, centered = true), SpotColumn("DX de", 66.dp),
+            SpotColumn("CS", 32.dp, true, centered = true), SpotColumn("DS", 44.dp, true, centered = true), SpotColumn("Comment", commentWidth))
         Column(Modifier.width(tableWidth).fillMaxHeight().horizontalScroll(rememberScrollState())) {
             Row(Modifier.fillMaxWidth().height(36.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
                 columns.forEach { SpotTableCell(it.label, it, header = true) }
@@ -1643,7 +1643,7 @@ private fun spotStatusColor(status: String?): Color = when (status) {
         .clickable(role = Role.Button, onClick = onClick)
     Box(Modifier.width(column.width).fillMaxHeight().border(.5.dp, Color(0xFF3D474D))
         .then(interaction).padding(horizontal = 4.dp),
-        contentAlignment = Alignment.CenterStart) {
+        contentAlignment = if (column.centered) Alignment.Center else Alignment.CenterStart) {
         Text(value.ifBlank { "—" }, color = if (value.isBlank()) Muted.copy(alpha = .55f) else color,
             fontFamily = if (column.mono) FontFamily.Monospace else FontFamily.Default,
             fontWeight = if (header || bold) FontWeight.Black else FontWeight.Medium,
