@@ -22,6 +22,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 sealed interface UsbResult {
     data class Connected(val frames: ByteArray, val detail: String, val cwFrames: ByteArray = byteArrayOf()) : UsbResult
@@ -40,9 +41,17 @@ data class SerialDeviceDescriptor(
     val portIndex: Int,
     val deviceAddress: String,
 ) {
+    val fallbackKey: String get() = listOf(driverFamily, manufacturer, product, vidPid, portIndex.toString()).joinToString("|")
     val label: String get() = listOf(driverFamily, manufacturer.takeIf(String::isNotBlank), product.takeIf(String::isNotBlank), vidPid,
         serialNumber.takeIf(String::isNotBlank)?.let { "S/N $it" }, "port $portIndex", deviceAddress)
         .filterNotNull().filter(String::isNotBlank).joinToString(" · ")
+}
+
+fun containsElecraftCatResponse(bytes: ByteArray): Boolean = bytes.toString(Charsets.US_ASCII).split(';').any { frame ->
+    (frame.startsWith("K3") && frame.length == 3 && frame[2] in "01") ||
+        (frame.startsWith("OM") && frame.length > 4) ||
+        (frame.startsWith("ID") && frame.length > 2) ||
+        (frame.startsWith("FA") && frame.length == 13 && frame.drop(2).all(Char::isDigit))
 }
 
 data class FreshTqResponse(val frames: ByteArray, val transmitting: Boolean?)
@@ -90,18 +99,27 @@ class UsbRadioTransport(private val context: Context) {
     fun discovered(): List<String> = refreshCandidates().map(SerialDeviceDescriptor::label)
 
     fun refreshCandidates(): List<SerialDeviceDescriptor> {
-        candidates = candidateRecords().map(Candidate::descriptor)
+        val available = candidateRecords()
+        candidates = available.map(Candidate::descriptor)
+        val configured = sessionSelection?.let { key -> available.firstOrNull { it.descriptor.sessionKey == key } }
+            ?: chooseConfiguredCandidate(available)
+        if (configured != null) {
+            sessionSelection = configured.descriptor.sessionKey
+            selected = configured.descriptor
+        }
         return candidates
     }
 
-    suspend fun selectCandidate(sessionKey: String) = withContext(Dispatchers.IO) { mutex.withLock {
+    suspend fun selectCandidate(sessionKey: String): Boolean = withContext(Dispatchers.IO) { mutex.withLock {
         closeLocked()
         val candidate = candidateRecords().firstOrNull { it.descriptor.sessionKey == sessionKey }
-        sessionSelection = candidate?.descriptor?.sessionKey
-        if (candidate == null) prefs.edit().remove("cat_stable_key").apply()
-        else prefs.edit().putString("cat_stable_key", candidate.descriptor.stableKey).apply()
-        selected = candidate?.descriptor
+        if (candidate == null) return@withLock false
+        sessionSelection = candidate.descriptor.sessionKey
+        prefs.edit().putString("cat_stable_key", candidate.descriptor.stableKey)
+            .putString("cat_fallback_key", candidate.descriptor.fallbackKey).apply()
+        selected = candidate.descriptor
         refreshCandidates()
+        true
     } }
 
     suspend fun connect(): UsbResult = withContext(Dispatchers.IO) { mutex.withLock {
@@ -109,9 +127,9 @@ class UsbRadioTransport(private val context: Context) {
         val available = candidateRecords()
         candidates = available.map(Candidate::descriptor)
         val explicit = sessionSelection?.let { key -> available.firstOrNull { it.descriptor.sessionKey == key } }
-        val policy = chooseStableCandidate(available, prefs.getString("cat_stable_key", null)) { it.descriptor.stableKey }
-        val choice = explicit ?: policy.selected
-        if (choice == null) return@withLock UsbResult.Unavailable(if (available.size > 1) "${policy.reason} in Settings · Safety" else policy.reason)
+        val choice = explicit ?: chooseConfiguredCandidate(available)
+        if (choice == null) return@withLock UsbResult.Unavailable(if (available.size > 1) "Multiple eligible devices detected; select one in Settings · Safety" else "No supported CAT adapter detected")
+        selected = choice.descriptor
         if (!awaitPermission(choice.driver.device)) {
             return@withLock UsbResult.PermissionRequired("USB permission was not granted · tap Connect to try again")
         }
@@ -132,14 +150,20 @@ class UsbRadioTransport(private val context: Context) {
             port = openedPort
             pollCount = 0
             selected = refreshed.descriptor
-            prefs.edit().putString("cat_stable_key", refreshed.descriptor.stableKey).apply()
+            sessionSelection = refreshed.descriptor.sessionKey
+            prefs.edit().putString("cat_stable_key", refreshed.descriptor.stableKey)
+                .putString("cat_fallback_key", refreshed.descriptor.fallbackKey).apply()
             val frames = exchange(connectQueries)
+            if (!containsElecraftCatResponse(frames)) {
+                closeLocked()
+                return@withLock UsbResult.Unavailable("Selected adapter opened at 38,400 baud but no Elecraft CAT response was received · ${refreshed.descriptor.label}")
+            }
             UsbResult.Connected(frames, "Connected at 38,400 baud · ${refreshed.descriptor.label} · $controlLineStatus")
         } catch (error: Exception) {
             runCatching { deassertControlLines(openedPort) }
             runCatching { openedPort.close() }
             openedConnection.close()
-            connection = null; port = null; selected = null
+            connection = null; port = null
             UsbResult.Unavailable("USB/CAT failed closed: ${error.message ?: error.javaClass.simpleName}")
         }
     } }
@@ -217,6 +241,13 @@ class UsbRadioTransport(private val context: Context) {
         }
     }
 
+    private fun chooseConfiguredCandidate(available: List<Candidate>): Candidate? {
+        val exact = chooseStableCandidate(available, prefs.getString("cat_stable_key", null)) { it.descriptor.stableKey }.selected
+        if (exact != null) return exact
+        val fallback = prefs.getString("cat_fallback_key", null) ?: return null
+        return available.filter { it.descriptor.fallbackKey == fallback }.singleOrNull()
+    }
+
     private suspend fun awaitPermission(device: UsbDevice): Boolean {
         if (manager.hasPermission(device)) return true
         val result = CompletableDeferred<Boolean>()
@@ -229,12 +260,21 @@ class UsbRadioTransport(private val context: Context) {
                 result.complete(intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false))
             }
         }
-        ContextCompat.registerReceiver(context, receiver, IntentFilter(ACTION_USB_PERMISSION), ContextCompat.RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(context, receiver, IntentFilter(ACTION_USB_PERMISSION), ContextCompat.RECEIVER_EXPORTED)
         return try {
             val pendingIntent = PendingIntent.getBroadcast(context, device.deviceId,
-                Intent(ACTION_USB_PERMISSION).setPackage(context.packageName), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                Intent(ACTION_USB_PERMISSION).setPackage(context.packageName), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
             manager.requestPermission(device, pendingIntent)
-            result.await()
+            withTimeoutOrNull(20_000) {
+                while (true) {
+                    if (manager.hasPermission(device)) return@withTimeoutOrNull true
+                    if (result.isCompleted && !result.await()) return@withTimeoutOrNull false
+                    // A granted broadcast can arrive just before UsbManager reflects the grant.
+                    // Keep polling the authoritative OS state for the remainder of the bound.
+                    delay(100)
+                }
+                @Suppress("UNREACHABLE_CODE") false
+            } ?: manager.hasPermission(device)
         } finally { runCatching { context.unregisterReceiver(receiver) } }
     }
 
@@ -331,6 +371,6 @@ class UsbRadioTransport(private val context: Context) {
     private fun closeLocked() {
         port?.let { active -> runCatching { deassertControlLines(active) }; runCatching { active.close() } }
         connection?.close()
-        port = null; connection = null; selected = null
+        port = null; connection = null
     }
 }

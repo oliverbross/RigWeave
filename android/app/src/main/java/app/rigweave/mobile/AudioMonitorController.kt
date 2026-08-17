@@ -17,6 +17,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.hardware.usb.UsbManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -37,9 +38,12 @@ data class AudioRouteDescriptor(
     val isSink: Boolean,
     val channelCounts: List<Int>,
     val sampleRates: List<Int>,
+    val encodings: List<Int> = emptyList(),
+    val usbIdentity: String = "",
 ) {
     val label: String get() = listOf(name, if (isSource) "input" else "output",
-        "${channelCounts.joinToString("/").ifBlank { "?" }} ch", address.takeIf(String::isNotBlank)).filterNotNull().joinToString(" · ")
+        "${channelCounts.joinToString("/").ifBlank { "?" }} ch", usbIdentity.takeIf(String::isNotBlank),
+        address.takeIf(String::isNotBlank)).filterNotNull().joinToString(" · ")
 }
 
 /** Receive-only USB audio monitor plus explicit RX/TX USB route ownership. */
@@ -47,6 +51,7 @@ class AudioMonitorController(private val context: Context) {
     private data class AudioFrame(val samples: ShortArray, val count: Int)
 
     private val audioManager = context.getSystemService(AudioManager::class.java)
+    private val usbManager = context.getSystemService(UsbManager::class.java)
     private val prefs = context.getSharedPreferences("rigweave-audio-routes", Context.MODE_PRIVATE)
     private val main = Handler(Looper.getMainLooper())
     private val running = AtomicBoolean(false)
@@ -270,10 +275,19 @@ class AudioMonitorController(private val context: Context) {
     private fun descriptor(device: AudioDeviceInfo): AudioRouteDescriptor {
         val address = if (Build.VERSION.SDK_INT >= 28) device.address.orEmpty() else ""
         val name = device.productName?.toString()?.ifBlank { "USB audio" } ?: "USB audio"
-        val stable = listOf(device.type.toString(), address, name, device.isSource.toString(), device.isSink.toString(),
-            device.channelCounts.sorted().joinToString(","), device.sampleRates.sorted().joinToString(",")).joinToString("|")
+        val usbMatches = usbManager.deviceList.values.filter { usb ->
+            usb.productName?.equals(name, ignoreCase = true) == true ||
+                (address.isNotBlank() && usb.deviceName.contains(address))
+        }
+        val usbIdentity = usbMatches.singleOrNull()?.let { usb ->
+            val serialHash = runCatching { usb.serialNumber }.getOrNull()?.hashCode()?.toUInt()?.toString(16).orEmpty()
+            "%04x:%04x%s".format(usb.vendorId, usb.productId, serialHash.takeIf(String::isNotBlank)?.let { ":$it" }.orEmpty())
+        }.orEmpty()
+        val stable = listOf(device.type.toString(), address, name, usbIdentity, device.isSource.toString(), device.isSink.toString(),
+            device.channelCounts.sorted().joinToString(","), device.sampleRates.sorted().joinToString(","),
+            device.encodings.sorted().joinToString(",")).joinToString("|")
         return AudioRouteDescriptor(device.id, stable, name, device.type, address, device.isSource, device.isSink,
-            device.channelCounts.toList(), device.sampleRates.toList())
+            device.channelCounts.toList(), device.sampleRates.toList(), device.encodings.toList(), usbIdentity)
     }
 
     private fun isUsb(device: AudioDeviceInfo): Boolean = device.type == AudioDeviceInfo.TYPE_USB_DEVICE ||

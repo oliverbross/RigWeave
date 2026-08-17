@@ -40,6 +40,7 @@ import androidx.compose.material.icons.automirrored.outlined.List
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -110,7 +111,7 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), EQ("EQ"), LOGBOOK("Logbook"), PRESETS("Presets"), DX("DX"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PRESETS("Presets"), DX("DX"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     DEFAULT("Default"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
@@ -168,6 +169,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     }
     val connect: () -> Unit = { scope.launch { connectKx3() } }
     val direct: (String) -> Unit = { command -> scope.launch { accept(transport.send(command)) } }
+    val panadapter = remember { PanadapterController(context, audio, { radio }, direct) }
     val send: (String) -> Unit = { raw ->
         val command = raw.uppercase()
         val cwMacro = command.startsWith("KY ")
@@ -215,7 +217,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     }
     LaunchedEffect(voiceAudio) { voiceAudio.onFailure = { app.updateVoiceMacrosArmed(false) } }
     DisposableEffect(Unit) { onDispose {
-        scope.launch { transport.disconnect() }; audio.close(); neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
+        scope.launch { transport.disconnect() }; panadapter.close(); audio.close(); neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
         voiceAudio.close(); voiceTx.close(); eqAudio.close(); app.disarmAll()
         NativeCore.destroy(core); database.close()
     } }
@@ -260,14 +262,14 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 Destination.entries.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
-            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, app, transport,
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app, transport,
                 voiceStore, voiceAudio, voiceTx, eqStudio, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode)
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
-            Destination.entries.filterNot { it == Destination.EQ }.forEach { item -> NavigationBarItem(destination == item, { destination = item },
+            Destination.entries.filterNot { it == Destination.EQ || it == Destination.PANADAPTER }.forEach { item -> NavigationBarItem(destination == item, { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
-            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, app, transport,
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app, transport,
                 voiceStore, voiceAudio, voiceTx, eqStudio, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode)
         } }
@@ -277,6 +279,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
 private fun navIcon(item: Destination) = when (item) {
     Destination.HOME -> Icons.Outlined.Home
     Destination.RADIO -> Icons.Outlined.SettingsInputAntenna
+    Destination.PANADAPTER -> Icons.Outlined.WaterfallChart
     Destination.EQ -> Icons.Outlined.Equalizer
     Destination.LOGBOOK -> Icons.AutoMirrored.Outlined.List
     Destination.PRESETS -> Icons.Outlined.Bookmarks
@@ -285,13 +288,23 @@ private fun navIcon(item: Destination) = when (item) {
 }
 
 @Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase,
-    features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, app: AppController,
+    features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController, app: AppController,
     transport: UsbRadioTransport, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
     eqStudio: EqStudioController, compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit) {
+    var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     when (destination) {
         Destination.HOME -> HomeScreen(radio, app, send)
-        Destination.RADIO -> RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode)
+        Destination.RADIO -> if (!compact) RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode)
+        else Column(Modifier.fillMaxSize()) {
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                SegmentedButton(!compactPanadapter, { compactPanadapter = false }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Controls") }
+                SegmentedButton(compactPanadapter, { compactPanadapter = true }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("Panadapter") }
+            }
+            if (compactPanadapter) PanadapterScreen(panadapter, radio, features.liveSpots, true) { compactPanadapter = false }
+            else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode)
+        }
+        Destination.PANADAPTER -> PanadapterScreen(panadapter, radio, features.liveSpots, compact)
         Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
         Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog, app)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
@@ -2890,9 +2903,16 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                 Button({
                     val key = pendingCatKey ?: return@Button
                     settingsScope.launch {
-                        voiceTx.stop("CAT adapter selection changed"); app.disarmAll(); transport.selectCandidate(key); reconnect()
-                        catSelectionDirty = false
-                        systemMessage = "CAT adapter selection saved"
+                        voiceTx.stop("CAT adapter selection changed"); app.disarmAll()
+                        if (transport.selectCandidate(key)) {
+                            pendingCatKey = transport.selected?.sessionKey
+                            catSelectionDirty = false
+                            systemMessage = "CAT adapter selection saved · reconnecting"
+                            reconnect()
+                        } else {
+                            transport.refreshCandidates()
+                            systemMessage = "CAT adapter changed or detached before it could be saved · rescan and select again"
+                        }
                     }
                 }, enabled = catSelectionDirty && pendingCatKey != null) { Text("SAVE CAT ADAPTER") }
                 OutlinedButton({ transport.refreshCandidates() }) { Text("RESCAN CAT") }

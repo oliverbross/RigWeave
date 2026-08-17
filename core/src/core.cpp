@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -120,6 +121,10 @@ bool apply_frame(CoreContext &context, const std::string &raw) {
         const auto payload = std::string_view(frame).substr(2);
         if (all_digits(payload.substr(0, 11))) {
             next.vfo_a_hz = std::stoull(std::string(payload.substr(0, 11)));
+            if ((payload[16] == '+' || payload[16] == '-') && all_digits(payload.substr(17, 4))) {
+                next.rit_xit_offset_hz = std::stoi(std::string(payload.substr(17, 4)));
+                if (payload[16] == '-') next.rit_xit_offset_hz = -next.rit_xit_offset_hz;
+            }
             if (payload[21] == '0' || payload[21] == '1') next.rit = payload[21] - '0';
             if (payload[22] == '0' || payload[22] == '1') next.xit = payload[22] - '0';
             if (payload[26] == '0' || payload[26] == '1') next.transmitting = payload[26] - '0';
@@ -127,6 +132,7 @@ bool apply_frame(CoreContext &context, const std::string &raw) {
                 copy_text(next.mode, sizeof(next.mode), mode_name(payload[27] - '0'));
             if (payload[28] == '0' || payload[28] == '1') next.rx_vfo = payload[28] - '0';
             if (payload[30] == '0' || payload[30] == '1') next.split = payload[30] - '0';
+            if (std::isdigit(static_cast<unsigned char>(payload[32]))) next.data_submode = payload[32] - '0';
             recognized = true;
         }
     } else if (frame.rfind("TQ", 0) == 0 && frame.size() >= 3 && (frame[2] == '0' || frame[2] == '1')) {
@@ -183,6 +189,17 @@ bool apply_frame(CoreContext &context, const std::string &raw) {
     }
 
     if (recognized) {
+        const uint64_t rx_base = next.rx_vfo == 1 ? next.vfo_b_hz : next.vfo_a_hz;
+        const uint64_t tx_base = next.tx_vfo == 1 ? next.vfo_b_hz : next.vfo_a_hz;
+        const auto with_offset = [](uint64_t base, int offset) -> uint64_t {
+            if (offset >= 0) return base + static_cast<uint64_t>(offset);
+            const uint64_t magnitude = static_cast<uint64_t>(-static_cast<int64_t>(offset));
+            return base > magnitude ? base - magnitude : 0U;
+        };
+        next.effective_rx_hz = with_offset(rx_base, next.rit ? next.rit_xit_offset_hz : 0);
+        next.effective_tx_hz = with_offset(tx_base, next.xit ? next.rit_xit_offset_hz : 0);
+        next.updated_monotonic_ms = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
         next.revision = context.state.revision + 1;
         context.state = next;
     }
@@ -238,6 +255,7 @@ void rw_context_reset(rw_context *context) {
     context->core.state.mic_gain = -1;
     context->core.state.keyer_speed = -1;
     context->core.state.if_shift_hz = -1;
+    context->core.state.data_submode = -1;
     context->core.state.revision = 0;
 }
 

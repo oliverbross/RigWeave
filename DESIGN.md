@@ -24,6 +24,8 @@ Dense radio information is intentional. Do not turn the operator console into a 
 
 Android implements the KX3-style console plus the broader Neural DX workspace. Apple implements a native iPad-focused navigation and radio/log/DX/panadapter flow. Their destination sets need not be forced into artificial parity; durable behaviour and evidence must remain clear.
 
+On Android, Panadapter is a first-class expanded destination and a segmented Radio subview on compact layouts so the existing six-item bottom navigation remains stable. The Flightline instrument keeps spectrum/waterfall dominant and unscrolled, offers a draggable split or either pane alone, and separates view gestures from explicit marker QSY actions. Setup and diagnostics may scroll; the live instrument does not.
+
 - Scene: field and station operation in mixed or low ambient light requires a dark, low-glare chassis with a high-contrast warm instrument face.
 - Color strategy: restrained graphite application shell plus a committed amber radio region. Amber is measurement surface, not decorative accent.
 - Core colors: graphite `#111519`, panel `#1B2228`, raised `#283139`, line `#4A555D`, ink `#F4F0E7`, muted `#A5ADB2`, amber `#E9A72B`, amber-dark `#201708`, hold `#F4C94E`, healthy `#42C77B`, danger `#E4544D`, split `#8F1D24`.

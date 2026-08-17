@@ -12,6 +12,23 @@ release-specific dependency, notice, build, and corresponding-source records.
 Nexus was evaluated as an external upstream/reference. No Nexus source, binary,
 dependency, submodule, or derived implementation is incorporated by Phase 0.
 
+The Android KX3 panadapter was independently implemented after behavior-only
+study of these pinned references:
+
+- cho45/go-KX3-panadapter at d0f72841440053f657eea98476920e9ace559d0f
+  (no licence file found at the audited commit; no code, comments, assets, or
+  distinctive UI copied).
+- ryansuchocki/panpi at a94da12a185e2ab234d24b34fa5c8ceef80afb43
+  (MIT, Copyright 2022 Ryan Suchocki; no code or FFTW dependency copied).
+- mcogoni/pypanadapter at d6f067616f56ce3c35cc06f211e4f51d8e43fc34
+  (README states GPLv3 and no separate licence file was found; clean-room
+  behavior study only, with no source or assets copied).
+
+Elecraft KX3 Programmer's Reference revision G5 was used as the authoritative
+interoperability reference for CAT IF-field semantics. Elecraft names and
+commands remain the property of their respective owner. This work adds no new
+third-party runtime dependency.
+
 Names including Nexus, KD9TAW, Elecraft, FlexRadio, POTA, SOTA, WWFF, Wavelog,
 QRZ, HamQTH, and other vendors, services, or organisations are used only to
 identify interoperability targets or external services. No endorsement,

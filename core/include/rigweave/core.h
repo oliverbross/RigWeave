@@ -10,6 +10,7 @@ extern "C" {
 
 typedef struct rw_context rw_context;
 typedef struct rw_feature_context rw_feature_context;
+typedef struct rw_panadapter_context rw_panadapter_context;
 
 typedef enum rw_command_class {
     RW_COMMAND_UNKNOWN = 0,
@@ -47,7 +48,58 @@ typedef struct rw_radio_state {
     int keyer_speed;
     int if_shift_hz;
     uint64_t revision;
+    int rit_xit_offset_hz;
+    uint64_t effective_rx_hz;
+    uint64_t effective_tx_hz;
+    int data_submode;
+    uint64_t updated_monotonic_ms;
 } rw_radio_state;
+
+typedef struct rw_panadapter_config {
+    uint32_t sample_rate;
+    uint32_t fft_size;
+    uint32_t overlap_percent;
+    uint32_t window;
+    float display_floor_db;
+    float display_top_db;
+    float attack;
+    float release;
+    uint32_t average_frames;
+    int peak_hold;
+    float peak_decay_db_per_second;
+    int generic_kx3_flatness;
+    int swap_iq;
+    int invert_i;
+    int invert_q;
+    int conjugate;
+    float i_trim;
+    float q_trim;
+    uint32_t zoom_decimation;
+    float zoom_offset_hz;
+} rw_panadapter_config;
+
+typedef struct rw_panadapter_snapshot {
+    uint64_t sequence;
+    uint64_t input_frames;
+    uint64_t transforms;
+    uint64_t discontinuities;
+    uint32_t sample_rate;
+    uint32_t effective_sample_rate;
+    uint32_t fft_size;
+    uint32_t hop_size;
+    uint32_t zoom_decimation;
+    float zoom_offset_hz;
+    float enbw_bins;
+    float rbw_hz;
+    float peak_db;
+    float floor_db;
+    float i_rms_db;
+    float q_rms_db;
+    float iq_correlation;
+    float clipped_fraction;
+    float duplicate_correlation;
+    int valid_stereo;
+} rw_panadapter_snapshot;
 
 rw_context *rw_context_create(void);
 void rw_context_destroy(rw_context *context);
@@ -97,6 +149,29 @@ float rw_panadapter_peak_db(const rw_feature_context *context);
 float rw_panadapter_i_rms_db(const rw_feature_context *context);
 float rw_panadapter_q_rms_db(const rw_feature_context *context);
 float rw_panadapter_iq_correlation(const rw_feature_context *context);
+
+rw_panadapter_context *rw_panadapter_context_create(void);
+void rw_panadapter_context_destroy(rw_panadapter_context *context);
+int rw_panadapter_configure(rw_panadapter_context *context, const rw_panadapter_config *config);
+int rw_panadapter_push(rw_panadapter_context *context, const uint8_t *bytes, size_t length,
+                       unsigned channels, unsigned subframe_bytes, unsigned bits,
+                       int discontinuity);
+size_t rw_panadapter_copy_trace(const rw_panadapter_context *context, float *output,
+                                size_t output_count);
+size_t rw_panadapter_copy_waterfall(const rw_panadapter_context *context, float *output,
+                                    size_t output_count);
+size_t rw_panadapter_copy_peak_hold(const rw_panadapter_context *context, float *output,
+                                    size_t output_count);
+int rw_panadapter_snapshot_copy(const rw_panadapter_context *context,
+                                rw_panadapter_snapshot *output);
+int rw_panadapter_copy_frame(const rw_panadapter_context *context,
+                             rw_panadapter_snapshot *snapshot,
+                             float *trace, float *waterfall, float *peak_hold,
+                             size_t output_count);
+int rw_panadapter_set_iq_correction(rw_panadapter_context *context,
+                                    float a_real, float a_imag, float b_real, float b_imag,
+                                    int enabled);
+void rw_panadapter_reset_peak_hold(rw_panadapter_context *context);
 
 int rw_sync_action(int status_code, int network_error, int response_ambiguous);
 uint32_t rw_sync_retry_delay(uint32_t attempt, uint32_t jitter_seed,

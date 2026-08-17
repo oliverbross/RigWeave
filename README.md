@@ -10,7 +10,7 @@ The current repository contains two native mobile clients—an iPad-focused Swif
 |---|---|---|
 | Shared core | KX3/KX2 CAT parsing and safety classes, ADIF, CTY, spot/DX analysis, operator intelligence, panadapter DSP, Wavelog retry policy, and bounded WSJT-X parsing behind a C ABI | core/include, core/portable, core/src |
 | Apple | SwiftUI app, Objective-C++ bridge, base USBDriverKit KXUSB transport, local SQLite/ADIF, callbook, Wavelog, cluster/DX, and physical-I/Q panadapter | ios/RigWeave, ios/CP210xDriver |
-| Android | Compose app, JNI bridge, USB serial, local SQLite/ADIF, callbook, Wavelog, CW and SSB voice macros, hardware-backed KX3 EQ Studio, DX/Neural DX surfaces, MapLibre maps, audio monitoring and spectrum paths | android/app/src/main |
+| Android | Compose app, JNI bridge, USB serial, local SQLite/ADIF, callbook, Wavelog, CW and SSB voice macros, hardware-backed KX3 EQ Studio, DX/Neural DX surfaces, MapLibre maps, audio monitoring, and a dedicated KX3 stereo-I/Q panadapter | android/app/src/main |
 | Planned | Further KX3/KX2 Studio hardening and platform parity, Portable Chase/Activate, Sync and Progress, FlexRadio SmartLink, Qt/QML desktop, then QMX and broader integrations | docs/ROADMAP.md |
 
 The Apple Xcode targets are configured for device family 2 (iPad), deployment target iOS 17, and should not be described as proven iPhone support.
@@ -93,7 +93,7 @@ adb shell am start -n app.rigweave.mobile/.MainActivity
 
 An emulator can validate navigation and local logging, but cannot prove USB serial or radio operation. The Android app uses `usb-serial-for-android` for PL2303, CP210x, FTDI, CH34x, and CDC-ACM adapters where supported by that library. It opens the selected adapter at 38,400 baud and exposes frequency, mode, and raw CAT controls without simulation.
 
-The Android source also binds the full portable feature engine through JNI and supplies the same KX3-style live CAT deck, local ADIF journal/import/export, Wavelog discovery/upload/full-log cache, six graphical DX views, real TCP DX-cluster, NOAA, and `AudioRecord` physical-input panadapter paths with matching Compose screens. Android SDK licences were accepted with the owner's explicit approval and NDK `28.2.13676358` is installed under the SDK used by Gradle.
+The Android source also binds the full portable feature engine through JNI and supplies the KX3-style live CAT deck, local ADIF journal/import/export, Wavelog discovery/upload/full-log cache, six graphical DX views, real TCP DX-cluster, NOAA, and a first-class production panadapter. The panadapter selects and proves an external stereo route, uses its own native DSP context and capture lifecycle, follows fresh CAT frequency truth, and fails closed rather than converting mono audio into a spectrum claim. Android SDK licences were accepted with the owner's explicit approval and NDK `28.2.13676358` is installed under the SDK used by Gradle.
 
 Android also includes six SSB voice-macro slots for exact USB/LSB operation. Recordings remain in private tablet storage, preview is verified against the built-in speaker, and transmission uses an explicitly selected DigiRig USB output with left-channel speech/right-channel silence. PTT is owned only by verified Elecraft CAT (`TQ0 -> TX -> TQ1 -> audio -> RX -> TQ0`); RTS/DTR are kept inactive. Multiple CAT or USB-audio candidates require explicit selection. See [`docs/VOICE_MACROS_ANDROID.md`](docs/VOICE_MACROS_ANDROID.md) for setup, privacy limits, calibration, and the operator-controlled dummy-load checklist.
 
@@ -103,7 +103,7 @@ Android EQ Studio is a dedicated responsive KX3 calibration workspace. It reads 
 
 The mobile panadapter consumes physical stereo I/Q only. Its shared FFT path now uses independent DC removal, coherent-gain-normalized complex magnitudes, Blackman-Harris windowing, FFT shift, and asymmetric dB-domain attack/release smoothing. It does not infer an I/Q calibration transform from each live frame.
 
-Both native clients render a 41/59 spectrum/waterfall split with a centered VFO axis, scrolling newest-first history, live trimmed-mean noise-floor tracking, adjustable black level and dynamic range, and selectable perceptual color maps. The iPad implementation uploads waterfall history as an image texture for asynchronous compositing; Android uses its hardware-accelerated Compose canvas. See [`docs/PANADAPTER_DESIGN.md`](docs/PANADAPTER_DESIGN.md).
+Both native clients provide spectrum/waterfall instrumentation, while implementation and evidence remain platform-specific. Android adds resizable/single-pane layouts, a circular bitmap waterfall, honest optional visual center masking, true decimation zoom, explicit marker QSY/confirmed undo, route diagnostics, bounded recording/replay, and device/rate-bound I/Q calibration. See [`docs/PANADAPTER_DESIGN.md`](docs/PANADAPTER_DESIGN.md) and [`docs/panadapter/PANADAPTER_OPERATOR_GUIDE.md`](docs/panadapter/PANADAPTER_OPERATOR_GUIDE.md).
 
 ## Current physical status
 

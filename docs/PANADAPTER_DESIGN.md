@@ -1,6 +1,6 @@
 # Panadapter and waterfall design
 
-**Status:** Current implementation description. Phase 0 changed documentation only.
+**Status:** Shared DSP plus production Android implementation; Apple evidence remains separate.
 
 ## Signal contract
 
@@ -8,7 +8,7 @@ RigWeave consumes real stereo I/Q PCM. Left is I and right is Q. Mono input must
 
 The shared implementation is in core/portable/include/kx3/panadapter_dsp.hpp and core/portable/src/panadapter_dsp.cpp, exposed through core/include/rigweave/core.h. It performs DC removal, windowing, complex FFT/magnitude processing, smoothing, bin copying, and I/Q metrics.
 
-Apple feeds the core from AVAudioSession in ios/RigWeave/FeatureModel.swift and renders the spectrum/waterfall in ios/RigWeave/ContentView.swift. Android binds the shared/native path through its JNI build and uses AudioMonitorController/MainActivity for physical input, monitoring, and presentation.
+Apple feeds the core from AVAudioSession in ios/RigWeave/FeatureModel.swift and renders the spectrum/waterfall in ios/RigWeave/ContentView.swift. Android uses a dedicated native context, `NativePanadapter`, and `PanadapterController`; its verified stereo `UNPROCESSED` capture is explicitly separate from `AudioMonitorController` playback/voice processing.
 
 ## Display contract
 
@@ -23,7 +23,7 @@ Apple feeds the core from AVAudioSession in ios/RigWeave/FeatureModel.swift and 
 - Shared host build and focused CTest passed during Phase 0.
 - Generic iOS build and Android unit/assemble validation passed during Phase 0.
 - Historical repository evidence records a physical iPad stereo-I/Q pass at 48 kHz and more than 1.2 million frames. Phase 0 did not repeat this device test.
-- Android source and build paths exist, but a physical Android I/Q acceptance pass remains unverified.
+- Android unit/package and connected-native results are recorded in `panadapter/PANADAPTER_VALIDATION_EVIDENCE.md`; physical Android I/Q claims remain limited to the scenarios actually observed there.
 
 ## Residual gates
 

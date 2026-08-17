@@ -9,7 +9,7 @@ RigWeave is local-first. Radio control and local logging must remain useful with
 ## Current product
 
 - Native Apple mobile client using SwiftUI. The current target and physical evidence are iPad-focused; iPhone support is not claimed.
-- Native Android client using Jetpack Compose.
+- Native Android client using Jetpack Compose, including a dedicated production KX3 receive-I/Q panadapter with explicit stereo-route proof, shared native DSP, CAT-synchronized spectrum/waterfall, calibration, diagnostics and bounded replay.
 - Shared C++17 core exposed through a C ABI.
 - Deep Elecraft KX3/KX2 integration: observed CAT state, radio controls, transport adapters, safety classification, logging, real spectrum paths, and DX intelligence.
 - Local SQLite journals and ADIF workflows.
@@ -31,7 +31,7 @@ The clients do not have identical surface coverage. Android currently contains t
 
 ## Approved direction
 
-1. KX3/KX2 Studio: preserve and harden the implemented Android KX3 EQ Studio, profiles, voice macros, and existing panadapter/audio-source path; extend other clients and KX2 write support only after their platform and hardware gates.
+1. KX3/KX2 Studio: preserve and harden the implemented Android KX3 EQ Studio, profiles, voice macros, and dedicated KX3 panadapter; extend other clients and KX2 write or wideband-I/Q claims only after their platform and hardware gates.
 2. Portable Chase for POTA, SOTA, and WWFF.
 3. Portable Activate.
 4. Sync and Progress.

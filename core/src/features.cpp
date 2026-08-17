@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iomanip>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -82,8 +83,45 @@ struct rw_feature_context {
     kx3::intel::WorkedIndex worked;
     kx3::PanadapterDsp panadapter;
 
-    rw_feature_context() : worked(kx3::intel::kDefaultWorkedCells) {}
+    rw_feature_context() : worked(kx3::intel::kDefaultWorkedCells) {
+        kx3::PanadapterConfig legacy{};
+        legacy.sample_rate = 48000;
+        legacy.fft_size = kx3::kPanFftSize;
+        panadapter.configure(legacy);
+    }
 };
+
+struct rw_panadapter_context {
+    mutable std::mutex mutex;
+    kx3::PanadapterDsp dsp;
+};
+
+namespace {
+kx3::PanadapterConfig native_pan_config(const rw_panadapter_config& value) {
+    kx3::PanadapterConfig config{};
+    config.sample_rate = value.sample_rate;
+    config.fft_size = value.fft_size;
+    config.overlap_percent = value.overlap_percent;
+    config.window = static_cast<kx3::PanWindow>(std::min(value.window, 4U));
+    config.display_floor_db = value.display_floor_db;
+    config.display_top_db = value.display_top_db;
+    config.attack = value.attack;
+    config.release = value.release;
+    config.average_frames = value.average_frames;
+    config.peak_hold = value.peak_hold != 0;
+    config.peak_decay_db_per_second = value.peak_decay_db_per_second;
+    config.generic_kx3_flatness = value.generic_kx3_flatness != 0;
+    config.swap_iq = value.swap_iq != 0;
+    config.invert_i = value.invert_i != 0;
+    config.invert_q = value.invert_q != 0;
+    config.conjugate = value.conjugate != 0;
+    config.i_trim = value.i_trim;
+    config.q_trim = value.q_trim;
+    config.zoom_decimation = value.zoom_decimation;
+    config.zoom_offset_hz = value.zoom_offset_hz;
+    return config;
+}
+}
 
 rw_feature_context *rw_feature_context_create(void) {
     return new rw_feature_context{};
@@ -342,6 +380,112 @@ float rw_panadapter_q_rms_db(const rw_feature_context *context) {
 }
 float rw_panadapter_iq_correlation(const rw_feature_context *context) {
     return context == nullptr ? 0.0F : context->panadapter.iq_correlation();
+}
+
+rw_panadapter_context *rw_panadapter_context_create(void) { return new rw_panadapter_context{}; }
+void rw_panadapter_context_destroy(rw_panadapter_context *context) { delete context; }
+
+int rw_panadapter_configure(rw_panadapter_context *context, const rw_panadapter_config *config) {
+    if (context == nullptr || config == nullptr) return 0;
+    std::lock_guard<std::mutex> lock(context->mutex);
+    return context->dsp.configure(native_pan_config(*config)) ? 1 : 0;
+}
+
+int rw_panadapter_push(rw_panadapter_context *context, const uint8_t *bytes, size_t length,
+                       unsigned channels, unsigned subframe_bytes, unsigned bits,
+                       int discontinuity) {
+    if (context == nullptr) return 0;
+    std::lock_guard<std::mutex> lock(context->mutex);
+    return context->dsp.push_pcm(bytes, length, channels, subframe_bytes, bits,
+                                 discontinuity != 0) ? 1 : 0;
+}
+
+namespace {
+size_t copy_pan_values(const std::vector<float>& values, float *output, size_t output_count) {
+    if (output == nullptr) return 0;
+    const size_t count = std::min(output_count, values.size());
+    std::copy_n(values.begin(), count, output);
+    return count;
+}
+}
+
+size_t rw_panadapter_copy_trace(const rw_panadapter_context *context, float *output,
+                                size_t output_count) {
+    if (context == nullptr) return 0;
+    std::lock_guard<std::mutex> lock(context->mutex);
+    return copy_pan_values(context->dsp.db_bins(), output, output_count);
+}
+size_t rw_panadapter_copy_waterfall(const rw_panadapter_context *context, float *output,
+                                    size_t output_count) {
+    if (context == nullptr) return 0;
+    std::lock_guard<std::mutex> lock(context->mutex);
+    return copy_pan_values(context->dsp.waterfall_db(), output, output_count);
+}
+size_t rw_panadapter_copy_peak_hold(const rw_panadapter_context *context, float *output,
+                                    size_t output_count) {
+    if (context == nullptr) return 0;
+    std::lock_guard<std::mutex> lock(context->mutex);
+    return copy_pan_values(context->dsp.peak_hold_db(), output, output_count);
+}
+
+int rw_panadapter_snapshot_copy(const rw_panadapter_context *context,
+                                rw_panadapter_snapshot *output) {
+    if (context == nullptr || output == nullptr) return 0;
+    std::lock_guard<std::mutex> lock(context->mutex);
+    const auto& source = context->dsp.snapshot();
+    output->sequence = source.sequence; output->input_frames = source.input_frames;
+    output->transforms = source.transforms; output->discontinuities = source.discontinuities;
+    output->sample_rate = source.sample_rate; output->effective_sample_rate = source.effective_sample_rate;
+    output->fft_size = static_cast<uint32_t>(source.fft_size); output->hop_size = static_cast<uint32_t>(source.hop_size);
+    output->zoom_decimation = source.zoom_decimation; output->zoom_offset_hz = source.zoom_offset_hz;
+    output->enbw_bins = source.enbw_bins; output->rbw_hz = source.rbw_hz;
+    output->peak_db = source.peak_db; output->floor_db = source.floor_db;
+    output->i_rms_db = source.i_rms_db; output->q_rms_db = source.q_rms_db;
+    output->iq_correlation = source.iq_correlation; output->clipped_fraction = source.clipped_fraction;
+    output->duplicate_correlation = source.duplicate_correlation;
+    output->valid_stereo = source.valid_stereo ? 1 : 0;
+    return 1;
+}
+
+int rw_panadapter_copy_frame(const rw_panadapter_context *context,
+                             rw_panadapter_snapshot *output,
+                             float *trace, float *waterfall, float *peak_hold,
+                             size_t output_count) {
+    if (context == nullptr || output == nullptr || trace == nullptr ||
+        waterfall == nullptr || peak_hold == nullptr) return 0;
+    std::lock_guard<std::mutex> lock(context->mutex);
+    const auto& source = context->dsp.snapshot();
+    const size_t count = std::min(output_count, context->dsp.db_bins().size());
+    if (count == 0U) return 0;
+    output->sequence = source.sequence; output->input_frames = source.input_frames;
+    output->transforms = source.transforms; output->discontinuities = source.discontinuities;
+    output->sample_rate = source.sample_rate; output->effective_sample_rate = source.effective_sample_rate;
+    output->fft_size = static_cast<uint32_t>(source.fft_size); output->hop_size = static_cast<uint32_t>(source.hop_size);
+    output->zoom_decimation = source.zoom_decimation; output->zoom_offset_hz = source.zoom_offset_hz;
+    output->enbw_bins = source.enbw_bins; output->rbw_hz = source.rbw_hz;
+    output->peak_db = source.peak_db; output->floor_db = source.floor_db;
+    output->i_rms_db = source.i_rms_db; output->q_rms_db = source.q_rms_db;
+    output->iq_correlation = source.iq_correlation; output->clipped_fraction = source.clipped_fraction;
+    output->duplicate_correlation = source.duplicate_correlation; output->valid_stereo = source.valid_stereo ? 1 : 0;
+    std::copy_n(context->dsp.db_bins().begin(), count, trace);
+    std::copy_n(context->dsp.waterfall_db().begin(), count, waterfall);
+    std::copy_n(context->dsp.peak_hold_db().begin(), count, peak_hold);
+    return static_cast<int>(count);
+}
+
+int rw_panadapter_set_iq_correction(rw_panadapter_context *context,
+                                    float a_real, float a_imag, float b_real, float b_imag,
+                                    int enabled) {
+    if (context == nullptr) return 0;
+    std::lock_guard<std::mutex> lock(context->mutex);
+    context->dsp.set_iq_correction({a_real, a_imag}, {b_real, b_imag}, enabled != 0);
+    return 1;
+}
+
+void rw_panadapter_reset_peak_hold(rw_panadapter_context *context) {
+    if (context == nullptr) return;
+    std::lock_guard<std::mutex> lock(context->mutex);
+    context->dsp.reset_peak_hold();
 }
 
 int rw_sync_action(int status_code, int network_error, int response_ambiguous) {

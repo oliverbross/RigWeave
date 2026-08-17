@@ -86,6 +86,12 @@ class VoiceMacroRulesTest {
         assertTrue(chooseStableCandidate(audio, "stale", AudioRouteDescriptor::stableKey).selectionRequired)
     }
 
+    @Test fun catResponseRejectsQueryEchoAndAcceptsStructuredElecraftFrames() {
+        assertFalse(containsElecraftCatResponse("K3;OM;ID;FA;".toByteArray()))
+        assertTrue(containsElecraftCatResponse("K30;OM A-F-------02;".toByteArray()))
+        assertTrue(containsElecraftCatResponse("FA00014074000;".toByteArray()))
+    }
+
     @Test fun parsesOnlyFreshCompleteTqFrames() {
         assertEquals(false, parseFreshTq("FA000;TQ0;".toByteArray()))
         assertEquals(true, parseFreshTq("TQ0;IFfoo;TQ1;".toByteArray()))

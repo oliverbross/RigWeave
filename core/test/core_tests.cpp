@@ -5,8 +5,10 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <complex>
 #include <iostream>
 #include <string>
+#include <vector>
 
 int main() {
     rw_context *context = rw_context_create();
@@ -22,6 +24,12 @@ int main() {
     assert(std::string(state.model) == "KX3" && std::string(state.mode) == "USB");
     assert(state.vfo_a_hz == 14075000 && state.transmitting == 0);
     assert(state.rit == 1 && state.xit == 0 && state.split == 1);
+    assert(state.rit_xit_offset_hz == 0 && state.effective_rx_hz == 14075000);
+    assert(state.effective_tx_hz == 14075000 && state.updated_monotonic_ms > 0);
+    const char *rit_offset = "IF00014075000     -012310 0002001001 ;";
+    assert(rw_context_feed(context, rit_offset, std::strlen(rit_offset)) == 1);
+    state = rw_context_state(context);
+    assert(state.rit_xit_offset_hz == -123 && state.effective_rx_hz == 14074877);
 
     rw_context *kx2_context = rw_context_create();
     const char *kx2_identity = "ID017;K30;OM A-F-------01;";
@@ -131,6 +139,89 @@ int main() {
         std::max_element(db_bins.begin(), db_bins.end())));
     assert(peak == 512 + tone_bin);
     assert(db_bins[512 + tone_bin] - db_bins[512 - tone_bin] > 45.0F);
+
+    rw_panadapter_context *pan = rw_panadapter_context_create();
+    assert(pan != nullptr);
+    rw_panadapter_config pan_config{};
+    pan_config.sample_rate = 96000; pan_config.fft_size = 4096; pan_config.overlap_percent = 50;
+    pan_config.window = 3; pan_config.display_floor_db = -140.0F; pan_config.display_top_db = 0.0F;
+    pan_config.attack = 1.0F; pan_config.release = 1.0F; pan_config.average_frames = 1;
+    pan_config.i_trim = 1.0F; pan_config.q_trim = 1.0F; pan_config.zoom_decimation = 1;
+    assert(rw_panadapter_configure(pan, &pan_config) == 1);
+    for (const uint32_t size : {1024U, 2048U, 4096U, 8192U}) {
+        pan_config.fft_size = size;
+        assert(rw_panadapter_configure(pan, &pan_config) == 1);
+    }
+    pan_config.fft_size = 4096;
+    assert(rw_panadapter_configure(pan, &pan_config) == 1);
+    std::vector<int16_t> production_tone(4096U * 2U);
+    constexpr std::size_t production_bin = 256U;
+    for (std::size_t frame_index = 0; frame_index < 4096U; ++frame_index) {
+        const float phase = 2.0F * 3.14159265358979323846F *
+            static_cast<float>(production_bin * frame_index) / 4096.0F;
+        production_tone[frame_index * 2U] = static_cast<int16_t>(std::cos(phase) * 0.5F * 32767.0F);
+        production_tone[frame_index * 2U + 1U] = static_cast<int16_t>(std::sin(phase) * 0.5F * 32767.0F);
+    }
+    assert(rw_panadapter_push(pan, reinterpret_cast<const uint8_t *>(production_tone.data()),
+        production_tone.size() * sizeof(int16_t), 2, 2, 16, 0) == 1);
+    rw_panadapter_snapshot pan_snapshot{};
+    std::vector<float> production_trace(4096), production_waterfall(4096), production_peak(4096);
+    assert(rw_panadapter_copy_frame(pan, &pan_snapshot, production_trace.data(), production_waterfall.data(),
+        production_peak.data(), production_trace.size()) == 4096);
+    const auto production_peak_bin = static_cast<std::size_t>(std::distance(production_trace.begin(),
+        std::max_element(production_trace.begin(), production_trace.end())));
+    assert(production_peak_bin == 2048U + production_bin);
+    assert(std::abs(production_trace[production_peak_bin] - (-6.02F)) < 0.35F);
+    assert(production_trace[2048U + production_bin] - production_trace[2048U - production_bin] > 55.0F);
+    assert(std::abs(pan_snapshot.enbw_bins - 1.0F) < 0.001F);
+    assert(std::abs(pan_snapshot.rbw_hz - 23.4375F) < 0.01F);
+    assert(pan_snapshot.fft_size == 4096 && pan_snapshot.hop_size == 2048 && pan_snapshot.sequence == 1);
+    assert(pan_snapshot.valid_stereo == 1 && pan_snapshot.clipped_fraction == 0.0F);
+
+    // A fixed, explicit widely-linear profile removes a known image; no live-frame covariance is used.
+    std::vector<int16_t> imbalanced_tone(4096U * 2U);
+    for (std::size_t frame_index = 0; frame_index < 4096U; ++frame_index) {
+        const float phase = 2.0F * 3.14159265358979323846F *
+            static_cast<float>(production_bin * frame_index) / 4096.0F;
+        const std::complex<float> wanted = std::polar(0.45F, phase);
+        const std::complex<float> value = wanted + 0.10F * std::conj(wanted);
+        imbalanced_tone[frame_index * 2U] = static_cast<int16_t>(value.real() * 32767.0F);
+        imbalanced_tone[frame_index * 2U + 1U] = static_cast<int16_t>(value.imag() * 32767.0F);
+    }
+    assert(rw_panadapter_configure(pan, &pan_config) == 1);
+    assert(rw_panadapter_push(pan, reinterpret_cast<const uint8_t *>(imbalanced_tone.data()),
+        imbalanced_tone.size() * sizeof(int16_t), 2, 2, 16, 0) == 1);
+    rw_panadapter_copy_trace(pan, production_trace.data(), production_trace.size());
+    const float rejection_before = production_trace[2048U + production_bin] - production_trace[2048U - production_bin];
+    assert(rejection_before > 18.0F && rejection_before < 22.0F);
+    assert(rw_panadapter_configure(pan, &pan_config) == 1);
+    assert(rw_panadapter_set_iq_correction(pan, 1.0F, 0.0F, -0.10F, 0.0F, 1) == 1);
+    assert(rw_panadapter_push(pan, reinterpret_cast<const uint8_t *>(imbalanced_tone.data()),
+        imbalanced_tone.size() * sizeof(int16_t), 2, 2, 16, 0) == 1);
+    rw_panadapter_copy_trace(pan, production_trace.data(), production_trace.size());
+    assert(production_trace[2048U + production_bin] - production_trace[2048U - production_bin] > 55.0F);
+
+    // Translate + anti-alias FIR + decimate is a real zoom path, not display interpolation.
+    pan_config.zoom_decimation = 4; pan_config.zoom_offset_hz = 12000.0F;
+    assert(rw_panadapter_configure(pan, &pan_config) == 1);
+    constexpr std::size_t zoom_input_frames = 18000U;
+    std::vector<int16_t> zoom_tone(zoom_input_frames * 2U);
+    for (std::size_t frame_index = 0; frame_index < zoom_input_frames; ++frame_index) {
+        const float phase = 2.0F * 3.14159265358979323846F * 13500.0F *
+            static_cast<float>(frame_index) / 96000.0F;
+        zoom_tone[frame_index * 2U] = static_cast<int16_t>(std::cos(phase) * 0.4F * 32767.0F);
+        zoom_tone[frame_index * 2U + 1U] = static_cast<int16_t>(std::sin(phase) * 0.4F * 32767.0F);
+    }
+    assert(rw_panadapter_push(pan, reinterpret_cast<const uint8_t *>(zoom_tone.data()),
+        zoom_tone.size() * sizeof(int16_t), 2, 2, 16, 0) == 1);
+    rw_panadapter_copy_frame(pan, &pan_snapshot, production_trace.data(), production_waterfall.data(),
+        production_peak.data(), production_trace.size());
+    const auto zoom_peak_bin = static_cast<std::size_t>(std::distance(production_trace.begin(),
+        std::max_element(production_trace.begin(), production_trace.end())));
+    assert(std::abs(static_cast<long>(zoom_peak_bin) - static_cast<long>(2048U + 256U)) <= 1L);
+    assert(pan_snapshot.effective_sample_rate == 24000 && pan_snapshot.zoom_decimation == 4);
+    assert(std::abs(pan_snapshot.rbw_hz - 5.859375F) < 0.01F);
+    rw_panadapter_context_destroy(pan);
 
     char normalized_url[128]{};
     assert(rw_wavelog_normalize_url(normalized_url, sizeof(normalized_url), "htps://log.example/") > 0);
