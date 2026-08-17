@@ -62,7 +62,7 @@ class FeatureController(private val context: Context) {
     var fallbackPort by mutableStateOf(prefs.getInt("fallback_port", 7300))
     var fallback2Host by mutableStateOf(prefs.getString("fallback2_host", "") ?: "")
     var fallback2Port by mutableStateOf(prefs.getInt("fallback2_port", 7300))
-    var clusterCallsign by mutableStateOf(prefs.getString("callsign", "") ?: "")
+    var clusterCallsign by mutableStateOf(prefs.getString("callsign", "OM0JRX") ?: "OM0JRX")
     var watchlistText by mutableStateOf(prefs.getString("watchlist", "") ?: ""); private set
 
     var clusterStatus by mutableStateOf("DX cluster disconnected"); private set
