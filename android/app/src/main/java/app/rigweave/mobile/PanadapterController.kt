@@ -193,6 +193,8 @@ class PanadapterController(
             settings.iqCorrectionEnabled && settings.calibrationDeviceKey == routeProof.requestedDevice &&
                 settings.calibrationRate == routeProof.physicalRate -> PanadapterIqState.CALIBRATED
             completedToneEvidence.isNotEmpty() -> PanadapterIqState.VERIFIED_UNCALIBRATED
+            displayMetrics.mirrorPairCount >= 8 && displayMetrics.mirrorRejectionDb.isFinite() &&
+                displayMetrics.mirrorRejectionDb < 3f -> PanadapterIqState.MIRROR_IMAGES_DOMINANT
             else -> PanadapterIqState.CHANNELS_HEALTHY_ORIENTATION_UNVERIFIED
         }
     }
@@ -1064,6 +1066,7 @@ class PanadapterController(
             .put("valid_bin_fraction", displayMetrics.validBinFraction).put("valid_bin_count", displayMetrics.validBinCount)
             .put("peak_to_floor_db", finite(displayMetrics.peakToFloorDb)).put("in_band_to_invalid_db", finite(displayMetrics.inBandToInvalidPowerDb))
             .put("comb_spacing_hz", finite(displayMetrics.combSpacingHz)).put("comb_persistence", displayMetrics.combPersistence)
+            .put("mirror_rejection_db", finite(displayMetrics.mirrorRejectionDb)).put("mirror_pair_count", displayMetrics.mirrorPairCount)
             .put("tone_evidence", JSONArray(completedToneEvidence.map { tone -> JSONObject()
                 .put("requested_offset_hz", tone.knownOffsetHz).put("measured_offset_hz", finite(tone.measuredOffsetHz))
                 .put("axis_error_hz", finite(tone.axisErrorHz)).put("desired_dbfs", finite(tone.desiredLevelDb))

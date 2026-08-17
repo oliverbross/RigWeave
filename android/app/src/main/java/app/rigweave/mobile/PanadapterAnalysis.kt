@@ -105,6 +105,7 @@ internal class PanadapterDisplayAnalyzer {
         val invalidMedian = if (invalid.isEmpty()) Float.NaN else percentile(invalid.sortedArray(), .50f)
         val inBandRatio = if (invalidMedian.isFinite()) median - invalidMedian else Float.NaN
         val comb = detectComb(values, mask, stabilizedFloor, sampleRate)
+        val mirror = detectMirrorImages(values, mask, stabilizedFloor)
         if (comb.isFinite()) {
             val matching = lastCombSpacing.isFinite() && abs(comb - lastCombSpacing) <= sampleRate.toFloat() / values.size * 2f
             combPersistence = if (matching) (combPersistence + .08f).coerceAtMost(1f) else .1f
@@ -120,7 +121,8 @@ internal class PanadapterDisplayAnalyzer {
             validBinFraction = valid.size.toFloat() / values.size, validBinCount = valid.size,
             medianDb = median, highPercentileDb = high, peakToFloorDb = peak - stabilizedFloor,
             inBandToInvalidPowerDb = inBandRatio, combSpacingHz = lastCombSpacing,
-            combPersistence = combPersistence, state = state,
+            combPersistence = combPersistence, mirrorRejectionDb = mirror.first,
+            mirrorPairCount = mirror.second, state = state,
         ), mask.copyOf())
     }
 
@@ -146,5 +148,23 @@ internal class PanadapterDisplayAnalyzer {
         val medianGap = gaps[gaps.size / 2]
         val consistent = gaps.count { abs(it - medianGap) <= 1 }
         return if (consistent >= 4) medianGap * sampleRate.toFloat() / values.size else Float.NaN
+    }
+
+    private fun detectMirrorImages(values: FloatArray, valid: BooleanArray, floor: Float): Pair<Float, Int> {
+        val centre = values.size / 2
+        val rejection = ArrayList<Float>()
+        for (offset in 4 until centre - 4) {
+            val positive = centre + offset
+            val negative = centre - offset
+            if (positive !in values.indices || negative !in values.indices || !valid[positive] || !valid[negative]) continue
+            val positivePeak = values[positive] >= values[positive - 1] && values[positive] > values[positive + 1]
+            val negativePeak = values[negative] >= values[negative - 1] && values[negative] > values[negative + 1]
+            if ((positivePeak || negativePeak) && max(values[positive], values[negative]) > floor + 12f) {
+                rejection += abs(values[positive] - values[negative])
+            }
+        }
+        if (rejection.isEmpty()) return Float.NaN to 0
+        rejection.sort()
+        return rejection[rejection.size / 2] to rejection.size
     }
 }
