@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -2324,7 +2325,8 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
         ?: wavelog.stationId.takeIf { it.isNotBlank() }?.let { "Station $it" }
         ?: "Station not selected"
 
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(Modifier.fillMaxSize().navigationBarsPadding().clipToBounds().padding(16.dp).testTag("logbook-safe-content"),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.weight(1f)) { Header(if (wavelog.logMode == LogMode.WAVELOG) "Wavelog logbook" else "Local logbook", state) }
             StatusChip(if (wavelog.logMode == LogMode.WAVELOG) "WAVELOG · TWO-WAY" else "LOCAL · TABLET", true)

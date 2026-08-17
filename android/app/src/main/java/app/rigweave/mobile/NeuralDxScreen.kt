@@ -20,6 +20,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -31,6 +32,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -85,7 +87,8 @@ fun NeuralDxScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(DxBg).padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Box(Modifier.fillMaxSize().background(DxBg).navigationBarsPadding().clipToBounds()) {
+    Column(Modifier.fillMaxSize().padding(14.dp).testTag("dx-safe-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Column(Modifier.weight(1f)) {
                 Text("NEURAL DX WATCHER", color = DxInk, fontSize = 24.sp, fontWeight = FontWeight.Black)
@@ -115,15 +118,17 @@ fun NeuralDxScreen(
                 color = DxYellow, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
         }
         HorizontalDivider(color = Color(0xFF465159))
+        val pageModifier = Modifier.fillMaxWidth().weight(1f).clipToBounds().testTag("dx-page-${page.name.lowercase()}")
         when (page) {
-            NeuralDxPage.COCKPIT -> DxCockpit(controller, features, database, wavelog, cty, tune, previousQsos, Modifier.weight(1f))
-            NeuralDxPage.MAP -> DxMap(controller,controller.enrichedSpots.ifEmpty { features.liveSpots }, cty, stationGrid, tune, previousQsos, Modifier.weight(1f))
-            NeuralDxPage.INSIGHT -> DxInsightPage(controller, features, Modifier.weight(1f))
-            NeuralDxPage.WORLD -> DxWorldPage(controller, features, Modifier.weight(1f))
-            NeuralDxPage.BRIEFING -> DxBriefingPage(controller, features, Modifier.weight(1f))
-            NeuralDxPage.SATELLITES -> DxSatellitesPage(controller, stationGrid, Modifier.weight(1f))
-            NeuralDxPage.WEATHER -> DxWeatherPage(controller, features, stationGrid, Modifier.weight(1f))
+            NeuralDxPage.COCKPIT -> DxCockpit(controller, features, database, wavelog, cty, tune, previousQsos, pageModifier)
+            NeuralDxPage.MAP -> DxMap(controller,controller.enrichedSpots.ifEmpty { features.liveSpots }, cty, stationGrid, tune, previousQsos, pageModifier)
+            NeuralDxPage.INSIGHT -> DxInsightPage(controller, features, pageModifier)
+            NeuralDxPage.WORLD -> DxWorldPage(controller, features, pageModifier)
+            NeuralDxPage.BRIEFING -> DxBriefingPage(controller, features, pageModifier)
+            NeuralDxPage.SATELLITES -> DxSatellitesPage(controller, stationGrid, pageModifier)
+            NeuralDxPage.WEATHER -> DxWeatherPage(controller, features, stationGrid, pageModifier)
         }
+    }
     }
 }
 
