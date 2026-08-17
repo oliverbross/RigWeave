@@ -269,9 +269,9 @@ fun NeuralDxScreen(
     val entity=cty.lookup(spot.callsign);val country=entity?.country.orEmpty().ifBlank{spot.country}.ifBlank{"Unknown"}
     Row(Modifier.fillMaxWidth().height(48.dp).clickable(role=Role.Button){selected(spot)}
         .background(if(smart&&spot.score>=75)DxGreen.copy(alpha=.08f) else if(spot.receivedEpoch%2L==0L)DxPanel else DxBg).padding(horizontal=6.dp),verticalAlignment=Alignment.CenterVertically){
-        DxFlexCell(utcSeconds(spot.receivedEpoch),.62f,DxInk);Box(Modifier.weight(.86f).fillMaxHeight().clickable{previous(spot)},contentAlignment=Alignment.CenterStart){Text(spot.callsign,color=if(spot.watchlisted)DxYellow else DxCyan,fontWeight=FontWeight.Black,maxLines=1,overflow=TextOverflow.Ellipsis)}
-        DxFlexCell(spot.band,.5f,DxInk);DxFlexCell(spot.mode,.55f,DxInk);DxFlexCell(formatMHz(spot.frequencyHz),.76f,DxAmber)
-        DxFlexCell(country,1.42f,DxInk);DxFlexCell(entity?.cqZone.orEmpty().ifBlank{spot.cqZone.takeIf{it>0}?.toString().orEmpty()},.36f,DxInk)
+        DxFlexCell(utcSeconds(spot.receivedEpoch),.62f,DxInk);Box(Modifier.weight(.86f).fillMaxHeight().clickable{previous(spot)},contentAlignment=Alignment.CenterStart){Text(spot.callsign,color=if(spot.watchlisted)DxYellow else OperationalCallsign,fontWeight=FontWeight.Black,maxLines=1,overflow=TextOverflow.Ellipsis)}
+        DxFlexCell(spot.band,.5f,DxInk);DxFlexCell(spot.mode,.55f,DxInk);DxFlexCell(formatMHz(spot.frequencyHz),.76f,OperationalFrequency)
+        DxFlexCell(country,1.42f,OperationalCountry);DxFlexCell(entity?.cqZone.orEmpty().ifBlank{spot.cqZone.takeIf{it>0}?.toString().orEmpty()},.36f,DxInk)
         DxFlexCell(spot.spotter,.82f,DxMuted);DxFlexCell(status?.callStatus.orEmpty(),.34f,DxGreen,true);DxFlexCell(status?.dxccStatus.orEmpty(),.46f,if(status?.dxccStatus=="ATNO")DxRed else DxYellow,true)
         DxFlexCell(spot.distanceKm.takeIf{it>0}?.toString() ?: calculatedDistanceKm?.toString().orEmpty(),.52f,DxMuted);DxFlexCell(spot.score.toString(),.48f,scoreColor(spot.score),true)
         DxFlexCell(spot.reason.ifBlank{spot.comment},1.72f,DxMuted)

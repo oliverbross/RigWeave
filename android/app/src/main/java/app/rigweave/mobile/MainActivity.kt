@@ -1609,11 +1609,11 @@ private data class SpotColumn(val label: String, val width: Dp, val mono: Boolea
                         SpotTableCell(utc.format(DateTimeFormatter.ofPattern("dd/MM")), columns[0])
                         SpotTableCell(utc.format(DateTimeFormatter.ofPattern("HH:mm:ss")), columns[1])
                         SpotTableCell(spot.band, columns[2])
-                        SpotTableCell(formatSpotFrequency(spot.frequencyHz), columns[3], Amber, true)
-                        SpotTableCell(spot.callsign, columns[4], if (spot.watchlisted) Hold else Healthy, true,
+                        SpotTableCell(formatSpotFrequency(spot.frequencyHz), columns[3], OperationalFrequency, true)
+                        SpotTableCell(spot.callsign, columns[4], if (spot.watchlisted) Hold else OperationalCallsign, true,
                             onClick = { previousQsos(spot) }, actionLabel = "Previous QSOs for ${spot.callsign}")
                         SpotTableCell(spot.mode, columns[5])
-                        SpotTableCell(entity?.country.orEmpty().ifBlank { spot.country }, columns[6])
+                        SpotTableCell(entity?.country.orEmpty().ifBlank { spot.country }, columns[6], OperationalCountry)
                         SpotTableCell(cq, columns[7])
                         SpotTableCell(spot.spotter, columns[8])
                         SpotTableCell(status?.callStatus.orEmpty(), columns[9], spotStatusColor(status?.callStatus))
@@ -1673,12 +1673,12 @@ private fun spotStatusColor(status: String?): Color = when (status) {
                     verticalAlignment = Alignment.CenterVertically) {
                     RadioLogCell(utc.format(DateTimeFormatter.ofPattern("dd/MM/yy")), columns[0].second)
                     RadioLogCell(utc.format(DateTimeFormatter.ofPattern("HH:mm")), columns[1].second)
-                    RadioLogCell(qso.callsign, columns[2].second, Healthy, true,
+                    RadioLogCell(qso.callsign, columns[2].second, OperationalCallsign, true,
                         onClick = { previousQsos(qso) }, actionLabel = "Previous QSOs for ${qso.callsign}")
                     RadioLogCell(qso.submode.ifBlank { qso.mode }, columns[3].second)
                     RadioLogCell(qso.rstSent, columns[4].second); RadioLogCell(qso.rstReceived, columns[5].second)
                     RadioLogCell(qso.band, columns[6].second)
-                    RadioLogCell(qso.country.ifBlank { qso.dxcc }, columns[7].second)
+                    RadioLogCell(qso.country.ifBlank { qso.dxcc }, columns[7].second, OperationalCountry)
                     RadioLogQslCell(qso.lotwSent, qso.lotwReceived, columns[8].second)
                     RadioLogQslCell(qso.clublogSent, qso.clublogReceived, columns[9].second)
                 }
@@ -2618,20 +2618,20 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
                         visibleColumns.forEach { column -> when (column) {
                             LogbookColumn.DATE_TIME -> LogbookCell(Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC)
                                 .format(DateTimeFormatter.ofPattern("dd/MM/yy HH:mm")), column.width)
-                            LogbookColumn.CALLSIGN -> LogbookCell(qso.callsign, column.width, Healthy, true,
+                            LogbookColumn.CALLSIGN -> LogbookCell(qso.callsign, column.width, OperationalCallsign, true,
                                 onClick = { previousQsos(qso) }, actionLabel = "Previous QSOs for ${qso.callsign}")
                             LogbookColumn.MODE -> LogbookCell(qso.submode.ifBlank { qso.mode }, column.width, centered = true)
                             LogbookColumn.RST_SENT -> LogbookCell(qso.rstSent, column.width, centered = true)
                             LogbookColumn.RST_RECEIVED -> LogbookCell(qso.rstReceived, column.width, centered = true)
                             LogbookColumn.BAND -> LogbookCell(qso.band, column.width, centered = true)
-                            LogbookColumn.FREQUENCY -> LogbookCell("${qso.frequencyHz / 1_000} kHz", column.width)
+                            LogbookColumn.FREQUENCY -> LogbookCell("${qso.frequencyHz / 1_000} kHz", column.width, OperationalFrequency)
                             LogbookColumn.GRID -> LogbookCell(qso.grid, column.width)
                             LogbookColumn.QSL -> LogbookQslCell(qso.qslSent, qso.qslReceived, column.width)
                             LogbookColumn.EQSL -> LogbookQslCell(qso.eqslSent, qso.eqslReceived, column.width)
                             LogbookColumn.LOTW -> LogbookQslCell(qso.lotwSent, qso.lotwReceived, column.width)
                             LogbookColumn.CLUBLOG -> LogbookQslCell(qso.clublogSent, qso.clublogReceived, column.width)
                             LogbookColumn.QRZ -> LogbookQslCell(qso.qrzSent, qso.qrzReceived, column.width)
-                            LogbookColumn.DXCC -> LogbookCell(qso.country.ifBlank { qso.dxcc }, column.width, Healthy, centered = true)
+                            LogbookColumn.DXCC -> LogbookCell(qso.country.ifBlank { qso.dxcc }, column.width, OperationalCountry, centered = true)
                             LogbookColumn.STATE -> LogbookCell(qso.state, column.width)
                             LogbookColumn.COUNTY -> LogbookCell(qso.county, column.width)
                             LogbookColumn.IOTA -> LogbookCell(qso.iota, column.width, Healthy)
