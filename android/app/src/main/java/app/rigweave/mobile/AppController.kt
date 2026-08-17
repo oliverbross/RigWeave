@@ -21,6 +21,7 @@ data class RadioPreset(
 
 class AppController(private val context: Context) {
     private val prefs = context.getSharedPreferences("rigweave-app", Context.MODE_PRIVATE)
+    private val needsDxccCountryColumnMigration = !prefs.getBoolean("logbook_dxcc_country_v1", false)
     var fieldProfile by mutableStateOf(runCatching { FieldProfile.valueOf(prefs.getString("profile", "DAY")!!) }.getOrDefault(FieldProfile.DAY)); private set
     var transmitArmed by mutableStateOf(false); private set
     var cwMacrosArmed by mutableStateOf(false); private set
@@ -51,7 +52,15 @@ class AppController(private val context: Context) {
     }
     val presets = mutableStateListOf<RadioPreset>().apply { addAll(loadPresets()) }
     val visibleLogbookColumns = mutableStateListOf<LogbookColumn>().apply {
-        addAll(decodeLogbookColumns(prefs.getString("logbook_columns", null)))
+        val restored = decodeLogbookColumns(prefs.getString("logbook_columns", null))
+        addAll(if (needsDxccCountryColumnMigration) ensureDxccCountryColumn(restored) else restored)
+    }
+
+    init {
+        if (needsDxccCountryColumnMigration) prefs.edit()
+            .putString("logbook_columns", encodeLogbookColumns(visibleLogbookColumns))
+            .putBoolean("logbook_dxcc_country_v1", true)
+            .apply()
     }
 
     fun setProfile(value: FieldProfile) {

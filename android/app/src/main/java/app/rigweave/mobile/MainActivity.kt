@@ -310,9 +310,9 @@ private fun navIcon(item: Destination) = when (item) {
         }
         Destination.PANADAPTER -> PanadapterScreen(panadapter, radio, features.liveSpots, compact)
         Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
-        Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog, app)
+        Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog, callbook, app)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
-        Destination.DX -> DXScreen(neuralDx, features, database, wavelog, cty, app, send)
+        Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app, send)
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, app,
             transport, voiceStore, voiceAudio, voiceTx, openEq, connect, direct)
     }
@@ -454,7 +454,7 @@ private fun navIcon(item: Destination) = when (item) {
                             CallbookIdentityOverlay(insight.record, { identityVisible = false }, Modifier.fillMaxSize())
                         }
                     }
-                    LiveSpotsPanel(features, database, wavelog, cty, send, stationInsight,
+                    LiveSpotsPanel(features, database, wavelog, callbook, cty, send, stationInsight,
                         Modifier.fillMaxWidth().weight(3f))
                 }
             }
@@ -1121,7 +1121,8 @@ private val callbookImageCache = object : LruCache<String, androidx.compose.ui.g
     override fun sizeOf(key: String, value: androidx.compose.ui.graphics.ImageBitmap) = value.width * value.height * 4
 }
 
-@Composable private fun RemoteCallbookImage(imageUrl: String, callsign: String, source: String, modifier: Modifier = Modifier) {
+@Composable private fun RemoteCallbookImage(imageUrl: String, callsign: String, source: String, modifier: Modifier = Modifier,
+    largeType: Boolean = false) {
     val bitmap by produceState<androidx.compose.ui.graphics.ImageBitmap?>(null, imageUrl) {
         value = null
         value = withContext(Dispatchers.IO) {
@@ -1148,9 +1149,9 @@ private val callbookImageCache = object : LruCache<String, androidx.compose.ui.g
             contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Outlined.AccountCircle, null, tint = Muted, modifier = Modifier.size(38.dp))
-                Text(callsign, color = Ink, fontWeight = FontWeight.Black, fontSize = 13.sp)
-                Text("NO PROFILE PHOTO", color = Muted, fontSize = 9.sp)
+                Icon(Icons.Outlined.AccountCircle, null, tint = Muted, modifier = Modifier.size(if (largeType) 40.dp else 38.dp))
+                Text(callsign, color = Ink, fontWeight = FontWeight.Black, fontSize = if (largeType) 26.sp else 13.sp)
+                Text("NO PROFILE PHOTO", color = Muted, fontSize = if (largeType) 18.sp else 9.sp)
             }
         }
     }
@@ -1161,7 +1162,7 @@ private enum class RadioActivityTab(val label: String) {
 }
 
 @Composable private fun LiveSpotsPanel(features: FeatureController, database: QsoDatabase, wavelog: WavelogController,
-    cty: CtyController, send: (String) -> Unit, insight: StationInsight?, modifier: Modifier = Modifier) {
+    callbook: CallbookController, cty: CtyController, send: (String) -> Unit, insight: StationInsight?, modifier: Modifier = Modifier) {
     var selected by remember { mutableStateOf(RadioActivityTab.SPOTS) }
     var logPage by remember { mutableStateOf(QsoPage(emptyList(), 0, 0, 50)) }
     var page by remember { mutableIntStateOf(0) }
@@ -1243,7 +1244,7 @@ private enum class RadioActivityTab(val label: String) {
         }
     }
     previousQsoRecord?.let { record ->
-        PreviousQsosDialog(record, database, wavelog) { previousQsoRecord = null }
+        PreviousQsosDialog(record, database, wavelog, callbook) { previousQsoRecord = null }
     }
 }
 
@@ -1325,23 +1326,25 @@ private data class InsightColumn(val label: String, val weight: Float)
 private fun String.confirmationGlyph() = if (uppercase() in setOf("Y", "V")) "C" else "—"
 private fun String.confirmationColor() = if (uppercase() in setOf("Y", "V")) Healthy else Muted
 
-@Composable private fun DxccMatrix(summary: DxccSummary, modifier: Modifier = Modifier) {
-    Column(modifier.padding(top = 4.dp)) {
+@Composable private fun DxccMatrix(summary: DxccSummary, modifier: Modifier = Modifier, largeType: Boolean = false) {
+    Column(modifier.padding(top = 4.dp).then(if (largeType) Modifier.verticalScroll(rememberScrollState()) else Modifier)) {
         Text("DXCC ${summary.country.ifBlank { summary.dxcc }} · W = worked · C = confirmed",
-            color = Ink, fontWeight = FontWeight.Black, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+            color = Ink, fontWeight = FontWeight.Black,
+            fontSize = if (largeType) PREVIOUS_QSO_SECTION_FONT_SP.sp else 13.sp,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
         BoxWithConstraints(Modifier.fillMaxWidth().border(1.dp, Color(0xFF424B50), RoundedCornerShape(4.dp))) {
             val modeWidth = 54.dp
             val bandWidth = (maxWidth - modeWidth) / insightBands.size
             Column(Modifier.fillMaxWidth()) {
                 Row(Modifier.fillMaxWidth().height(30.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
-                    MatrixLabel("MODE", modeWidth)
-                    insightBands.forEach { MatrixLabel(it, bandWidth) }
+                    MatrixLabel("MODE", modeWidth, largeType)
+                    insightBands.forEach { MatrixLabel(it, bandWidth, largeType) }
                 }
                 insightModes.forEachIndexed { index, mode ->
                     Row(Modifier.fillMaxWidth().height(34.dp)
                         .background(if (index % 2 == 0) Color(0xFF171D20) else Color(0xFF242B2F)),
                         verticalAlignment = Alignment.CenterVertically) {
-                        MatrixLabel(mode, modeWidth)
+                        MatrixLabel(mode, modeWidth, largeType)
                         insightBands.forEach { band ->
                             val cell = summary.cells["$mode|$band"]
                             val label = when { cell?.confirmed == true -> "C"; cell?.worked == true -> "W"; else -> "—" }
@@ -1349,7 +1352,8 @@ private fun String.confirmationColor() = if (uppercase() in setOf("Y", "V")) Hea
                             Box(Modifier.width(bandWidth).height(27.dp).padding(horizontal = 2.dp, vertical = 1.dp)
                                 .background(color, RoundedCornerShape(2.dp)), contentAlignment = Alignment.Center) {
                                 Text(label, color = if (label == "—") Muted else Color.White,
-                                    fontWeight = FontWeight.Black, fontSize = 11.sp)
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = if (largeType) PREVIOUS_QSO_MATRIX_CELL_FONT_SP.sp else 11.sp)
                             }
                         }
                     }
@@ -1359,8 +1363,10 @@ private fun String.confirmationColor() = if (uppercase() in setOf("Y", "V")) Hea
     }
 }
 
-@Composable private fun MatrixLabel(value: String, width: Dp) = Box(Modifier.width(width).fillMaxHeight(), contentAlignment = Alignment.Center) {
-    Text(value, color = Ink, fontWeight = FontWeight.Bold, fontSize = 10.sp, maxLines = 1)
+@Composable private fun MatrixLabel(value: String, width: Dp, largeType: Boolean = false) =
+    Box(Modifier.width(width).fillMaxHeight(), contentAlignment = Alignment.Center) {
+    Text(value, color = Ink, fontWeight = FontWeight.Bold,
+        fontSize = if (largeType) PREVIOUS_QSO_MATRIX_LABEL_FONT_SP.sp else 10.sp, maxLines = 1)
 }
 
 private sealed class PreviousQsoLoad {
@@ -1391,10 +1397,19 @@ private fun AndroidDXSpot.previousQsoRecord(cty: CtyController): AndroidCallbook
 }
 
 @Composable private fun PreviousQsosDialog(record: AndroidCallbookRecord, database: QsoDatabase,
-    wavelog: WavelogController, dismiss: () -> Unit) {
+    wavelog: WavelogController, callbook: CallbookController, dismiss: () -> Unit) {
     val stationScope = configuredStationScope(wavelog)
     var retry by remember(record.callsign, stationScope) { mutableIntStateOf(0) }
     var load by remember(record.callsign, stationScope) { mutableStateOf<PreviousQsoLoad>(PreviousQsoLoad.Loading) }
+    var liveProfile by remember(record.callsign) { mutableStateOf<AndroidCallbookRecord?>(null) }
+    var profileLoading by remember(record.callsign) { mutableStateOf(true) }
+    LaunchedEffect(record.callsign, callbook.qrzEnabled, callbook.hamQthEnabled) {
+        profileLoading = true
+        callbook.lookup(record.callsign) { result ->
+            liveProfile = result
+            profileLoading = false
+        }
+    }
     LaunchedEffect(record, stationScope, retry) {
         load = PreviousQsoLoad.Loading
         load = try {
@@ -1424,58 +1439,140 @@ private fun AndroidDXSpot.previousQsoRecord(cty: CtyController): AndroidCallbook
         )
         is PreviousQsoLoad.Ready -> {
             val insight = result.insight
-            if (insight.history.total == 0) AlertDialog(
-                onDismissRequest = dismiss,
-                title = { Text(insight.record.callsign, color = Amber, fontWeight = FontWeight.Black) },
-                text = { Text("This station was not worked before in the configured log.") },
-                confirmButton = { Button(dismiss) { Text("CLOSE") } },
-            ) else PreviousQsosWorkedDialog(insight, dismiss)
+            PreviousQsosWorkedDialog(insight, mergeCallbookRecords(liveProfile, insight.record), profileLoading, dismiss)
         }
     }
 }
 
-@Composable private fun PreviousQsosWorkedDialog(insight: StationInsight, dismiss: () -> Unit) {
+@Composable private fun PreviousQsosWorkedDialog(insight: StationInsight, profile: AndroidCallbookRecord,
+    profileLoading: Boolean, dismiss: () -> Unit) {
     val call = insight.record.callsign
-    val facts = listOf(
-        "NAME" to insight.record.name, "QTH" to insight.record.qth,
-        "DXCC" to insight.record.country.ifBlank { insight.record.dxcc }, "GRID" to insight.record.grid,
-    ).filter { it.second.isNotBlank() }
+    val workedBefore = insight.history.total > 0
     Dialog(onDismissRequest = dismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxWidth(.94f).fillMaxHeight(.88f).widthIn(max = 1120.dp), color = Panel,
-            shape = RoundedCornerShape(12.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Healthy)) {
-            Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.AutoMirrored.Outlined.List, null, tint = Healthy)
-                    Spacer(Modifier.width(8.dp))
-                    Text("PREVIOUS QSOs · $call", color = Healthy, fontWeight = FontWeight.Black, fontSize = 20.sp)
-                    Spacer(Modifier.weight(1f))
-                    IconButton(dismiss, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Close, "Close previous QSOs") }
+        BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            val widthFraction = if (maxWidth >= 900.dp) PREVIOUS_QSO_DIALOG_WIDTH_FRACTION else .92f
+            Surface(Modifier.fillMaxWidth(widthFraction).fillMaxHeight(.90f).widthIn(max = 840.dp)
+                .testTag("previous_qso_dialog"), color = Panel, shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Healthy)) {
+                Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.AutoMirrored.Outlined.List, null, tint = Healthy, modifier = Modifier.size(34.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Text("PREVIOUS QSOs · $call", color = Healthy, fontWeight = FontWeight.Black,
+                            fontSize = PREVIOUS_QSO_TITLE_FONT_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.weight(1f))
+                        IconButton(dismiss, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Close, "Close previous QSOs") }
+                    }
+                    Surface(Modifier.fillMaxWidth(), color = Healthy.copy(alpha = .10f), shape = RoundedCornerShape(5.dp)) {
+                        Text(if (workedBefore)
+                            "${insight.history.total} ${if (insight.history.total == 1) "time" else "times"} worked before · newest ${insight.history.rows.size} shown"
+                            else "NOT WORKED BEFORE · LIVE CALLBOOK PROFILE AND DXCC STATUS",
+                            color = Healthy, fontWeight = FontWeight.Black, fontSize = PREVIOUS_QSO_SUMMARY_FONT_SP.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp))
+                    }
+                    Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (workedBefore) {
+                            PreviousQsoHistoryPanel(insight, Modifier.fillMaxHeight().weight(2f))
+                            PreviousQsoProfilePanel(profile, profileLoading, Modifier.fillMaxHeight().weight(1f))
+                        } else {
+                            PreviousQsoProfilePanel(profile, profileLoading, Modifier.fillMaxSize(), wide = true)
+                        }
+                    }
+                    Text("BAND / MODE MATRIX", color = Healthy, fontWeight = FontWeight.Black,
+                        fontSize = PREVIOUS_QSO_SECTION_FONT_SP.sp)
+                    DxccMatrix(insight.dxcc, Modifier.fillMaxWidth(), largeType = true)
                 }
-                Surface(Modifier.fillMaxWidth(), color = Healthy.copy(alpha = .10f), shape = RoundedCornerShape(5.dp)) {
-                    Text("${insight.history.total} ${if (insight.history.total == 1) "time" else "times"} worked before · newest ${insight.history.rows.size} shown",
-                        color = Healthy, fontWeight = FontWeight.Black, fontSize = 15.sp,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp))
-                }
-                if (facts.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    facts.forEach { (label, value) -> PreviousQsoFact(label, value) }
-                }
-                CallsignHistoryTable(insight, Modifier.fillMaxWidth().weight(1f), showSummary = false)
-                Text("BAND / MODE MATRIX", color = Healthy, fontWeight = FontWeight.Black, fontSize = 14.sp)
-                DxccMatrix(insight.dxcc, Modifier.fillMaxWidth().height(250.dp))
             }
         }
     }
 }
 
-@Composable private fun PreviousQsoFact(label: String, value: String) {
-    Surface(color = Raised, shape = RoundedCornerShape(5.dp),
+@Composable private fun PreviousQsoHistoryPanel(insight: StationInsight, modifier: Modifier = Modifier) {
+    val columns = listOf(
+        InsightColumn("DATE / UTC", 1.35f), InsightColumn("FREQUENCY", 1.05f),
+        InsightColumn("BAND / MODE", 1f), InsightColumn("RST S / R", .85f), InsightColumn("QSL / LoTW", .9f),
+    )
+    Surface(modifier, color = Color(0xFF161C20), shape = RoundedCornerShape(7.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF465159))) {
-        Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(label, color = Muted, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-            Text(value, color = Healthy, fontWeight = FontWeight.Black, fontSize = 13.sp, maxLines = 1)
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().height(36.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
+                columns.forEach { column -> PreviousQsoHistoryCell(column.label, column.weight, header = true) }
+            }
+            LazyColumn(Modifier.fillMaxSize()) {
+                items(insight.history.rows.size, key = { insight.history.rows[it].id }) { index ->
+                    val qso = insight.history.rows[index]
+                    val time = Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC)
+                    Row(Modifier.fillMaxWidth().height(46.dp)
+                        .background(if (index % 2 == 0) Color(0xFF1B2227) else Color(0xFF252D32)),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        PreviousQsoHistoryCell(time.format(DateTimeFormatter.ofPattern("dd/MM/yy HH:mm")), columns[0].weight, bold = true)
+                        PreviousQsoHistoryCell(formatSpotFrequency(qso.frequencyHz), columns[1].weight, color = Amber)
+                        PreviousQsoHistoryCell("${qso.band.ifBlank { bandForFrequency(qso.frequencyHz) }} / ${qso.submode.ifBlank { qso.mode }}",
+                            columns[2].weight, color = Healthy, bold = true)
+                        PreviousQsoHistoryCell("${qso.rstSent.ifBlank { "—" }} / ${qso.rstReceived.ifBlank { "—" }}", columns[3].weight)
+                        PreviousQsoHistoryCell("${qso.qslReceived.confirmationGlyph()} / ${qso.lotwReceived.confirmationGlyph()}", columns[4].weight)
+                    }
+                }
+            }
         }
     }
+}
+
+@Composable private fun RowScope.PreviousQsoHistoryCell(value: String, weight: Float, color: Color = Ink,
+    bold: Boolean = false, header: Boolean = false) {
+    Box(Modifier.weight(weight).fillMaxHeight().border(.5.dp, Color(0xFF465159)).padding(horizontal = 4.dp),
+        contentAlignment = Alignment.Center) {
+        Text(value, color = if (header) Muted else color,
+            fontWeight = if (header || bold) FontWeight.Black else FontWeight.Medium,
+            fontSize = PREVIOUS_QSO_BODY_FONT_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable private fun PreviousQsoProfilePanel(profile: AndroidCallbookRecord, loading: Boolean,
+    modifier: Modifier = Modifier, wide: Boolean = false) {
+    Surface(modifier.testTag("previous_qso_profile"), color = Color(0xFF161C20), shape = RoundedCornerShape(7.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF465159))) {
+        if (wide) Row(Modifier.fillMaxSize().padding(10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            RemoteCallbookImage(profile.imageUrl, profile.callsign, profile.source,
+                Modifier.width(360.dp).fillMaxHeight(), largeType = true)
+            PreviousQsoProfileDetails(profile, loading, Modifier.weight(1f).fillMaxHeight())
+        } else Column(Modifier.fillMaxSize().padding(10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(if (loading) "CALLBOOK · LOOKING UP…" else "CALLBOOK · ${profile.source.ifBlank { "LOG / CTY.DAT" }}",
+                color = if (loading) Amber else Healthy, fontWeight = FontWeight.Black, fontSize = 15.sp)
+            RemoteCallbookImage(profile.imageUrl, profile.callsign, profile.source,
+                Modifier.fillMaxWidth().height(164.dp), largeType = true)
+            PreviousQsoProfileDetails(profile, loading, Modifier.fillMaxWidth().weight(1f), showSource = false)
+        }
+    }
+}
+
+@Composable private fun PreviousQsoProfileDetails(profile: AndroidCallbookRecord, loading: Boolean,
+    modifier: Modifier = Modifier, showSource: Boolean = true) {
+    Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        if (showSource) Text(if (loading) "CALLBOOK · LOOKING UP…" else "CALLBOOK · ${profile.source.ifBlank { "LOG / CTY.DAT" }}",
+            color = if (loading) Amber else Healthy, fontWeight = FontWeight.Black, fontSize = 15.sp)
+        Text(profile.name.ifBlank { profile.callsign }, color = Ink, fontWeight = FontWeight.Black,
+            fontSize = PREVIOUS_QSO_SECTION_FONT_SP.sp)
+        PreviousQsoProfileLine("CALL", profile.callsign)
+        PreviousQsoProfileLine("QTH", listOf(profile.address, profile.qth, profile.postalCode, profile.country)
+            .filter(String::isNotBlank).distinct().joinToString(" · "))
+        PreviousQsoProfileLine("GRID", profile.grid)
+        PreviousQsoProfileLine("STATE", profile.state)
+        PreviousQsoProfileLine("ENTITY", listOf(profile.country,
+            profile.dxcc.takeIf(String::isNotBlank)?.let { "DXCC $it" }.orEmpty(), profile.continent)
+            .filter(String::isNotBlank).distinct().joinToString(" · "))
+        PreviousQsoProfileLine("ZONES", listOf(profile.cqZone.takeIf(String::isNotBlank)?.let { "CQ $it" }.orEmpty(),
+            profile.ituZone.takeIf(String::isNotBlank)?.let { "ITU $it" }.orEmpty()).filter(String::isNotBlank).joinToString(" · "))
+        PreviousQsoProfileLine("E-MAIL", profile.email)
+        PreviousQsoProfileLine("BORN", profile.born)
+    }
+}
+
+@Composable private fun PreviousQsoProfileLine(label: String, value: String) {
+    if (value.isBlank()) return
+    Text("$label  $value", color = Ink, fontWeight = FontWeight.SemiBold,
+        fontSize = PREVIOUS_QSO_BODY_FONT_SP.sp, lineHeight = 21.sp)
 }
 
 private data class SpotColumn(val label: String, val width: Dp, val mono: Boolean = false)
@@ -1550,7 +1647,8 @@ private fun spotStatusColor(status: String?): Color = when (status) {
         Text(value.ifBlank { "—" }, color = if (value.isBlank()) Muted.copy(alpha = .55f) else color,
             fontFamily = if (column.mono) FontFamily.Monospace else FontFamily.Default,
             fontWeight = if (header || bold) FontWeight.Black else FontWeight.Medium,
-            fontSize = if (header) 11.sp else 12.sp, maxLines = 1, softWrap = false,
+            fontSize = if (header) LIVE_SPOT_HEADER_FONT_SP.sp else LIVE_SPOT_ROW_FONT_SP.sp,
+            maxLines = 1, softWrap = false,
             overflow = TextOverflow.Ellipsis)
     }
 }
@@ -2277,13 +2375,13 @@ private fun modeCode(mode: String) = when (mode.uppercase()) { "LSB" -> "1"; "US
 private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
 
 @Composable private fun DXScreen(neuralDx: NeuralDxController, features: FeatureController, database: QsoDatabase,
-    wavelog: WavelogController, cty: CtyController, app: AppController, send: (String) -> Unit) {
+    wavelog: WavelogController, callbook: CallbookController, cty: CtyController, app: AppController, send: (String) -> Unit) {
     var previousQsoRecord by remember { mutableStateOf<AndroidCallbookRecord?>(null) }
     NeuralDxScreen(neuralDx, features, database, wavelog, cty, app, send) { spot ->
         previousQsoRecord = spot.previousQsoRecord(cty)
     }
     previousQsoRecord?.let { record ->
-        PreviousQsosDialog(record, database, wavelog) { previousQsoRecord = null }
+        PreviousQsosDialog(record, database, wavelog, callbook) { previousQsoRecord = null }
     }
 }
 
@@ -2292,7 +2390,8 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
         trailingContent = { Text(trailing, color = if (alert) Hold else Muted) }, colors = ListItemDefaults.colors(containerColor = Color.Transparent))
 }
 
-@Composable private fun LogbookScreen(state: RadioState, database: QsoDatabase, wavelog: WavelogController, app: AppController) {
+@Composable private fun LogbookScreen(state: RadioState, database: QsoDatabase, wavelog: WavelogController,
+    callbook: CallbookController, app: AppController) {
     var showFilters by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf(LogbookFilter()) }
     var applied by remember { mutableStateOf(LogbookFilter()) }
@@ -2389,7 +2488,7 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                 }, onDismiss = { showFilters = false })
     }
     previousQsoRecord?.let { record ->
-        PreviousQsosDialog(record, database, wavelog) { previousQsoRecord = null }
+        PreviousQsosDialog(record, database, wavelog, callbook) { previousQsoRecord = null }
     }
 }
 
@@ -2521,10 +2620,10 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
                                 .format(DateTimeFormatter.ofPattern("dd/MM/yy HH:mm")), column.width)
                             LogbookColumn.CALLSIGN -> LogbookCell(qso.callsign, column.width, Healthy, true,
                                 onClick = { previousQsos(qso) }, actionLabel = "Previous QSOs for ${qso.callsign}")
-                            LogbookColumn.MODE -> LogbookCell(qso.submode.ifBlank { qso.mode }, column.width)
-                            LogbookColumn.RST_SENT -> LogbookCell(qso.rstSent, column.width)
-                            LogbookColumn.RST_RECEIVED -> LogbookCell(qso.rstReceived, column.width)
-                            LogbookColumn.BAND -> LogbookCell(qso.band, column.width)
+                            LogbookColumn.MODE -> LogbookCell(qso.submode.ifBlank { qso.mode }, column.width, centered = true)
+                            LogbookColumn.RST_SENT -> LogbookCell(qso.rstSent, column.width, centered = true)
+                            LogbookColumn.RST_RECEIVED -> LogbookCell(qso.rstReceived, column.width, centered = true)
+                            LogbookColumn.BAND -> LogbookCell(qso.band, column.width, centered = true)
                             LogbookColumn.FREQUENCY -> LogbookCell("${qso.frequencyHz / 1_000} kHz", column.width)
                             LogbookColumn.GRID -> LogbookCell(qso.grid, column.width)
                             LogbookColumn.QSL -> LogbookQslCell(qso.qslSent, qso.qslReceived, column.width)
@@ -2532,7 +2631,7 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
                             LogbookColumn.LOTW -> LogbookQslCell(qso.lotwSent, qso.lotwReceived, column.width)
                             LogbookColumn.CLUBLOG -> LogbookQslCell(qso.clublogSent, qso.clublogReceived, column.width)
                             LogbookColumn.QRZ -> LogbookQslCell(qso.qrzSent, qso.qrzReceived, column.width)
-                            LogbookColumn.DXCC -> LogbookCell(qso.country.ifBlank { qso.dxcc }, column.width, Healthy)
+                            LogbookColumn.DXCC -> LogbookCell(qso.country.ifBlank { qso.dxcc }, column.width, Healthy, centered = true)
                             LogbookColumn.STATE -> LogbookCell(qso.state, column.width)
                             LogbookColumn.COUNTY -> LogbookCell(qso.county, column.width)
                             LogbookColumn.IOTA -> LogbookCell(qso.iota, column.width, Healthy)
@@ -2553,7 +2652,7 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
     Row(Modifier.width(width.dp).fillMaxHeight().then(if (column != null) Modifier.clickable { sort(column) } else Modifier)
         .border(width = 0.5.dp, color = Color(0xFF515A60)).padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = if (column == null) Arrangement.Center else Arrangement.spacedBy(3.dp)) {
+        horizontalArrangement = Arrangement.Center) {
         Text(label, color = Ink, fontWeight = FontWeight.Black, fontSize = 17.sp, maxLines = 1)
         if (column != null && filter.sort == column) Icon(
             if (filter.direction == LogbookSortDirection.DESCENDING) Icons.Outlined.ArrowDownward else Icons.Outlined.ArrowUpward,
@@ -2562,13 +2661,13 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
 }
 
 @Composable private fun RowScope.LogbookCell(value: String, width: Int, color: Color = Ink, bold: Boolean = false,
-    onClick: (() -> Unit)? = null, actionLabel: String = "") {
+    centered: Boolean = false, onClick: (() -> Unit)? = null, actionLabel: String = "") {
     val interaction = if (onClick == null) Modifier else Modifier
         .semantics { contentDescription = actionLabel }
         .clickable(role = Role.Button, onClick = onClick)
     Box(Modifier.width(width.dp).height(LOGBOOK_ROW_HEIGHT_DP.dp).border(width = 0.5.dp, color = Color(0xFF39434A))
         .then(interaction).padding(horizontal = 6.dp),
-        contentAlignment = Alignment.CenterStart) {
+        contentAlignment = if (centered) Alignment.Center else Alignment.CenterStart) {
         Text(value.ifBlank { "—" }, color = if (value.isBlank()) Muted.copy(alpha = .55f) else color,
             fontWeight = if (bold) FontWeight.Black else FontWeight.Medium, fontSize = LOGBOOK_ROW_FONT_SP.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
