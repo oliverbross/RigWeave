@@ -1593,6 +1593,7 @@ private data class SpotColumn(val label: String, val width: Dp, val mono: Boolea
             Row(Modifier.fillMaxWidth().height(36.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
                 columns.forEach { SpotTableCell(it.label, it, header = true) }
             }
+            HorizontalDivider(color = Color(0xFF303940))
             if (spots.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 Text("No live spots yet · configured clusters connect automatically", color = Muted)
             } else LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
@@ -1620,6 +1621,7 @@ private data class SpotColumn(val label: String, val width: Dp, val mono: Boolea
                         SpotTableCell(status?.dxccStatus.orEmpty(), columns[10], spotStatusColor(status?.dxccStatus))
                         SpotTableCell(spot.comment, columns[11])
                     }
+                    HorizontalDivider(color = Color(0xFF303940))
                 }
             }
         }
@@ -1641,8 +1643,7 @@ private fun spotStatusColor(status: String?): Color = when (status) {
     val interaction = if (onClick == null) Modifier else Modifier
         .semantics { contentDescription = actionLabel }
         .clickable(role = Role.Button, onClick = onClick)
-    Box(Modifier.width(column.width).fillMaxHeight().border(.5.dp, Color(0xFF3D474D))
-        .then(interaction).padding(horizontal = 4.dp),
+    Box(Modifier.width(column.width).fillMaxHeight().then(interaction).padding(horizontal = 4.dp),
         contentAlignment = if (column.centered) Alignment.Center else Alignment.CenterStart) {
         Text(value.ifBlank { "—" }, color = if (value.isBlank()) Muted.copy(alpha = .55f) else color,
             fontFamily = if (column.mono) FontFamily.Monospace else FontFamily.Default,
