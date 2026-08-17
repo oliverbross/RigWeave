@@ -24,6 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import org.json.JSONObject
+import org.json.JSONArray
 import java.io.File
 import java.io.FileInputStream
 import java.io.RandomAccessFile
@@ -35,6 +36,9 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.sqrt
+import kotlin.math.asin
+import kotlin.math.log10
+import kotlin.math.PI
 
 class PanadapterController(
     private val context: Context,
@@ -42,6 +46,11 @@ class PanadapterController(
     private val radioState: () -> RadioState,
     private val sendCat: (String) -> Unit,
 ) {
+    private data class ProvenCapture(
+        val record: AudioRecord,
+        val proof: PanadapterRouteProof,
+        val minimumBytes: Int,
+    )
     private data class NativeBuffer(
         val meta: LongArray,
         val metrics: FloatArray,
@@ -50,6 +59,7 @@ class PanadapterController(
         val peak: FloatArray,
         val waterfallPixels: IntArray,
         var waterfallReady: Boolean = false,
+        var analysis: PanadapterAnalysisResult? = null,
     )
 
     private val audioManager = context.getSystemService(AudioManager::class.java)
@@ -70,6 +80,7 @@ class PanadapterController(
     private var performancePublishedFrames = 0
     private var performanceWaterfallRows = 0
     private var waterfallSmoothedPower = FloatArray(0)
+    private val displayAnalyzer = PanadapterDisplayAnalyzer()
     private var palette = IntArray(256)
     private var wantedLive = false
     private var pendingQsy: PanadapterQsy? = null
@@ -91,6 +102,8 @@ class PanadapterController(
     private var calibrationPeakMin = Int.MAX_VALUE
     private var calibrationPeakMax = Int.MIN_VALUE
     private var calibrationAwaitSequence = Long.MAX_VALUE
+    private var firstToneCandidate: PanadapterCalibrationCandidate? = null
+    private var completedToneEvidence: List<PanadapterCalibrationCandidate> = emptyList()
     private var levelCalibrationKnownDbm = 0f
     private var levelCalibrationUncertaintyDb = 0f
     private var levelCalibrationNotes = ""
@@ -129,12 +142,15 @@ class PanadapterController(
     var supportExportPath by mutableStateOf(""); private set
     var recordingStatus by mutableStateOf("Not recording"); private set
     var lastRecordingPath by mutableStateOf(""); private set
+    var rejectedFormatRecordingPath by mutableStateOf(""); private set
     var calibrationStatus by mutableStateOf("Calibration idle"); private set
     var calibrationCandidate by mutableStateOf<PanadapterCalibrationCandidate?>(null); private set
+    var spurCaptures by mutableStateOf<Map<String, PanadapterSpurCapture>>(emptyMap()); private set
     var levelCalibrationCandidate by mutableStateOf<PanadapterLevelCalibrationCandidate?>(null); private set
     var publishedFps by mutableStateOf(0f); private set
     var waterfallFps by mutableStateOf(0f); private set
     var latencyEstimateMs by mutableStateOf(0f); private set
+    var displayMetrics by mutableStateOf(PanadapterDisplayMetrics()); private set
     val inputCandidates: List<AudioRouteDescriptor> get() = audio.inputCandidates
     val selectedInput: AudioRouteDescriptor? get() = audio.selectedRx
 
@@ -164,6 +180,31 @@ class PanadapterController(
     fun hasRecordPermission(): Boolean = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     fun selectInput(sessionId: Int) = audio.selectRxInput(sessionId)
 
+    fun setAutoDisplay(enabled: Boolean) {
+        updateSettings(settings.copy(autoLevel = enabled), restart = false)
+        if (enabled) displayAnalyzer.reset()
+        clearWaterfall()
+    }
+
+    fun iqState(): PanadapterIqState {
+        val current = frame ?: return PanadapterIqState.UNVERIFIED
+        if (!current.validStereo) return PanadapterIqState.INVALID
+        return when {
+            settings.iqCorrectionEnabled && settings.calibrationDeviceKey == routeProof.requestedDevice &&
+                settings.calibrationRate == routeProof.physicalRate -> PanadapterIqState.CALIBRATED
+            completedToneEvidence.isNotEmpty() -> PanadapterIqState.VERIFIED_UNCALIBRATED
+            else -> PanadapterIqState.CHANNELS_HEALTHY_ORIENTATION_UNVERIFIED
+        }
+    }
+
+    fun calibrationState(): PanadapterCalibrationState = when {
+        !settings.iqCorrectionEnabled && !settings.measuredFlatnessEnabled && !settings.levelCalibrationEnabled -> PanadapterCalibrationState.UNCALIBRATED
+        (settings.iqCorrectionEnabled && (settings.calibrationDeviceKey != routeProof.requestedDevice || settings.calibrationRate != routeProof.physicalRate)) ||
+            (settings.measuredFlatnessEnabled && !measuredFlatnessActive()) ||
+            (settings.levelCalibrationEnabled && !levelCalibrationActive()) -> PanadapterCalibrationState.INVALID_FOR_PATH
+        else -> PanadapterCalibrationState.DEVICE_BOUND
+    }
+
     @SuppressLint("MissingPermission") // RECORD_AUDIO is checked immediately below; builder failures are caught per candidate.
     fun start() {
         if (running.get() || lifecycle == PanadapterLifecycle.STARTING) return
@@ -184,11 +225,38 @@ class PanadapterController(
         }
         lifecycle = PanadapterLifecycle.STARTING; status = "Negotiating selected stereo USB route"
         requestedDeviceId = device.id; requestedDeviceKey = selected.stableKey
-        val rates = buildList { add(settings.requestedRate); if (settings.requestedRate == 96_000 && settings.allow48kFallback) add(48_000) }.distinct()
-        var chosen: AudioRecord? = null
-        var chosenRate = 0
-        var chosenMinimum = 0
-        var preferred = false
+        routeProof = PanadapterRouteProof(
+            requestedDevice = selected.stableKey,
+            preferredAccepted = true,
+            actualDevice = selected.stableKey,
+            requestedRate = settings.requestedRate,
+            activeDevice = selected.stableKey,
+            stateOverride = PanadapterFormatState.ROUTE_PROVEN_FORMAT_PENDING,
+        )
+        Thread({
+            val result = negotiateProvenCapture(selected, device)
+            main.post {
+                if (lifecycle != PanadapterLifecycle.STARTING) {
+                    result?.record?.let { runCatching { it.stop() }; it.release() }
+                    return@post
+                }
+                if (result == null) {
+                    audio.releaseAudio("PANADAPTER")
+                    lifecycle = PanadapterLifecycle.ERROR
+                    if (routeProof.state == PanadapterFormatState.ROUTE_PROVEN_FORMAT_PENDING)
+                        status = "FORMAT UNPROVEN · active device format unavailable or converted"
+                } else activateProvenCapture(selected, result)
+            }
+        }, "RigWeave-IQ-Format-Proof").apply { start() }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun negotiateProvenCapture(selected: AudioRouteDescriptor, device: AudioDeviceInfo): ProvenCapture? {
+        val rates = buildList {
+            add(settings.requestedRate)
+            if (settings.requestedRate == 96_000 && settings.allow48kFallback) add(48_000)
+        }.distinct()
+        var lastProof = routeProof
         for (rate in rates) {
             val minimum = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT)
             if (minimum <= 0) continue
@@ -199,59 +267,144 @@ class PanadapterController(
                     .setBufferSizeInBytes(max(minimum * 4, rate / 5 * 4)).build()
             }.getOrNull() ?: continue
             if (candidate.state != AudioRecord.STATE_INITIALIZED) { candidate.release(); continue }
-            preferred = candidate.setPreferredDevice(device)
+            val preferred = candidate.setPreferredDevice(device)
             if (!preferred) { candidate.release(); continue }
-            chosen = candidate; chosenRate = rate; chosenMinimum = minimum; break
+            candidate.addOnRoutingChangedListener(routeListener, main)
+            val started = runCatching { candidate.startRecording(); true }.getOrElse { false }
+            if (!started) { candidate.removeOnRoutingChangedListener(routeListener); candidate.release(); continue }
+            val active = waitForActiveConfiguration(candidate)
+            val actual = candidate.routedDevice
+            val activeDevice = if (Build.VERSION.SDK_INT >= 29) active?.audioDevice else actual
+            fun stableKey(target: AudioDeviceInfo?): String = target?.let { info ->
+                audio.inputCandidates.firstOrNull { it.sessionId == info.id }?.stableKey
+            } ?: "None"
+            val client = if (Build.VERSION.SDK_INT >= 29) active?.clientFormat else candidate.format
+            val physical = if (Build.VERSION.SDK_INT >= 29) active?.format else null
+            val proof = PanadapterRouteProof(
+                requestedDevice = selected.stableKey,
+                preferredAccepted = preferred,
+                actualDevice = stableKey(actual),
+                requestedRate = settings.requestedRate,
+                configuredRate = candidate.sampleRate,
+                configuredChannels = candidate.channelCount,
+                encoding = candidate.audioFormat,
+                bufferFrames = minimum / 4,
+                clientFormat = client?.toString() ?: "Unavailable",
+                deviceFormat = physical?.toString() ?: "Unavailable",
+                audioSource = candidate.audioSource,
+                sessionId = candidate.audioSessionId,
+                clientRate = client?.sampleRate ?: 0,
+                clientChannels = client?.channelCount ?: 0,
+                clientChannelMask = client?.channelMask ?: 0,
+                clientEncoding = client?.encoding ?: 0,
+                deviceRate = physical?.sampleRate ?: 0,
+                deviceChannels = physical?.channelCount ?: 0,
+                deviceChannelMask = physical?.channelMask ?: 0,
+                deviceEncoding = physical?.encoding ?: 0,
+                activeConfigurationAvailable = active != null,
+                activeDevice = stableKey(activeDevice),
+                clientSilenced = if (Build.VERSION.SDK_INT >= 29) active?.isClientSilenced ?: false else false,
+                clientEffects = if (Build.VERSION.SDK_INT >= 29) active?.clientEffects?.joinToString { it.name } ?: "Unavailable" else "Unavailable",
+                deviceEffects = if (Build.VERSION.SDK_INT >= 29) active?.effects?.joinToString { it.name } ?: "Unavailable" else "Unavailable",
+            )
+            lastProof = proof
+            if (proof.verified && proof.physicalRate == rate) {
+                return ProvenCapture(candidate, proof.copy(configuredRate = proof.physicalRate), minimum)
+            }
+            if (proof.state == PanadapterFormatState.RESAMPLED_48_TO_96) retainRejectedFormatSample(candidate, proof)
+            candidate.removeOnRoutingChangedListener(routeListener)
+            runCatching { candidate.stop() }
+            candidate.release()
+            if (proof.state == PanadapterFormatState.RESAMPLED_48_TO_96 && rate == 96_000) continue
+            if (rate == 96_000 && settings.allow48kFallback) continue
+            break
         }
-        val record = chosen ?: run {
-            audio.releaseAudio("PANADAPTER"); lifecycle = PanadapterLifecycle.ERROR
-            status = "Selected input could not initialize as 96/48 kHz stereo PCM"; return
+        main.post {
+            routeProof = lastProof
+            status = when (lastProof.state) {
+                PanadapterFormatState.RESAMPLED_48_TO_96 -> "FORMAT: DEVICE 48 kHz / CLIENT 96 kHz — RESAMPLED; 96 kHz span rejected"
+                PanadapterFormatState.UNSUPPORTED_MONO_OR_CONVERTED_CHANNEL_PATH -> "FORMAT REJECTED · mono or converted channel path"
+                else -> "FORMAT UNPROVEN · no direct stereo 96/48 kHz device path"
+            }
         }
-        val configured = settings.copy(requestedRate = chosenRate)
-        if (!NativePanadapter.configure(nativeHandle, chosenRate, configured.fftSize, configured.overlapPercent,
+        return null
+    }
+
+    private fun retainRejectedFormatSample(record: AudioRecord, proof: PanadapterRouteProof) {
+        val targetFrames = (proof.clientRate / 2).coerceAtLeast(4_096)
+        val samples = ShortArray(minOf(targetFrames * 2, 96_000))
+        var count = 0
+        while (count < samples.size) {
+            val read = record.read(samples, count, samples.size - count, AudioRecord.READ_BLOCKING)
+            if (read <= 0) break
+            count += read
+        }
+        if (count < 4_096) return
+        runCatching {
+            val directory = File(context.filesDir, "panadapter/format-proof").apply { mkdirs() }
+            val stem = "client-${proof.clientRate}-device-${proof.deviceRate}-${System.currentTimeMillis()}"
+            val wav = File(directory, "$stem.wav")
+            RandomAccessFile(wav, "rw").use { output ->
+                val frames = count / 2
+                output.write(wavHeader(proof.clientRate, frames.toLong() * 4L))
+                val bytes = ByteBuffer.allocate(count * 2).order(ByteOrder.LITTLE_ENDIAN)
+                for (index in 0 until count) bytes.putShort(samples[index])
+                output.write(bytes.array())
+            }
+            File(directory, "$stem.json").writeText(JSONObject()
+                .put("requested_rate", proof.requestedRate).put("client_rate", proof.clientRate)
+                .put("device_rate", proof.deviceRate).put("client_channels", proof.clientChannels)
+                .put("device_channels", proof.deviceChannels).put("format_state", proof.state.name)
+                .put("frames", count / 2).put("wav", wav.name).toString(2))
+            main.post { rejectedFormatRecordingPath = wav.absolutePath }
+        }
+    }
+
+    private fun waitForActiveConfiguration(record: AudioRecord): android.media.AudioRecordingConfiguration? {
+        if (Build.VERSION.SDK_INT < 29) return null
+        val deadline = SystemClock.elapsedRealtime() + 800L
+        do {
+            val direct = runCatching { record.activeRecordingConfiguration }.getOrNull()
+            if (direct != null) return direct
+            val listed = runCatching { audioManager.activeRecordingConfigurations }
+                .getOrNull()?.firstOrNull { it.clientAudioSessionId == record.audioSessionId }
+            if (listed != null) return listed
+            SystemClock.sleep(20L)
+        } while (SystemClock.elapsedRealtime() < deadline)
+        return null
+    }
+
+    private fun activateProvenCapture(selected: AudioRouteDescriptor, result: ProvenCapture) {
+        val record = result.record
+        val proof = result.proof
+        val physicalRate = proof.physicalRate
+        routeProof = proof
+        val configured = settings.copy(requestedRate = physicalRate)
+        if (!NativePanadapter.configure(nativeHandle, physicalRate, configured.fftSize, configured.overlapPercent,
                 configured.window.nativeValue, configured.displayFloorDb, configured.displayTopDb,
                 configured.attack, configured.release, configured.averageFrames, configured.peakHold,
                 configured.peakDecayDbPerSecond, configured.genericKx3Flatness, configured.swapIq,
                 configured.invertI, configured.invertQ, configured.conjugate, configured.iTrim, configured.qTrim,
                 configured.zoomDecimation, configured.zoomOffsetHz)) {
-            record.release(); audio.releaseAudio("PANADAPTER"); lifecycle = PanadapterLifecycle.ERROR
-            status = "Native DSP rejected the selected configuration"; return
+            record.removeOnRoutingChangedListener(routeListener); runCatching { record.stop() }; record.release()
+            audio.releaseAudio("PANADAPTER"); lifecycle = PanadapterLifecycle.ERROR
+            status = "Native DSP rejected the proven physical format"; return
         }
         NativePanadapter.setIqCorrection(nativeHandle, configured.iqAReal, configured.iqAImag,
             configured.iqBReal, configured.iqBImag,
-            configured.iqCorrectionEnabled && configured.calibrationDeviceKey == selected.stableKey && configured.calibrationRate == chosenRate)
-        buffers = Array(3) { NativeBuffer(LongArray(9), FloatArray(10), FloatArray(configured.fftSize),
+            configured.iqCorrectionEnabled && configured.calibrationDeviceKey == selected.stableKey && configured.calibrationRate == physicalRate)
+        buffers = Array(3) { NativeBuffer(LongArray(9), FloatArray(14), FloatArray(configured.fftSize),
             FloatArray(configured.fftSize), FloatArray(configured.fftSize), IntArray(waterfallWidth(configured.fftSize))) }
         rebuildWaterfall(configured.fftSize)
-        record.addOnRoutingChangedListener(routeListener, main)
         recorder = record
-        runCatching { record.startRecording() }.onFailure {
-            record.removeOnRoutingChangedListener(routeListener); record.release(); recorder = null
-            audio.releaseAudio("PANADAPTER"); lifecycle = PanadapterLifecycle.ERROR; status = "AudioRecord start failed: ${it.message}"; return
-        }
-        val actual = record.routedDevice
-        val channels = record.channelCount
-        val actualMatches = actual?.id == device.id
-        val active = if (Build.VERSION.SDK_INT >= 29) runCatching { record.activeRecordingConfiguration }.getOrNull() else null
-        routeProof = PanadapterRouteProof(
-            selected.stableKey, preferred, actual?.let { audio.inputCandidates.firstOrNull { row -> row.sessionId == it.id }?.stableKey } ?: "None",
-            settings.requestedRate, record.sampleRate, channels, record.audioFormat, chosenMinimum / 4,
-            active?.clientFormat?.toString() ?: record.format.toString(),
-            if (Build.VERSION.SDK_INT >= 29) active?.format?.toString() ?: "Unavailable" else "Unavailable on API ${Build.VERSION.SDK_INT}",
-            record.audioSource, record.audioSessionId,
-        )
-        if (!actualMatches || channels < 2 || record.sampleRate !in setOf(48_000, 96_000)) {
-            stop("Active route/format did not prove selected stereo 48/96 kHz I/Q")
-            lifecycle = PanadapterLifecycle.ERROR; return
-        }
         running.set(true); lifecycle = PanadapterLifecycle.LIVE
         performanceWindowNanos = System.nanoTime(); performancePublishedFrames = 0; performanceWaterfallRows = 0
         lastPublishedNanos = 0L; lastWaterfallNanos = 0L
         publishedFps = 0f; waterfallFps = 0f
-        status = "LIVE · ${selected.name} · ${record.sampleRate / 1000} kHz stereo · ${configured.fftSize} FFT"
+        status = "LIVE · ${selected.name} · TRUE ${physicalRate / 1000} kHz stereo · ${configured.fftSize} FFT"
         // The AudioRecord owns a generously sized internal buffer; bounded ~16.7 ms reads let
         // presentation hit 30 fps without changing the proven route, format, FFT or RF span.
-        val samples = ShortArray(record.sampleRate / 60 * 2)
+        val samples = ShortArray(physicalRate / 60 * 2)
         captureThread = Thread({ captureLoop(record, samples) }, "RigWeave-IQ-Capture").apply { start() }
     }
 
@@ -267,15 +420,31 @@ class PanadapterController(
         stopRecording()
         calibrating.set(false)
         levelCalibrating.set(false)
+        displayAnalyzer.reset()
+        displayMetrics = PanadapterDisplayMetrics()
+        routeProof = routeProof.copy(activeConfigurationAvailable = false,
+            stateOverride = if (lifecycle == PanadapterLifecycle.ROUTE_LOST) PanadapterFormatState.ROUTE_LOST else PanadapterFormatState.ROUTE_UNPROVEN)
         if (lifecycle != PanadapterLifecycle.ROUTE_LOST) lifecycle = PanadapterLifecycle.STOPPED
         status = reason
     }
 
     private fun failRoute(reason: String) {
         if (!running.get() && lifecycle != PanadapterLifecycle.STARTING) return
+        invalidateCalibrationAfterPhysicalRouteChange()
         lifecycle = PanadapterLifecycle.ROUTE_LOST
         stop(reason, keepWanted = true)
         lifecycle = PanadapterLifecycle.ROUTE_LOST
+    }
+
+    private fun invalidateCalibrationAfterPhysicalRouteChange() {
+        if (!settings.iqCorrectionEnabled && !settings.measuredFlatnessEnabled && !settings.levelCalibrationEnabled) return
+        settings = settings.copy(
+            calibrationDeviceKey = if (settings.iqCorrectionEnabled) "INVALID_AFTER_ROUTE_CHANGE" else settings.calibrationDeviceKey,
+            measuredFlatnessDeviceKey = if (settings.measuredFlatnessEnabled) "INVALID_AFTER_ROUTE_CHANGE" else settings.measuredFlatnessDeviceKey,
+            levelCalibrationDeviceKey = if (settings.levelCalibrationEnabled) "INVALID_AFTER_ROUTE_CHANGE" else settings.levelCalibrationDeviceKey,
+        )
+        prefs.edit().putString("panadapter_settings", settings.encode()).apply()
+        calibrationStatus = "Calibration invalidated: physical I/Q route changed"
     }
 
     private fun captureLoop(record: AudioRecord, samples: ShortArray) {
@@ -295,10 +464,12 @@ class PanadapterController(
                 val copied = NativePanadapter.snapshot(nativeHandle, buffer.meta, buffer.metrics,
                     buffer.trace, buffer.waterfall, buffer.peak)
                 if (copied > 0) {
-                    applyMeasuredFlatness(buffer, copied)
+                    val analysis = displayAnalyzer.analyze(buffer.waterfall, routeProof.physicalRate, settings)
+                    buffer.analysis = analysis
+                    applyMeasuredFlatness(buffer, copied, analysis.validMask)
                     buffer.waterfallReady = waterfallRowDue(now)
                     if (buffer.waterfallReady) {
-                        prepareWaterfallRow(buffer.waterfall, buffer.waterfallPixels)
+                        prepareWaterfallRow(buffer.waterfall, buffer.waterfallPixels, analysis)
                     }
                     bufferIndex = (bufferIndex + 1) % buffers.size
                     main.post {
@@ -320,9 +491,10 @@ class PanadapterController(
             buffer.metrics[7].isFinite() && buffer.metrics[7] in -0.995f..0.995f &&
                 buffer.metrics[9].isFinite() && buffer.metrics[9] < .995f &&
                 buffer.metrics[5] > -100f && buffer.metrics[6] > -100f && buffer.metrics[8] < .01f,
-            buffer.trace, buffer.waterfall, buffer.peak,
+            buffer.trace, buffer.waterfall, buffer.peak, buffer.analysis?.validMask ?: BooleanArray(count) { true },
         )
         frame = next
+        buffer.analysis?.let { displayMetrics = it.metrics }
         performancePublishedFrames++
         collectLevelCalibration(next)
         if (calibrating.get()) {
@@ -533,7 +705,7 @@ class PanadapterController(
             NativePanadapter.setIqCorrection(nativeHandle, configured.iqAReal, configured.iqAImag,
                 configured.iqBReal, configured.iqBImag,
                 configured.iqCorrectionEnabled && configured.calibrationDeviceKey == selectedKey && configured.calibrationRate == rate)
-            buffers = Array(3) { NativeBuffer(LongArray(9), FloatArray(10), FloatArray(configured.fftSize),
+            buffers = Array(3) { NativeBuffer(LongArray(9), FloatArray(14), FloatArray(configured.fftSize),
                 FloatArray(configured.fftSize), FloatArray(configured.fftSize), IntArray(waterfallWidth(configured.fftSize))) }
             bufferIndex = 0
             main.post { rebuildWaterfall(configured.fftSize) }
@@ -546,11 +718,13 @@ class PanadapterController(
         val buffer = buffers[bufferIndex]
         val copied = NativePanadapter.snapshot(nativeHandle, buffer.meta, buffer.metrics, buffer.trace, buffer.waterfall, buffer.peak)
         if (copied > 0) {
-            applyMeasuredFlatness(buffer, copied)
+            val analysis = displayAnalyzer.analyze(buffer.waterfall, buffer.meta[4].toInt(), settings)
+            buffer.analysis = analysis
+            applyMeasuredFlatness(buffer, copied, analysis.validMask)
             val now = System.nanoTime()
             buffer.waterfallReady = waterfallRowDue(now)
             if (buffer.waterfallReady) {
-                prepareWaterfallRow(buffer.waterfall, buffer.waterfallPixels)
+                prepareWaterfallRow(buffer.waterfall, buffer.waterfallPixels, analysis)
             }
             bufferIndex = (bufferIndex + 1) % buffers.size
             main.post { publish(buffer, copied); publicationPending.set(false) }
@@ -600,6 +774,17 @@ class PanadapterController(
         val expectedSign = if (calibrationKnownOffsetHz > 0) 1 else -1
         val observedSign = beforeSignal?.first?.let { if (it >= (frame?.fftSize ?: 0) / 2) 1 else -1 } ?: 0
         val rejectionBefore = beforeSignal?.second ?: -140f
+        val peakIndex = beforeSignal?.first ?: -1
+        val centre = frame?.fftSize?.div(2) ?: 0
+        val measuredOffset = if (peakIndex >= 0 && frame != null)
+            (peakIndex - centre) * frame!!.effectiveSampleRate.toFloat() / frame!!.fftSize else Float.NaN
+        val desiredDb = if (peakIndex >= 0) frame?.trace?.getOrNull(peakIndex) ?: Float.NaN else Float.NaN
+        val mirrorIndex = if (peakIndex >= 0) (2 * centre - peakIndex).coerceIn(0, (frame?.trace?.lastIndex ?: 0)) else -1
+        val imageDb = if (mirrorIndex >= 0) frame?.trace?.getOrNull(mirrorIndex) ?: Float.NaN else Float.NaN
+        val gainImbalance = if (ii > 0.0 && qq > 0.0) (10.0 * log10(ii / qq)).toFloat() else Float.NaN
+        val correlation = if (ii > 0.0 && qq > 0.0) (iq / sqrt(ii * qq)).coerceIn(-1.0, 1.0) else Double.NaN
+        val phaseError = if (correlation.isFinite()) (asin(correlation) * 180.0 / PI).toFloat() else Float.NaN
+        val dcRelative = frame?.let { value -> value.trace.getOrNull(centre)?.minus(value.floorDb) } ?: Float.NaN
         val error = when {
             denominator < 1.0e-8 -> "Calibration rejected: tone level is too low"
             magnitude2 >= .90 * .90 -> "Calibration rejected: channels are duplicated or coefficients are implausible"
@@ -621,7 +806,10 @@ class PanadapterController(
         }
         NativePanadapter.setIqCorrection(nativeHandle, 1f, 0f, bReal, bImag, true)
         main.post {
-            calibrationCandidate = PanadapterCalibrationCandidate(bReal, bImag, calibrationKnownOffsetHz, rejectionBefore)
+            calibrationCandidate = PanadapterCalibrationCandidate(bReal, bImag, calibrationKnownOffsetHz, rejectionBefore,
+                measuredOffsetHz = measuredOffset, axisErrorHz = measuredOffset - calibrationKnownOffsetHz,
+                desiredLevelDb = desiredDb, imageLevelDb = imageDb, gainImbalanceDb = gainImbalance,
+                phaseErrorDegrees = phaseError, dcSpurRelativeFloorDb = dcRelative)
             calibrationAwaitSequence = (frame?.sequence ?: 0) + 8
             calibrationStatus = "Previewing stable I/Q correction · do not change the known tone"
         }
@@ -631,10 +819,26 @@ class PanadapterController(
         val candidate = calibrationCandidate ?: return "No calibration preview to confirm"
         val after = candidate.rejectionAfterDb ?: return "Wait for the corrected preview"
         if (after < 35f || after < candidate.rejectionBeforeDb + 6f) return "Calibration not saved: preview did not reach a credible improvement"
-        updateSettings(settings.copy(iqAReal = 1f, iqAImag = 0f, iqBReal = candidate.bReal,
-            iqBImag = candidate.bImag, iqCorrectionEnabled = true,
+        val first = firstToneCandidate
+        if (first == null) {
+            firstToneCandidate = candidate
+            completedToneEvidence = listOf(candidate.copy(rejectionAfterDb = after))
+            calibrationCandidate = null
+            restoreSavedCorrection()
+            calibrationStatus = "First offset verified · retune the known tone to the opposite side and run CALIBRATE I/Q again"
+            return calibrationStatus
+        }
+        if (first.knownOffsetHz * candidate.knownOffsetHz >= 0f) return "Calibration not saved: second proof must use the opposite frequency offset"
+        if (kotlin.math.hypot(first.bReal - candidate.bReal, first.bImag - candidate.bImag) > .18f)
+            return "Calibration not saved: correction changed excessively between offsets"
+        val bReal = (first.bReal + candidate.bReal) * .5f
+        val bImag = (first.bImag + candidate.bImag) * .5f
+        updateSettings(settings.copy(iqAReal = 1f, iqAImag = 0f, iqBReal = bReal,
+            iqBImag = bImag, iqCorrectionEnabled = true,
             calibrationDeviceKey = routeProof.requestedDevice, calibrationRate = routeProof.configuredRate), restart = false)
-        calibrationCandidate = null; calibrationStatus = "Calibration saved · ${"%.1f".format(after)} dB image rejection"
+        completedToneEvidence = completedToneEvidence + candidate.copy(rejectionAfterDb = after)
+        firstToneCandidate = null
+        calibrationCandidate = null; calibrationStatus = "I/Q calibrated at both offsets · ${"%.1f".format(after)} dB second-offset image rejection"
         return calibrationStatus
     }
 
@@ -642,6 +846,18 @@ class PanadapterController(
         calibrating.set(false); calibrationCandidate = null; restoreSavedCorrection()
         calibrationStatus = "Calibration cancelled; saved profile restored"
         return calibrationStatus
+    }
+
+    fun captureSpurStage(stage: String): String {
+        val normalized = stage.uppercase()
+        if (normalized !in setOf("A", "B", "C")) return "Unknown spur capture stage"
+        if (lifecycle != PanadapterLifecycle.LIVE || !routeProof.verified || !displayMetrics.stabilizedFloorDb.isFinite())
+            return "Spur capture requires a stable direct live I/Q path"
+        val capture = PanadapterSpurCapture(normalized, System.currentTimeMillis(), routeProof.state,
+            routeProof.physicalRate, displayMetrics.stabilizedFloorDb, displayMetrics.combSpacingHz,
+            displayMetrics.combPersistence, displayMetrics.waterfallSaturatedFraction)
+        spurCaptures = spurCaptures + (normalized to capture)
+        return "Spur capture $normalized retained · ${if (capture.combSpacingHz.isFinite()) "%.1f Hz comb".format(capture.combSpacingHz) else "no stable comb"}"
     }
 
     fun startLevelCalibration(knownDbm: Float, uncertaintyDb: Float, notes: String): String {
@@ -719,15 +935,16 @@ class PanadapterController(
                 settings.calibrationRate == routeProof.configuredRate)
     }
 
-    private fun applyMeasuredFlatness(buffer: NativeBuffer, count: Int) {
+    private fun applyMeasuredFlatness(buffer: NativeBuffer, count: Int, validMask: BooleanArray) {
         val configured = settings
         if (!measuredFlatnessActive()) return
         val points = parseMeasuredFlatness(configured)
         if (points.isEmpty()) return
         val rate = buffer.meta[5].toFloat().takeIf { it > 0f } ?: return
         for (index in 0 until count.coerceAtMost(buffer.trace.size)) {
+            if (index >= validMask.size || !validMask[index]) continue
             val offset = (index.toFloat() / count - .5f) * rate
-            val correction = measuredFlatnessCorrection(points, offset)
+            val correction = measuredFlatnessCorrection(points, offset).coerceIn(-8f, 8f)
             buffer.trace[index] += correction
             buffer.waterfall[index] += correction
             buffer.peak[index] += correction
@@ -765,23 +982,25 @@ class PanadapterController(
 
     private fun waterfallWidth(fftSize: Int): Int = minOf(1_024, fftSize)
 
-    private fun prepareWaterfallRow(values: FloatArray, pixels: IntArray) {
+    private fun prepareWaterfallRow(values: FloatArray, pixels: IntArray, analysis: PanadapterAnalysisResult) {
         if (pixels.isEmpty()) return
         if (waterfallSmoothedPower.size != pixels.size) waterfallSmoothedPower = FloatArray(pixels.size)
         val configured = settings
         val colors = palette
-        val group = values.size.toFloat() / pixels.size
+        val buckets = reducePanadapterBuckets(values, 0, values.size, pixels.size)
+        val black = if (configured.autoLevel) analysis.metrics.waterfallBlackDb else configured.waterfallMinDb
+        val top = if (configured.autoLevel) analysis.metrics.waterfallTopDb else configured.waterfallMaxDb
         for (pixel in pixels.indices) {
-            val start = (pixel * group).toInt()
-            val end = max(start + 1, ((pixel + 1) * group).toInt()).coerceAtMost(values.size)
-            var power = 0.0
-            for (index in start until end) power += 10.0.pow(values[index] / 10.0)
-            val meanPower = (power / (end - start).coerceAtLeast(1)).toFloat()
+            val start = (pixel.toLong() * values.size / pixels.size).toInt()
+            val end = (((pixel + 1L) * values.size / pixels.size).toInt()).coerceAtLeast(start + 1).coerceAtMost(values.size)
+            val usable = (start until end).any { it < analysis.validMask.size && analysis.validMask[it] }
+            if (!usable) { pixels[pixel] = if (pixel % 8 < 4) Color.rgb(10, 18, 28) else Color.rgb(18, 24, 32); continue }
+            val meanPower = 10.0.pow(buckets[pixel].displayDb / 10.0).toFloat()
             val alpha = 1f / configured.waterfallAverageFrames
             waterfallSmoothedPower[pixel] = if (waterfallSmoothedPower[pixel] == 0f) meanPower
                 else waterfallSmoothedPower[pixel] + alpha * (meanPower - waterfallSmoothedPower[pixel])
             val db = (10.0 / ln(10.0) * ln(waterfallSmoothedPower[pixel].coerceAtLeast(1.0e-14f).toDouble())).toFloat()
-            val normalized = ((db - configured.waterfallMinDb) / (configured.waterfallMaxDb - configured.waterfallMinDb)).coerceIn(0f, 1f)
+            val normalized = ((db - black) / (top - black).coerceAtLeast(20f)).coerceIn(0f, 1f)
             val corrected = normalized.pow(configured.waterfallGamma)
             pixels[pixel] = colors[(corrected * 255).toInt().coerceIn(0, 255)]
         }
@@ -813,21 +1032,49 @@ class PanadapterController(
 
     fun exportSupportSnapshot(): String = runCatching {
         val radio = radioState(); val current = frame
+        fun finite(value: Float): Any = if (value.isFinite()) value else JSONObject.NULL
         val output = JSONObject().put("version", 1).put("created_at", System.currentTimeMillis())
             .put("app", "RigWeave Android").put("device_model", Build.MODEL).put("android", Build.VERSION.RELEASE)
             .put("lifecycle", lifecycle.name).put("status", status)
             .put("selected_product", audio.selectedRx?.name ?: "none")
             .put("selected_usb", audio.selectedRx?.usbIdentity ?: "unavailable")
-            .put("preferred_accepted", routeProof.preferredAccepted).put("actual_route_match", routeProof.verified)
+            .put("preferred_accepted", routeProof.preferredAccepted).put("actual_route_match", routeProof.routeVerified)
             .put("requested_rate", routeProof.requestedRate).put("configured_rate", routeProof.configuredRate)
             .put("channels", routeProof.configuredChannels).put("encoding", routeProof.encoding)
             .put("client_format", routeProof.clientFormat).put("device_format", routeProof.deviceFormat)
+            .put("format_state", routeProof.state.name).put("physical_rate", routeProof.physicalRate)
+            .put("client_rate", routeProof.clientRate).put("client_channels", routeProof.clientChannels)
+            .put("client_channel_mask", routeProof.clientChannelMask).put("client_encoding", routeProof.clientEncoding)
+            .put("device_rate", routeProof.deviceRate).put("device_channels", routeProof.deviceChannels)
+            .put("device_channel_mask", routeProof.deviceChannelMask).put("device_encoding", routeProof.deviceEncoding)
+            .put("active_device", routeProof.activeDevice).put("client_silenced", routeProof.clientSilenced)
+            .put("client_effects", routeProof.clientEffects).put("device_effects", routeProof.deviceEffects)
             .put("fft", current?.fftSize ?: settings.fftSize).put("hop", current?.hopSize ?: 0)
             .put("sequence", current?.sequence ?: 0).put("drops", current?.discontinuities ?: 0)
             .put("published_fps", publishedFps).put("waterfall_fps", waterfallFps)
             .put("capture_to_display_estimate_ms", latencyEstimateMs)
             .put("peak_dbfs", current?.peakDb ?: -140f).put("floor_dbfs", current?.floorDb ?: -140f)
             .put("stereo_valid", current?.validStereo ?: false).put("cat_model", radio.model)
+            .put("iq_state", iqState().name).put("calibration_state", calibrationState().name)
+            .put("display_state", displayMetrics.state.name)
+            .put("raw_floor_dbfs", finite(displayMetrics.rawFloorDb)).put("stabilized_floor_dbfs", finite(displayMetrics.stabilizedFloorDb))
+            .put("spectrum_floor_dbfs", displayMetrics.spectrumFloorDb).put("spectrum_top_dbfs", displayMetrics.spectrumTopDb)
+            .put("waterfall_black_dbfs", displayMetrics.waterfallBlackDb).put("waterfall_top_dbfs", displayMetrics.waterfallTopDb)
+            .put("waterfall_saturated_fraction", displayMetrics.waterfallSaturatedFraction)
+            .put("valid_bin_fraction", displayMetrics.validBinFraction).put("valid_bin_count", displayMetrics.validBinCount)
+            .put("peak_to_floor_db", finite(displayMetrics.peakToFloorDb)).put("in_band_to_invalid_db", finite(displayMetrics.inBandToInvalidPowerDb))
+            .put("comb_spacing_hz", finite(displayMetrics.combSpacingHz)).put("comb_persistence", displayMetrics.combPersistence)
+            .put("tone_evidence", JSONArray(completedToneEvidence.map { tone -> JSONObject()
+                .put("requested_offset_hz", tone.knownOffsetHz).put("measured_offset_hz", finite(tone.measuredOffsetHz))
+                .put("axis_error_hz", finite(tone.axisErrorHz)).put("desired_dbfs", finite(tone.desiredLevelDb))
+                .put("image_dbfs", finite(tone.imageLevelDb)).put("irr_before_db", tone.rejectionBeforeDb)
+                .put("irr_after_db", finite(tone.rejectionAfterDb ?: Float.NaN)).put("gain_imbalance_db", finite(tone.gainImbalanceDb))
+                .put("phase_error_degrees", finite(tone.phaseErrorDegrees)).put("dc_spur_relative_floor_db", finite(tone.dcSpurRelativeFloorDb)) }))
+            .put("spur_captures", JSONArray(spurCaptures.values.sortedBy { it.stage }.map { capture -> JSONObject()
+                .put("stage", capture.stage).put("captured_at", capture.capturedEpochMs).put("format", capture.formatState.name)
+                .put("physical_rate", capture.physicalRate).put("floor_dbfs", finite(capture.floorDb))
+                .put("comb_spacing_hz", finite(capture.combSpacingHz)).put("comb_persistence", capture.combPersistence)
+                .put("saturated_fraction", capture.saturatedFraction) }))
             .put("measured_flatness", measuredFlatnessActive())
             .put("level_calibrated", levelCalibrationActive())
             .put("level_units", if (levelCalibrationActive()) "dBm" else "dBFS")

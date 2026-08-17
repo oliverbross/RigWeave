@@ -2,7 +2,9 @@
 
 ## Before starting
 
-Connect and identify the KX3 through the normal RigWeave CAT path. Connect the KX3 RX I/Q output to a class-compliant external stereo USB ADC through a topology the tablet can actually enumerate. In Panadapter setup, select that exact input and choose 96 kHz, or deliberately allow the 48 kHz fallback. Do not select a microphone-only/mono route.
+Connect and identify the KX3 through the normal RigWeave CAT path. Connect the KX3 RX I/Q output to a class-compliant external stereo USB ADC through a topology the tablet can actually enumerate. Select that exact input. Use the always-visible **48K** or **96K** control to change capture rate; the live stream is reopened and re-proved. Do not select a mono route.
+
+For the StarTech ICUSBAUDIO2D, the three hardware LEDs document the **playback** sample rate, not microphone-capture truth. The KX3 I/Q lead belongs in its stereo microphone input. Trust the live RigWeave client/device format fields and Android audio diagnostics for capture rate. In the tested Lenovo/StarTech path, direct 48 kHz used nearly the entire nominal span; direct Android-reported 96 kHz exposed only about 48 kHz of useful central response. Use 48 kHz for honest routine viewing until the 96 kHz analogue/input response is independently explained and calibrated.
 
 Open **Radio → Panadapter** on a compact device or **Panadapter** in the expanded navigation rail. Grant microphone permission only if you intend to use physical receive I/Q; Android applies that permission to external audio capture too. Press **Start**. Treat the instrument as unavailable until the header reports live operation and Diagnostics shows the requested route equals the actual route, stereo channels, and 48 or 96 kHz.
 
@@ -14,13 +16,14 @@ There is no panadapter audio playback. The audible monitor pauses while the pana
 - Tap to place marker A/B; drag the active marker to refine it. Pinch and pan alter only the view.
 - **QSY A/B** is the only tuning gesture. **Undo** appears only after CAT confirms the requested tune.
 - The layout button cycles split, spectrum-only and waterfall-only views. Drag the divider in split mode. Fullscreen hides system bars until a swipe or the fullscreen action restores them.
-- Settings control FFT/window/overlap, independent spectrum power averaging, manual or robust attack/release auto-level, floor line, peak hold/reset, Elecraft generic flatness, I/Q orientation, genuine decimation zoom, visual-only DC masking and the independent waterfall power averaging/palette/range/gamma/line rate.
+- The truth strip separately reports route, format, usable bandwidth, I/Q state, display state, and persistent comb-spur warnings. `TRUE 96 kHz` describes the Android device interface; `USABLE 47.7 kHz`, for example, honestly narrows the response that currently contributes to display statistics.
+- Settings control FFT/window/overlap, independent spectrum power averaging, manual or robust attack/release auto-level, floor line, peak hold/reset, optional Elecraft generic flatness, I/Q orientation, genuine decimation zoom, visual-only DC masking and the independent waterfall power averaging/palette/range/gamma/line rate.
 
 The display is dBFS unless a separately measured level calibration is available; this implementation does not claim dBm or S-unit accuracy. The generic Elecraft curve is a display correction, not a measurement of your particular radio/interface. “Raw” center-mask mode is the diagnostic truth.
 
 ## I/Q calibration
 
-Use one known, stable, unmodulated receive tone clearly off center. Put marker A on its known offset, verify healthy non-clipping stereo metrics, then press the calibration action. Do not change the generator or radio during collection and preview. RigWeave rejects weak, duplicated, unstable, ambiguous or wrong-side input. Save only when the preview dialog reports a credible improvement. Saved correction is bound to the selected device fingerprint and sample rate; changing either disables it until separately calibrated.
+Use one known, stable, unmodulated receive tone clearly off center. Put marker A on its known offset, verify healthy non-clipping stereo metrics, then press the calibration action. Confirm the first preview, retune the same known tone to the opposite offset, and repeat. The profile is saved only when both offsets are stable, agree in coefficient, improve rejection by at least 6 dB, and reach at least 35 dB corrected image rejection. Until then the UI remains `ORIENTATION UNVERIFIED` or `VERIFIED UNCALIBRATED`. Saved correction is bound to the selected device fingerprint and physical sample rate; detach/reconnect or changing either invalidates it.
 
 This is image-balance calibration, not RF level or multi-point analogue-flatness calibration. Use a dummy load/shielded source where appropriate and never key the transmitter for this receive-only workflow.
 
@@ -29,6 +32,8 @@ This is image-balance calibration, not RF level or multi-point analogue-flatness
 The record action captures a finite private stereo WAV (10 seconds from the main action, never more than 60) and companion metadata. Stop early with the same action. Replay is available only when live capture is stopped and uses the production DSP path. Files remain in app-private storage unless you deliberately export through a later platform workflow.
 
 Diagnostics exposes requested/actual route, formats, frame/transform/drop counters, FFT/hop/RBW, I/Q RMS/correlation/duplication, clipping, peak/floor, CAT and calibration state. **Export support snapshot** writes a redacted JSON file to private storage; share it only by an explicit operator action.
+
+For periodic lines, open Diagnostics and follow **SPUR DIAGNOSTIC** exactly: capture A with the USB input safely terminated and KX3 disconnected; capture B with KX3 I/Q connected and the antenna path in an operator-approved controlled state; capture C during normal receive. Do not press a capture label unless the physical state matches it. Compare comb spacing/persistence across all three; RigWeave deliberately does not auto-notch the result.
 
 ## Recovery
 

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "created_at": 1786974261891,
+  "sample_rate": 48000,
+  "channels": 2,
+  "encoding": "PCM_SIGNED_16_LE",
+  "selected_product": "Sound Blaster Play! 3",
+  "selected_usb": "041e:324d",
+  "settings": "v=2;rate=48000;fallback=true;fft=4096;overlap=50;window=BLACKMAN_HARRIS;floor=-120.0;top=-20.0;attack=0.78;release=0.16;average=2;peak_hold=false;peak_decay=0.0;flatness=false;swap=false;invert_i=false;invert_q=false;conjugate=false;i_trim=1.0;q_trim=1.0;zoom=1;zoom_offset=0.0;wf_rows=384;wf_min=-110.0;wf_max=-55.0;wf_gamma=0.85;wf_rate=25;palette=FLIGHTLINE;spots=true;floor_line=true;center_mask=0;awake=false;qsy_step=10;iq_ar=1.0;iq_ai=0.0;iq_br=0.0;iq_bi=0.0;iq_enabled=false;cal_device=;cal_rate=0;auto_level=true;level_attack=0.35;level_release=0.08;wf_average=2;measured_flatness=false;flat_offsets=;flat_gains=;flat_device=;flat_rate=0;flat_radio=;flat_epoch=0;level_enabled=false;level_offset=0.0;level_frequency=0;level_device=;level_rate=0;level_radio=;level_band=;level_epoch=0;level_uncertainty=0.0;level_notes="
+}

@@ -34,7 +34,7 @@ object NativePanadapter {
 
     /**
      * Fills every array while the native snapshot lock is held. Meta requires 9 longs,
-     * metrics requires 10 floats, and spectrum arrays must be at least the configured FFT size.
+     * metrics requires 14 floats, and spectrum arrays must be at least the configured FFT size.
      */
     external fun snapshot(
         handle: Long,

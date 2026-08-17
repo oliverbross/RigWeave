@@ -93,6 +93,10 @@ typedef struct rw_panadapter_snapshot {
     float rbw_hz;
     float peak_db;
     float floor_db;
+    float raw_floor_db;
+    float stabilized_floor_db;
+    float valid_bin_fraction;
+    uint32_t valid_bin_count;
     float i_rms_db;
     float q_rms_db;
     float iq_correlation;

@@ -1,0 +1,232 @@
+[
+  {
+    "path": "docs/panadapter/evidence/iq-48k.wav",
+    "sample_rate_hz": 48000,
+    "frames": 480000,
+    "duration_s": 10.0,
+    "fft_size": 4096,
+    "averages": 233,
+    "bin_hz": 11.71875,
+    "usable_width_hz_at_18db_envelope": 48000.0,
+    "usable_fraction": 1.0,
+    "middle_to_outer_edge_db": 4.499455612357232,
+    "i_rms_dbfs": -54.93542035765472,
+    "q_rms_dbfs": -58.19416759522832,
+    "iq_correlation": 0.5809968917428349,
+    "one_khz_period_samples": 48,
+    "one_khz_complex_autocorrelation": 0.30126022480274023,
+    "one_khz_harmonics": [
+      {
+        "frequency_hz": -12000.0,
+        "average_dbfs": -75.04078735255206
+      },
+      {
+        "frequency_hz": -11003.90625,
+        "average_dbfs": -74.42186238534093
+      },
+      {
+        "frequency_hz": -9996.09375,
+        "average_dbfs": -74.43676796978525
+      },
+      {
+        "frequency_hz": -9000.0,
+        "average_dbfs": -78.25312518610815
+      },
+      {
+        "frequency_hz": -8003.90625,
+        "average_dbfs": -77.14527173146534
+      },
+      {
+        "frequency_hz": -6996.09375,
+        "average_dbfs": -80.22156344062867
+      },
+      {
+        "frequency_hz": -6000.0,
+        "average_dbfs": -80.2249343897467
+      },
+      {
+        "frequency_hz": -5003.90625,
+        "average_dbfs": -74.75598205516961
+      },
+      {
+        "frequency_hz": -3996.09375,
+        "average_dbfs": -69.49032648882064
+      },
+      {
+        "frequency_hz": -3000.0,
+        "average_dbfs": -66.48004224419293
+      },
+      {
+        "frequency_hz": -2003.90625,
+        "average_dbfs": -66.7988079200643
+      },
+      {
+        "frequency_hz": -996.09375,
+        "average_dbfs": -67.77348833628051
+      },
+      {
+        "frequency_hz": 996.09375,
+        "average_dbfs": -70.19341693676589
+      },
+      {
+        "frequency_hz": 2003.90625,
+        "average_dbfs": -71.49204415049316
+      },
+      {
+        "frequency_hz": 3000.0,
+        "average_dbfs": -73.09777150249394
+      },
+      {
+        "frequency_hz": 3996.09375,
+        "average_dbfs": -77.42514917520157
+      },
+      {
+        "frequency_hz": 5003.90625,
+        "average_dbfs": -83.25333034983713
+      },
+      {
+        "frequency_hz": 6000.0,
+        "average_dbfs": -88.51297253966925
+      },
+      {
+        "frequency_hz": 6996.09375,
+        "average_dbfs": -87.60298483005826
+      },
+      {
+        "frequency_hz": 8003.90625,
+        "average_dbfs": -84.60879842690957
+      },
+      {
+        "frequency_hz": 9000.0,
+        "average_dbfs": -84.56891346072369
+      },
+      {
+        "frequency_hz": 9996.09375,
+        "average_dbfs": -80.69712747617346
+      },
+      {
+        "frequency_hz": 11003.90625,
+        "average_dbfs": -80.1830553621445
+      },
+      {
+        "frequency_hz": 12000.0,
+        "average_dbfs": -80.26193223561205
+      }
+    ]
+  },
+  {
+    "path": "docs/panadapter/evidence/soundblaster-48k.wav",
+    "sample_rate_hz": 48000,
+    "frames": 480000,
+    "duration_s": 10.0,
+    "fft_size": 4096,
+    "averages": 233,
+    "bin_hz": 11.71875,
+    "usable_width_hz_at_18db_envelope": 43746.09375,
+    "usable_fraction": 0.911376953125,
+    "middle_to_outer_edge_db": 9.841182056222955,
+    "i_rms_dbfs": -54.45138592598149,
+    "q_rms_dbfs": -54.45138592598149,
+    "iq_correlation": 1.0,
+    "one_khz_period_samples": 48,
+    "one_khz_complex_autocorrelation": 0.1088645824904725,
+    "one_khz_harmonics": [
+      {
+        "frequency_hz": -12000.0,
+        "average_dbfs": -72.8157293621985
+      },
+      {
+        "frequency_hz": -11003.90625,
+        "average_dbfs": -83.10167807803882
+      },
+      {
+        "frequency_hz": -9996.09375,
+        "average_dbfs": -79.63873016720252
+      },
+      {
+        "frequency_hz": -9000.0,
+        "average_dbfs": -77.93760807560014
+      },
+      {
+        "frequency_hz": -8003.90625,
+        "average_dbfs": -74.32432816714449
+      },
+      {
+        "frequency_hz": -6996.09375,
+        "average_dbfs": -78.19686210785152
+      },
+      {
+        "frequency_hz": -6000.0,
+        "average_dbfs": -79.84582077762315
+      },
+      {
+        "frequency_hz": -5003.90625,
+        "average_dbfs": -78.2203811874422
+      },
+      {
+        "frequency_hz": -3996.09375,
+        "average_dbfs": -80.09741513482669
+      },
+      {
+        "frequency_hz": -3000.0,
+        "average_dbfs": -79.23207726262446
+      },
+      {
+        "frequency_hz": -2003.90625,
+        "average_dbfs": -74.49904866313179
+      },
+      {
+        "frequency_hz": -996.09375,
+        "average_dbfs": -76.89357483156837
+      },
+      {
+        "frequency_hz": 996.09375,
+        "average_dbfs": -76.89357483156837
+      },
+      {
+        "frequency_hz": 2003.90625,
+        "average_dbfs": -74.49904866313179
+      },
+      {
+        "frequency_hz": 3000.0,
+        "average_dbfs": -79.23207726262446
+      },
+      {
+        "frequency_hz": 3996.09375,
+        "average_dbfs": -80.09741513482669
+      },
+      {
+        "frequency_hz": 5003.90625,
+        "average_dbfs": -78.2203811874422
+      },
+      {
+        "frequency_hz": 6000.0,
+        "average_dbfs": -79.84582077762315
+      },
+      {
+        "frequency_hz": 6996.09375,
+        "average_dbfs": -78.19686210785152
+      },
+      {
+        "frequency_hz": 8003.90625,
+        "average_dbfs": -74.32432816714449
+      },
+      {
+        "frequency_hz": 9000.0,
+        "average_dbfs": -77.93760807560014
+      },
+      {
+        "frequency_hz": 9996.09375,
+        "average_dbfs": -79.63873016720252
+      },
+      {
+        "frequency_hz": 11003.90625,
+        "average_dbfs": -83.10167807803882
+      },
+      {
+        "frequency_hz": 12000.0,
+        "average_dbfs": -72.8157293621985
+      }
+    ]
+  }
+]

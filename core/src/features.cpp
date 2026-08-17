@@ -440,6 +440,8 @@ int rw_panadapter_snapshot_copy(const rw_panadapter_context *context,
     output->zoom_decimation = source.zoom_decimation; output->zoom_offset_hz = source.zoom_offset_hz;
     output->enbw_bins = source.enbw_bins; output->rbw_hz = source.rbw_hz;
     output->peak_db = source.peak_db; output->floor_db = source.floor_db;
+    output->raw_floor_db = source.raw_floor_db; output->stabilized_floor_db = source.stabilized_floor_db;
+    output->valid_bin_fraction = source.valid_bin_fraction; output->valid_bin_count = source.valid_bin_count;
     output->i_rms_db = source.i_rms_db; output->q_rms_db = source.q_rms_db;
     output->iq_correlation = source.iq_correlation; output->clipped_fraction = source.clipped_fraction;
     output->duplicate_correlation = source.duplicate_correlation;
@@ -464,6 +466,8 @@ int rw_panadapter_copy_frame(const rw_panadapter_context *context,
     output->zoom_decimation = source.zoom_decimation; output->zoom_offset_hz = source.zoom_offset_hz;
     output->enbw_bins = source.enbw_bins; output->rbw_hz = source.rbw_hz;
     output->peak_db = source.peak_db; output->floor_db = source.floor_db;
+    output->raw_floor_db = source.raw_floor_db; output->stabilized_floor_db = source.stabilized_floor_db;
+    output->valid_bin_fraction = source.valid_bin_fraction; output->valid_bin_count = source.valid_bin_count;
     output->i_rms_db = source.i_rms_db; output->q_rms_db = source.q_rms_db;
     output->iq_correlation = source.iq_correlation; output->clipped_fraction = source.clipped_fraction;
     output->duplicate_correlation = source.duplicate_correlation; output->valid_stereo = source.valid_stereo ? 1 : 0;
