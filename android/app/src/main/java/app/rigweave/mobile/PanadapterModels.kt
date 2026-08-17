@@ -15,7 +15,7 @@ enum class PanadapterFormatState {
     UNSUPPORTED_MONO_OR_CONVERTED_CHANNEL_PATH,
     ROUTE_LOST,
 }
-enum class PanadapterIqState { UNVERIFIED, CHANNELS_HEALTHY_ORIENTATION_UNVERIFIED, VERIFIED_UNCALIBRATED, CALIBRATED, INVALID }
+enum class PanadapterIqState { UNVERIFIED, CHANNELS_HEALTHY_ORIENTATION_UNVERIFIED, MIRROR_IMAGES_DOMINANT, VERIFIED_UNCALIBRATED, CALIBRATED, INVALID }
 enum class PanadapterCalibrationState { UNCALIBRATED, DEVICE_BOUND, INVALID_FOR_PATH }
 enum class PanadapterDisplayState { UNAVAILABLE, HEALTHY, SATURATED, INSUFFICIENT_VALID_BINS }
 
@@ -262,6 +262,8 @@ data class PanadapterDisplayMetrics(
     val inBandToInvalidPowerDb: Float = Float.NaN,
     val combSpacingHz: Float = Float.NaN,
     val combPersistence: Float = 0f,
+    val mirrorRejectionDb: Float = Float.NaN,
+    val mirrorPairCount: Int = 0,
     val state: PanadapterDisplayState = PanadapterDisplayState.UNAVAILABLE,
 )
 

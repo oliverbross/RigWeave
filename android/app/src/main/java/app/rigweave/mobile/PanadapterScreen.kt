@@ -221,17 +221,18 @@ private fun PanadapterTruthStrip(controller: PanadapterController) {
     val proof = controller.routeProof
     val metrics = controller.displayMetrics
     val iq = controller.iqState()
+    val catLive = controller.effectiveCenter() > 0
     val usableKhz = proof.physicalRate * metrics.validBinFraction / 1000f
     val periodicSpurs = metrics.combPersistence > .6f && metrics.combSpacingHz.isFinite()
     val danger = proof.state in setOf(PanadapterFormatState.RESAMPLED_48_TO_96,
         PanadapterFormatState.OTHER_RESAMPLED_PATH, PanadapterFormatState.UNSUPPORTED_MONO_OR_CONVERTED_CHANNEL_PATH) ||
-        metrics.state == PanadapterDisplayState.SATURATED || iq == PanadapterIqState.INVALID
-    Surface(color = when { danger -> PanDanger.copy(alpha = .22f); periodicSpurs -> PanAmber.copy(alpha = .14f); else -> PanRaised.copy(alpha = .70f) }, modifier = Modifier.fillMaxWidth()) {
-        Text("ROUTE ${if (proof.routeVerified) "OK" else "UNPROVEN"} · FORMAT ${proof.state.name.replace('_', ' ')} · " +
+        metrics.state == PanadapterDisplayState.SATURATED || iq in setOf(PanadapterIqState.INVALID, PanadapterIqState.MIRROR_IMAGES_DOMINANT)
+    Surface(color = when { danger -> PanDanger.copy(alpha = .22f); periodicSpurs || !catLive -> PanAmber.copy(alpha = .14f); else -> PanRaised.copy(alpha = .70f) }, modifier = Modifier.fillMaxWidth()) {
+        Text("CAT ${if (catLive) "LIVE" else "OFFLINE · RELATIVE OFFSETS ONLY"} · ROUTE ${if (proof.routeVerified) "OK" else "UNPROVEN"} · FORMAT ${proof.state.name.replace('_', ' ')} · " +
             "USABLE ${if (usableKhz > 0f) "%.1f kHz".format(usableKhz) else "UNPROVEN"} · I/Q ${iq.name.replace('_', ' ')} · " +
             "DISPLAY ${metrics.state.name.replace('_', ' ')}" +
             if (periodicSpurs) " · PERIODIC SPURS ${"%.0f".format(metrics.combSpacingHz)} Hz" else "",
-            color = when { danger -> PanDanger; periodicSpurs -> PanAmber; else -> PanMuted }, fontFamily = FontFamily.Monospace, fontSize = 9.sp,
+            color = when { danger -> PanDanger; periodicSpurs || !catLive -> PanAmber; else -> PanMuted }, fontFamily = FontFamily.Monospace, fontSize = 9.sp,
             maxLines = 2, modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp))
     }
 }
@@ -250,8 +251,9 @@ private fun PanadapterHeader(controller: PanadapterController, radio: RadioState
                 else -> PanMuted
             }, fontSize = 10.sp, maxLines = 1)
         }
-        Text(if (radio.effectiveRxHz > 0) formatRadioFrequency(radio.effectiveRxHz) else "RF STALE",
-            color = if (controller.effectiveCenter() > 0) PanInk else PanDanger, fontFamily = FontFamily.Monospace,
+        val liveCenter = controller.effectiveCenter()
+        Text(if (liveCenter > 0) formatRadioFrequency(liveCenter) else "RF STALE",
+            color = if (liveCenter > 0) PanInk else PanDanger, fontFamily = FontFamily.Monospace,
             fontSize = if (compact) 13.sp else 17.sp, fontWeight = FontWeight.Bold)
         listOf(48_000 to "48K", 96_000 to "96K").forEach { (rate, label) ->
             FilterChip(

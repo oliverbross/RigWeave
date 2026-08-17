@@ -43,3 +43,5 @@ For periodic lines, open Diagnostics and follow **SPUR DIAGNOSTIC** exactly: cap
 - **CAT stale/disconnected/wrong model:** restore the normal KX3 CAT connection. The panadapter does not start a second CAT poller.
 - **Clipping:** reduce analogue interface level. **Weak signal:** raise the safe receive-I/Q/interface level; software gain is not proof of usable capture.
 - **Reversed spectrum:** use Swap/Conjugate/Invert deliberately, verify with a known off-center signal, then calibrate again.
+- **CAT offline with ADC still live:** use the trace only as an input diagnostic. The header shows `RF STALE`, the truth strip shows `CAT OFFLINE · RELATIVE OFFSETS ONLY`, absolute-frequency labels disappear, and QSY remains blocked.
+- **Dominant mirror images:** `MIRROR IMAGES DOMINANT` means strong positive/negative-offset peaks have less than 3 dB median separation. This is not usable quadrature I/Q; check the KX3 RX I/Q output, stereo cable/contact, ADC input mode, grounding and channel gain before attempting calibration.

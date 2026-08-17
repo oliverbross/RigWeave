@@ -100,6 +100,19 @@ class PanadapterRulesTest {
         assertEquals(-60f, values[512], .001f)
     }
 
+    @Test fun strongSymmetricPeaksAreReportedAsDominantMirrorImages() {
+        val analyzer = PanadapterDisplayAnalyzer()
+        val values = FloatArray(1_024) { -100f }
+        for (offset in 64..384 step 64) {
+            values[512 - offset] = -60f
+            values[512 + offset] = -60.2f
+        }
+        var result = analyzer.analyze(values, 48_000, PanadapterSettings())
+        repeat(70) { result = analyzer.analyze(values, 48_000, PanadapterSettings()) }
+        assertTrue(result.metrics.mirrorPairCount >= 6)
+        assertTrue(result.metrics.mirrorRejectionDb < 1f)
+    }
+
     @Test fun passbandUsesModeDirectionBandwidthAndShift() {
         val usb = panadapterPassband(RadioState(mode = "USB", bandwidthHz = 2_700, ifShiftHz = 1_500))
         assertEquals(150f, usb.lowOffsetHz)
