@@ -20,9 +20,26 @@ class PanadapterRulesTest {
             requestedRate = 44_100, zoomDecimation = 3, qsyStepHz = 7).validated()
         assertEquals(4_096, invalid.fftSize)
         assertEquals(50, invalid.overlapPercent)
-        assertEquals(96_000, invalid.requestedRate)
+        assertEquals(48_000, invalid.requestedRate)
         assertEquals(1, invalid.zoomDecimation)
         assertEquals(10, invalid.qsyStepHz)
+    }
+
+    @Test fun newDefaultIs48kAndExplicitRatesRoundTrip() {
+        assertEquals(48_000, PanadapterSettings().requestedRate)
+        assertEquals(48_000, PanadapterSettings.decode(null).requestedRate)
+        assertEquals(48_000, PanadapterSettings.decode("v=2;fft=4096").requestedRate)
+        assertEquals(48_000, PanadapterSettings.decode(PanadapterSettings(requestedRate = 48_000).encode()).requestedRate)
+        assertEquals(96_000, PanadapterSettings.decode(PanadapterSettings(requestedRate = 96_000).encode()).requestedRate)
+    }
+
+    @Test fun staleCatCenterIsHiddenAndQsyIsBlocked() {
+        val live = RadioState(connected = true, model = "KX3", frequencyHz = 14_074_000,
+            effectiveRxHz = 14_074_000, updatedMonotonicMs = 10_000)
+        assertEquals(14_074_000, effectivePanadapterCenter(live, 11_000))
+        assertTrue(canPanadapterQsy(live, effectivePanadapterCenter(live, 11_000)))
+        assertEquals(0, effectivePanadapterCenter(live, 13_000))
+        assertFalse(canPanadapterQsy(live, effectivePanadapterCenter(live, 13_000)))
     }
 
     @Test fun legacyDisplayDefaultsMigrateToRfHonestSettings() {

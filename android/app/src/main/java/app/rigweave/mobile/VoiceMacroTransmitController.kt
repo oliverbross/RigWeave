@@ -103,12 +103,10 @@ class VoiceMacroTransmitController(
         val pcm = runCatching { store.read(slot) }.getOrElse { fail("Voice macro validation failed: ${it.message}", false); return }
         active.set(true); progress = 0f; state = VoiceTransmitState.Preflighting; log("Preflight started")
         transport.beginVoiceOperation()
-        val monitorWasRunning = routes.enabled
         val io = AndroidVoiceTxIo(slot, pcm)
         val result = try { withContext(NonCancellable) { executeVoiceTxSequence(io) } }
         finally {
             active.set(false); releaseAudio(); transport.endVoiceOperation()
-            if (monitorWasRunning && foreground() && radioState().connected && routes.selectedRxDevice() != null) routes.start()
         }
         if (result.success) {
             state = VoiceTransmitState.Idle; progress = 0f; status = result.message
@@ -118,6 +116,14 @@ class VoiceMacroTransmitController(
     }
 
     private inner class AndroidVoiceTxIo(private val slot: Int, private val pcm: CanonicalVoicePcm) : VoiceTxSequenceIo {
+        override fun acquireAudio(): String? = if (routes.acquireAudio(AudioOwners.VOICE_TX, pauseMonitor = true)) null
+            else "${routes.audioOwner} owns the shared audio route; voice TX blocked before PTT"
+
+        override fun releaseAudio() {
+            this@VoiceMacroTransmitController.releaseAudio()
+            routes.releaseAudio(AudioOwners.VOICE_TX)
+        }
+
         override suspend fun queryTq(): Boolean? {
             val response = transport.queryTqFresh(); onFrames(response.frames)
             log(if (response.transmitting == false) "TQ0 preflight" else "Preflight TQ unavailable or TX")
@@ -126,7 +132,6 @@ class VoiceMacroTransmitController(
 
         override suspend fun prepareAndVerifyRoute() {
             require(active.get() && foreground() && isVoiceMacroMode(radioState().mode)) { "Voice TX preflight was cancelled" }
-            routes.stop()
             val device = routes.selectedTxDevice() ?: error("Selected voice TX USB output disappeared")
             selectedRouteId = device.id
             val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)

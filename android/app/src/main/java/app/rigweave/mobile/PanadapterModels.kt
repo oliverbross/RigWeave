@@ -19,8 +19,16 @@ enum class PanadapterIqState { UNVERIFIED, CHANNELS_HEALTHY_ORIENTATION_UNVERIFI
 enum class PanadapterCalibrationState { UNCALIBRATED, DEVICE_BOUND, INVALID_FOR_PATH }
 enum class PanadapterDisplayState { UNAVAILABLE, HEALTHY, SATURATED, INSUFFICIENT_VALID_BINS }
 
+fun effectivePanadapterCenter(radio: RadioState, nowMonotonicMs: Long): Long {
+    val age = if (radio.updatedMonotonicMs > 0) nowMonotonicMs - radio.updatedMonotonicMs else Long.MAX_VALUE
+    return if (radio.connected && age in 0 until 2_500) radio.effectiveRxHz.takeIf { it > 0 } ?: radio.frequencyHz else 0L
+}
+
+fun canPanadapterQsy(radio: RadioState, liveCenterHz: Long): Boolean =
+    radio.connected && radio.model == "KX3" && !radio.transmitting && liveCenterHz > 0
+
 data class PanadapterSettings(
-    val requestedRate: Int = 96_000,
+    val requestedRate: Int = 48_000,
     val allow48kFallback: Boolean = true,
     val fftSize: Int = 4_096,
     val overlapPercent: Int = 50,
@@ -82,7 +90,7 @@ data class PanadapterSettings(
     val levelCalibrationNotes: String = "",
 ) {
     fun validated(): PanadapterSettings = copy(
-        requestedRate = if (requestedRate == 48_000) 48_000 else 96_000,
+        requestedRate = if (requestedRate == 96_000) 96_000 else 48_000,
         fftSize = fftSize.takeIf { it in setOf(1_024, 2_048, 4_096, 8_192) } ?: 4_096,
         overlapPercent = overlapPercent.takeIf { it in setOf(25, 50, 75) } ?: 50,
         displayFloorDb = displayFloorDb.coerceIn(-140f, -40f),
@@ -131,7 +139,7 @@ data class PanadapterSettings(
             fun float(name: String, fallback: Float) = row[name]?.toFloatOrNull() ?: fallback
             fun bool(name: String, fallback: Boolean = false) = row[name]?.toBooleanStrictOrNull() ?: fallback
             val decoded = PanadapterSettings(
-                int("rate", 96_000), bool("fallback", true), int("fft", 4_096), int("overlap", 50),
+                int("rate", 48_000), bool("fallback", true), int("fft", 4_096), int("overlap", 50),
                 enumValueOf<PanadapterWindow>(row["window"] ?: PanadapterWindow.BLACKMAN_HARRIS.name),
                 float("floor", -120f), float("top", -20f), float("attack", .78f), float("release", .16f), int("average", 2),
                 bool("peak_hold"), float("peak_decay", 0f), bool("flatness", false), bool("swap"), bool("invert_i"), bool("invert_q"), bool("conjugate"),

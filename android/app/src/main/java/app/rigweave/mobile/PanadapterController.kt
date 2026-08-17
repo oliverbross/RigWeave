@@ -555,9 +555,7 @@ class PanadapterController(
         latencyEstimateMs = if (rate > 0) (routeProof.bufferFrames + value.fftSize) * 1_000f / rate else 0f
     }
     fun effectiveCenter(): Long {
-        val radio = radioState()
-        val age = if (radio.updatedMonotonicMs > 0) SystemClock.elapsedRealtime() - radio.updatedMonotonicMs else Long.MAX_VALUE
-        return if (radio.connected && age < 2_500) radio.effectiveRxHz.takeIf { it > 0 } ?: radio.frequencyHz else 0L
+        return effectivePanadapterCenter(radioState(), SystemClock.elapsedRealtime())
     }
 
     fun levelCalibrationActive(): Boolean {
@@ -584,7 +582,7 @@ class PanadapterController(
 
     fun tune(frequencyHz: Long, vfo: Int = radioState().rxVfo): String {
         val radio = radioState()
-        if (!radio.connected || radio.model != "KX3" || radio.transmitting) return "QSY blocked: KX3 is not in live receive"
+        if (!canPanadapterQsy(radio, effectiveCenter())) return "QSY blocked: KX3 is not in live receive"
         val rounded = roundedPanadapterFrequency(frequencyHz, settings.qsyStepHz)
         val previous = if (vfo == 1) radio.frequencyBHz else radio.frequencyHz
         if (rounded !in 100_000L..54_000_000L || previous <= 0) return "QSY blocked: frequency is outside the verified HF/6 m range"

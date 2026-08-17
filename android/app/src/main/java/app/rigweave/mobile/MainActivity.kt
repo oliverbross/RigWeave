@@ -208,7 +208,8 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         val observer = LifecycleEventObserver { _, event -> when (event) {
             Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> foreground = true
             Lifecycle.Event.ON_STOP, Lifecycle.Event.ON_DESTROY -> {
-                foreground = false; app.disarmAll(); voiceAudio.stopCurrent(); voiceTx.stop("App left foreground; defensive RX cleanup requested")
+                foreground = false; app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
+                voiceTx.stop("App left foreground; defensive RX cleanup requested")
             }
             else -> Unit
         } }
@@ -217,8 +218,8 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     }
     LaunchedEffect(voiceAudio) { voiceAudio.onFailure = { app.updateVoiceMacrosArmed(false) } }
     DisposableEffect(Unit) { onDispose {
-        scope.launch { transport.disconnect() }; panadapter.close(); audio.close(); neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
-        voiceAudio.close(); voiceTx.close(); eqAudio.close(); app.disarmAll()
+        app.disarmAll(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); audio.close()
+        scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
         NativeCore.destroy(core); database.close()
     } }
     pendingRisk?.let { command ->
@@ -309,7 +310,7 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog, app)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, cty, app, send)
-        Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, app,
+        Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
             transport, voiceStore, voiceAudio, voiceTx, openEq, connect, direct)
     }
 }
@@ -2692,7 +2693,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
 
 @Composable private fun SettingsScreen(state: RadioState, detail: String, database: QsoDatabase, features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController,
     callbook: CallbookController, cty: CtyController,
-    audio: AudioMonitorController, app: AppController, transport: UsbRadioTransport, voiceStore: VoiceMacroStore,
+    audio: AudioMonitorController, panadapter: PanadapterController, app: AppController, transport: UsbRadioTransport, voiceStore: VoiceMacroStore,
     voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, openEq: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
     var section by remember { mutableStateOf(SettingsSection.DEFAULT) }
@@ -2990,7 +2991,8 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             if (audio.inputCandidates.isEmpty()) Text("No eligible USB input", color = Muted)
             else ChoiceField("USB input", audio.selectedRx?.label ?: "Selection required",
                 audio.inputCandidates.map { it.sessionId.toString() to it.label }, audio.selectedRx?.sessionId?.toString().orEmpty(), {
-                voiceTx.stop("RX audio route changed"); app.updateVoiceMacrosArmed(false); audio.selectRxInput(it.toInt())
+                voiceTx.stop("RX audio route changed"); app.updateVoiceMacrosArmed(false)
+                panadapter.stop("RX audio route selection changed"); audio.selectRxInput(it.toInt())
             })
             Text("VOICE MACRO TX OUTPUT", color = Amber, fontWeight = FontWeight.Bold)
             if (audio.txOutputCandidates.isEmpty()) Text("No eligible USB output", color = Muted)
