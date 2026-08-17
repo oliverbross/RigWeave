@@ -1,30 +1,19 @@
-# Tab5 Feature Parity
+# Tab5 feature parity
 
-RigWeave Mobile ports the user-facing KX3 remote, logbook, and Neural DX behaviour from `kx3-tab5-remote` into native iPadOS and Android code. It does not inject fixture CAT frames, generated spots, fake spectrum, or demonstration QSOs.
+**Status:** Current implementation comparison, not a universal support claim.
 
-| Area | Mobile implementation | Data source |
-|---|---|---|
-| KX3 deck | Dual VFO, RX/TX, mode, CWT indicator, S/RF/SWR meters, split/RIT/XIT/preamp/attenuator flags, AF/RF gain, bandwidth, power, and CAT controls | Live 38,400-baud CAT polling |
-| Settings | Top tabs: Default, Log, Cluster, Macros, Alerts, Safety, Audio, Health, Diag, About | Native app preferences |
-| Local log | SQLite QSO journal, local browse, ADIF import/export, QRZ/HamQTH enrichment, and CTY fallback | App-private tablet storage; no SD card |
-| CTY.DAT | Download, validate, atomically replace, retain backup, and resolve callsign prefixes locally | App-private tablet storage |
-| Wavelog | Encrypted API key, connection/time checks, station discovery/selection, durable upload queue, cursor-based full-log download, cached remote browse | Configured Wavelog API |
-| DX cluster | Primary endpoint plus two ordered fallbacks | Configured live cluster endpoints |
-| LIVE | Ranked current DX opportunities with tune and detail actions | Live cluster feed and CTY/DX analysis |
-| SMART | Worked-state, distance, bearing, path, and propagation ranking | Shared DX analysis |
-| BANDMAP | Per-band activity and opportunity presentation | Shared DX snapshot |
-| PULSE | Twelve time buckets for each band | Shared band timeline |
-| WORLD | 5 by 12 activity heat grid and regional pulse bars | Shared world grid and regions |
-| WATCH | Watchlist-specific graphical activity and tune actions | Live cluster feed and configured watchlist |
+RigWeave carries forward selected owner-authored KX3 remote, logging, DSP, and DX behaviour from the Tab5 project into native Apple and Android clients over a shared C++ core. It does not inject fixture CAT frames, generated spots, fake spectrum, or demonstration QSOs in production paths.
 
-## iPad acceptance pass
+| Area | Shared core | Apple | Android | Evidence boundary |
+|---|---|---|---|---|
+| KX3/KX2 CAT and safety classes | Implemented | DriverKit/Objective-C++ adapter | USB-serial/JNI adapter | Core tests and both builds pass; physical iPad/KX3 is historical, Android hardware unverified |
+| Radio faceplate/state | Parser/state | SwiftUI controls | Compose KX3 console | Client builds; physical evidence differs by client |
+| Local log and ADIF | ADIF/identity helpers | SQLite/document-directory import/export | SQLite/app-private import/export and paging | Automated coverage is strongest in core/Android |
+| Wavelog | Retry/normalisation helpers | Keychain-backed queue and station/cache flows | encrypted preferences, durable queue and two-way flows | Authenticated current service proof unavailable |
+| Cluster/CTY/DX | Parsing, CTY, ranking, worked status | Cluster, spots and compact DX views | Cluster plus expanded Neural DX workspace | Historical iPad real-cluster pass; Android network/hardware proof not repeated |
+| Panadapter | Shared DSP | AVAudioSession and SwiftUI | Android audio/native/render paths | Historical iPad physical I/Q; Android physical I/Q unverified |
+| CW macros | Safety primitives | Local macro editor/text CAT path | Session-armed macro workflow and abort semantics | Source/build evidence; transmit was not exercised in Phase 0 |
 
-1. Enable the embedded Prolific KXUSB DriverKit extension, connect the PL2303GC cable and KX3, then confirm the identity and both VFOs populate without placeholder values.
-2. Change mode, frequency, split, RIT/XIT, preamp, attenuator, AF/RF gain, bandwidth, and power on the radio and confirm the deck follows; use app CAT controls and confirm the radio follows.
-3. Save a real QSO, relaunch, confirm persistence, export the whole ADIF file, re-import a known file, and inspect the record fields and duplicate handling.
-4. Configure Wavelog, run Test Wavelog and Check time sync, load station profiles, select the intended station, upload the queued QSO, run Full log, and confirm the remote contact cache and cursor complete without duplicates.
-5. Configure QRZ or HamQTH, test the selected service, enrich a known callsign, update CTY.DAT, and confirm local country fallback remains available without a network call.
-6. Connect to the intended DX cluster, verify ordered fallback behaviour, and exercise LIVE, SMART, BANDMAP, PULSE, WORLD, and WATCH. Tune only a spot you intend to use.
-7. Feed physical stereo I/Q audio and verify the spectrum and newest-first waterfall respond to received RF rather than an idle placeholder.
+Portable-programme reference fields in Android logging do not constitute POTA/SOTA/WWFF feeds, activation sessions, P2P/S2S, or award support.
 
-Software builds establish implementation readiness only. Driver activation, USB enumeration, live CAT semantics, authenticated Wavelog behaviour, real cluster density, and physical I/Q fidelity require this device pass.
+Software builds establish implementation readiness only. USB enumeration, DriverKit activation, live CAT semantics, authenticated Wavelog behaviour, real cluster density, and physical I/Q fidelity require separate evidence.

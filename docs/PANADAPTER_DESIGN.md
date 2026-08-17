@@ -1,40 +1,35 @@
 # Panadapter and waterfall design
 
+**Status:** Current implementation description. Phase 0 changed documentation only.
+
 ## Signal contract
 
-RigWeave accepts real stereo I/Q PCM. Left is I and right is Q. A mono route is rejected on iPad because duplicating one channel would produce a misleading symmetric display. Spectrum reversal is an explicit operator setting for interfaces whose I/Q polarity is reversed.
+RigWeave consumes real stereo I/Q PCM. Left is I and right is Q. Mono input must not be duplicated into a misleading symmetric display. Spectrum reversal is an explicit operator setting for interfaces whose I/Q polarity is reversed.
 
-The shared 1,024-point complex FFT performs:
+The shared implementation is in core/portable/include/kx3/panadapter_dsp.hpp and core/portable/src/panadapter_dsp.cpp, exposed through core/include/rigweave/core.h. It performs DC removal, windowing, complex FFT/magnitude processing, smoothing, bin copying, and I/Q metrics.
 
-1. independent I and Q mean removal;
-2. a Blackman-Harris window;
-3. radix-2 complex FFT and FFT shift;
-4. magnitude normalization by the window's coherent gain;
-5. dBFS conversion with a -140 dB floor;
-6. fast attack and slower release smoothing in dB space.
+Apple feeds the core from AVAudioSession in ios/RigWeave/FeatureModel.swift and renders the spectrum/waterfall in ios/RigWeave/ContentView.swift. Android binds the shared/native path through its JNI build and uses AudioMonitorController/MainActivity for physical input, monitoring, and presentation.
 
-Automatic per-frame Gram-Schmidt correction was removed. A live RF frame cannot distinguish front-end imbalance from legitimate asymmetric spectrum content, so deriving a correction from that same frame can suppress or rotate real signals. Any future I/Q calibration must be an explicit measured calibration with stable stored coefficients.
+## Display contract
 
-## Display model
+- Spectrum/waterfall is instrumentation, not generated decoration.
+- Centre frequency comes from live CAT; span comes from the physical sample rate.
+- Newest waterfall history stays aligned with the current frequency frame.
+- Noise floor, black level, dynamic range, palette, and I/Q reversal are explicit.
+- No physical input means an offline/empty instrument.
 
-- Spectrum: 41% of the instrument height.
-- Frequency scale: a dedicated strip between spectrum and waterfall.
-- Waterfall: 59% minus the scale strip; newest row first and scrolling downward.
-- Scale: center frequency from live CAT and span from the physical audio sample rate.
-- Floor: two-pass trimmed mean (bins at or below the first-pass mean), excluding the DC notch, followed by EMA smoothing.
-- Color: operator-selected piecewise perceptual gradients; black-level offset and dynamic range remain independent controls.
-- Empty state: no generated samples. The instrument remains explicitly offline until physical stereo I/Q arrives.
+## Evidence
 
-## Reference findings
+- Shared host build and focused CTest passed during Phase 0.
+- Generic iOS build and Android unit/assemble validation passed during Phase 0.
+- Historical repository evidence records a physical iPad stereo-I/Q pass at 48 kHz and more than 1.2 million frames. Phase 0 did not repeat this device test.
+- Android source and build paths exist, but a physical Android I/Q acceptance pass remains unverified.
 
-The design uses concepts observed in the owner-authorized QMX Panadapter and AetherSDR sources without copying their platform implementations:
+## Residual gates
 
-- QMX: 1,024-point complex FFT, Blackman-Harris window, about 30 FPS, distinct trace and waterfall smoothing, newest-at-top waterfall, configurable black level/contrast/floor blend, and realistic treatment of a narrow direct-conversion DC artifact.
-- AetherSDR: roughly 40/60 spectrum/waterfall hierarchy, dBm-domain data, a trimmed live noise-floor estimate, independent dynamic-range controls, gradient color maps, frame coalescing, and accelerated compositing with a CPU fallback.
-- Thetis: avoid preserving stale waterfall alignment across center-frequency changes; current releases deliberately sleep or realign waterfall data during frequency-frame transitions rather than smearing invalid history.
+- Measure axis/calibration accuracy against known RF/audio sources.
+- Reconfirm I/Q orientation, image rejection, frequency alignment, and device persistence on each supported interface.
+- Separate capture proof, DSP proof, rendered-axis proof, and monitoring/playback proof.
+- Phase 1A must harden this implementation rather than rewrite it.
 
-Reference repositories:
-
-- `https://github.com/aethersdr/AetherSDR`
-- `https://github.com/ramdor/Thetis`
-- local owner checkout `/Users/oliver/Documents/M5Stack Core2/qmx-panadapter`
+Historical research references and owner-local paths are retained in [PORTING_NOTES.md](PORTING_NOTES.md); they are provenance clues, not imported Phase 0 code.

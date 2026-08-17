@@ -1,5 +1,7 @@
 # Neural DX Watcher parity contract
 
+> **Status and coverage.** This is an active Android implementation/design contract for the Neural DX workspace, not proof of Apple parity or authenticated live success for every provider. Android source under NeuralDxController.kt, NeuralDxScreen.kt, and NeuralDxMap.kt implements the listed local stores, views, maps, and provider adapters to differing depths. Shared CTY/DX/operator-intelligence primitives live in the C++ core. Apple currently exposes a smaller DX/cluster/solar feature set and does not implement these Android pages. Provider credentials, terms, network availability, and physical-device proof remain separate gates; see [phase-0/ACTUAL_FEATURE_INVENTORY.md](phase-0/ACTUAL_FEATURE_INVENTORY.md).
+
 Canonical source: `F1SMV/Neural-DX-Watcher` v12.1, commit
 `fe3cba8ed9c0502f5dabdb2f64ebd990de986559` (2026-08-16).
 

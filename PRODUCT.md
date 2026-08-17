@@ -1,62 +1,53 @@
-# Product
-
-<!-- impeccable:product-schema 1 -->
-
-## Platform
-
-android
-
-## Users
-
-Amateur-radio operators using an Android phone or tablet as a direct field console for an Elecraft KX3 or KX2. The primary tablet posture is landscape, touch-first operation beside the physical radio; compact and multi-window layouts must remain usable.
-
-## Product Purpose
-
-RigWeave provides observed live radio control, local-first QSO logging, Wavelog synchronization, and analyzed DX awareness through native Android hardware and services. Success means an operator can control and monitor the connected radio, log safely without network dependence, and act on real DX data without simulated fallback.
+# RigWeave product contract
 
 ## Positioning
 
-RigWeave is the native mobile successor to the M5Stack Tab5 KX3 Touch Remote: one hardware-first operating console built around a portable C++ radio/DX core and Android USB Host integration.
+> RigWeave is a radio-native portable operating cockpit that connects discovery, tuning, operating, logging, synchronisation, and progress without requiring fabricated state or permanent network access.
 
-## Operating Context
+RigWeave is local-first. Radio control and local logging must remain useful without a cloud service. Online enrichment may improve the operating loop but must degrade independently and honestly.
 
-- Elecraft KXUSB/Prolific PL2303-family serial connection, normally 38,400 baud.
-- KX3/KX2 field, portable, and station operation in changing light and network conditions.
-- Local SQLite/ADIF logging with optional Wavelog, QRZ/HamQTH, NOAA, CTY, and DX-cluster services.
-- Android tablet landscape, portrait, multi-window, keyboard, and pointer use.
+## Current product
 
-## Capabilities and Constraints
+- Native Apple mobile client using SwiftUI. The current target and physical evidence are iPad-focused; iPhone support is not claimed.
+- Native Android client using Jetpack Compose.
+- Shared C++17 core exposed through a C ABI.
+- Deep Elecraft KX3/KX2 integration: observed CAT state, radio controls, transport adapters, safety classification, logging, real spectrum paths, and DX intelligence.
+- Local SQLite journals and ADIF workflows.
+- Optional Wavelog, QRZ/HamQTH, CTY, cluster, NOAA/solar, and other Android Neural DX data sources where implemented and configured.
+- CW text macros with explicit operator safety controls; voice macros are not implemented.
 
-- Retained destinations: Home, Radio, Logbook, Presets, DX, and Settings. Radio owns the complete KX3 control surface.
-- Panadapter, raw Spots destination, and Digital/WSJT-X are explicitly deferred and absent from navigation.
-- The consolidated DX destination owns live cluster browsing and analyzed DX views.
-- Radio state must be observed truth with explicit live, stale, disconnected, pending, and failed states.
-- TX, TUNE, ATU TUNE, and CW macro transmission are disabled by default, explicitly armed, never started automatically, and never blindly retried.
-- Local QSO durability outranks network synchronization; service failure degrades only that service.
-- Logbook follows the configured source: the complete tablet log in Local mode, or the selected station's two-way cached Wavelog log including offline queued QSOs. New QSOs are entered only from Radio.
-- Logbook filtering covers date presets, station and award fields, propagation, comments, numeric distance/duration expressions, QSL and online-service states, sorting, quick filters, and bounded result counts.
-- No demo radio state, fixture spots, fabricated worked state, credentials, or automatic test QSO.
+The clients do not have identical surface coverage. Android currently contains the larger Neural DX workspace; Apple contains the physically proven iPad KXUSB and stereo-I/Q path. Cross-platform claims must name the client and evidence level.
 
-## Brand Commitments
+## Approved direction
 
-Preserve the Tab5 Flightline instrument language: graphite chassis, amber radio display, off-white primary labels, yellow hold labels, green healthy state, and red transmit/safety state. Translate it into Material 3 behavior rather than copying embedded-device mechanics literally.
+1. KX3/KX2 Studio: harden the existing panadapter/audio-source path, then RX/TX EQ and profiles, then voice macros.
+2. Portable Chase for POTA, SOTA, and WWFF.
+3. Portable Activate.
+4. Sync and Progress.
+5. FlexRadio SmartLink through legitimate official interfaces and authentication.
+6. One Qt 6/QML/CMake desktop client for macOS, Windows, and Linux.
+7. QMX, rigctld, additional radios, and additional programmes only after hardware/data/licence gates.
 
-## Evidence on Hand
+See [docs/ROADMAP.md](docs/ROADMAP.md). Roadmap items are not current capabilities.
 
-- Canonical source: `/Users/oliver/Documents/M5Stack Core2/kx3-tab5-remote`.
-- Mobile parity contract: `docs/mobile-architecture-orchestration.md` in that source.
-- Canonical visual reference: `docs/evidence/ui-comps/option-b-flightline.png` in that source.
-- Current Android implementation and shared portable core in this repository.
-- A physical Lenovo `TB373FU`, real KXUSB `067B:23A3`, and live KX3 are available for validation.
+## Product principles
 
-## Product Principles
+1. **Observed radio truth.** No simulated radio, fabricated spectrum, fixture spot, demonstration QSO, invented service success, or hidden fallback in production paths.
+2. **Local durability before network convenience.** Local logging remains authoritative until a configured authority accepts a durable outbox item.
+3. **Explicit transmit safety.** Transmit-capable actions are operator-initiated, bounded, abortable, and never blindly retried.
+4. **Authority-aware synchronisation.** Wavelog mode and local-log mode remain distinct; direct connectors must not duplicate uploads when Wavelog is authoritative.
+5. **Graceful per-service degradation.** One unavailable provider must not falsify or disable unrelated local work.
+6. **Platform-native interaction.** SwiftUI and Compose remain native; future desktop UI is Qt/QML.
+7. **Lean shared core.** Put portable protocol, DSP, parsing, ranking, logging-domain, provider-neutral, and retry-policy logic in C++ when that is genuinely useful. Keep hardware, secure storage, document picking, lifecycle, networking orchestration, and UI platform-specific.
+8. **Preserve the working KX3/KX2 path.** Do not replace proven code with a theoretical abstraction.
+9. **Evidence before support claims.** Source, tests, builds, simulator/emulator, physical device, real radio/audio, and authenticated service are distinct evidence levels.
 
-1. Radio truth before decoration.
-2. Local control and local logging before network work.
-3. Dense controls remain legible, predictable, and touch-safe.
-4. Transmit-capable actions are explicit, bounded, and never inferred.
-5. Hardware, service, and physical-radio evidence remain separate.
+## Licence and reuse
 
-## Accessibility & Inclusion
+RigWeave is GPL-3.0-only. Distributed covered binaries require complete corresponding source and retained notices; charging for distribution or services remains permitted.
 
-Use Material semantic roles, scalable `sp` typography, 48 dp minimum touch targets, explicit text plus color for state, meaningful content descriptions, and size-class-driven layouts.
+Future third-party reuse must record the source URL, immutable upstream commit, original path, licence, copyright/provenance, RigWeave modifications, applicable notice entries, dependencies, and corresponding-source obligations.
+
+Nexus is an evaluated external upstream, not an incorporated dependency. Its name or licence does not imply endorsement or make every vendored/dependency component automatically reusable. Component-specific authorisation and review are required before reuse.
+
+Public distribution through Apple-controlled channels remains an unresolved legal/platform risk. No App Store submission or compatibility claim is part of this contract.
