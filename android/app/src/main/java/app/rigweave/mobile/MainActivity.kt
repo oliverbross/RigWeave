@@ -1583,11 +1583,11 @@ private data class SpotColumn(val label: String, val width: Dp, val mono: Boolea
     BoxWithConstraints(modifier) {
         val minimumWidth = 760.dp
         val tableWidth = if (maxWidth > minimumWidth) maxWidth else minimumWidth
-        val commentWidth = 126.dp + if (maxWidth > minimumWidth) maxWidth - minimumWidth else 0.dp
+        val commentWidth = 107.dp + if (maxWidth > minimumWidth) maxWidth - minimumWidth else 0.dp
         val columns = listOf(
-            SpotColumn("Date", 56.dp, true), SpotColumn("Time", 80.dp, true), SpotColumn("Band", 36.dp, centered = true),
+            SpotColumn("Date", 56.dp, true), SpotColumn("Time", 80.dp, true), SpotColumn("Band", 42.dp, centered = true),
             SpotColumn("Freq", 92.dp, true), SpotColumn("Callsign", 72.dp), SpotColumn("Mode", 42.dp),
-            SpotColumn("Country", 86.dp), SpotColumn("CQ", 28.dp, true, centered = true), SpotColumn("DX de", 66.dp),
+            SpotColumn("Country", 99.dp), SpotColumn("CQ", 28.dp, true, centered = true), SpotColumn("DX de", 66.dp),
             SpotColumn("CS", 32.dp, true, centered = true), SpotColumn("DS", 44.dp, true, centered = true), SpotColumn("Comment", commentWidth))
         Column(Modifier.width(tableWidth).fillMaxHeight().horizontalScroll(rememberScrollState())) {
             Row(Modifier.fillMaxWidth().height(36.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
