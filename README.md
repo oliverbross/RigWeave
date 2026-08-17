@@ -83,6 +83,8 @@ The Android source also binds the full portable feature engine through JNI and s
 
 Android also includes six SSB voice-macro slots for exact USB/LSB operation. Recordings remain in private tablet storage, preview is verified against the built-in speaker, and transmission uses an explicitly selected DigiRig USB output with left-channel speech/right-channel silence. PTT is owned only by verified Elecraft CAT (`TQ0 -> TX -> TQ1 -> audio -> RX -> TQ0`); RTS/DTR are kept inactive. Multiple CAT or USB-audio candidates require explicit selection. See [`docs/VOICE_MACROS_ANDROID.md`](docs/VOICE_MACROS_ANDROID.md) for setup, privacy limits, calibration, and the operator-controlled dummy-load checklist.
 
+Android EQ Studio is a dedicated responsive KX3 calibration workspace. It reads exact RX/TX menu values, separates verified radio state from local drafts and profiles, records one transient 10–15 second physical-input clip, supports raw-reference or hardware-baseline delta preview, and applies only after `TQ0`, menu/context, conflict, and exact readback checks. Expanded layouts expose EQ in the rail; compact layouts retain the six destinations and open it from Radio or Settings → Audio. See [`docs/EQ_STUDIO.md`](docs/EQ_STUDIO.md).
+
 ## Panadapter architecture
 
 The mobile panadapter consumes physical stereo I/Q only. Its shared FFT path now uses independent DC removal, coherent-gain-normalized complex magnitudes, Blackman-Harris windowing, FFT shift, and asymmetric dB-domain attack/release smoothing. It does not infer an I/Q calibration transform from each live frame.

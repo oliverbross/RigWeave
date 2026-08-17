@@ -20,7 +20,8 @@
 - Typography: Android system sans for navigation, forms, and actions; monospace only for frequency, CAT, meters, time, and tabular measurements.
 - Shape: 8–12 dp instrument and panel radii; small state chips may be pill-shaped. Dense operational content uses regions and tables, not nested decorative cards.
 - Controls: every paired control presents primary tap text and secondary yellow hold text. Minimum target 48 dp with clear pressed, disabled, armed, pending, and error states.
-- Navigation: Material navigation rail/drawer on expanded width; navigation bar on compact width. Retained destinations are Home, Radio, Logbook, Presets, DX, Settings; the Radio destination owns the complete KX3 control surface.
+- Navigation: Material navigation rail/drawer on expanded width; navigation bar on compact width. The compact bar retains Home, Radio, Logbook, Presets, DX, and Settings. EQ is a first-class expanded destination and a prominent Radio/Settings Audio route on compact layouts, with a normal back path.
+- EQ Studio: a Flightline audio bench, not a music-player equalizer. Graphite instrument regions hold exact green radio readback, yellow local draft state, amber response/measurement plots, real waveform/spectrum data, source/baseline provenance, touch-safe eight-band controls, and a fixed apply-and-verify action. Compact layouts stack the same workflow without shrinking the controls into narrow faders.
 - Motion: short Material fade-through/shared-axis transitions only where state or destination changes. No decorative entrance choreography.
 - Safety: transmit state overrides ordinary color and hierarchy with redundant red text, full-width warning, and permanent emergency RX access.
 - Tables: fixed semantic columns, alternating tonal rows, sticky context where possible, explicit empty/loading/error recovery, and 20–25 row paging rather than unbounded rendering.

@@ -66,11 +66,14 @@ class VoiceMacroAudioController(
     fun preview(slot: Int) = scope.launch { mutex.withLock { previewLocked(slot) } }
 
     fun importWave(slot: Int, bytes: ByteArray) = scope.launch { mutex.withLock {
-        stopCurrent(); state = VoiceAudioState.Importing(slot); routes.stop()
-        runCatching { withContext(Dispatchers.Default) { store.import(slot, bytes) } }
-            .onSuccess { status = "Voice macro ${slot + 1} imported · ${store.slots[slot].durationMillis / 1_000f}s" }
-            .onFailure { fail("WAV import failed: ${it.message}") }
-        state = VoiceAudioState.Idle
+        if (!routes.acquireAudio("VOICE", true)) { fail("Another audio operation is active"); return@withLock }
+        try {
+            stopCurrent(); state = VoiceAudioState.Importing(slot)
+            runCatching { withContext(Dispatchers.Default) { store.import(slot, bytes) } }
+                .onSuccess { status = "Voice macro ${slot + 1} imported · ${store.slots[slot].durationMillis / 1_000f}s" }
+                .onFailure { fail("WAV import failed: ${it.message}") }
+            state = VoiceAudioState.Idle
+        } finally { routes.releaseAudio("VOICE") }
     } }
 
     fun delete(slot: Int) {
@@ -80,12 +83,13 @@ class VoiceMacroAudioController(
     }
 
     fun close() {
-        stopCurrent(); releaseAudio(); scope.cancel()
+        stopCurrent(); releaseAudio(); routes.releaseAudio("VOICE"); scope.cancel()
     }
 
     private suspend fun record(slot: Int) {
         require(slot in 0 until VOICE_MACRO_COUNT)
-        stopCurrent(); routes.stop(); active.set(true); state = VoiceAudioState.Recording(slot); status = "Recording from built-in tablet microphone"
+        if (!routes.acquireAudio("VOICE", true)) return failAndIdle("Another audio operation is active")
+        stopCurrent(); active.set(true); state = VoiceAudioState.Recording(slot); status = "Recording from built-in tablet microphone"
         val input = routes.builtInMicDevice() ?: return failAndIdle("No unique built-in tablet microphone is available")
         val source = if (audioManager.getProperty(AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED) == "true")
             MediaRecorder.AudioSource.UNPROCESSED else MediaRecorder.AudioSource.MIC
@@ -121,11 +125,12 @@ class VoiceMacroAudioController(
             store.save(slot, prepared)
             status = "Voice macro ${slot + 1} saved · ${prepared.durationMillis / 1_000f}s"
         } catch (error: Exception) { fail("Recording failed: ${error.message}") }
-        finally { record.release(); recorder = null; level = 0f; state = VoiceAudioState.Idle }
+        finally { record.release(); recorder = null; level = 0f; state = VoiceAudioState.Idle; routes.releaseAudio("VOICE") }
     }
 
     private suspend fun previewLocked(slot: Int) {
-        stopCurrent(); routes.stop(); active.set(true); state = VoiceAudioState.Previewing(slot); status = "Verifying tablet speaker preview route"
+        if (!routes.acquireAudio("VOICE", true)) return failAndIdle("Another audio operation is active")
+        stopCurrent(); active.set(true); state = VoiceAudioState.Previewing(slot); status = "Verifying tablet speaker preview route"
         val speaker = routes.speakerDevice() ?: return failAndIdle("No unique built-in tablet speaker is available")
         val pcm = runCatching { store.read(slot) }.getOrElse { return failAndIdle("Preview failed: ${it.message}") }
         val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
@@ -155,7 +160,7 @@ class VoiceMacroAudioController(
             }
             status = if (active.get()) "Preview complete · radio PTT was not used" else "Preview stopped"
         } catch (error: Exception) { fail("Preview failed: ${error.message}") }
-        finally { active.set(false); releaseAudio(); state = VoiceAudioState.Idle }
+        finally { active.set(false); releaseAudio(); state = VoiceAudioState.Idle; routes.releaseAudio("VOICE") }
     }
 
     private fun writeAll(player: AudioTrack, samples: ShortArray) {
@@ -174,7 +179,7 @@ class VoiceMacroAudioController(
     }
 
     private fun failAndIdle(message: String) {
-        fail(message); active.set(false); state = VoiceAudioState.Idle; level = 0f
+        fail(message); active.set(false); state = VoiceAudioState.Idle; level = 0f; routes.releaseAudio("VOICE")
     }
 
     private fun fail(message: String) {

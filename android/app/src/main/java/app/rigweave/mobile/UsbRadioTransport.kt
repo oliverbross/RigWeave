@@ -64,6 +64,7 @@ class UsbRadioTransport(private val context: Context) {
     private val connectQueries = listOf("K3;", "OM;", "ID;", "K31;", "AI2;") + instrumentQueries
     private var pollCount = 0
     @Volatile private var voiceOperationExclusive = false
+    @Volatile private var eqOperationExclusive = false
 
     var candidates by mutableStateOf(emptyList<SerialDeviceDescriptor>()); private set
     var selected by mutableStateOf<SerialDeviceDescriptor?>(null); private set
@@ -72,6 +73,19 @@ class UsbRadioTransport(private val context: Context) {
 
     fun beginVoiceOperation() { voiceOperationExclusive = true }
     fun endVoiceOperation() { voiceOperationExclusive = false }
+
+    suspend fun <T> exclusiveEqTransaction(block: suspend (EqCatIo) -> T): T = withContext(Dispatchers.IO) {
+        mutex.lock()
+        try {
+            check(!voiceOperationExclusive) { "Voice macro owns CAT; stop it before opening EQ Studio" }
+            val active = port ?: error("Connect the USB serial adapter first")
+            eqOperationExclusive = true
+            block(EqTransportSession(active))
+        } finally {
+            eqOperationExclusive = false
+            mutex.unlock()
+        }
+    }
 
     fun discovered(): List<String> = refreshCandidates().map(SerialDeviceDescriptor::label)
 
@@ -172,7 +186,7 @@ class UsbRadioTransport(private val context: Context) {
     } }
 
     suspend fun poll(): UsbResult? = withContext(Dispatchers.IO) { mutex.withLock {
-        if (port == null || voiceOperationExclusive) return@withLock null
+        if (port == null || voiceOperationExclusive || eqOperationExclusive) return@withLock null
         try {
             val queries = if (pollCount++ % 6 == 0) instrumentQueries else fastQueries
             UsbResult.Connected(exchange(queries), "Live CAT state · ${selected?.label.orEmpty()}")
@@ -180,7 +194,7 @@ class UsbRadioTransport(private val context: Context) {
     } }
 
     suspend fun pollCwText(): UsbResult? = withContext(Dispatchers.IO) { mutex.withLock {
-        if (port == null || voiceOperationExclusive) return@withLock null
+        if (port == null || voiceOperationExclusive || eqOperationExclusive) return@withLock null
         try {
             val frames = exchange(listOf("DB;"), initialTimeout = 120, trailingTimeout = 40)
             UsbResult.Connected(frames, "Live CW text", frames)
@@ -258,6 +272,53 @@ class UsbRadioTransport(private val context: Context) {
             timeout = trailingTimeout
         }
         return output.toByteArray()
+    }
+
+    private inner class EqTransportSession(private val active: UsbSerialPort) : EqCatIo {
+        private val allowedWrites = Regex("^(MN(?:008|009|255);|SWT(?:19|27|20|28|21|29|32|33);|UP;|DN;|TE(?:[+-]\\d{2}){8};)$")
+        private val allowedQueries = setOf("TQ;", "MN;", "DB;", "FT;", "MD;", "MD$;", "ES;", "RVM;", "ID;", "OM;")
+
+        override suspend fun query(command: String, expectedPrefix: String, timeoutMillis: Long): String {
+            val normalized = normalize(command) ?: error("CAT query is empty")
+            require(normalized in allowedQueries) { "EQ query is not allowlisted: $normalized" }
+            readFrames(active, 1, 1)
+            active.write(normalized.toByteArray(Charsets.US_ASCII), 500)
+            val deadline = System.currentTimeMillis() + timeoutMillis
+            val pending = StringBuilder()
+            val unsolicited = mutableListOf<String>()
+            var matched: String? = null
+            var quietDeadline = Long.MAX_VALUE
+            while (System.currentTimeMillis() < deadline) {
+                val buffer = ByteArray(256)
+                val now = System.currentTimeMillis()
+                if (matched != null && now >= quietDeadline) return matched
+                val remaining = minOf(deadline - now, if (matched == null) 120 else quietDeadline - now)
+                val wait = remaining.coerceIn(1, 120).toInt()
+                val count = active.read(buffer, wait).coerceAtLeast(0)
+                if (count == 0) {
+                    if (matched != null && System.currentTimeMillis() >= quietDeadline) return matched
+                    continue
+                }
+                pending.append(buffer.copyOf(count).toString(Charsets.US_ASCII))
+                while (';' in pending) {
+                    val end = pending.indexOf(";")
+                    val frame = pending.substring(0, end + 1)
+                    pending.delete(0, end + 1)
+                    if (frame.startsWith(expectedPrefix, ignoreCase = true)) {
+                        matched = frame
+                        quietDeadline = System.currentTimeMillis() + 55
+                    } else unsolicited += frame
+                }
+            }
+            if (matched != null) return matched
+            error("Timed out waiting for $expectedPrefix response${if (unsolicited.isEmpty()) "" else " (${unsolicited.size} unrelated frame(s) received)"}")
+        }
+
+        override suspend fun write(command: String) {
+            val normalized = normalize(command) ?: error("CAT command is empty")
+            require(allowedWrites.matches(normalized)) { "EQ write is not allowlisted: $normalized" }
+            active.write(normalized.toByteArray(Charsets.US_ASCII), 500)
+        }
     }
 
     private fun normalize(command: String): String? = command.trim().let { if (it.endsWith(';')) it else "$it;" }.takeUnless { it == ";" }

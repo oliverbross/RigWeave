@@ -110,7 +110,7 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), LOGBOOK("Logbook"), PRESETS("Presets"), DX("DX"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), EQ("EQ"), LOGBOOK("Logbook"), PRESETS("Presets"), DX("DX"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     DEFAULT("Default"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
@@ -134,6 +134,9 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     var radio by remember { mutableStateOf(NativeCore.parseState(NativeCore.state(core))) }
     val voiceStore = remember { VoiceMacroStore(context) { app.voiceMacroLabels.toList() } }
     val voiceAudio = remember { VoiceMacroAudioController(context, audio, voiceStore) }
+    val eqAudio = remember { EqAudioController(context, audio) }
+    val eqProfiles = remember { EqProfileStore(context) }
+    val eqStudio = remember { EqStudioController(transport, { radio }, eqAudio, eqProfiles) }
     var foreground by remember { mutableStateOf(true) }
     val voiceTx = remember { VoiceMacroTransmitController(context, transport, audio, voiceStore, app,
         radioState = { radio }, foreground = { foreground }, audioOperationIdle = { voiceAudio.state is VoiceAudioState.Idle }, onFrames = { frames ->
@@ -197,6 +200,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
             app.updateVoiceMacrosArmed(false); voiceTx.stop("CAT or exact sideband mode changed")
         }
     }
+    LaunchedEffect(radio.connected) { eqStudio.onConnectionChanged(radio.connected) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event -> when (event) {
@@ -212,7 +216,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     LaunchedEffect(voiceAudio) { voiceAudio.onFailure = { app.updateVoiceMacrosArmed(false) } }
     DisposableEffect(Unit) { onDispose {
         scope.launch { transport.disconnect() }; audio.close(); neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
-        voiceAudio.close(); voiceTx.close(); app.disarmAll()
+        voiceAudio.close(); voiceTx.close(); eqAudio.close(); app.disarmAll()
         NativeCore.destroy(core); database.close()
     } }
     pendingRisk?.let { command ->
@@ -257,13 +261,15 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
             Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, app, transport,
-                voiceStore, voiceAudio, voiceTx, connect, send, direct, requestVoice, clearCwDecode)
+                voiceStore, voiceAudio, voiceTx, eqStudio, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
+                connect, send, direct, requestVoice, clearCwDecode)
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
-            Destination.entries.forEach { item -> NavigationBarItem(destination == item, { destination = item },
+            Destination.entries.filterNot { it == Destination.EQ }.forEach { item -> NavigationBarItem(destination == item, { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
             Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, app, transport,
-                voiceStore, voiceAudio, voiceTx, connect, send, direct, requestVoice, clearCwDecode)
+                voiceStore, voiceAudio, voiceTx, eqStudio, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
+                connect, send, direct, requestVoice, clearCwDecode)
         } }
     }
 }
@@ -271,6 +277,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
 private fun navIcon(item: Destination) = when (item) {
     Destination.HOME -> Icons.Outlined.Home
     Destination.RADIO -> Icons.Outlined.SettingsInputAntenna
+    Destination.EQ -> Icons.Outlined.Equalizer
     Destination.LOGBOOK -> Icons.AutoMirrored.Outlined.List
     Destination.PRESETS -> Icons.Outlined.Bookmarks
     Destination.DX -> Icons.Outlined.Public
@@ -280,15 +287,17 @@ private fun navIcon(item: Destination) = when (item) {
 @Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase,
     features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, app: AppController,
     transport: UsbRadioTransport, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
+    eqStudio: EqStudioController, compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit) {
     when (destination) {
         Destination.HOME -> HomeScreen(radio, app, send)
-        Destination.RADIO -> RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, connect, send, direct, requestVoice, clearCwDecode)
+        Destination.RADIO -> RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode)
+        Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
         Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog, app)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, cty, app, send)
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, app,
-            transport, voiceStore, voiceAudio, voiceTx, connect, direct)
+            transport, voiceStore, voiceAudio, voiceTx, openEq, connect, direct)
     }
 }
 
@@ -358,7 +367,7 @@ private fun navIcon(item: Destination) = when (item) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable private fun RadioScreen(state: RadioState, detail: String, app: AppController, database: QsoDatabase,
     wavelog: WavelogController, callbook: CallbookController, cty: CtyController, features: FeatureController,
-    voiceStore: VoiceMacroStore, voiceTx: VoiceMacroTransmitController, connect: () -> Unit, send: (String) -> Unit,
+    voiceStore: VoiceMacroStore, voiceTx: VoiceMacroTransmitController, openEq: () -> Unit, connect: () -> Unit, send: (String) -> Unit,
     direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit) {
     var previousState by remember { mutableStateOf<RadioState?>(null) }
     var radioFeedback by remember { mutableStateOf<RadioFeedback?>(null) }
@@ -401,6 +410,7 @@ private fun navIcon(item: Destination) = when (item) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Kx3StatusRail(state, detail, connect, direct)
+                OutlinedButton(openEq, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("EQ STUDIO · READ · CAPTURE · COMPARE · APPLY & VERIFY") }
                 CompactKx3Face(state, send, radioFeedback, feedbackVisible, Modifier.fillMaxWidth().weight(1f))
             }
             Row(Modifier.fillMaxWidth().weight(2f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2670,7 +2680,8 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
 @Composable private fun SettingsScreen(state: RadioState, detail: String, database: QsoDatabase, features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController,
     callbook: CallbookController, cty: CtyController,
     audio: AudioMonitorController, app: AppController, transport: UsbRadioTransport, voiceStore: VoiceMacroStore,
-    voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, reconnect: () -> Unit, direct: (String) -> Unit) {
+    voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, openEq: () -> Unit,
+    reconnect: () -> Unit, direct: (String) -> Unit) {
     var section by remember { mutableStateOf(SettingsSection.DEFAULT) }
     var host by remember { mutableStateOf(features.clusterHost) }; var port by remember { mutableStateOf(features.clusterPort.toString()) }
     var fallbackHost by remember { mutableStateOf(features.fallbackHost) }; var fallbackPort by remember { mutableStateOf(features.fallbackPort.toString()) }
@@ -2950,6 +2961,9 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             CtyUpdatePanel(cty)
         }
         if (section == SettingsSection.AUDIO) SettingsCard("USB AUDIO ROUTES") {
+            Button(openEq, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("OPEN EQ STUDIO") }
+            Text("EQ capture uses the selected USB input or a clearly labelled built-in reference mic, with explicit audio ownership and finite local recording.", color = Muted)
+            HorizontalDivider()
             AudioCard(audio)
             HorizontalDivider()
             Text("RX MONITOR INPUT", color = Amber, fontWeight = FontWeight.Bold)

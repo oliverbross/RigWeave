@@ -59,6 +59,7 @@ class AudioMonitorController(private val context: Context) {
     private var automaticGainControl: AutomaticGainControl? = null
     private var sessionRxId: Int? = null
     private var sessionTxId: Int? = null
+    private var restoreMonitorAfterLease = false
     private val deviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = devicesChanged()
         override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) = devicesChanged()
@@ -77,6 +78,7 @@ class AudioMonitorController(private val context: Context) {
     var level by mutableFloatStateOf(0f); private set
     var gain by mutableFloatStateOf(1f); private set
     var onTxRouteInvalidated: (() -> Unit)? = null
+    var audioOwner by mutableStateOf("NONE"); private set
 
     init {
         audioManager.registerAudioDeviceCallback(deviceCallback, main)
@@ -84,6 +86,23 @@ class AudioMonitorController(private val context: Context) {
     }
 
     fun updateGain(value: Float) { gain = value.coerceIn(0f, 12f) }
+
+    @Synchronized fun acquireAudio(owner: String, pauseMonitor: Boolean): Boolean {
+        if (audioOwner != "NONE" && audioOwner != owner) return false
+        if (enabled && !pauseMonitor) return false
+        restoreMonitorAfterLease = enabled
+        if (enabled) stop()
+        audioOwner = owner
+        return true
+    }
+
+    @Synchronized fun releaseAudio(owner: String) {
+        if (audioOwner != owner) return
+        audioOwner = "NONE"
+        val restore = restoreMonitorAfterLease
+        restoreMonitorAfterLease = false
+        if (restore) start()
+    }
 
     fun refreshDevices() {
         inputCandidates = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).filter(::isUsb).map(::descriptor)
@@ -137,6 +156,7 @@ class AudioMonitorController(private val context: Context) {
 
     fun start() {
         if (running.get()) return
+        if (audioOwner != "NONE") { status = "$audioOwner owns the selected audio device"; return }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             status = "Microphone permission is required for USB audio monitoring"; return
         }
@@ -175,7 +195,7 @@ class AudioMonitorController(private val context: Context) {
             }.build()
         audioManager.requestAudioFocus(focus); focusRequest = focus
         automaticGainControl = if (AutomaticGainControl.isAvailable()) AutomaticGainControl.create(record.audioSessionId)?.apply { enabled = true } else null
-        recorder = record; player = track; frames.clear()
+        recorder = record; player = track; frames.clear(); audioOwner = "MONITOR"
         record.startRecording(); track.setVolume(1f); track.play()
         running.set(true); enabled = true; status = "Starting selected USB audio monitor · ${rate / 1000} kHz"
         captureThread = Thread({ captureLoop(record, input, frameSamples, rate) }, "RigWeave-USB-Capture").apply { start() }
@@ -192,6 +212,7 @@ class AudioMonitorController(private val context: Context) {
         recorder = null; player = null; captureThread = null; playbackThread = null
         focusRequest = null; automaticGainControl = null
         frames.clear(); level = 0f; status = "Audio monitor stopped"
+        if (audioOwner == "MONITOR") audioOwner = "NONE"
     }
 
     fun close() {
