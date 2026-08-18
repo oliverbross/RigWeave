@@ -77,13 +77,13 @@ This is the normative product order. A phase starts only after separate owner au
 ### Phase 5A — Legitimate authentication, discovery, and control
 
 - **Implemented on Android — source/build/device-shell pass:** explicitly authorised shared StationPilot/AetherSDR client registration through ignored developer configuration, restricted WebView authentication, Keystore refresh-token storage, source-verified broker/direct TLS ordering, per-radio TOFU, LAN discovery and Nexus-derived SmartSDR framing/state.
-- Rust/JNI and Android builds pass, the complete offline cockpit launches on a Lenovo TB373FU, and live SmartLink authentication succeeds. The broker returned one empty directory update during a 30-second window through both RigWeave and an independent AetherSDR-compatible token check, so radio discovery and physical FLEX proof remain stopped on the live account/radio registration state.
+- Rust/JNI and Android builds pass and the cockpit launches on a Lenovo TB373FU. A persisted manual IPv4 target now supports routed LAN/OpenVPN operation without UDP discovery; the real FLEX returned a version and nonzero handle and accepted RigWeave GUI/station registration. SmartLink was not retested during the current service outage; earlier authentication evidence does not establish current availability.
 - KX behaviour remains separate. iPadOS parity is deferred; SOTA live remains pending approval.
 
 ### Phase 5B — Spectrum, waterfall, and meters
 
 - **Implemented in source/build:** official TCP/UDP/VITA-49 framing, attach/RigWeave-owned panafall, coverage-based spectrum/waterfall, live meters and tablet Canvas rendering.
-- Real FLEX-8400 LAN/SmartLink VITA acceptance remains required before a support claim.
+- The real VPN/LAN command channel passes, but the radio returned `No foundation receiver available` for a new owned panadapter. Real VITA, waterfall and meters remain required before a support claim.
 
 ### Phase 5C — Remote audio and controlled TX
 

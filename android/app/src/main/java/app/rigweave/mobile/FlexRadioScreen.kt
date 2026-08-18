@@ -166,7 +166,20 @@ private fun SmartLinkAuthDialog(authorizationUri: Uri, onRedirect: (Uri) -> Unit
     Card(modifier, colors = CardDefaults.cardColors(containerColor = Color(0xFF1B2228))) {
     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("RADIOS", color = FlexAmber, fontWeight = FontWeight.Black)
-        if (controller.radios.isEmpty()) Text(if (controller.connectionState == FlexConnectionState.SEARCHING) "SEARCHING LAN" else "NO LAN RADIOS", color = FlexMuted)
+        controller.manualTarget?.let { radio ->
+            Text("MANUAL LAN / VPN", color = FlexAmber, fontWeight = FontWeight.Bold)
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFF283139))) {
+                Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(radio.nickname, fontWeight = FontWeight.Bold)
+                        Text("${radio.ip}:${radio.port}", color = FlexMuted, fontFamily = FontFamily.Monospace)
+                    }
+                    Button({ scope.launch { controller.connectLan(radio) } }) { Text("CONNECT") }
+                }
+            }
+            HorizontalDivider()
+        }
+        if (controller.radios.isEmpty()) Text(if (controller.connectionState == FlexConnectionState.SEARCHING) "SEARCHING LAN" else "NO DISCOVERED LAN RADIOS", color = FlexMuted)
         controller.radios.forEach { radio -> Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFF283139))) {
             Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) { Text(radio.nickname.ifBlank { radio.model }, fontWeight = FontWeight.Bold); Text("${radio.model} · ${radio.callsign.ifBlank { radio.serial }}", color = FlexMuted); Text("${radio.ip}:${radio.port} · ${radio.status}", color = FlexMuted, fontFamily = FontFamily.Monospace) }
@@ -183,6 +196,7 @@ private fun SmartLinkAuthDialog(authorizationUri: Uri, onRedirect: (Uri) -> Unit
         HorizontalDivider()
         Text("DIAGNOSTICS", color = FlexAmber, fontWeight = FontWeight.Bold)
         Text("V ${controller.snapshot.version.ifBlank { "—" }} · H ${controller.snapshot.handle.takeIf { it != 0L }?.toString(16)?.uppercase() ?: "—"}", color = FlexMuted, fontFamily = FontFamily.Monospace)
+        if (controller.lastDisconnectReason.isNotBlank()) Text(controller.lastDisconnectReason, color = FlexAmber)
     }
     }
 }
@@ -214,8 +228,8 @@ private fun SmartLinkAuthDialog(authorizationUri: Uri, onRedirect: (Uri) -> Unit
                 FilterChip(controller.displayMode == mode, { controller.chooseDisplayMode(mode) }, { Text(if (mode == FlexDisplayMode.ATTACH) "ATTACH" else "RIGWEAVE CLIENT") })
             }
             Button(
-                { controller.createRigWeaveDisplay(selected?.frequencyHz ?: 14_074_000) },
-                enabled = controller.displayMode == FlexDisplayMode.RIGWEAVE_CLIENT && controller.connectionState == FlexConnectionState.CONNECTED,
+                { scope.launch { controller.createRigWeaveDisplay(selected?.frequencyHz ?: 14_074_000) } },
+                enabled = controller.displayMode == FlexDisplayMode.RIGWEAVE_CLIENT && controller.snapshot.hasCommandChannel,
             ) { Text("CREATE PANAFALL") }
         }
         val stations = controller.snapshot.clients.filter { it.connected && it.gui && it.station.isNotBlank() }.map { it.station }.distinct()

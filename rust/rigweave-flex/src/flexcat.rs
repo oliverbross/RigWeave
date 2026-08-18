@@ -256,6 +256,9 @@ impl FlexState {
         client.connected = fields.get("connected").map_or(true, |v| bool_value(v));
         if let Some(v) = fields.get("client_id") {
             client.client_id = v.clone();
+            if !v.is_empty() {
+                client.is_gui = true;
+            }
         }
         if let Some(v) = fields.get("program") {
             client.program = v.clone();
@@ -418,6 +421,14 @@ mod tests {
         state.apply(&parse_line("S0|slice 1 removed"));
         state.apply(&parse_line("S0|client 0x100 disconnected"));
         assert!(state.slices.is_empty() && state.clients.is_empty());
+    }
+
+    #[test]
+    fn real_client_id_status_identifies_gui_without_synthetic_gui_field() {
+        let mut state = FlexState::default();
+        state.apply(&parse_line("S0|client 0x100 connected local_ptt=0 client_id=12345678-1234-4234-8234-123456789abc program=RigWeave station=RigWeave"));
+        assert!(state.clients[&0x100].is_gui);
+        assert!(state.clients[&0x100].connected);
     }
 
     #[test]

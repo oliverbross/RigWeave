@@ -61,7 +61,7 @@ Do not change signing identities, profiles, entitlements, DriverKit identifiers,
 | Physical iPad, KXUSB, KX3, and I/Q | Historical repository evidence, not repeated in Phase 0 | See docs/COMPLETION_REPORT.md and docs/PANADAPTER_DESIGN.md |
 | Physical Android KX3 EQ and USB audio | PASS WITH NOTES on 2026-08-17 UTC | Lenovo TB373FU, KXUSB, KX3 firmware 03.02, exact RX/TX write-readback-restore, and real 48 kHz mono capture/A-B; test input was too quiet for a credible acoustic recommendation |
 | Wavelog authenticated workflow | UNVERIFIED | No usable API key/station-profile proof was available in the recorded pass |
-| FlexRadio Android Phase 5 complete client | STOPPED at external physical acceptance | Rust/JVM/CTest, four ABI/JNI link, APK, install/launch and SmartLink authentication pass; the live broker returned an empty radio directory, so FLEX-8400, real VITA/audio and controlled RF were not exercised |
+| FlexRadio Android Phase 5 complete client | STOPPED at real stream acceptance | Rust/JVM/CTest, four ABI/JNI link, APK, install/launch and a real FLEX command connection over OpenVPN/LAN pass; SmartLink was not retested during the service outage and the radio reported no foundation receiver for a new owned panadapter, so VITA/audio and controlled RF remain unaccepted |
 
 A successful build is not proof of USB enumeration, DriverKit activation, CAT semantics, audio orientation, remote authentication, service terms, or physical-radio operation.
 

@@ -133,7 +133,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val neuralDx = remember { NeuralDxController(context, database) }
     val wavelog = remember { WavelogController(context, database) }
     val app = remember { AppController(context) }
-    val flex = remember { FlexRadioController(context, { app.preferredFlexStation }, app::savePreferredFlexStation) }
+    val flex = remember { FlexRadioController(context, { app.preferredFlexStation }, app::savePreferredFlexStation) { app.manualFlexIp } }
     val syncHub = remember { SyncHubController(context, database, { wavelog.logMode }, { app.stationGrid }) }
     val callbook = remember { CallbookController(context) { app.stationCallsign } }
     val cty = remember { CtyController(context) }
@@ -2828,6 +2828,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
     var autoDim by remember { mutableStateOf(app.autoDim) }; var tones by remember { mutableStateOf(app.alertTones) }
     var quiet by remember { mutableStateOf(app.quietAlerts) }; var program by remember { mutableStateOf(app.activationProgram) }
     var activation by remember { mutableStateOf(app.activationReference) }
+    var manualFlexIp by remember { mutableStateOf(app.manualFlexIp) }
     LaunchedEffect(transport.selected?.sessionKey, transport.candidates) {
         if (!catSelectionDirty) pendingCatKey = transport.selected?.sessionKey
     }
@@ -2874,7 +2875,23 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             }
             if (app.radioFamily == RadioFamily.FLEXRADIO) {
                 Text(flex.connectionState.label, color = Hold, fontWeight = FontWeight.Bold)
-        Text("KX USB polling, KX EQ and the physical-I/Q panadapter are disabled while FlexRadio is selected. Flex uses its own SmartLink/LAN, VITA panafall, PC audio and session-gated transmit cockpit.", color = Muted)
+                Text("KX USB polling, KX EQ and the physical-I/Q panadapter are disabled while FlexRadio is selected. Flex uses its own SmartLink/LAN, VITA panafall, PC audio and session-gated transmit cockpit.", color = Muted)
+                val invalidManualFlexIp = manualFlexIp.isNotBlank() && manualFlexDiscovery(manualFlexIp) == null
+                OutlinedTextField(
+                    value = manualFlexIp,
+                    onValueChange = { manualFlexIp = it.filter { ch -> ch.isDigit() || ch == '.' }.take(15) },
+                    label = { Text("Manual radio IPv4 address") },
+                    supportingText = { Text("For routed LAN or VPN access when UDP discovery is unavailable. Flex TCP/UDP port 4992 is used.") },
+                    singleLine = true,
+                    isError = invalidManualFlexIp,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Button({
+                    if (app.saveManualFlexIp(manualFlexIp)) {
+                        manualFlexIp = app.manualFlexIp
+                        systemMessage = if (manualFlexIp.isBlank()) "Manual FlexRadio address cleared" else "Manual FlexRadio address saved"
+                    } else systemMessage = "Enter a valid IPv4 address"
+                }, enabled = !invalidManualFlexIp) { Text("SAVE FLEX ADDRESS") }
             } else Text("KX USB CAT and all existing KX-specific tools remain active.", color = Muted)
         }
         if (section == SettingsSection.DEFAULT || section == SettingsSection.MACROS) SettingsCard(if (section == SettingsSection.DEFAULT) "LOCAL STATION" else "MACROS") {

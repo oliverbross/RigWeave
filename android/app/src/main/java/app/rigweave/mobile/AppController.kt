@@ -25,6 +25,7 @@ class AppController(private val context: Context) {
     var fieldProfile by mutableStateOf(runCatching { FieldProfile.valueOf(prefs.getString("profile", "DAY")!!) }.getOrDefault(FieldProfile.DAY)); private set
     var radioFamily by mutableStateOf(runCatching { RadioFamily.valueOf(prefs.getString("radio_family", RadioFamily.ELECRAFT_KX.name)!!) }.getOrDefault(RadioFamily.ELECRAFT_KX)); private set
     var preferredFlexStation by mutableStateOf(prefs.getString("flex_station", "").orEmpty()); private set
+    var manualFlexIp by mutableStateOf(prefs.getString("flex_manual_ip", "").orEmpty().takeIf { it.isBlank() || manualFlexDiscovery(it) != null }.orEmpty()); private set
     var transmitArmed by mutableStateOf(false); private set
     var cwMacrosArmed by mutableStateOf(false); private set
     var voiceMacrosArmed by mutableStateOf(false); private set
@@ -67,6 +68,14 @@ class AppController(private val context: Context) {
 
     fun savePreferredFlexStation(value: String) {
         preferredFlexStation = value.take(64); prefs.edit().putString("flex_station", preferredFlexStation).apply()
+    }
+
+    fun saveManualFlexIp(value: String): Boolean {
+        val normalized = value.trim()
+        if (normalized.isNotEmpty() && manualFlexDiscovery(normalized) == null) return false
+        manualFlexIp = normalized
+        prefs.edit().putString("flex_manual_ip", manualFlexIp).apply()
+        return true
     }
 
     fun updateTransmitArmed(value: Boolean) { transmitArmed = value }

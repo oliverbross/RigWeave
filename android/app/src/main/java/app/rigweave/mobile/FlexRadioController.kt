@@ -25,6 +25,7 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.UUID
 
 enum class FlexConnectionState(val label: String) {
     IDLE("NO LAN RADIOS"), SEARCHING("SEARCHING LAN"), SIGNED_OUT("SIGNED OUT"), SIGNING_IN("SIGNING IN"),
@@ -35,7 +36,12 @@ enum class FlexConnectionState(val label: String) {
     OWNER_CONFIG_REQUIRED("OWNER CONFIGURATION VALUES REQUIRED")
 }
 
-class FlexRadioController(context: Context, private val preferredStation: () -> String, private val saveStation: (String) -> Unit) : RadioBackend {
+class FlexRadioController(
+    context: Context,
+    private val preferredStation: () -> String,
+    private val saveStation: (String) -> Unit,
+    private val manualAddress: () -> String,
+) : RadioBackend {
     override val capabilities = setOf(
         RadioCapability.RECEIVE_STATE, RadioCapability.RECEIVE_TUNE, RadioCapability.FILTER,
         RadioCapability.PANADAPTER, RadioCapability.MACROS, RadioCapability.TRANSMIT,
@@ -44,6 +50,7 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
     private val controllerJob = SupervisorJob()
     private val scope = CoroutineScope(controllerJob + Dispatchers.IO)
     private val sequence = AtomicInteger(1)
+    private val guiClientId = UUID.randomUUID()
     private val pendingReplies = ConcurrentHashMap<Int, (Long, String) -> Unit>()
     private val statusFramer = FlexStatusFramer()
     private var socket: Socket? = null
@@ -97,8 +104,10 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
     var selectedTxSliceIndex by mutableStateOf<Int?>(null); private set
     var connectionState by mutableStateOf(FlexConnectionState.IDLE); private set
     var detail by mutableStateOf("FlexRadio is not connected"); private set
+    var lastDisconnectReason by mutableStateOf(""); private set
     val smartLinkConfigured get() = smartLinkConfig.complete
     val smartLinkSignedIn get() = accessToken != null
+    val manualTarget get() = manualFlexDiscovery(manualAddress())
     override val state get() = snapshot.toRadioState(selectedSliceIndex)
 
     init {
@@ -261,12 +270,14 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
         val handleDeadline = android.os.SystemClock.elapsedRealtime() + 5_000
         while (snapshot.handle == 0L && android.os.SystemClock.elapsedRealtime() < handleDeadline) delay(100)
         if (snapshot.handle == 0L) error("Flex connected without a nonzero client handle")
-        sendBody(NativeCore.flexIdentity("RigWeave"))
-        FlexCommands.subscriptions().forEach(::sendBody)
-        FlexCommands.requestProfiles().forEach(::sendBody)
-        if (!streamSession.start(udpMode, snapshot.handle, radioHost)) error("Flex UDP stream registration could not start")
+        val bootstrap = FlexCommands.sessionIdentity(guiClientId) + FlexCommands.subscriptions() + FlexCommands.requestProfiles()
+        if (!withContext(Dispatchers.IO) { bootstrap.all(::sendBody) }) error("Flex session bootstrap could not be sent")
+        if (!withContext(Dispatchers.IO) { streamSession.start(udpMode, snapshot.handle, radioHost) }) error("Flex UDP stream registration could not start")
         keepalive = scope.launch { while (isActive) { delay(5_000); sendBody(NativeCore.flexKeepalive()) } }
-        updateSelection(); connectionState = effectiveState(); if (operatorInitiated) operatorEstablished = true
+        updateSelection()
+        connectionState = effectiveState()
+        detail = "Flex command channel established"
+        if (operatorInitiated) operatorEstablished = true
         return true
     }
 
@@ -274,6 +285,7 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
 
     private suspend fun readLoop(connected: Socket) {
         val buffer = ByteArray(8192)
+        var closeReason = "Flex command channel closed by the radio"
         try {
             while (scope.isActive && !connected.isClosed) {
                 val count = try { connected.getInputStream().read(buffer) } catch (_: SocketTimeoutException) { continue }
@@ -288,11 +300,11 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
                 connectionState = effectiveState()
             }
         } catch (_: CancellationException) { throw CancellationException() }
-        catch (error: Exception) { detail = error.message ?: "Flex connection lost" }
+        catch (error: Exception) { closeReason = "Flex reader stopped: ${error.javaClass.simpleName}${error.message?.takeIf(String::isNotBlank)?.let { ": $it" }.orEmpty()}" }
         finally { if (socket === connected) {
             tx.connectionLost()
             if (!connected.isClosed) runCatching { connected.close() }
-            socket = null; connectionState = FlexConnectionState.LOST; detail = "Flex command channel closed"
+            socket = null; connectionState = FlexConnectionState.LOST; lastDisconnectReason = closeReason; detail = closeReason
             scheduleReconnect()
         } }
     }
@@ -392,8 +404,9 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
             active.getOutputStream().write("C$seq|$body\n".toByteArray(Charsets.US_ASCII))
             active.getOutputStream().flush()
             true
-        }.getOrElse {
+        }.getOrElse { error ->
             pendingReplies.remove(seq)
+            detail = "Flex command send failed: ${error.javaClass.simpleName}${error.message?.takeIf(String::isNotBlank)?.let { ": $it" }.orEmpty()}"
             false
         }
     }
@@ -425,12 +438,20 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
         if (mode == FlexDisplayMode.ATTACH) removeOwnedDisplay()
     }
 
-    fun createRigWeaveDisplay(centerHz: Long): Boolean {
-        if (displayMode != FlexDisplayMode.RIGWEAVE_CLIENT || snapshot.handle == 0L) return false
-        if (extended.pans.count { it.clientHandle == snapshot.handle } >= extended.capabilities.maxPanadapters) return false
-        return sendBody(FlexCommands.createPanafall()) { code, body ->
+    suspend fun createRigWeaveDisplay(centerHz: Long): Boolean = withContext(Dispatchers.IO) {
+        if (displayMode != FlexDisplayMode.RIGWEAVE_CLIENT || !snapshot.hasCommandChannel) {
+            detail = "A live Flex command channel is required to create a panafall"
+            return@withContext false
+        }
+        if (extended.pans.count { it.clientHandle == snapshot.handle } >= extended.capabilities.maxPanadapters) {
+            detail = "This FlexRadio has no free panadapter capacity"
+            return@withContext false
+        }
+        detail = "Requesting a RigWeave panafall from the FlexRadio"
+        val create = FlexCommands.createPanafall(centerHz) ?: return@withContext false
+        val sent = sendBody(create) { code, body ->
             if (code != 0L) {
-                detail = "Flex panafall create failed: 0x${code.toString(16)}"
+                detail = FlexCommands.responseFailure(code)
                 return@sendBody
             }
             val ids = extractFlexIds(body)
@@ -438,6 +459,7 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
             val waterfall = flexFields(body)["waterfall"]?.let(::parseFlexNumber) ?: ids.getOrNull(1)
             owned.ownPan(pan)
             waterfall?.let(owned::ownWaterfall)
+            detail = "Flex panafall created"
             FlexCommands.configurePan(pan, 1024, 700, 20, -130, -30).forEach(::sendBody)
             FlexCommands.createSlice(pan, centerHz)?.let { create ->
                 sendBody(create) { sliceCode, sliceBody ->
@@ -445,6 +467,8 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
                 }
             }
         }
+        if (!sent && detail == "Requesting a RigWeave panafall from the FlexRadio") detail = "Flex command channel could not send the panafall request"
+        sent
     }
 
     fun removeOwnedDisplay() {
