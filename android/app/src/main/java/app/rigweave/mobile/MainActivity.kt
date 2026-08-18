@@ -1438,7 +1438,7 @@ private val callbookImageCache = object : LruCache<String, androidx.compose.ui.g
 }
 
 private enum class RadioActivityTab(val label: String) {
-    SPOTS("LIVE DX SPOTS"), LOG("LOG"), DETAILS("QRZ/QSO DETAILS")
+    SPOTS("LIVE DX SPOTS"), LOG("LOG"), DETAILS("QRZ/QSO DETAILS"), SEARCH("SEARCH")
 }
 
 @Composable private fun LiveSpotsPanel(features: FeatureController, database: QsoDatabase, wavelog: WavelogController,
@@ -1448,14 +1448,35 @@ private enum class RadioActivityTab(val label: String) {
     var page by remember { mutableIntStateOf(0) }
     var pageSize by remember { mutableIntStateOf(50) }
     var spotPage by remember { mutableIntStateOf(0) }
+    var searchPage by remember { mutableIntStateOf(0) }
     var spotStatuses by remember { mutableStateOf(emptyMap<String, SpotLogStatus>()) }
+    var spotFilters by remember { mutableStateOf(SpotFilters()) }
+    var activeSpotFilter by remember { mutableStateOf<SpotFilterDimension?>(null) }
+    var spotSearchQuery by remember { mutableStateOf("") }
     var previousQsoRecord by remember { mutableStateOf<AndroidCallbookRecord?>(null) }
     val ctyRevision = cty.dataRevision
-    val spotPageCount = ((features.liveSpots.size + 49) / 50).coerceAtLeast(1)
-    val visibleSpots = features.liveSpots.drop(spotPage * 50).take(50)
-    LaunchedEffect(features.liveSpots.size) {
-        spotPage = spotPage.coerceAtMost(spotPageCount - 1)
+    val filteredSpots = remember(features.liveSpots, spotStatuses, spotFilters) {
+        features.liveSpots.filter { spotMatchesFilters(it, spotStatuses[it.id], spotFilters) }
     }
+    val searchedSpots = remember(filteredSpots, spotSearchQuery, ctyRevision) {
+        filteredSpots.filter { spot ->
+            val entity = cty.lookup(spot.callsign)
+            spotMatchesSearch(spot, entity?.country.orEmpty(), entity?.dxcc.orEmpty(), spotSearchQuery)
+        }
+    }
+    val modeOptions = remember(features.liveSpots, spotFilters.modes) {
+        (spotModeOptions + features.liveSpots.map { canonicalSpotMode(it.mode) }.filter(String::isNotBlank) + spotFilters.modes)
+            .distinct().sorted()
+    }
+    val spotPageCount = ((filteredSpots.size + 49) / 50).coerceAtLeast(1)
+    val searchPageCount = ((searchedSpots.size + 49) / 50).coerceAtLeast(1)
+    val visibleSpots = filteredSpots.drop(spotPage * 50).take(50)
+    val visibleSearchSpots = searchedSpots.drop(searchPage * 50).take(50)
+    LaunchedEffect(spotPageCount, searchPageCount) {
+        spotPage = spotPage.coerceAtMost(spotPageCount - 1)
+        searchPage = searchPage.coerceAtMost(searchPageCount - 1)
+    }
+    LaunchedEffect(spotSearchQuery) { searchPage = 0 }
     LaunchedEffect(insight?.record?.callsign) { if (insight != null) selected = RadioActivityTab.DETAILS }
     LaunchedEffect(wavelog.logMode, wavelog.stationId) { page = 0 }
     LaunchedEffect(selected, wavelog.logMode, wavelog.stationId, page, pageSize) {
@@ -1475,8 +1496,8 @@ private enum class RadioActivityTab(val label: String) {
         }
     }
     LaunchedEffect(selected, features.liveSpots, wavelog.logMode, wavelog.stationId, wavelog.configured, ctyRevision) {
-        if (selected != RadioActivityTab.SPOTS) return@LaunchedEffect
-        val identities = visibleSpots.map { spot ->
+        if (selected !in setOf(RadioActivityTab.SPOTS, RadioActivityTab.SEARCH)) return@LaunchedEffect
+        val identities = features.liveSpots.map { spot ->
             val entity = cty.lookup(spot.callsign)
             SpotLogIdentity(spot.id, spot.callsign, entity?.dxcc.orEmpty(),
                 entity?.country.orEmpty().ifBlank { spot.country }, spot.band, spot.mode)
@@ -1487,7 +1508,7 @@ private enum class RadioActivityTab(val label: String) {
             return@LaunchedEffect
         }
         var observedRevision = Long.MIN_VALUE
-        while (selected == RadioActivityTab.SPOTS) {
+        while (selected in setOf(RadioActivityTab.SPOTS, RadioActivityTab.SEARCH)) {
             val revision = database.changeToken()
             if (revision != observedRevision) {
                 spotStatuses = withContext(Dispatchers.IO) {
@@ -1508,13 +1529,16 @@ private enum class RadioActivityTab(val label: String) {
                     RadioActivityTab.entries.forEach { tab -> Tab(selected == tab, { selected = tab },
                         text = { Text(tab.label, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelMedium) }) }
                 }
-                Spacer(Modifier.weight(1f))
-                Text(if (selected == RadioActivityTab.SPOTS) features.clusterStatus else if (selected == RadioActivityTab.DETAILS)
-                    insight?.let { "${it.record.callsign} · ${it.history.total} QSO${if (it.history.total == 1) "" else "S"}" } ?: "ENTER A CALLSIGN"
-                    else if (wavelog.logMode == LogMode.LOCAL) "LOCAL LOG · ${logPage.total}"
-                    else "WAVELOG · ${wavelog.selectedStation?.name ?: "STATION ${wavelog.stationId}"}",
+                Text(when (selected) {
+                    RadioActivityTab.SPOTS -> features.clusterStatus
+                    RadioActivityTab.SEARCH -> "${searchedSpots.size} MATCH${if (searchedSpots.size == 1) "" else "ES"}"
+                    RadioActivityTab.DETAILS -> insight?.let { "${it.record.callsign} · ${it.history.total} QSO${if (it.history.total == 1) "" else "S"}" } ?: "ENTER A CALLSIGN"
+                    RadioActivityTab.LOG -> if (wavelog.logMode == LogMode.LOCAL) "LOCAL LOG · ${logPage.total}"
+                        else "WAVELOG · ${wavelog.selectedStation?.name ?: "STATION ${wavelog.stationId}"}"
+                    },
                     color = if (selected == RadioActivityTab.SPOTS && features.liveSpots.isEmpty()) Muted else Healthy,
-                    style = MaterialTheme.typography.labelSmall, maxLines = 1, modifier = Modifier.padding(horizontal = 10.dp))
+                    style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(horizontal = 10.dp))
                 if (selected == RadioActivityTab.LOG) {
                     CompactPager(logPage, pageSize, { pageSize = it; page = 0 }, { page = (page - 1).coerceAtLeast(0) },
                         { page = (page + 1).coerceAtMost(logPage.pageCount - 1) })
@@ -1528,13 +1552,35 @@ private enum class RadioActivityTab(val label: String) {
                         enabled = spotPage + 1 < spotPageCount) {
                         Icon(Icons.Outlined.ChevronRight, "Next spots")
                     }
+                } else if (selected == RadioActivityTab.SEARCH) {
+                    Text("50 / PAGE · ${searchPage + 1} / $searchPageCount", color = Muted,
+                        style = MaterialTheme.typography.labelSmall)
+                    IconButton({ searchPage = (searchPage - 1).coerceAtLeast(0) }, enabled = searchPage > 0) {
+                        Icon(Icons.Outlined.ChevronLeft, "Previous search results")
+                    }
+                    IconButton({ searchPage = (searchPage + 1).coerceAtMost(searchPageCount - 1) },
+                        enabled = searchPage + 1 < searchPageCount) {
+                        Icon(Icons.Outlined.ChevronRight, "Next search results")
+                    }
                 }
             }
-            when (selected) {
-                RadioActivityTab.SPOTS -> LiveSpotTable(visibleSpots, spotStatuses, cty, send,
-                    { previousQsoRecord = it.previousQsoRecord(cty) }, Modifier.fillMaxSize())
-                RadioActivityTab.LOG -> RadioLogTable(logPage.rows, { previousQsoRecord = it.previousQsoRecord() }, Modifier.fillMaxSize())
-                RadioActivityTab.DETAILS -> QrzQsoDetails(insight, Modifier.fillMaxSize())
+            Box(Modifier.fillMaxSize()) {
+                when (selected) {
+                    RadioActivityTab.SPOTS -> LiveSpotTable(visibleSpots, spotStatuses, cty, send,
+                        { previousQsoRecord = it.previousQsoRecord(cty) }, { activeSpotFilter = it },
+                        if (features.liveSpots.isEmpty()) "No live spots yet · configured clusters connect automatically"
+                        else "No live spots match the selected filters", Modifier.fillMaxSize())
+                    RadioActivityTab.LOG -> RadioLogTable(logPage.rows, { previousQsoRecord = it.previousQsoRecord() }, Modifier.fillMaxSize())
+                    RadioActivityTab.DETAILS -> QrzQsoDetails(insight, Modifier.fillMaxSize())
+                    RadioActivityTab.SEARCH -> SpotSearchPanel(spotSearchQuery, { spotSearchQuery = it }, spotFilters,
+                        { activeSpotFilter = it }, visibleSearchSpots, spotStatuses, cty, send,
+                        { previousQsoRecord = it.previousQsoRecord(cty) }, Modifier.fillMaxSize())
+                }
+                activeSpotFilter?.let { dimension ->
+                    SpotFilterOverlay(dimension, spotFilters, modeOptions, { activeSpotFilter = null }, {
+                        spotFilters = it; spotPage = 0; searchPage = 0; activeSpotFilter = null
+                    }, Modifier.fillMaxSize())
+                }
             }
         }
     }
@@ -1872,9 +1918,136 @@ private fun AndroidDXSpot.previousQsoRecord(cty: CtyController): AndroidCallbook
 
 private data class SpotColumn(val label: String, val width: Dp, val mono: Boolean = false, val centered: Boolean = false)
 
-@Composable private fun LiveSpotTable(spots: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>,
+@Composable private fun SpotSearchPanel(query: String, updateQuery: (String) -> Unit, filters: SpotFilters,
+    openFilter: (SpotFilterDimension) -> Unit, spots: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>,
     cty: CtyController, send: (String) -> Unit, previousQsos: (AndroidDXSpot) -> Unit,
     modifier: Modifier = Modifier) {
+    BoxWithConstraints(modifier) {
+        val compact = maxWidth < 720.dp
+        Column(Modifier.fillMaxSize()) {
+            if (compact) {
+                Column(Modifier.fillMaxWidth().background(Color(0xFF171D20)).padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SpotSearchField(query, updateQuery, Modifier.fillMaxWidth().height(48.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        SpotFilterButtons(filters, openFilter, true)
+                    }
+                }
+            } else {
+                Row(Modifier.fillMaxWidth().height(58.dp).background(Color(0xFF171D20))
+                    .padding(horizontal = 8.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    SpotSearchField(query, updateQuery, Modifier.weight(1f).fillMaxHeight())
+                    SpotFilterButtons(filters, openFilter, false)
+                }
+            }
+            LiveSpotTable(spots, statuses, cty, send, previousQsos, openFilter,
+                "No spots match this callsign/entity and filter combination", Modifier.fillMaxWidth().weight(1f))
+        }
+    }
+}
+
+@Composable private fun SpotSearchField(query: String, updateQuery: (String) -> Unit, modifier: Modifier = Modifier) {
+    OutlinedTextField(query, { updateQuery(it.uppercase().take(32)) }, singleLine = true,
+        label = { Text("Callsign or entity") }, leadingIcon = { Icon(Icons.Outlined.Search, null) },
+        trailingIcon = {
+            if (query.isNotBlank()) IconButton({ updateQuery("") }) {
+                Icon(Icons.Outlined.Close, "Clear search")
+            }
+        }, modifier = modifier)
+}
+
+@Composable private fun RowScope.SpotFilterButtons(filters: SpotFilters,
+    openFilter: (SpotFilterDimension) -> Unit, compact: Boolean) {
+    SpotFilterDimension.entries.forEach { dimension ->
+        OutlinedButton({ openFilter(dimension) }, modifier = Modifier.height(48.dp).then(
+            if (compact) Modifier.weight(1f) else Modifier), contentPadding = PaddingValues(horizontal = 10.dp)) {
+            Text(if (filters.count(dimension) == 0) dimension.title.uppercase()
+                else "${dimension.title.uppercase()} · ${filters.count(dimension)}",
+                fontWeight = FontWeight.Black, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable private fun SpotFilterOverlay(dimension: SpotFilterDimension, filters: SpotFilters,
+    modeOptions: List<String>, dismiss: () -> Unit, apply: (SpotFilters) -> Unit,
+    modifier: Modifier = Modifier) {
+    val options = when (dimension) {
+        SpotFilterDimension.BAND -> spotBandOptions
+        SpotFilterDimension.MODE -> modeOptions
+        SpotFilterDimension.CALL_STATUS -> spotCallStatusOptions
+        SpotFilterDimension.DXCC_STATUS -> spotDxccStatusOptions
+    }
+    var draft by remember(dimension, filters) { mutableStateOf(filters.selected(dimension)) }
+    BoxWithConstraints(modifier.background(Color.Black.copy(alpha = .62f)).clickable(onClick = dismiss),
+        contentAlignment = Alignment.Center) {
+        val modalInteraction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+        val modalHeight = maxHeight * .94f
+        Surface(color = Color(0xFF171D20), shape = RoundedCornerShape(8.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF59636A)), shadowElevation = 12.dp,
+            modifier = Modifier.widthIn(min = 390.dp, max = 680.dp).height(modalHeight)
+                .clickable(interactionSource = modalInteraction, indication = null) {}) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("FILTER BY ${dimension.title.uppercase()}", color = Amber, fontWeight = FontWeight.Black,
+                            fontSize = 15.sp, letterSpacing = .5.sp)
+                        Text("Choose one, several, or All. Filter categories combine together.", color = Muted, fontSize = 11.sp)
+                    }
+                    IconButton(dismiss) { Icon(Icons.Outlined.Close, "Close filter") }
+                }
+                SpotFilterChoice("ALL", draft.isEmpty(), { draft = emptySet() }, Modifier.fillMaxWidth())
+                HorizontalDivider(color = Color(0xFF3A4348))
+                val columns = if (dimension == SpotFilterDimension.BAND) 4 else 3
+                Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                    options.chunked(columns).forEach { row ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            row.forEach { option ->
+                                SpotFilterChoice(spotFilterOptionLabel(dimension, option), option in draft, {
+                                    draft = if (draft.isEmpty()) setOf(option)
+                                    else if (option in draft) (draft - option).ifEmpty { emptySet() }
+                                    else draft + option
+                                }, Modifier.weight(1f))
+                            }
+                            repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+                        }
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(dismiss) { Text("CANCEL") }
+                    Spacer(Modifier.width(8.dp))
+                    Button({ apply(filters.withSelection(dimension, draft)) }) { Text("APPLY FILTER") }
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun SpotFilterChoice(label: String, checked: Boolean, select: () -> Unit,
+    modifier: Modifier = Modifier) {
+    Row(modifier.heightIn(min = 48.dp).clickable(role = Role.Checkbox, onClick = select).padding(horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked, onCheckedChange = null)
+        Text(label, color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1,
+            overflow = TextOverflow.Ellipsis)
+    }
+}
+
+private fun spotFilterOptionLabel(dimension: SpotFilterDimension, option: String): String = when (dimension) {
+    SpotFilterDimension.CALL_STATUS -> when (option) {
+        "NC" -> "NC · new call"; "NB" -> "NB · new band"; "NM" -> "NM · new mode"
+        "W" -> "W · worked"; "C" -> "C · confirmed"; else -> option
+    }
+    SpotFilterDimension.DXCC_STATUS -> when (option) {
+        "ATNO" -> "ATNO · new entity"; "W/NB" -> "W/NB · new band"; "C/NB" -> "C/NB · confirmed entity"
+        "W" -> "W · worked"; "C" -> "C · confirmed"; else -> option
+    }
+    else -> option
+}
+
+@Composable private fun LiveSpotTable(spots: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>,
+    cty: CtyController, send: (String) -> Unit, previousQsos: (AndroidDXSpot) -> Unit,
+    openFilter: (SpotFilterDimension) -> Unit, emptyMessage: String, modifier: Modifier = Modifier) {
     BoxWithConstraints(modifier) {
         val minimumWidth = 760.dp
         val tableWidth = if (maxWidth > minimumWidth) maxWidth else minimumWidth
@@ -1886,11 +2059,20 @@ private data class SpotColumn(val label: String, val width: Dp, val mono: Boolea
             SpotColumn("CS", 32.dp, true, centered = true), SpotColumn("DS", 44.dp, true, centered = true), SpotColumn("Comment", commentWidth))
         Column(Modifier.width(tableWidth).fillMaxHeight().horizontalScroll(rememberScrollState())) {
             Row(Modifier.fillMaxWidth().height(36.dp).background(Raised), verticalAlignment = Alignment.CenterVertically) {
-                columns.forEach { SpotTableCell(it.label, it, header = true) }
+                columns.forEach { column ->
+                    val dimension = when (column.label) {
+                        "Band" -> SpotFilterDimension.BAND; "Mode" -> SpotFilterDimension.MODE
+                        "CS" -> SpotFilterDimension.CALL_STATUS; "DS" -> SpotFilterDimension.DXCC_STATUS
+                        else -> null
+                    }
+                    SpotTableCell(column.label, column, header = true,
+                        onClick = dimension?.let { { openFilter(it) } },
+                        actionLabel = dimension?.let { "Filter spots by ${it.title}" }.orEmpty())
+                }
             }
             HorizontalDivider(color = Color(0xFF303940))
             if (spots.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                Text("No live spots yet · configured clusters connect automatically", color = Muted)
+                Text(emptyMessage, color = Muted)
             } else LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                 items(spots.size, key = { spots[it].id }) { index ->
                     val spot = spots[index]
