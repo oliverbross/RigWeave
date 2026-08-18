@@ -69,6 +69,17 @@ object NativeCore {
     external fun featureClusterLine(handle: Long, value: String, epoch: Long): Boolean
     external fun featureDxSnapshot(handle: Long, epoch: Long): String
     external fun featureSolar(handle: Long, flux: Float, aIndex: Float, kpIndex: Float, epoch: Long)
+    external fun flexCreate(): Long
+    external fun flexDestroy(handle: Long)
+    external fun flexFeed(handle: Long, data: ByteArray): Int
+    external fun flexState(handle: Long): String
+    external fun flexIdentity(program: String): String
+    external fun flexSubscriptions(): String
+    external fun flexKeepalive(): String
+    external fun flexFrequency(slice: Int, frequencyHz: Long): String
+    external fun flexMode(slice: Int, mode: String): String
+    external fun flexFilter(letter: String, lowHz: Int, highHz: Int): String
+    external fun flexParseDiscovery(data: ByteArray): String
 
     fun parseState(value: String): RadioState {
         val fields = value.split('|')

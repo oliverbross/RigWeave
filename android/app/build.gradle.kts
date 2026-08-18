@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -19,12 +21,37 @@ android {
         externalNativeBuild { cmake { cppFlags += "-std=c++17 -Wall -Wextra -Wpedantic" } }
     }
 
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
+
+val flexProperties = Properties()
+rootProject.file("../flex-developer.properties").takeIf { it.isFile }?.inputStream()?.use { flexProperties.load(it) }
+fun flexValue(name: String): String = providers.environmentVariable(name).orNull
+    ?: flexProperties.getProperty(name).orEmpty()
+fun quoted(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+android.defaultConfig {
+    buildConfigField("String", "FLEX_SMARTLINK_CLIENT_ID", quoted(flexValue("FLEX_SMARTLINK_CLIENT_ID")))
+    buildConfigField("String", "FLEX_SMARTLINK_AUTH_DOMAIN", quoted(flexValue("FLEX_SMARTLINK_AUTH_DOMAIN")))
+    buildConfigField("String", "FLEX_SMARTLINK_REDIRECT_URI", quoted(flexValue("FLEX_SMARTLINK_REDIRECT_URI")))
+    buildConfigField("String", "FLEX_SMARTLINK_SERVER", quoted(flexValue("FLEX_SMARTLINK_SERVER")))
+}
+
+val buildRustFlex by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Build the Nexus-derived Flex core for every Android ABI"
+    workingDir(rootProject.file("../rust/rigweave-flex"))
+    val sdkRoot = providers.environmentVariable("ANDROID_SDK_ROOT").orElse(providers.environmentVariable("ANDROID_HOME")).orNull
+    if (sdkRoot != null) environment("ANDROID_NDK_HOME", file("$sdkRoot/ndk/${android.ndkVersion}").absolutePath)
+    commandLine(providers.environmentVariable("CARGO").orElse("cargo").get(), "ndk", "-t", "armeabi-v7a", "-t", "arm64-v8a", "-t", "x86", "-t", "x86_64",
+        "build", "--release")
+}
+
+tasks.matching { it.name.startsWith("configureCMake") }.configureEach { dependsOn(buildRustFlex) }
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2025.10.00")
