@@ -77,7 +77,7 @@ This is the normative product order. A phase starts only after separate owner au
 ### Phase 5A — Legitimate authentication, discovery, and control
 
 - **Implemented on Android — source/build/device-shell pass:** explicitly authorised shared StationPilot/AetherSDR client registration through ignored developer configuration, restricted WebView authentication, Keystore refresh-token storage, source-verified broker/direct TLS ordering, per-radio TOFU, LAN discovery and Nexus-derived SmartSDR framing/state.
-- Rust/JNI and Android builds pass, and the complete offline cockpit launches on a Lenovo TB373FU. The operator did not perform SmartLink authentication in this pass, so authenticated discovery and physical FLEX proof remain unclaimed.
+- Rust/JNI and Android builds pass, the complete offline cockpit launches on a Lenovo TB373FU, and live SmartLink authentication succeeds. The broker returned one empty directory update during a 30-second window through both RigWeave and an independent AetherSDR-compatible token check, so radio discovery and physical FLEX proof remain stopped on the live account/radio registration state.
 - KX behaviour remains separate. iPadOS parity is deferred; SOTA live remains pending approval.
 
 ### Phase 5B — Spectrum, waterfall, and meters
@@ -89,7 +89,7 @@ This is the normative product order. A phase starts only after separate owner au
 
 - **Implemented in source/build:** Opus PC audio, exclusive audio ownership, microphone and stored voice-macro Opus TX, CWX, MOX/PTT, TUNE, one authoritative state machine, watchdog and fail-closed cleanup.
 - Wholesale Nexus `flexdax.rs` remains rejected; no unconditional DAX TX path was imported.
-- Authenticated SmartLink, real audio and controlled dummy-load/legal-frequency RF acceptance remain required. No SmartSDR or StationPilot parity claim is made.
+- Populated SmartLink radio discovery, real audio and controlled dummy-load/legal-frequency RF acceptance remain required. No SmartSDR or StationPilot parity claim is made.
 
 ## Phase 6 — Desktop client
 

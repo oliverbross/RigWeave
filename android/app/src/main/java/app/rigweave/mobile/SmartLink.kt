@@ -12,6 +12,7 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.net.URI
 import java.net.URL
 import java.net.URLDecoder
@@ -223,23 +224,32 @@ private fun brokerFields(value: String): Map<String, String> = value.split(Regex
     .toMap()
 
 fun parseSmartLinkRadios(line: String): List<SmartLinkRadio> {
-    if (!line.startsWith("radio list")) return emptyList()
-    val payload = line.removePrefix("radio list").trim()
+    val trimmed = line.trim()
+    if (trimmed != "radio list" && !trimmed.startsWith("radio list ")) return emptyList()
+    val payload = trimmed.removePrefix("radio list").trim()
     if (payload.isBlank()) return emptyList()
-    return payload.split(Regex("\\|(?=serial=)")).mapNotNull { value ->
+    return payload.split('|').mapNotNull { value ->
         val fields = brokerFields(value)
         val serial = fields["serial"]?.takeIf(String::isNotBlank) ?: return@mapNotNull null
         SmartLinkRadio(
             serial,
             fields["model"].orEmpty(),
-            fields["nickname"].orEmpty().replace('_', ' '),
-            fields["callsign"].orEmpty(),
+            (fields["nickname"] ?: fields["radio_name"] ?: fields["name"]).orEmpty().replace('_', ' '),
+            (fields["callsign"] ?: fields["station"]).orEmpty(),
             fields["status"].orEmpty(),
             fields["public_ip"].orEmpty(),
-            fields["public_tls_port"]?.toIntOrNull() ?: -1,
-            fields["public_upnp_tls_port"]?.toIntOrNull() ?: -1,
+            (fields["public_tls_port"] ?: fields["tls_port"])?.toIntOrNull() ?: -1,
+            (fields["public_upnp_tls_port"] ?: fields["upnp_tls_port"])?.toIntOrNull() ?: -1,
         )
     }
+}
+
+private fun radioListShape(line: String): String {
+    val payload = line.trim().removePrefix("radio list").trim()
+    if (payload.isBlank()) return "0 records; no fields"
+    val records = payload.split('|').filter(String::isNotBlank)
+    val keys = records.flatMap { brokerFields(it).keys }.distinct().sorted()
+    return "${records.size} record(s); fields=${keys.joinToString(",").ifBlank { "none" }}"
 }
 
 fun parseWanEndpoint(line: String, radio: SmartLinkRadio): WanEndpoint? {
@@ -264,18 +274,34 @@ class SmartLinkBrokerClient(private val config: SmartLinkConfig) : AutoCloseable
         val host = uri.host ?: error("SmartLink server host is invalid")
         val port = if (uri.port > 0) uri.port else 443
         val connected = SSLSocketFactory.getDefault().createSocket(host, port) as SSLSocket
-        connected.soTimeout = 15_000
+        connected.soTimeout = 2_000
         connected.startHandshake()
         socket = connected
         reader = BufferedReader(InputStreamReader(connected.inputStream, StandardCharsets.UTF_8))
         writer = BufferedWriter(OutputStreamWriter(connected.outputStream, StandardCharsets.UTF_8))
         send(protocol.registration(idToken) ?: error("SmartLink registration must be first"))
         startKeepalive()
-        while (true) {
-            val line = reader?.readLine() ?: error("SmartLink server closed before sending a radio list")
+        val deadline = System.nanoTime() + 30_000_000_000L
+        var emptyLists = 0
+        var lastEmptyShape = "no list received"
+        while (System.nanoTime() < deadline) {
+            val line = try {
+                reader?.readLine() ?: error("SmartLink server closed before sending a radio list")
+            } catch (_: SocketTimeoutException) {
+                continue
+            }
             if (line.startsWith("application registration_invalid")) error("SmartLink registration token was rejected")
-            if (line.startsWith("radio list")) return parseSmartLinkRadios(line).distinctBy { it.serial }
+            if (line.trim() == "radio list" || line.trim().startsWith("radio list ")) {
+                val radios = parseSmartLinkRadios(line).distinctBy { it.serial }
+                if (radios.isEmpty()) {
+                    emptyLists++
+                    lastEmptyShape = radioListShape(line)
+                    continue
+                }
+                return radios
+            }
         }
+        error("SmartLink broker reported no radios during the 30-second discovery window ($emptyLists empty update(s); $lastEmptyShape)")
     }
 
     fun request(radio: SmartLinkRadio): WanEndpoint? {

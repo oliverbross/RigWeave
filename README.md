@@ -2,7 +2,7 @@
 
 RigWeave is a radio-native portable operating cockpit that connects discovery, tuning, operating, logging, synchronisation, and progress without requiring fabricated state or permanent network access.
 
-The current repository contains two native mobile clients—an iPad-focused SwiftUI client and an Android Jetpack Compose client—over a shared C++17 core. Android supports the existing Elecraft KX3/KX2 path plus a complete source-level FlexRadio LAN/SmartLink cockpit: VITA panafall/meters, multi-slice controls, PC audio and session-gated microphone/voice/CWX/MOX/TUNE paths. Build and Lenovo launch evidence pass; authenticated SmartLink, real FLEX-8400 VITA/audio and controlled RF remain physical-validation gates. Android also implements KX3 EQ Studio, SSB voice macros, Portable Chase, POTA Activate, Sync Hub and Progress Intelligence. SOTA live remains unavailable pending written programme API approval. FlexRadio is not claimed for Apple, and desktop, QMX and SOTA/WWFF activation remain planned work.
+The current repository contains two native mobile clients—an iPad-focused SwiftUI client and an Android Jetpack Compose client—over a shared C++17 core. Android supports the existing Elecraft KX3/KX2 path plus a complete source-level FlexRadio LAN/SmartLink cockpit: VITA panafall/meters, multi-slice controls, PC audio and session-gated microphone/voice/CWX/MOX/TUNE paths. Build, Lenovo launch and live SmartLink authentication evidence pass; the tested account's broker directory was empty, so FLEX-8400 discovery, real VITA/audio and controlled RF remain physical-validation gates. Android also implements KX3 EQ Studio, SSB voice macros, Portable Chase, POTA Activate, Sync Hub and Progress Intelligence. SOTA live remains unavailable pending written programme API approval. FlexRadio is not claimed for Apple, and desktop, QMX and SOTA/WWFF activation remain planned work.
 
 ## Current implementation
 
@@ -61,7 +61,7 @@ Do not change signing identities, profiles, entitlements, DriverKit identifiers,
 | Physical iPad, KXUSB, KX3, and I/Q | Historical repository evidence, not repeated in Phase 0 | See docs/COMPLETION_REPORT.md and docs/PANADAPTER_DESIGN.md |
 | Physical Android KX3 EQ and USB audio | PASS WITH NOTES on 2026-08-17 UTC | Lenovo TB373FU, KXUSB, KX3 firmware 03.02, exact RX/TX write-readback-restore, and real 48 kHz mono capture/A-B; test input was too quiet for a credible acoustic recommendation |
 | Wavelog authenticated workflow | UNVERIFIED | No usable API key/station-profile proof was available in the recorded pass |
-| FlexRadio Android Phase 5 complete client | STOPPED at external physical acceptance | Rust/JVM/CTest, four ABI/JNI link, APK, install/launch and offline Lenovo cockpit pass; owner authentication, FLEX-8400, real VITA/audio and controlled RF were not exercised |
+| FlexRadio Android Phase 5 complete client | STOPPED at external physical acceptance | Rust/JVM/CTest, four ABI/JNI link, APK, install/launch and SmartLink authentication pass; the live broker returned an empty radio directory, so FLEX-8400, real VITA/audio and controlled RF were not exercised |
 
 A successful build is not proof of USB enumeration, DriverKit activation, CAT semantics, audio orientation, remote authentication, service terms, or physical-radio operation.
 

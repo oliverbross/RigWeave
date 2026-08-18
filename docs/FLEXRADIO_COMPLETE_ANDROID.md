@@ -4,7 +4,7 @@
 
 Phase 5 source implementation is complete on branch `feature/android-flexradio-complete-client`. Host tests, Android unit tests, all four Android Rust ABIs, JNI/C++ linkage, debug APK assembly, installation, launch and the offline Flex cockpit on a Lenovo TB373FU pass.
 
-Acceptance remains **STOPPED at external physical validation**. This pass did not enter an operator password, authenticate a real SmartLink account, connect a FLEX-8400, receive real VITA traffic, play real radio audio, or transmit RF. Those outcomes must not be inferred from source, tests, build, or an offline tablet screenshot.
+Acceptance remains **STOPPED at external physical validation**. A real SmartLink account authenticated successfully on 2026-08-18, but the broker returned one empty radio-list update and no radio during a bounded 30-second discovery window. An independent AetherSDR-compatible token-flow check against the same account produced the same empty broker directory, isolating the remaining discovery gate to the account/radio's live SmartLink registration state rather than RigWeave's token or radio-list parser. No FLEX-8400 command connection, VITA traffic, radio audio or RF transmission was attempted.
 
 ## Developer configuration
 
@@ -111,14 +111,15 @@ Results:
 - CTest: 1 passed, 0 failed.
 - Debug APK: assembled, installed and launched on Lenovo `TB373FU`.
 - Tablet evidence: [`screenshots/phase5/flex-offline-cockpit.png`](screenshots/phase5/flex-offline-cockpit.png) and [`screenshots/phase5/flex-tx-safety-offline.png`](screenshots/phase5/flex-tx-safety-offline.png) show the no-radio state, zero live packets/meters and fail-closed TX controls from that installed build.
+- Live directory evidence: [`screenshots/phase5/smartlink-empty-directory.png`](screenshots/phase5/smartlink-empty-directory.png) shows the authenticated build after the bounded broker wait, with no radios and the new explicit `REFRESH SMARTLINK` action.
+- Live SmartLink authentication: passed; the encrypted refresh session also restored successfully after reinstall.
+- Live SmartLink directory: stopped with one empty broker update after 30 seconds. No credentials, tokens, radio identifiers or broker values were recorded.
 
 ## Physical validation still required
 
-The operator must manually perform SmartLink authentication. Codex must not request or enter the password.
-
 With a real FLEX-8400, validate separately:
 
-1. LAN discovery and SmartLink discovery/connect.
+1. Confirm the radio is logged into the same SmartLink account and currently registered with the SmartLink service, then repeat directory discovery and connect.
 2. First-use TOFU and a controlled mismatch accept/reject exercise.
 3. WAN UDP register cadence, first-VITA transition and ping maintenance.
 4. Real FFT frequency/scale, waterfall continuity, meters and stream diagnostics.
@@ -127,7 +128,7 @@ With a real FLEX-8400, validate separately:
 7. Only with a dummy load or legal clear frequency/antenna at minimum power: microphone, one voice macro, CWX, TUNE and interruption/watchdog cleanup.
 8. Confirm RX at the radio after every TX test.
 
-Until those steps exist as evidence, SmartLink, real VITA, RX audio and every RF/TX result are **unverified**, not failed and not passed.
+Until those steps exist as evidence, SmartLink authentication is **passed**, broker radio discovery is **stopped on an empty live directory**, and direct connection, real VITA, RX audio and every RF/TX result remain **unverified**.
 
 ## Provenance
 
