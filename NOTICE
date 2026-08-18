@@ -39,3 +39,10 @@ worldwide park catalogue from api.pota.app and pota.app. POTA names and park
 data remain attributable to Parks on the Air. RigWeave is an independent
 application and does not imply official hunter credit, affiliation, or
 authoritative park boundaries.
+
+Android Portable Chase consumes the WWFF Spotline public integration spot and
+active-agenda JSON feeds from spots.wwff.co and the official downloadable SOTA
+summit list from sotadata.org.uk. WWFF and SOTA names and data remain
+attributable to their respective programmes. The full WWFF Directory is not
+stored without permission. SOTA live access is disabled pending approval under
+the current private-API terms; no deprecated or unauthorized endpoint is used.
