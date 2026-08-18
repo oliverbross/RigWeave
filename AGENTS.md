@@ -12,3 +12,18 @@
 - Do not import Nexus or another upstream unless the task authorises the selected component and integration strategy. Never imply upstream endorsement.
 - Flex, desktop, QMX, portable-programme, and Nexus-reuse work is not authorised unless the task explicitly says so.
 - Do not merge, deploy, release, distribute, submit to a store, or publish without owner authorisation.
+
+### Simplicity
+
+- Do not introduce abstractions unless the current task requires them.
+- Do not add dependencies unless they clearly reduce complexity.
+- Do not add boilerplate, generic helpers, or extensibility nobody asked for.
+- Prefer deletion over addition.
+- Prefer boring code over clever code.
+- When two approaches are equally small, choose the safer one for edge cases.
+- Avoid private helper methods for short logic. Keep simple conditions inline when local context makes them easier to read.
+
+### Runtime behavior
+
+- Runtime validation belongs at trust boundaries. Don't re-validate trusted domain values.
+- Avoid defensive noise: deep type checks, catch-all fallbacks, and runtime guards must protect a real invariant.
