@@ -1,20 +1,88 @@
 #include <jni.h>
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <sstream>
 #include <string>
 #include "rigweave/core.h"
+#include "rigweave_flex.h"
 
 namespace {
 rw_context *context(jlong handle) { return reinterpret_cast<rw_context *>(static_cast<intptr_t>(handle)); }
 rw_feature_context *features(jlong handle) { return reinterpret_cast<rw_feature_context *>(static_cast<intptr_t>(handle)); }
 rw_panadapter_context *panadapter(jlong handle) { return reinterpret_cast<rw_panadapter_context *>(static_cast<intptr_t>(handle)); }
+rw_flex_context *flex(jlong handle) { return reinterpret_cast<rw_flex_context *>(static_cast<intptr_t>(handle)); }
 std::string utf(JNIEnv *env, jstring value) {
     if (!value) return {};
     const char *chars = env->GetStringUTFChars(value, nullptr);
     std::string result(chars ? chars : "");
     if (chars) env->ReleaseStringUTFChars(value, chars);
     return result;
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_app_rigweave_mobile_NativeCore_flexCreate(JNIEnv *, jobject) {
+    return static_cast<jlong>(reinterpret_cast<intptr_t>(rw_flex_context_create()));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_rigweave_mobile_NativeCore_flexDestroy(JNIEnv *, jobject, jlong handle) {
+    rw_flex_context_destroy(flex(handle));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_app_rigweave_mobile_NativeCore_flexFeed(JNIEnv *env, jobject, jlong handle, jbyteArray data) {
+    if (!data) return -1;
+    const jsize length = env->GetArrayLength(data);
+    jbyte *bytes = env->GetByteArrayElements(data, nullptr);
+    const int applied = rw_flex_context_feed(flex(handle), reinterpret_cast<const uint8_t *>(bytes), static_cast<size_t>(length));
+    env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
+    return applied;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeCore_flexState(JNIEnv *env, jobject, jlong handle) {
+    std::string output(65536, '\0');
+    const int size = rw_flex_state_json(flex(handle), output.data(), output.size());
+    return env->NewStringUTF(size >= 0 ? output.c_str() : "{}");
+}
+
+namespace {
+jstring flex_text(JNIEnv *env, const std::function<int(char *, size_t)> &builder) {
+    char output[512]{};
+    return env->NewStringUTF(builder(output, sizeof(output)) >= 0 ? output : "");
+}
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeCore_flexIdentity(JNIEnv *env, jobject, jstring program) {
+    const auto value = utf(env, program); return flex_text(env, [&](char *out, size_t size) { return rw_flex_client_identity(value.c_str(), out, size); });
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeCore_flexSubscriptions(JNIEnv *env, jobject) { return flex_text(env, rw_flex_subscriptions); }
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeCore_flexKeepalive(JNIEnv *env, jobject) { return flex_text(env, rw_flex_keepalive); }
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeCore_flexFrequency(JNIEnv *env, jobject, jint slice, jlong hz) {
+    return flex_text(env, [&](char *out, size_t size) { return rw_flex_frequency(static_cast<uint32_t>(slice), static_cast<uint64_t>(hz), out, size); });
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeCore_flexMode(JNIEnv *env, jobject, jint slice, jstring mode) {
+    const auto value = utf(env, mode); return flex_text(env, [&](char *out, size_t size) { return rw_flex_mode(static_cast<uint32_t>(slice), value.c_str(), out, size); });
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeCore_flexFilter(JNIEnv *env, jobject, jstring letter, jint low, jint high) {
+    const auto value = utf(env, letter); return flex_text(env, [&](char *out, size_t size) { return rw_flex_filter(value.c_str(), low, high, out, size); });
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeCore_flexParseDiscovery(JNIEnv *env, jobject, jbyteArray data) {
+    if (!data) return env->NewStringUTF("");
+    const jsize length = env->GetArrayLength(data);
+    jbyte *bytes = env->GetByteArrayElements(data, nullptr);
+    char output[4096]{};
+    const int size = rw_flex_parse_discovery(reinterpret_cast<const uint8_t *>(bytes), static_cast<size_t>(length), output, sizeof(output));
+    env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
+    return env->NewStringUTF(size >= 0 ? output : "");
 }
 }
 
