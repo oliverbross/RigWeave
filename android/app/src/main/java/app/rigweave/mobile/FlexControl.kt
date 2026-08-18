@@ -6,6 +6,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.UUID
 
 enum class FlexDisplayMode { ATTACH, RIGWEAVE_CLIENT }
 
@@ -33,12 +34,25 @@ object FlexCommands {
     private fun quoted(value: String): String? = value.takeIf { it.isNotBlank() && it.length <= 64 && '\n' !in it && '\r' !in it }
         ?.replace("\\", "\\\\")?.replace("\"", "\\\"")?.let { "\"$it\"" }
 
+    fun sessionIdentity(guiClientId: UUID): List<String> = listOf(
+        "name RigWeave",
+        "client program RigWeave",
+        "client gui $guiClientId",
+        "client station RigWeave",
+    )
+
+    fun responseFailure(code: Long): String = when (code) {
+        0x50000009L -> "No foundation receiver is available for a new panadapter"
+        else -> "Flex command failed: 0x${code.toString(16)}"
+    }
+
     fun subscriptions(): List<String> = listOf(
         "sub radio all", "sub client all", "sub slice all", "sub pan all", "sub waterfall all",
         "sub meter all", "sub stream all", "sub interlock all", "sub transmit all", "sub atu all",
         "sub cwx all", "sub profile all",
     )
-    fun createPanafall() = "display panafall create x=100 y=100"
+    fun createPanafall(centerHz: Long): String? = centerHz.takeIf { it in 100_000..77_000_000_000 }
+        ?.let { "display pan create freq=${"%.6f".format(java.util.Locale.US, it / 1_000_000.0)} x=1024 y=700" }
     fun configurePan(panId: Long, width: Int, height: Int, fps: Int, minDbm: Int, maxDbm: Int): List<String> =
         hexId(panId)?.let { pan ->
             listOf(

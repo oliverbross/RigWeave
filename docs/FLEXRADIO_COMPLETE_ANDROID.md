@@ -2,9 +2,9 @@
 
 ## Status
 
-Phase 5 source implementation is complete on branch `feature/android-flexradio-complete-client`. Host tests, Android unit tests, all four Android Rust ABIs, JNI/C++ linkage, debug APK assembly, installation, launch and the offline Flex cockpit on a Lenovo TB373FU pass.
+Phase 5 source implementation is complete on branch `feature/android-flexradio-complete-client`. Host tests, Android unit tests, all four Android Rust ABIs, JNI/C++ linkage, debug APK assembly, installation and launch on a Lenovo TB373FU pass.
 
-Acceptance remains **STOPPED at external physical validation**. A real SmartLink account authenticated successfully on 2026-08-18, but the broker returned one empty radio-list update and no radio during a bounded 30-second discovery window. An independent AetherSDR-compatible token-flow check against the same account produced the same empty broker directory, isolating the remaining discovery gate to the account/radio's live SmartLink registration state rather than RigWeave's token or radio-list parser. No FLEX-8400 command connection, VITA traffic, radio audio or RF transmission was attempted.
+Acceptance remains **STOPPED**, but the real-radio boundary has advanced. On 2026-08-18 the tablet connected through OpenVPN to a manually configured private IPv4 address on Flex TCP port 4992. The real radio returned protocol version `1.4.0.0` and nonzero client handles; RigWeave's name/program/GUI/station registration completed, and the command channel remained available. Live testing fixed main-thread socket writes, the missing GUI-registration sequence, real `client_id` GUI-state parsing and the source-backed `display pan create` command. The radio then rejected new owned panadapter creation with `0x50000009` (`No foundation receiver available`), so VITA panadapter/waterfall, meters and RX audio could not be accepted in this session. SmartLink remains unavailable because its live broker directory is empty. No RF/TX command was sent.
 
 ## Developer configuration
 
@@ -22,6 +22,7 @@ The current developer build uses the StationPilot/AetherSDR registration after e
 ## Connection architecture
 
 - LAN discovery listens on UDP 4992 and parses only valid Flex discovery VITA.
+- A validated manual IPv4 address can be saved in Android Radio settings for routed LAN or VPN operation when UDP discovery cannot cross the tunnel. It uses the same plain LAN TCP/VITA path on Flex port 4992 and is not hard-coded into source.
 - SmartLink uses random OAuth state, exact HTTPS redirect validation, an in-memory short-lived token and an Android-Keystore-encrypted refresh token.
 - Broker registration precedes list/connect requests and uses validated public TLS.
 - Direct-radio TLS is socket-scoped. The self-signed leaf must be valid and self-signed; its SHA-256 fingerprint is recorded on first connection.
@@ -29,6 +30,7 @@ The current developer build uses the StationPilot/AetherSDR registration after e
 - `wan validate` remains the first direct WAN command.
 - A nonzero client handle is required before normal subscriptions or UDP registration.
 - LAN sends `client udpport <port>` once.
+- After a nonzero handle, RigWeave sends the source-backed `name`, `client program`, `client gui <session UUID>` and `client station` sequence on an I/O dispatcher before subscriptions. A nonempty real `client_id` status identifies the registered GUI even when the radio omits a synthetic `gui=1` field.
 - SmartLink uses an unconnected UDP socket and sends `client udp_register handle=0x...` every 50 ms until the first structurally valid Flex-OUI VITA packet or a 30-second timeout. It then sends `client ping handle=...` every five seconds.
 
 ## VITA stream core
@@ -105,30 +107,34 @@ ctest --test-dir core/build-phase5 --output-on-failure
 
 Results:
 
-- Rust: 13 passed, 0 failed.
-- Android/JVM: passed, including focused VITA, ownership, command-injection and TX-state tests.
+- Rust: 14 passed, 0 failed.
+- Android/JVM: 165 passed, including focused manual-IP, GUI-registration, real client-status, VITA, ownership, command-injection and TX-state tests.
 - Rust Android targets: `armeabi-v7a`, `arm64-v8a`, `x86` and `x86_64` built and linked.
 - CTest: 1 passed, 0 failed.
 - Debug APK: assembled, installed and launched on Lenovo `TB373FU`.
 - Tablet evidence: [`screenshots/phase5/flex-offline-cockpit.png`](screenshots/phase5/flex-offline-cockpit.png) and [`screenshots/phase5/flex-tx-safety-offline.png`](screenshots/phase5/flex-tx-safety-offline.png) show the no-radio state, zero live packets/meters and fail-closed TX controls from that installed build.
 - Live directory evidence: [`screenshots/phase5/smartlink-empty-directory.png`](screenshots/phase5/smartlink-empty-directory.png) shows the authenticated build after the bounded broker wait, with no radios and the new explicit `REFRESH SMARTLINK` action.
-- Live SmartLink authentication: passed; the encrypted refresh session also restored successfully after reinstall.
-- Live SmartLink directory: stopped with one empty broker update after 30 seconds. No credentials, tokens, radio identifiers or broker values were recorded.
+- SmartLink was not retested during this VPN/LAN acceptance because the service was unavailable. Earlier authentication/refresh evidence is retained separately and is not evidence of current service availability.
+- Live SmartLink directory: unavailable for this acceptance. No credentials, tokens, radio identifiers or broker values were recorded.
+- OpenVPN/LAN route: passed from the Lenovo; the tunnel was active and the real radio answered across the routed private subnet.
+- Manual IPv4 setting: passed on device, persisted across `adb install -r`, and appeared as a dedicated `MANUAL LAN / VPN` target.
+- Real LAN command channel: passed; version, nonzero handle and GUI/station registration were observed.
+- Owned panafall: stopped by the radio's real `0x50000009` foundation-receiver capacity response. No foreign display or slice was removed.
+- VITA, meters and RX audio: not validated because an owned display/stream could not be allocated.
+- TX: not safely run; RigWeave remained `TX · DISABLED` and sent no MOX, TUNE, CWX, microphone or voice-macro command.
 
 ## Physical validation still required
 
 With a real FLEX-8400, validate separately:
 
-1. Confirm the radio is logged into the same SmartLink account and currently registered with the SmartLink service, then repeat directory discovery and connect.
-2. First-use TOFU and a controlled mismatch accept/reject exercise.
-3. WAN UDP register cadence, first-VITA transition and ping maintenance.
-4. Real FFT frequency/scale, waterfall continuity, meters and stream diagnostics.
-5. Opus RX audio continuity, mute/gain, background and route-loss cleanup.
-6. Receive controls and multi-slice ownership alongside SmartSDR/Maestro.
-7. Only with a dummy load or legal clear frequency/antenna at minimum power: microphone, one voice macro, CWX, TUNE and interruption/watchdog cleanup.
-8. Confirm RX at the radio after every TX test.
+1. Repeat the VPN/LAN session when the radio reports an available foundation receiver, or attach explicitly to an owner-approved existing GUI station/slice, then validate owned pan/waterfall and VITA.
+2. Validate real meters, Opus RX audio, receive controls, disconnect/reconnect and cleanup over the VPN route.
+3. Confirm the radio is logged into the same SmartLink account and currently registered with the SmartLink service, then repeat directory discovery and connect when the Flex service is restored.
+4. Exercise first-use TOFU and a controlled mismatch accept/reject fixture for SmartLink.
+5. Only with a dummy load or legal clear frequency/antenna at minimum power: microphone, one voice macro, CWX, TUNE and interruption/watchdog cleanup.
+6. Confirm RX at the radio after every TX test.
 
-Until those steps exist as evidence, SmartLink authentication is **passed**, broker radio discovery is **stopped on an empty live directory**, and direct connection, real VITA, RX audio and every RF/TX result remain **unverified**.
+Until those steps exist as evidence, current SmartLink operation is **not tested during the service outage**, direct VPN/LAN command connection is **passed**, owned display/VITA/audio are **stopped at radio foundation-receiver availability**, and every RF/TX result remains **not safely run**.
 
 ## Provenance
 

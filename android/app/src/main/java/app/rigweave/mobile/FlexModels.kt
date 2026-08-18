@@ -7,6 +7,13 @@ data class FlexDiscovery(
     val callsign: String, val version: String, val status: String, val guiStations: String,
 )
 
+fun manualFlexDiscovery(address: String): FlexDiscovery? {
+    val ip = address.trim()
+    val octets = ip.split('.')
+    if (octets.size != 4 || octets.any { it.isEmpty() || it.length > 3 || it.any { ch -> !ch.isDigit() } || it.toIntOrNull() !in 0..255 }) return null
+    return FlexDiscovery("FlexRadio", "Manual LAN / VPN", ip, 4992, "", "", "", "Configured", "")
+}
+
 data class FlexClient(
     val handle: Long, val clientId: String, val program: String, val station: String,
     val connected: Boolean, val gui: Boolean,
@@ -23,6 +30,7 @@ data class FlexSnapshot(
     val nickname: String = "", val callsign: String = "", val serial: String = "", val firmware: String = "",
     val clients: List<FlexClient> = emptyList(), val slices: List<FlexSlice> = emptyList(),
 ) {
+    val hasCommandChannel get() = connected && handle != 0L
     fun selected(index: Int?): FlexSlice? = slices.firstOrNull { it.index == index && it.inUse && !it.tx }
     fun toRadioState(index: Int?): RadioState {
         val slice = selected(index)

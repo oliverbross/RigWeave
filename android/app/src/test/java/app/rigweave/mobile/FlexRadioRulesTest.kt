@@ -5,8 +5,35 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.UUID
 
 class FlexRadioRulesTest {
+    @Test fun flexSessionRegistersAsAnOwningGuiBeforeSubscriptions() {
+        val id = UUID.fromString("12345678-1234-4234-8234-123456789abc")
+        assertEquals(
+            listOf("name RigWeave", "client program RigWeave", "client gui $id", "client station RigWeave"),
+            FlexCommands.sessionIdentity(id),
+        )
+    }
+
+    @Test fun ownedPanadapterCreationUsesTheGuiPanCommand() {
+        assertEquals("display pan create freq=14.074000 x=1024 y=700", FlexCommands.createPanafall(14_074_000))
+        assertNull(FlexCommands.createPanafall(0))
+    }
+
+    @Test fun realPanadapterCapacityFailureIsExplained() {
+        assertEquals("No foundation receiver is available for a new panadapter", FlexCommands.responseFailure(0x50000009))
+    }
+
+    @Test fun manualLanTargetRequiresAValidIpv4AddressAndUsesTheFlexPort() {
+        val target = manualFlexDiscovery(" 192.168.0.199 ")
+        assertEquals("192.168.0.199", target?.ip)
+        assertEquals(4992, target?.port)
+        assertNull(manualFlexDiscovery("192.168.0"))
+        assertNull(manualFlexDiscovery("192.168.0.256"))
+        assertNull(manualFlexDiscovery("radio.example.test"))
+    }
+
     @Test fun selectedFlexSliceMapsToSharedRadioState() {
         val snapshot = parseFlexSnapshot("""{"connected":true,"handle":10940,"version":"3.8","model":"FLEX-8400","nickname":"Remote","callsign":"OM0RX","serial":"123","firmware":"3.8","clients":[{"handle":256,"clientId":"id","program":"SmartSDR","station":"Shack","connected":true,"gui":true}],"slices":[{"index":1,"letter":"B","inUse":true,"active":true,"tx":false,"clientHandle":256,"frequencyHz":14074000,"mode":"DIGU","filterLowHz":300,"filterHighHz":3000,"rxAntenna":"ANT1"}]}""")
         val state = snapshot.toRadioState(1)
@@ -22,6 +49,12 @@ class FlexRadioRulesTest {
         val tx = FlexSnapshot(connected = true, handle = 1, slices = listOf(FlexSlice(0, "A", true, true, true, 1, 7_100_000, "LSB", 100, 2800, "ANT1")))
         assertFalse(tx.toRadioState(0).connected)
         assertEquals(0, tx.toRadioState(null).frequencyHz)
+    }
+
+    @Test fun liveCommandChannelDoesNotRequireAnotherGuiStationOrSlice() {
+        assertTrue(FlexSnapshot(connected = true, handle = 0x1234).hasCommandChannel)
+        assertFalse(FlexSnapshot(connected = true).hasCommandChannel)
+        assertFalse(FlexSnapshot(handle = 0x1234).hasCommandChannel)
     }
 
     @Test fun authUsesOfficialImplicitFlowAndValidatesExactRedirectState() {
