@@ -27,9 +27,9 @@ class AppController(private val context: Context) {
     var cwMacrosArmed by mutableStateOf(false); private set
     var voiceMacrosArmed by mutableStateOf(false); private set
     var voiceTxLevel by mutableStateOf(prefs.getFloat("voice_tx_level", 0.20f).coerceIn(0.02f, 1f)); private set
-    var stationCallsign by mutableStateOf(prefs.getString("station_call", "") ?: ""); private set
-    var stationName by mutableStateOf(prefs.getString("station_name", "") ?: ""); private set
-    var stationGrid by mutableStateOf(prefs.getString("station_grid", "") ?: ""); private set
+    var stationCallsign by mutableStateOf(prefs.getString("station_call", RigWeaveDefaults.OPERATOR_CALLSIGN) ?: RigWeaveDefaults.OPERATOR_CALLSIGN); private set
+    var stationName by mutableStateOf(prefs.getString("station_name", RigWeaveDefaults.OPERATOR_NAME) ?: RigWeaveDefaults.OPERATOR_NAME); private set
+    var stationGrid by mutableStateOf(prefs.getString("station_grid", RigWeaveDefaults.OPERATOR_GRID) ?: RigWeaveDefaults.OPERATOR_GRID); private set
     var activationProgram by mutableStateOf(prefs.getString("activation_program", "NONE") ?: "NONE"); private set
     var activationReference by mutableStateOf(prefs.getString("activation_reference", "") ?: ""); private set
     var autoDim by mutableStateOf(prefs.getBoolean("auto_dim", true)); private set
@@ -57,6 +57,11 @@ class AppController(private val context: Context) {
     }
 
     init {
+        val defaults = prefs.edit()
+        if (!prefs.contains("station_call")) defaults.putString("station_call", stationCallsign)
+        if (!prefs.contains("station_name")) defaults.putString("station_name", stationName)
+        if (!prefs.contains("station_grid")) defaults.putString("station_grid", stationGrid)
+        defaults.apply()
         if (needsDxccCountryColumnMigration) prefs.edit()
             .putString("logbook_columns", encodeLogbookColumns(visibleLogbookColumns))
             .putBoolean("logbook_dxcc_country_v1", true)
@@ -86,9 +91,15 @@ class AppController(private val context: Context) {
         transmitArmed = false; cwMacrosArmed = false; voiceMacrosArmed = false
     }
 
+    fun updateStationIdentity(call: String, name: String, grid: String) {
+        stationCallsign = call.trim().uppercase(); stationName = name.trim(); stationGrid = grid.trim().uppercase()
+        prefs.edit().putString("station_call", stationCallsign).putString("station_name", stationName)
+            .putString("station_grid", stationGrid).apply()
+    }
+
     fun saveLocalSettings(call: String, name: String, grid: String, repeat: Int,
         labels: List<String>, texts: List<String>) {
-        stationCallsign = call.uppercase(); stationName = name; stationGrid = grid.uppercase()
+        updateStationIdentity(call, name, grid)
         cqRepeatSeconds = repeat.coerceIn(CQ_REPEAT_MIN_SECONDS, CQ_REPEAT_MAX_SECONDS)
         repeat(CW_MACRO_COUNT) { index ->
             macroLabels[index] = sanitizeCwMacroLabel(labels.getOrNull(index).orEmpty())

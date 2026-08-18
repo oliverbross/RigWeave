@@ -91,6 +91,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n app.rigweave.mobile/.MainActivity
 ```
 
+Use the replacement install above for development deployments so app-private station, cluster, Wavelog, QRZ, CAT, audio, and log data remain intact. Never use `adb uninstall`, `pm clear`, or `connectedDebugAndroidTest` on an operator tablet when its saved data must be preserved; the connected-test lifecycle may remove the target package. Run instrumentation on a disposable emulator or dedicated test device instead.
+
 An emulator can validate navigation and local logging, but cannot prove USB serial or radio operation. The Android app uses `usb-serial-for-android` for PL2303, CP210x, FTDI, CH34x, and CDC-ACM adapters where supported by that library. It opens the selected adapter at 38,400 baud and exposes frequency, mode, and raw CAT controls without simulation.
 
 The Android source also binds the full portable feature engine through JNI and supplies the KX3-style live CAT deck, local ADIF journal/import/export, Wavelog discovery/upload/full-log cache, six graphical DX views, real TCP DX-cluster, NOAA, and a first-class production panadapter. The panadapter selects and proves an external stereo route, uses its own native DSP context and capture lifecycle, follows fresh CAT frequency truth, and fails closed rather than converting mono audio into a spectrum claim. Android SDK licences were accepted with the owner's explicit approval and NDK `28.2.13676358` is installed under the SDK used by Gradle.

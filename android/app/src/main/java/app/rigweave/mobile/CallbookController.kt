@@ -71,8 +71,8 @@ class CallbookController(context: Context, private val operatorCallsign: () -> S
     private val legacyProvider = prefs.getString("provider", "QRZ") ?: "QRZ"
     private val legacyUsername = prefs.getString("username", "") ?: ""
     private val legacyPassword = decrypt(prefs.getString("password", "") ?: "")
-    var qrzEnabled by mutableStateOf(prefs.getBoolean("qrz_enabled", legacyProvider == "QRZ" && legacyUsername.isNotBlank())); private set
-    var qrzUsername by mutableStateOf(prefs.getString("qrz_username", if (legacyProvider == "QRZ") legacyUsername else "") ?: ""); private set
+    var qrzEnabled by mutableStateOf(prefs.getBoolean("qrz_enabled", legacyProvider == "QRZ")); private set
+    var qrzUsername by mutableStateOf(prefs.getString("qrz_username", if (legacyProvider == "QRZ") legacyUsername.ifBlank { RigWeaveDefaults.QRZ_USERNAME } else RigWeaveDefaults.QRZ_USERNAME) ?: RigWeaveDefaults.QRZ_USERNAME); private set
     var qrzPassword by mutableStateOf(decrypt(prefs.getString("qrz_password", "") ?: "").ifBlank { if (legacyProvider == "QRZ") legacyPassword else "" }); private set
     var hamQthEnabled by mutableStateOf(prefs.getBoolean("hamqth_enabled", legacyProvider == "HamQTH" && legacyUsername.isNotBlank())); private set
     var hamQthUsername by mutableStateOf(prefs.getString("hamqth_username", if (legacyProvider == "HamQTH") legacyUsername else "") ?: ""); private set
@@ -85,16 +85,25 @@ class CallbookController(context: Context, private val operatorCallsign: () -> S
     private var hamQthSession = ""
     private val lookupCache = LruCache<String, AndroidCallbookRecord>(128)
 
+    init {
+        val defaults = prefs.edit()
+        if (!prefs.contains("qrz_enabled")) defaults.putBoolean("qrz_enabled", qrzEnabled)
+        if (!prefs.contains("qrz_username")) defaults.putString("qrz_username", qrzUsername)
+        defaults.apply()
+    }
+
     fun configureQrz(enabled: Boolean, username: String, password: String) {
-        qrzEnabled = enabled; qrzUsername = username.trim(); qrzPassword = password; qrzSession = ""; lookupCache.evictAll()
+        val retainedPassword = password.ifBlank { qrzPassword }
+        qrzEnabled = enabled; qrzUsername = username.trim(); qrzPassword = retainedPassword; qrzSession = ""; lookupCache.evictAll()
         prefs.edit().putBoolean("qrz_enabled", enabled).putString("qrz_username", qrzUsername)
-            .putString("qrz_password", encrypt(password)).apply()
+            .putString("qrz_password", encrypt(retainedPassword)).apply()
     }
 
     fun configureHamQth(enabled: Boolean, username: String, password: String) {
-        hamQthEnabled = enabled; hamQthUsername = username.trim(); hamQthPassword = password; hamQthSession = ""; lookupCache.evictAll()
+        val retainedPassword = password.ifBlank { hamQthPassword }
+        hamQthEnabled = enabled; hamQthUsername = username.trim(); hamQthPassword = retainedPassword; hamQthSession = ""; lookupCache.evictAll()
         prefs.edit().putBoolean("hamqth_enabled", enabled).putString("hamqth_username", hamQthUsername)
-            .putString("hamqth_password", encrypt(password)).apply()
+            .putString("hamqth_password", encrypt(retainedPassword)).apply()
     }
 
     fun test() = scope.launch {

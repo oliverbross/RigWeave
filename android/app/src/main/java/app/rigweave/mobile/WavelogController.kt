@@ -37,6 +37,24 @@ data class AndroidWavelogStation(
     val iota: String, val sotaRef: String, val wwffRef: String, val potaRef: String, val active: Boolean,
 ) { val label get() = listOf(name, callsign, grid).filter { it.isNotBlank() }.joinToString(" · ") }
 
+internal fun encodeWavelogStations(stations: List<AndroidWavelogStation>): String = JSONArray().apply {
+    stations.forEach { station -> put(JSONObject()
+        .put("id", station.id).put("name", station.name).put("callsign", station.callsign).put("grid", station.grid)
+        .put("city", station.city).put("country", station.country).put("dxcc", station.dxcc)
+        .put("cq_zone", station.cqZone).put("itu_zone", station.ituZone).put("state", station.state)
+        .put("iota", station.iota).put("sota", station.sotaRef).put("wwff", station.wwffRef)
+        .put("pota", station.potaRef).put("active", station.active)) }
+}.toString()
+
+internal fun decodeWavelogStations(value: String?): List<AndroidWavelogStation> = runCatching {
+    val rows = JSONArray(value ?: "[]")
+    List(rows.length()) { index -> rows.getJSONObject(index).let { row -> AndroidWavelogStation(
+        row.optString("id"), row.optString("name"), row.optString("callsign"), row.optString("grid"),
+        row.optString("city"), row.optString("country"), row.optString("dxcc"), row.optString("cq_zone"),
+        row.optString("itu_zone"), row.optString("state"), row.optString("iota"), row.optString("sota"),
+        row.optString("wwff"), row.optString("pota"), row.optBoolean("active")) } }
+}.getOrDefault(emptyList())
+
 class WavelogController(private val context: Context, private val database: QsoDatabase) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val prefs = context.getSharedPreferences("wavelog", Context.MODE_PRIVATE)
@@ -48,15 +66,15 @@ class WavelogController(private val context: Context, private val database: QsoD
         override fun onAvailable(network: Network) { if (logMode == LogMode.WAVELOG) syncTwoWay() }
     }
 
-    var baseURL by mutableStateOf(prefs.getString("base_url", "") ?: ""); private set
+    var baseURL by mutableStateOf(prefs.getString("base_url", RigWeaveDefaults.WAVELOG_BASE_URL) ?: RigWeaveDefaults.WAVELOG_BASE_URL); private set
     var stationId by mutableStateOf(prefs.getString("station_id", "") ?: ""); private set
     var apiKey by mutableStateOf(decrypt(prefs.getString("api_key", "") ?: "")); private set
     var ntpServer by mutableStateOf(prefs.getString("ntp_server", "time.google.com") ?: "time.google.com"); private set
     private var ntpOffsetMillis = prefs.getLong("ntp_offset_ms", 0L)
     var logMode by mutableStateOf(runCatching { LogMode.valueOf(prefs.getString("log_mode", "LOCAL")!!) }.getOrDefault(LogMode.LOCAL)); private set
-    var status by mutableStateOf("Wavelog not configured"); private set
+    var stations by mutableStateOf(decodeWavelogStations(prefs.getString("stations_json", null))); private set
+    var status by mutableStateOf(if (stations.isEmpty()) "Wavelog not configured" else "${stations.size} saved Wavelog stations restored"); private set
     var timeStatus by mutableStateOf("NTP not checked"); private set
-    var stations by mutableStateOf(emptyList<AndroidWavelogStation>()); private set
     var pendingCount by mutableStateOf(loadQueue().length()); private set
     var syncPages by mutableStateOf(0); private set
 
@@ -65,6 +83,7 @@ class WavelogController(private val context: Context, private val database: QsoD
     fun synchronizedNow(): Instant = Instant.ofEpochMilli(System.currentTimeMillis() + ntpOffsetMillis)
 
     init {
+        if (!prefs.contains("base_url")) prefs.edit().putString("base_url", baseURL).apply()
         runCatching { connectivity.registerDefaultNetworkCallback(networkCallback) }
         scope.launch {
             delay(1_000); if (logMode == LogMode.WAVELOG) runTwoWay()
@@ -115,6 +134,7 @@ class WavelogController(private val context: Context, private val database: QsoD
             }
             withContext(Dispatchers.Main) {
                 stations = loaded
+                prefs.edit().putString("stations_json", encodeWavelogStations(loaded)).apply()
                 if (stationId.isBlank() || loaded.none { it.id == stationId })
                     (loaded.firstOrNull { it.active } ?: loaded.firstOrNull())?.let { setStation(it.id) }
                 status = if (loaded.isEmpty()) "No Wavelog stations available" else "${loaded.size} Wavelog stations loaded"

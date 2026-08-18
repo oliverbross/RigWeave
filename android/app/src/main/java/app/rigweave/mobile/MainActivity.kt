@@ -2812,6 +2812,20 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
     var qrzPassword by remember { mutableStateOf(callbook.qrzPassword) }
     var hamQthEnabled by remember { mutableStateOf(callbook.hamQthEnabled) }; var hamQthUser by remember { mutableStateOf(callbook.hamQthUsername) }
     var hamQthPassword by remember { mutableStateOf(callbook.hamQthPassword) }
+    LaunchedEffect(stationCall, stationName, stationGrid) {
+        delay(300); app.updateStationIdentity(stationCall, stationName, stationGrid)
+    }
+    LaunchedEffect(host, port, callsign, fallbackHost, fallbackPort, fallback2Host, fallback2Port) {
+        delay(300); features.saveClusterConfiguration(host, port.toIntOrNull() ?: features.clusterPort, callsign,
+            fallbackHost, fallbackPort.toIntOrNull() ?: features.fallbackPort,
+            fallback2Host, fallback2Port.toIntOrNull() ?: features.fallback2Port)
+    }
+    LaunchedEffect(qrzEnabled, qrzUser, qrzPassword) {
+        delay(300); callbook.configureQrz(qrzEnabled, qrzUser, qrzPassword)
+    }
+    LaunchedEffect(hamQthEnabled, hamQthUser, hamQthPassword) {
+        delay(300); callbook.configureHamQth(hamQthEnabled, hamQthUser, hamQthPassword)
+    }
     var systemMessage by remember { mutableStateOf("No recovery operation run this session") }
     var dxNotifications by remember { mutableStateOf(neuralDx.notificationsEnabled) }
     var ntfyUrl by remember { mutableStateOf(neuralDx.ntfyUrl) }; var ntfyToken by remember { mutableStateOf(neuralDx.ntfyToken) }
@@ -2879,6 +2893,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                 OutlinedTextField(stationGrid, { stationGrid = it.uppercase() }, label = { Text("Grid") }, modifier = Modifier.weight(1f))
             }
             Button({ app.saveLocalSettings(stationCall, stationName, stationGrid, repeatSeconds, macroLabels, macroTexts) }) { Text("SAVE DEFAULTS") }
+            Text("Station identity is saved automatically and retained across app updates.", color = Muted)
             HorizontalDivider()
             Column(Modifier.testTag("settings-default-cty"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 CtyUpdatePanel(cty)
@@ -3056,6 +3071,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                 OutlinedButton(features::disconnectCluster) { Text("Disconnect") }; OutlinedButton(features::refreshSolar) { Text("Refresh NOAA") }
             }
             Text(features.clusterStatus, color = Muted)
+            Text("Cluster fields are saved automatically; Connect only controls the live connection.", color = Muted)
         }
         if (section == SettingsSection.LOG) SettingsCard("LOCAL LOG & WAVELOG") {
             Text("LOG DESTINATION", color = Amber, fontWeight = FontWeight.Bold)
@@ -3078,6 +3094,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                     wavelog.stationId, wavelog::setStation)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Button({ wavelog.loadStations() }) { Text("Load stations") }; Button({ wavelog.syncQueue() }) { Text("Sync queue") }; Button({ wavelog.fullSync() }) { Text("Full log") } }
                 Text(wavelog.status, color = Muted)
+                Text("Wavelog URL, encrypted API key, selected station, and station list are retained across app updates.", color = Muted)
             }
             Text("QRZ.COM / HAMQTH ENRICHMENT", color = Amber, fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -3095,6 +3112,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                     callbook.configureHamQth(hamQthEnabled, hamQthUser, hamQthPassword) }) { Text("SAVE") }
             }
             Text("Automatic lookup order: QRZ.COM → HamQTH → CTY.DAT. Email-style QRZ accounts use the configured station callsign for XML access; CTY.DAT supplements missing entity and zone fields.", color = Muted)
+            Text("Callbook settings are saved automatically. Blank password fields keep the previously saved encrypted password.", color = Muted)
         }
         if (section == SettingsSection.AUDIO) SettingsCard("USB AUDIO ROUTES") {
             BoxWithConstraints(Modifier.fillMaxWidth().testTag("settings-audio-layout")) {

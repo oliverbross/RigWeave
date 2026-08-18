@@ -56,13 +56,13 @@ class FeatureController(private val context: Context) {
     private var clusterGeneration = 0
     private val prefs = context.getSharedPreferences("dx_cluster", Context.MODE_PRIVATE)
 
-    var clusterHost by mutableStateOf(prefs.getString("host", "cluster.om0rx.com") ?: "cluster.om0rx.com")
-    var clusterPort by mutableStateOf(prefs.getInt("port", 7300))
+    var clusterHost by mutableStateOf(prefs.getString("host", RigWeaveDefaults.CLUSTER_HOST) ?: RigWeaveDefaults.CLUSTER_HOST)
+    var clusterPort by mutableStateOf(prefs.getInt("port", RigWeaveDefaults.CLUSTER_PORT))
     var fallbackHost by mutableStateOf(prefs.getString("fallback_host", "") ?: "")
     var fallbackPort by mutableStateOf(prefs.getInt("fallback_port", 7300))
     var fallback2Host by mutableStateOf(prefs.getString("fallback2_host", "") ?: "")
     var fallback2Port by mutableStateOf(prefs.getInt("fallback2_port", 7300))
-    var clusterCallsign by mutableStateOf(prefs.getString("callsign", "OM0JRX") ?: "OM0JRX")
+    var clusterCallsign by mutableStateOf(prefs.getString("callsign", RigWeaveDefaults.CLUSTER_LOGIN) ?: RigWeaveDefaults.CLUSTER_LOGIN)
     var watchlistText by mutableStateOf(prefs.getString("watchlist", "") ?: ""); private set
 
     var clusterStatus by mutableStateOf("DX cluster disconnected"); private set
@@ -79,7 +79,14 @@ class FeatureController(private val context: Context) {
     var duplicateSpots by mutableStateOf(0); private set
     var newestSpotEpoch by mutableStateOf(0L); private set
 
-    init { NativeCore.featureWatchlist(handle, watchlistText) }
+    init {
+        val defaults = prefs.edit()
+        if (!prefs.contains("host")) defaults.putString("host", clusterHost)
+        if (!prefs.contains("port")) defaults.putInt("port", clusterPort)
+        if (!prefs.contains("callsign")) defaults.putString("callsign", clusterCallsign)
+        defaults.apply()
+        NativeCore.featureWatchlist(handle, watchlistText)
+    }
 
     fun setWatchlist(value: String) {
         watchlistText = value.lineSequence().flatMap { it.split(',', ' ', ';').asSequence() }
@@ -95,16 +102,22 @@ class FeatureController(private val context: Context) {
         }
     }
 
-    fun connectCluster(host: String, port: Int, callsign: String,
-        fallbackHost: String = "", fallbackPort: Int = 7300,
-        fallback2Host: String = "", fallback2Port: Int = 7300) {
-        clusterHost = host.trim().lowercase(); clusterPort = port
+    fun saveClusterConfiguration(host: String, port: Int, callsign: String,
+        fallbackHost: String = "", fallbackPort: Int = RigWeaveDefaults.CLUSTER_PORT,
+        fallback2Host: String = "", fallback2Port: Int = RigWeaveDefaults.CLUSTER_PORT) {
+        clusterHost = host.trim().lowercase(); clusterPort = port.coerceIn(1, 65535)
         clusterCallsign = callsign.trim().uppercase()
-        this.fallbackHost = fallbackHost.trim().lowercase(); this.fallbackPort = fallbackPort
-        this.fallback2Host = fallback2Host.trim().lowercase(); this.fallback2Port = fallback2Port
+        this.fallbackHost = fallbackHost.trim().lowercase(); this.fallbackPort = fallbackPort.coerceIn(1, 65535)
+        this.fallback2Host = fallback2Host.trim().lowercase(); this.fallback2Port = fallback2Port.coerceIn(1, 65535)
         prefs.edit().putString("host", clusterHost).putInt("port", clusterPort).putString("callsign", clusterCallsign)
             .putString("fallback_host", this.fallbackHost).putInt("fallback_port", this.fallbackPort)
             .putString("fallback2_host", this.fallback2Host).putInt("fallback2_port", this.fallback2Port).apply()
+    }
+
+    fun connectCluster(host: String, port: Int, callsign: String,
+        fallbackHost: String = "", fallbackPort: Int = 7300,
+        fallback2Host: String = "", fallback2Port: Int = 7300) {
+        saveClusterConfiguration(host, port, callsign, fallbackHost, fallbackPort, fallback2Host, fallback2Port)
         disconnectCluster(); val generation = ++clusterGeneration
         val endpoints = listOf(clusterHost to clusterPort, this.fallbackHost to this.fallbackPort,
             this.fallback2Host to this.fallback2Port).filter { it.first.isNotBlank() && it.second in 1..65535 }.distinct()
