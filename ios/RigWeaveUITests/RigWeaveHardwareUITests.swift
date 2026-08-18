@@ -122,6 +122,31 @@ final class RigWeaveHardwareUITests: XCTestCase {
         }
     }
 
+    func testSettingsLayoutImprovements() throws {
+        openDestination("Settings")
+
+        openSettingsTab("Default")
+        XCTAssertTrue(app.staticTexts["CTY.DAT"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["ctyStatus"].exists)
+
+        openSettingsTab("Log")
+        XCTAssertFalse(app.staticTexts["CTY.DAT"].exists)
+
+        openSettingsTab("Macros")
+        XCTAssertTrue(app.descendants(matching: .any)["cwMacroGrid"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["cwMacroMessage2"].exists)
+
+        openSettingsTab("Audio")
+        XCTAssertTrue(app.descendants(matching: .any)["audioSettingsLayout"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["audioInputPicker"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["audioCaptureControls"].exists)
+
+        openSettingsTab("About")
+        XCTAssertTrue(app.descendants(matching: .any)["developerInformation"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Oliver Bross, OM0RX"].exists)
+        XCTAssertTrue(app.images["developerPortrait"].exists)
+    }
+
     func testPhysicalIQ() throws {
         openDestination("Panadapter")
         app.tap()

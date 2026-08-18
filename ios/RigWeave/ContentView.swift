@@ -826,6 +826,11 @@ struct SettingsView: View {
                 TextField("DX watchlist callsigns", text: $features.watchlist, axis: .vertical)
                     .textInputAutocapitalization(.characters).autocorrectionDisabled()
             }
+            Section("CTY.DAT") {
+                LabeledContent("Status", value: features.cty.status)
+                    .accessibilityIdentifier("ctyStatus")
+                Button("Update CTY.DAT") { Task { await features.cty.update() } }
+            }
         case .log:
             Section("Local tablet log") {
                 LabeledContent("SQLite QSOs", value: "\(logbook.records.count) recent")
@@ -865,10 +870,6 @@ struct SettingsView: View {
                 Text("Log → Enrich fills Name, QTH and Country before the local save and Wavelog queue.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section("CTY.DAT") {
-                LabeledContent("Status", value: features.cty.status).accessibilityIdentifier("ctyStatus")
-                Button("Update CTY.DAT") { Task { await features.cty.update() } }
-            }
         case .cluster:
             Section("DX cluster endpoints") {
                 TextField("Operator callsign", text: $features.operatorCallsign).textInputAutocapitalization(.characters).autocorrectionDisabled()
@@ -883,9 +884,20 @@ struct SettingsView: View {
             }
         case .macros:
             Section("CW macros") {
-                macroRow(label: $macroLabel1, text: $macroText1)
-                macroRow(label: $macroLabel2, text: $macroText2)
-                macroRow(label: $macroLabel3, text: $macroText3)
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
+                    GridRow {
+                        Text("Button label")
+                        Text("CW message")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                    macroRow(index: 1, label: $macroLabel1, text: $macroText1)
+                    macroRow(index: 2, label: $macroLabel2, text: $macroText2)
+                    macroRow(index: 3, label: $macroLabel3, text: $macroText3)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("cwMacroGrid")
                 Text("Macros are stored locally. Transmission remains subject to the Safety controls and a live CW-mode radio session.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -906,17 +918,22 @@ struct SettingsView: View {
             }
         case .audio:
             Section("USB receive audio") {
-                Picker("Input", selection: $features.selectedAudioInputUID) {
-                    if features.audioInputs.isEmpty { Text("No physical input").tag("") }
-                    ForEach(features.audioInputs) { Text("\($0.name) · \($0.type)").tag($0.id) }
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 24) {
+                        audioInputColumn
+                            .frame(minWidth: 260, maxWidth: .infinity, alignment: .topLeading)
+                        Divider()
+                        audioCaptureColumn
+                            .frame(minWidth: 260, maxWidth: .infinity, alignment: .topLeading)
+                    }
+                    VStack(alignment: .leading, spacing: 20) {
+                        audioInputColumn
+                        Divider()
+                        audioCaptureColumn
+                    }
                 }
-                HStack {
-                    Button("Scan") { Task { await features.refreshAudioInputs() } }
-                    Button("Start") { Task { await features.startAudioCapture() } }
-                    Button("Stop") { features.stopAudioCapture() }
-                }.buttonStyle(.borderless)
-                Text(features.audioStatus).font(.caption).foregroundStyle(.secondary)
-                LabeledContent("Format", value: "\(Int(features.audioSampleRate)) Hz · I/Q stereo required")
+                .padding(.vertical, 4)
+                .accessibilityIdentifier("audioSettingsLayout")
             }
         case .health:
             Section("System health") {
@@ -973,6 +990,30 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Text("WSJT-X is intentionally not exposed in Settings yet.").font(.caption).foregroundStyle(.secondary)
             }
+            Section("Developer") {
+                HStack(alignment: .top, spacing: 20) {
+                    Image("DeveloperPortrait")
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 112, height: 112)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .accessibilityLabel("Oliver Bross, OM0RX")
+                        .accessibilityIdentifier("developerPortrait")
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Oliver Bross, OM0RX")
+                            .font(.headline)
+                        Text("Amateur radio operator licensed since 2000.")
+                            .foregroundStyle(.secondary)
+                        Text("RigWeave is built by a radio amateur for real portable and station operating.")
+                            .fixedSize(horizontal: false, vertical: true)
+                        Link("stationpilot.app", destination: URL(string: "https://stationpilot.app")!)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.vertical, 4)
+                .accessibilityIdentifier("developerInformation")
+            }
         }
     }
 
@@ -981,8 +1022,54 @@ struct SettingsView: View {
             TextField("Port", text: port).keyboardType(.numberPad).frame(maxWidth: 120) }
     }
 
-    private func macroRow(label: Binding<String>, text: Binding<String>) -> some View {
-        HStack { TextField("Label", text: label).frame(maxWidth: 140)
-            TextField("CW text", text: text).textInputAutocapitalization(.characters).autocorrectionDisabled() }
+    private func macroRow(index: Int, label: Binding<String>, text: Binding<String>) -> some View {
+        GridRow {
+            TextField("Button label", text: label)
+                .frame(width: 140)
+                .accessibilityIdentifier("cwMacroLabel\(index)")
+            TextField("CW message", text: text)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .frame(maxWidth: .infinity)
+                .accessibilityIdentifier("cwMacroMessage\(index)")
+        }
+        .textFieldStyle(.roundedBorder)
+    }
+
+    private var audioInputColumn: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("Input device", systemImage: "cable.connector")
+                .font(.headline)
+            Picker("Audio input", selection: $features.selectedAudioInputUID) {
+                if features.audioInputs.isEmpty { Text("No physical input").tag("") }
+                ForEach(features.audioInputs) { Text("\($0.name) · \($0.type)").tag($0.id) }
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: 320, alignment: .leading)
+            .accessibilityIdentifier("audioInputPicker")
+            Button("Scan devices") { Task { await features.refreshAudioInputs() } }
+                .buttonStyle(.bordered)
+            Text(features.audioStatus)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("audioSettingsStatus")
+        }
+    }
+
+    private var audioCaptureColumn: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("I/Q capture", systemImage: "waveform")
+                .font(.headline)
+            LabeledContent("Sample rate", value: "\(Int(features.audioSampleRate)) Hz")
+            LabeledContent("Channels", value: "Stereo I/Q required")
+            HStack(spacing: 12) {
+                Button("Start capture") { Task { await features.startAudioCapture() } }
+                    .buttonStyle(.borderedProminent)
+                Button("Stop") { features.stopAudioCapture() }
+                    .buttonStyle(.bordered)
+            }
+            .accessibilityIdentifier("audioCaptureControls")
+        }
     }
 }
