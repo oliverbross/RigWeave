@@ -65,13 +65,12 @@ This is the normative product order. A phase starts only after separate owner au
 
 ## Phase 4 — Sync and Progress v1
 
-- Multi-destination outbox for local-log mode.
-- Stage QRZ, Club Log, and eQSL.
-- Preserve Wavelog authority mode and prevent duplicate uploads.
-- Track worked, uploaded, accepted, and confirmed states.
-- Add Needs Board and useful activation/award statistics.
+- **Phase 4A implemented on Android:** local-authority Sync Hub, independent durable QRZ/Club Log/eQSL delivery, explicit historical catch-up, secure credentials, truthful provider attention states, and Wavelog duplicate-prevention gating.
+- Upload acceptance is tracked without fabricating remote confirmation. QRZ/Club Log/eQSL confirmation import remains later work.
+- **Phase 4B next:** Needs Board and useful activation/award statistics.
 - Keep direct LoTW signing later because certificate/key handling is materially different.
 - Review any Nexus connector, queue, logbook, or award component before reuse.
+- SOTA live still requires written API approval; iPadOS parity remains deferred; no Nexus source is incorporated.
 
 ## Phase 5 — FlexRadio SmartLink
 

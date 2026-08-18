@@ -10,8 +10,8 @@ The current repository contains two native mobile clients—an iPad-focused Swif
 |---|---|---|
 | Shared core | KX3/KX2 CAT parsing and safety classes, ADIF, CTY, spot/DX analysis, operator intelligence, panadapter DSP, Wavelog retry policy, and bounded WSJT-X parsing behind a C ABI | core/include, core/portable, core/src |
 | Apple | SwiftUI app, Objective-C++ bridge, base USBDriverKit KXUSB transport, local SQLite/ADIF, callbook, Wavelog, cluster/DX, and physical-I/Q panadapter | ios/RigWeave, ios/CP210xDriver |
-| Android | Compose app, JNI bridge, USB serial, local SQLite/ADIF, callbook, Wavelog, CW and SSB voice macros, hardware-backed KX3 EQ Studio, multi-program Portable Chase, POTA Activate sessions/export, DX/Neural DX surfaces, MapLibre maps, audio monitoring, and a dedicated KX3 stereo-I/Q panadapter behind one exclusive audio-owner contract | android/app/src/main |
-| Planned / gated | SOTA live API approval, further KX3/KX2 Studio hardening and platform parity, SOTA/WWFF Activate, Sync and Progress, FlexRadio SmartLink, Qt/QML desktop, then QMX and broader integrations | docs/ROADMAP.md |
+| Android | Compose app, JNI bridge, USB serial, local SQLite/ADIF, local-authority QRZ/Club Log/eQSL Sync Hub, callbook, Wavelog, CW and SSB voice macros, hardware-backed KX3 EQ Studio, multi-program Portable Chase, POTA Activate sessions/export, DX/Neural DX surfaces, MapLibre maps, audio monitoring, and a dedicated KX3 stereo-I/Q panadapter behind one exclusive audio-owner contract | android/app/src/main |
+| Planned / gated | SOTA live API approval, further KX3/KX2 Studio hardening and platform parity, SOTA/WWFF Activate, Phase 4B Needs Board/statistics, FlexRadio SmartLink, Qt/QML desktop, then QMX and broader integrations | docs/ROADMAP.md |
 
 The Apple Xcode targets are configured for device family 2 (iPad), deployment target iOS 17, and should not be described as proven iPhone support.
 

@@ -13,6 +13,7 @@ RigWeave is local-first. Radio control and local logging must remain useful with
 - Shared C++17 core exposed through a C ABI.
 - Deep Elecraft KX3/KX2 integration: observed CAT state, radio controls, transport adapters, safety classification, logging, real spectrum paths, and DX intelligence.
 - Local SQLite journals and ADIF workflows.
+- Android Local authority includes a durable Sync Hub for independently enabled QRZ Logbook, Club Log, and eQSL.cc delivery. Wavelog authority pauses direct services to prevent duplicates; upload acceptance never implies remote confirmation.
 - Optional Wavelog, QRZ/HamQTH, CTY, cluster, NOAA/solar, and other Android Neural DX data sources where implemented and configured.
 - CW text macros with explicit operator safety controls. Android also implements six operator-controlled SSB voice-macro slots with explicit CAT/PTT ownership and fail-closed audio routing; this is not claimed for Apple.
 
@@ -36,7 +37,7 @@ The clients do not have identical surface coverage. Android currently contains t
 1. KX3/KX2 Studio: preserve and harden the implemented Android KX3 EQ Studio, profiles, voice macros, and dedicated KX3 panadapter; extend other clients and KX2 write or wideband-I/Q claims only after their platform and hardware gates.
 2. Preserve the integrated Android Portable Chase extension while SOTA live remains disabled pending documented API approval.
 3. Preserve the implemented Android POTA Activate workflow; SOTA/WWFF activation remains later work.
-4. Sync and Progress.
+4. Preserve Android Phase 4A local-log delivery; Phase 4B Needs Board and statistics is next.
 5. FlexRadio SmartLink through legitimate official interfaces and authentication.
 6. One Qt 6/QML/CMake desktop client for macOS, Windows, and Linux.
 7. QMX, rigctld, additional radios, and additional programmes only after hardware/data/licence gates.
