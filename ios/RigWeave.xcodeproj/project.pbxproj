@@ -29,6 +29,7 @@
 		A10000000000000000000013 /* Settings.bundle in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* Settings.bundle */; };
 		A10000000000000000000014 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* IOKit.framework */; };
 		A10000000000000000000015 /* KXUSBDriverClient.mm in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* KXUSBDriverClient.mm */; };
+		D10000000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001 /* Assets.xcassets */; };
 		B10000000000000000000001 /* features.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* features.cpp */; };
 		B10000000000000000000002 /* adif.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000002 /* adif.cpp */; };
 		B10000000000000000000003 /* cat_parser.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000003 /* cat_parser.cpp */; };
@@ -100,6 +101,7 @@
 		A20000000000000000000017 /* Settings.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = Settings.bundle; sourceTree = "<group>"; };
 		A20000000000000000000018 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
 		A20000000000000000000019 /* KXUSBDriverClient.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = KXUSBDriverClient.mm; sourceTree = "<group>"; };
+		D20000000000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B20000000000000000000001 /* features.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = features.cpp; path = ../core/src/features.cpp; sourceTree = SOURCE_ROOT; };
 		B20000000000000000000002 /* adif.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = adif.cpp; path = ../core/portable/src/adif.cpp; sourceTree = SOURCE_ROOT; };
 		B20000000000000000000003 /* cat_parser.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = cat_parser.cpp; path = ../core/portable/src/cat_parser.cpp; sourceTree = SOURCE_ROOT; };
@@ -168,6 +170,7 @@
 				A20000000000000000000015 /* WavelogSync.swift */,
 				A20000000000000000000016 /* CallbookService.swift */,
 				A20000000000000000000017 /* Settings.bundle */,
+				D20000000000000000000001 /* Assets.xcassets */,
 				A20000000000000000000009 /* SerialTransport.swift */,
 				A20000000000000000000019 /* KXUSBDriverClient.mm */,
 				A20000000000000000000005 /* RigWeave-Bridging-Header.h */,
@@ -358,6 +361,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000013 /* Settings.bundle in Resources */,
+				D10000000000000000000001 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
