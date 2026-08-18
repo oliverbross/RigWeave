@@ -50,7 +50,7 @@ This is the normative product order. A phase starts only after separate owner au
 ## Phase 2 — Portable Chase v1
 
 - **Phase 2A implemented on Android:** POTA live activator feed; honest live/cache/stale states; source-stamped replaceable park database; offline search and nearby; local worked labels; deterministic recommendation reasons; joined list/map selection; operator-confirmed receive-only tune; and the existing logger/Wavelog handoff.
-- **Phase 2B implemented locally but gate stopped:** unified POTA/SOTA/WWFF model and UI, WWFF Spotline/agendas, staged offline SOTA summits, grouping, programme-specific worked state, map/Places, and multi-reference Tune & Log are present. SOTA live is unavailable because the replacement private API requires documented developer and AI-client approval; the deprecated endpoint is not shipped.
+- **Phase 2B integrated — PASS WITH EXTERNAL DEPENDENCY:** unified POTA/SOTA/WWFF model and UI, WWFF Spotline/agendas, staged offline SOTA summits, grouping, programme-specific worked state, map/Places, and multi-reference Tune & Log are present. SOTA live remains disabled pending written approval for the replacement API; RigWeave makes no request to an unapproved or deprecated endpoint.
 - WWFF full offline directory storage is deferred pending programme permission. iPadOS Portable Chase parity remains deferred.
 - Portable Activate remains Phase 3. Panadapter spot overlays remain deferred.
 - No Nexus source or dependency is incorporated.

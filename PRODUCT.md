@@ -33,8 +33,8 @@ The clients do not have identical surface coverage. Android currently contains t
 ## Approved direction
 
 1. KX3/KX2 Studio: preserve and harden the implemented Android KX3 EQ Studio, profiles, voice macros, and dedicated KX3 panadapter; extend other clients and KX2 write or wideband-I/Q claims only after their platform and hardware gates.
-2. Complete the gated Android Portable Chase extension after documented SOTA live API approval and final device acceptance.
-3. Portable Activate.
+2. Preserve the integrated Android Portable Chase extension while SOTA live remains disabled pending documented API approval.
+3. Portable Activate, beginning with an Android POTA activation workflow.
 4. Sync and Progress.
 5. FlexRadio SmartLink through legitimate official interfaces and authentication.
 6. One Qt 6/QML/CMake desktop client for macOS, Windows, and Linux.

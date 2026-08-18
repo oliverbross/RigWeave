@@ -35,10 +35,4 @@ RigWeave is independent of POTA, SOTA, and WWFF and uses no programme logos.
 - The official 2026-08-17 SOTA CSV imported 181,658 summits. Searches selected `VK3/VC-001` Mt Matlock and `OM/ZA-001` Bystrá. Nearby from manual grid `JN88TQ` returned `OM/TN-045` Bradlo at 4.2 km / 260° first after correcting pre-limit proximity ordering.
 - Screenshots: `docs/portable/evidence/portable-all-on-air.png`, `docs/portable/evidence/portable-sota-places.png`, and `docs/portable/evidence/portable-wwff-map-detail.png`.
 
-Phase 2B cannot pass or merge until SOTA live API approval is documented and the approved current endpoint is implemented and physically smoke-tested. POTA remains the Phase 2A production truth; WWFF full offline directory storage remains deferred pending permission. iPadOS parity, Portable Activate, awards, panadapter overlays, and Nexus reuse remain outside this phase.
-
-Screenshot targets after the gate is unblocked:
-
-- `docs/portable/evidence/portable-all-on-air.png`
-- `docs/portable/evidence/portable-sota-places.png`
-- `docs/portable/evidence/portable-wwff-map-detail.png`
+Phase 2B is integrated with the accepted status **PASS WITH EXTERNAL DEPENDENCY**. SOTA live remains unavailable pending written API approval; the disabled provider makes no live SOTA request. The existing offline summit catalogue is independent of that approval. WWFF full offline directory storage remains deferred pending permission. iPadOS parity, Portable Activate, awards, panadapter overlays, and Nexus reuse remain outside Phase 2B.
