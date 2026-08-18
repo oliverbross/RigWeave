@@ -3,6 +3,7 @@ package app.rigweave.mobile
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import android.content.ContentValues
 import org.json.JSONObject
 import java.time.LocalDateTime
 import java.time.ZoneOffset
@@ -37,6 +38,8 @@ data class Qso(
     val activationSessionId: String = "", val activationProgram: String = "",
     val myPotaRefs: List<String> = emptyList(), val potaRefs: List<String> = emptyList(),
 )
+
+enum class QsoOrigin { OPERATOR, IMPORT, REMOTE_SYNC }
 
 data class QsoPage(val rows: List<Qso>, val total: Int, val page: Int, val pageSize: Int) {
     val pageCount get() = logbookPageCount(total, pageSize)
@@ -73,13 +76,18 @@ fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
     in 50_000_000L..54_000_000L -> "6m"; else -> ""
 }
 
-class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 6) {
+class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 7) {
     private val changeRevision = AtomicLong(0)
+    var operatorSaveHandler: ((Qso) -> Unit)? = null
+    override fun onConfigure(db: SQLiteDatabase) {
+        db.setForeignKeyConstraintsEnabled(true)
+    }
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         db.execSQL("CREATE TABLE radio_profile(id TEXT PRIMARY KEY, model TEXT NOT NULL)")
         db.execSQL("CREATE TABLE qso(id TEXT PRIMARY KEY, callsign TEXT NOT NULL, frequency_hz INTEGER NOT NULL, mode TEXT NOT NULL, rst_sent TEXT NOT NULL, rst_received TEXT NOT NULL, created_at INTEGER NOT NULL, name TEXT NOT NULL DEFAULT '', qth TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '', details_json TEXT NOT NULL DEFAULT '{}')")
         createPagingIndexes(db)
+        createDeliveryTable(db)
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
@@ -91,6 +99,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         if (oldVersion < 4) db.execSQL("ALTER TABLE qso ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'")
         if (oldVersion < 5) createPagingIndexes(db)
         if (oldVersion < 6) createSpotStatusIndexes(db)
+        if (oldVersion < 7) createDeliveryTable(db)
     }
 
     private fun createPagingIndexes(db: SQLiteDatabase) {
@@ -106,12 +115,34 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         db.execSQL("CREATE INDEX IF NOT EXISTS qso_dxcc_upper_idx ON qso(UPPER(COALESCE(json_extract(details_json,'$.dxcc'),'')))")
     }
 
-    fun save(qso: Qso): Boolean {
+    private fun createDeliveryTable(db: SQLiteDatabase) {
+        db.execSQL("""CREATE TABLE IF NOT EXISTS qso_delivery(
+            qso_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            state TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            last_attempt_at INTEGER,
+            next_attempt_at INTEGER,
+            payload_hash TEXT NOT NULL DEFAULT '',
+            remote_id TEXT NOT NULL DEFAULT '',
+            provider_message TEXT NOT NULL DEFAULT '',
+            http_status INTEGER,
+            PRIMARY KEY(qso_id, provider),
+            FOREIGN KEY(qso_id) REFERENCES qso(id) ON DELETE CASCADE
+        )""".trimIndent())
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_delivery_queue_idx ON qso_delivery(provider,state,next_attempt_at,created_at)")
+    }
+
+    fun save(qso: Qso, origin: QsoOrigin = QsoOrigin.OPERATOR): Boolean {
         readableDatabase.rawQuery("SELECT 1 FROM qso WHERE callsign=? AND frequency_hz=? AND mode=? AND created_at BETWEEN ? AND ? LIMIT 1",
             arrayOf(qso.callsign, qso.frequencyHz.toString(), qso.mode, (qso.createdAt - 15).toString(), (qso.createdAt + 15).toString())).use {
             if (it.moveToFirst()) return false
         }
-        insert(qso); return true
+        insert(qso)
+        if (origin == QsoOrigin.OPERATOR) operatorSaveHandler?.invoke(qso)
+        return true
     }
 
     fun mergeRemote(remote: Qso): Boolean {
@@ -381,7 +412,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
                 return record.substring(tag.range.last + 1).take(length)
             }
             val qso = qsoFromFields(::field, "", "")
-            if (qso == null) skipped++ else if (save(qso)) added++ else skipped++
+            if (qso == null) skipped++ else if (save(qso, QsoOrigin.IMPORT)) added++ else skipped++
         }
         return added to skipped
     }
@@ -445,6 +476,93 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     private fun findNatural(qso: Qso): Qso? = queryWhere("callsign=? AND frequency_hz=? AND mode=? AND created_at BETWEEN ? AND ? LIMIT 1",
         arrayOf(qso.callsign, qso.frequencyHz.toString(), qso.mode, (qso.createdAt - 15).toString(), (qso.createdAt + 15).toString())).firstOrNull()
     private fun findById(id: String): Qso? = queryWhere("id=? LIMIT 1", arrayOf(id)).firstOrNull()
+    fun qso(id: String): Qso? = findById(id)
+
+    fun enqueueDelivery(qsoId: String, provider: SyncProvider, state: DeliveryState = DeliveryState.QUEUED,
+        now: Long = System.currentTimeMillis() / 1_000): Boolean {
+        val values = ContentValues().apply {
+            put("qso_id", qsoId); put("provider", provider.name); put("state", state.name)
+            put("created_at", now); put("updated_at", now)
+        }
+        val inserted = writableDatabase.insertWithOnConflict("qso_delivery", null, values, SQLiteDatabase.CONFLICT_IGNORE) != -1L
+        if (inserted) changeRevision.incrementAndGet()
+        return inserted
+    }
+
+    fun deliveries(provider: SyncProvider? = null): List<DeliveryRecord> {
+        val where = if (provider == null) "1=1" else "provider=?"
+        val args = provider?.let { arrayOf(it.name) }
+        return deliveryQuery("$where ORDER BY created_at ASC, qso_id ASC", args)
+    }
+
+    fun deliveriesForQsoIds(ids: List<String>): Map<String, List<DeliveryRecord>> {
+        if (ids.isEmpty()) return emptyMap()
+        val placeholders = ids.joinToString(",") { "?" }
+        return deliveryQuery("qso_id IN ($placeholders) ORDER BY provider", ids.toTypedArray()).groupBy { it.qsoId }
+    }
+
+    fun nextDelivery(provider: SyncProvider, now: Long): DeliveryRecord? = deliveryQuery(
+        "provider=? AND state IN ('QUEUED','RETRY_WAIT') AND (next_attempt_at IS NULL OR next_attempt_at<=?) ORDER BY created_at ASC,qso_id ASC LIMIT 1",
+        arrayOf(provider.name, now.toString())).firstOrNull()
+
+    fun recoverInterruptedDeliveries(now: Long = System.currentTimeMillis() / 1_000) {
+        writableDatabase.execSQL("UPDATE qso_delivery SET state='RETRY_WAIT',updated_at=?,next_attempt_at=? WHERE state='SENDING'",
+            arrayOf(now, now + 60))
+    }
+
+    fun updateDelivery(record: DeliveryRecord) {
+        writableDatabase.execSQL("""UPDATE qso_delivery SET state=?,updated_at=?,attempt_count=?,last_attempt_at=?,next_attempt_at=?,
+            payload_hash=?,remote_id=?,provider_message=?,http_status=? WHERE qso_id=? AND provider=?""".trimIndent(),
+            arrayOf(record.state.name, record.updatedAt, record.attemptCount, record.lastAttemptAt, record.nextAttemptAt,
+                record.payloadHash, record.remoteId, record.providerMessage.take(1_000), record.httpStatus, record.qsoId, record.provider.name))
+        changeRevision.incrementAndGet()
+    }
+
+    fun setProviderQueueState(provider: SyncProvider, from: Set<DeliveryState>, state: DeliveryState,
+        now: Long = System.currentTimeMillis() / 1_000) {
+        if (from.isEmpty()) return
+        val names = from.joinToString(",") { "'${it.name}'" }
+        writableDatabase.execSQL("UPDATE qso_delivery SET state=?,updated_at=? WHERE provider=? AND state IN ($names)",
+            arrayOf(state.name, now, provider.name))
+        changeRevision.incrementAndGet()
+    }
+
+    fun removeUnsentDelivery(qsoId: String, provider: SyncProvider) {
+        writableDatabase.execSQL("DELETE FROM qso_delivery WHERE qso_id=? AND provider=? AND state NOT IN ('ACCEPTED','ACCEPTED_DUPLICATE','ACCEPTED_MODIFIED','SUBMITTED_BATCH')",
+            arrayOf(qsoId, provider.name))
+        changeRevision.incrementAndGet()
+    }
+
+    fun markProviderAccepted(qsoId: String, provider: SyncProvider) {
+        val qso = findById(qsoId) ?: return
+        update(applyAcceptedFlag(qso, provider))
+    }
+
+    fun updateLocal(qso: Qso) {
+        val old = findById(qso.id) ?: return
+        update(qso)
+        if (toADIF(old) != toADIF(qso)) {
+            writableDatabase.execSQL("UPDATE qso_delivery SET state='LOCAL_CHANGED',updated_at=? WHERE qso_id=? AND state IN ('ACCEPTED','ACCEPTED_DUPLICATE','ACCEPTED_MODIFIED','SUBMITTED_BATCH')",
+                arrayOf(System.currentTimeMillis() / 1_000, qso.id))
+        }
+    }
+
+    fun deleteLocal(id: String) {
+        writableDatabase.delete("qso", "id=?", arrayOf(id))
+        changeRevision.incrementAndGet()
+    }
+
+    private fun deliveryQuery(where: String, args: Array<String>?): List<DeliveryRecord> = buildList {
+        readableDatabase.rawQuery("SELECT qso_id,provider,state,created_at,updated_at,attempt_count,last_attempt_at,next_attempt_at,payload_hash,remote_id,provider_message,http_status FROM qso_delivery WHERE $where", args).use { cursor ->
+            while (cursor.moveToNext()) add(DeliveryRecord(
+                qsoId = cursor.getString(0), provider = SyncProvider.valueOf(cursor.getString(1)),
+                state = DeliveryState.valueOf(cursor.getString(2)), createdAt = cursor.getLong(3), updatedAt = cursor.getLong(4),
+                attemptCount = cursor.getInt(5), lastAttemptAt = cursor.getLong(6).takeIf { !cursor.isNull(6) },
+                nextAttemptAt = cursor.getLong(7).takeIf { !cursor.isNull(7) }, payloadHash = cursor.getString(8),
+                remoteId = cursor.getString(9), providerMessage = cursor.getString(10),
+                httpStatus = cursor.getInt(11).takeIf { !cursor.isNull(11) }))
+        }
+    }
     private fun query(limit: String): List<Qso> = queryWhere("1=1 ORDER BY created_at DESC$limit", null)
 
     private data class PageQuery(val where: String, val args: List<String>, val order: String)
