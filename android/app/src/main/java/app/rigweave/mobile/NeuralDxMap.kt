@@ -53,11 +53,13 @@ import org.maplibre.android.maps.Style
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.PI
+import kotlin.math.acos
 import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 private val MapInk = ComposeColor(0xFFF4F0E7)
 private val MapMuted = ComposeColor(0xFFB4BDC2)
@@ -66,6 +68,7 @@ private val MapGreen = ComposeColor(0xFF42C77B)
 private val MapAmber = ComposeColor(0xFFE9A72B)
 private val MapYellow = ComposeColor(0xFFF4C94E)
 private val MapRed = ComposeColor(0xFFE4544D)
+private const val MaxVisibleDxPaths = 300
 
 private enum class NeuralBasemap(val label: String, val styleJson: String) {
     SATELLITE("ESRI SATELLITE", satelliteStyleJson()),
@@ -96,6 +99,7 @@ private fun NativeNeuralMap(
     label: String,
     description: String,
     modifier: Modifier,
+    legend: String = "",
 ) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -244,28 +248,93 @@ private fun NativeNeuralMap(
                 Icon(Icons.Outlined.MyLocation, contentDescription = "Reset map view", tint = MapCyan)
             }
         }
+        if (legend.isNotBlank()) {
+            Surface(
+                color = ComposeColor(0xE6192228),
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier.align(Alignment.BottomStart).padding(10.dp),
+            ) {
+                Text(legend, color = MapInk, fontSize = 10.sp,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp))
+            }
+        }
     }
 }
 
 @Composable
-internal fun DxWorldCanvas(rows: List<AndroidDXSpot>, stationGrid: String, hearsMe: Boolean, modifier: Modifier) {
+internal fun DxWorldCanvas(rows: List<AndroidDXSpot>, stationGrid: String, hearsMe: Boolean,
+    cty: CtyController, showPaths: Boolean, modifier: Modifier) {
     val qth = maidenheadCenter(stationGrid)
+    val resolvedPaths = if (!showPaths) emptyList() else rows.asSequence().mapNotNull { spot ->
+        val reporter = cty.lookup(spot.spotter) ?: return@mapNotNull null
+        val segments = dxReportRoute(reporter, spot)
+        if (segments.isEmpty()) null else Triple(spot, reporter, segments)
+    }.take(MaxVisibleDxPaths).toList()
     val markers = buildList {
         qth?.let { add(qthMarker(it)) }
         rows.forEach { spot ->
             if (spot.latitude != 0.0 || spot.longitude != 0.0) {
                 add(MapMarker(
                     spot.latitude, spot.longitude, spot.callsign,
-                    "${spot.band} ${spot.mode} · ${"%.3f".format(spot.frequencyHz / 1_000_000.0)} MHz · ${spot.country}",
+                    "${spot.band} ${spot.mode} · ${"%.3f".format(spot.frequencyHz / 1_000_000.0)} MHz · ${spot.country} · DX de ${spot.spotter}",
                     when { spot.watchlisted -> colorInt(MapYellow); hearsMe -> colorInt(MapGreen); else -> colorInt(MapCyan) },
                     if (spot.watchlisted) 15 else 11,
                     spot.watchlisted,
                 ))
             }
         }
+        resolvedPaths.distinctBy { it.first.spotter.uppercase() }.forEach { (spot, reporter) ->
+            add(MapMarker(reporter.latitude, reporter.longitude, "DX DE ${spot.spotter}",
+                "Reported ${spot.callsign} · ${spot.band} ${spot.mode} · approximate CTY location",
+                colorInt(MapAmber), 9))
+        }
     }
-    NativeNeuralMap(markers, emptyList(), emptyList(), LatLng(20.0, 0.0), 1.35, NeuralBasemap.SATELLITE,
-        "LIVE DX", "Interactive world map with ${rows.size} DX observations", modifier)
+    val paths = resolvedPaths.flatMap { (spot, _, segments) ->
+        segments.map { points ->
+            MapPath(points, colorInt((if (spot.watchlisted) MapYellow else MapCyan).copy(alpha = if (spot.watchlisted) .72f else .42f)),
+                if (spot.watchlisted) 1.65f else 1.1f)
+        }
+    }
+    val pathLabel = if (showPaths) " · ${resolvedPaths.size} PATHS" else ""
+    val cappedLabel = if (resolvedPaths.size == MaxVisibleDxPaths && rows.size > MaxVisibleDxPaths) " · MAX $MaxVisibleDxPaths SHOWN" else ""
+    val legend = if (showPaths) "AMBER DX DE → CYAN DX · APPROX. CTY CENTRES$cappedLabel" else ""
+    NativeNeuralMap(markers, paths, emptyList(), LatLng(20.0, 0.0), 1.35, NeuralBasemap.SATELLITE,
+        "LIVE DX$pathLabel", "Interactive world map with ${rows.size} DX observations and ${resolvedPaths.size} resolved reporting paths",
+        modifier, legend)
+}
+
+internal fun dxReportRoute(reporter: AndroidCtyRecord, spot: AndroidDXSpot): List<List<LatLng>> {
+    val from = LatLng(reporter.latitude, reporter.longitude)
+    val to = LatLng(spot.latitude, spot.longitude)
+    if (!validMapPoint(from) || !validMapPoint(to)) return emptyList()
+    if (from.latitude == to.latitude && from.longitude == to.longitude) return emptyList()
+    return splitAtDateline(greatCirclePath(from, to))
+}
+
+private fun validMapPoint(point: LatLng): Boolean =
+    point.latitude in -90.0..90.0 && point.longitude in -180.0..180.0 &&
+        (point.latitude != 0.0 || point.longitude != 0.0)
+
+internal fun greatCirclePath(from: LatLng, to: LatLng, steps: Int = 32): List<LatLng> {
+    val count = steps.coerceAtLeast(2)
+    val fromLat = Math.toRadians(from.latitude)
+    val fromLon = Math.toRadians(from.longitude)
+    val toLat = Math.toRadians(to.latitude)
+    val toLon = Math.toRadians(to.longitude)
+    val fromVector = doubleArrayOf(cos(fromLat) * cos(fromLon), cos(fromLat) * sin(fromLon), sin(fromLat))
+    val toVector = doubleArrayOf(cos(toLat) * cos(toLon), cos(toLat) * sin(toLon), sin(toLat))
+    val omega = acos((fromVector.indices.sumOf { fromVector[it] * toVector[it] }).coerceIn(-1.0, 1.0))
+    val sinOmega = sin(omega)
+    if (omega < 1e-8 || kotlin.math.abs(sinOmega) < 1e-8) return listOf(from, to)
+    return (0..count).map { step ->
+        val fraction = step.toDouble() / count
+        val fromScale = sin((1.0 - fraction) * omega) / sinOmega
+        val toScale = sin(fraction * omega) / sinOmega
+        val x = fromScale * fromVector[0] + toScale * toVector[0]
+        val y = fromScale * fromVector[1] + toScale * toVector[1]
+        val z = fromScale * fromVector[2] + toScale * toVector[2]
+        LatLng(Math.toDegrees(atan2(z, sqrt(x * x + y * y))), Math.toDegrees(atan2(y, x)))
+    }
 }
 
 @Composable

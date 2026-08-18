@@ -5,6 +5,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.maplibre.android.geometry.LatLng
 
 class NeuralDxRulesTest {
     @Test fun maidenheadUsesCellCentreAndRejectsInvalidInput() {
@@ -68,6 +69,22 @@ class NeuralDxRulesTest {
             polygon.size >= 3 &&
                 polygon.all { it.longitude in -180.0..180.0 } &&
                 polygon.zipWithNext().all { (a, b) -> kotlin.math.abs(a.longitude - b.longitude) <= 180.0 }
+        })
+    }
+
+    @Test fun greatCircleSpotPathsKeepEndpointsAndSplitAtDateLine() {
+        val from = LatLng(35.0, 170.0)
+        val to = LatLng(37.0, -175.0)
+        val route = greatCirclePath(from, to)
+        assertEquals(33, route.size)
+        assertEquals(from.latitude, route.first().latitude, 0.000001)
+        assertEquals(from.longitude, route.first().longitude, 0.000001)
+        assertEquals(to.latitude, route.last().latitude, 0.000001)
+        assertEquals(to.longitude, route.last().longitude, 0.000001)
+        val segments = splitAtDateline(route)
+        assertTrue(segments.size >= 2)
+        assertTrue(segments.all { segment ->
+            segment.zipWithNext().all { (a, b) -> kotlin.math.abs(a.longitude - b.longitude) <= 180.0 }
         })
     }
 }

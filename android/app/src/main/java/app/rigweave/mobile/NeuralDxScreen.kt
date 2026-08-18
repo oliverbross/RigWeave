@@ -284,6 +284,7 @@ fun NeuralDxScreen(
     previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
     var minutes by remember { mutableIntStateOf(60) }; var limit by remember { mutableIntStateOf(250) }
     var band by remember { mutableStateOf("ALL") }; var mode by remember { mutableStateOf("ALL") }; var hearsMe by remember { mutableStateOf(false) }
+    var showPaths by remember { mutableStateOf(true) }
     var selected by remember { mutableStateOf<AndroidDXSpot?>(null) }; val now=Instant.now().epochSecond
     val filtered=rows.filter{now-it.receivedEpoch<=minutes*60&&(band=="ALL"||it.band==band)&&(mode=="ALL"||it.mode==mode)}.take(limit)
     Column(modifier,verticalArrangement=Arrangement.spacedBy(8.dp)){
@@ -291,10 +292,12 @@ fun NeuralDxScreen(
             DxSelect("WINDOW","${minutes}m",listOf("15m","30m","60m","180m","360m")){minutes=it.removeSuffix("m").toInt()}
             DxSelect("LIMIT",limit.toString(),listOf("50","100","250","500","1000")){limit=it.toInt()}
             DxSelect("BAND",band,DxBands){band=it};DxSelect("MODE",mode,listOf("ALL")+rows.map{it.mode}.distinct()){mode=it}
-            FilterChip(hearsMe,{hearsMe=!hearsMe},{Text("WHO HEARS ME")});Text("${filtered.size} OBSERVATIONS",color=DxCyan,fontWeight=FontWeight.Black)
+            FilterChip(hearsMe,{hearsMe=!hearsMe},{Text("WHO HEARS ME")})
+            if(!hearsMe)FilterChip(showPaths,{showPaths=!showPaths},{Text("SPOT PATHS")})
+            Text("${filtered.size} OBSERVATIONS",color=DxCyan,fontWeight=FontWeight.Black)
         }
         Row(Modifier.fillMaxSize(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
-            if(hearsMe)DxReceiverMap(controller.mySignal.reports,stationGrid,Modifier.weight(2.2f).fillMaxHeight())else DxWorldCanvas(filtered,stationGrid,false,Modifier.weight(2.2f).fillMaxHeight())
+            if(hearsMe)DxReceiverMap(controller.mySignal.reports,stationGrid,Modifier.weight(2.2f).fillMaxHeight())else DxWorldCanvas(filtered,stationGrid,false,cty,showPaths,Modifier.weight(2.2f).fillMaxHeight())
             DxSection(if(hearsMe)"RECEIVERS / SPOTTERS" else "MAP OBSERVATIONS",Modifier.weight(1f).fillMaxHeight()){
                 Row(Modifier.fillMaxWidth().height(34.dp).background(DxRaised).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){DxFlexCell(if(hearsMe)"RX CALL" else "DX",.8f,DxInk,true);DxFlexCell("BAND / MODE",.9f,DxInk,true);DxFlexCell(if(hearsMe)"SNR / KM" else "MHz / COUNTRY",1.2f,DxInk,true)}
                 if(hearsMe)LazyColumn(Modifier.fillMaxSize()){items(controller.mySignal.reports,key={it.callsign}){r->Row(Modifier.fillMaxWidth().height(44.dp).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){DxFlexCell("${r.callsign} ${r.locator}",.8f,DxGreen,true);DxFlexCell("${r.band} ${r.mode}",.9f,DxInk);DxFlexCell("${r.snr?.let{"$it dB"}?:"—"} · ${r.distanceKm?.let{"$it km"}?:"—"}",1.2f,DxAmber)};HorizontalDivider(color=Color(0xFF303940))}}
