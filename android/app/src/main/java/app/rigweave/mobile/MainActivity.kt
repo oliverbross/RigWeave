@@ -157,7 +157,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         radioState = { radio }, foreground = { foreground }, audioOperationIdle = { voiceAudio.state is VoiceAudioState.Idle }, onFrames = { frames ->
             NativeCore.feed(core, frames)
             kxRadio = NativeCore.parseState(NativeCore.state(core)).copy(cwDecodedText = cwDecoder.text)
-            if (app.radioFamily == RadioFamily.ELECRAFT_KX) radio = kxRadio
+            if (app.radioFamily.isElecraft) radio = kxRadio
         }) }
     var usbDetail by remember { mutableStateOf("No USB CAT adapter opened") }
     var destination by remember { mutableStateOf(Destination.HOME) }
@@ -172,7 +172,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 cwDecoder.feed(result.cwFrames)
                 NativeCore.feed(core, result.frames)
                 kxRadio = NativeCore.parseState(NativeCore.state(core)).copy(cwDecodedText = cwDecoder.text)
-                if (app.radioFamily == RadioFamily.ELECRAFT_KX) radio = kxRadio
+                if (app.radioFamily.isElecraft) radio = kxRadio
                 usbDetail = result.detail
             }
             is UsbResult.PermissionRequired -> { usbDetail = result.detail; app.disarmAll(); voiceTx.stop("CAT permission unavailable") }
@@ -181,7 +181,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     }
     suspend fun connectKx3() {
         app.disarmAll(); voiceTx.stop("CAT reconnect clears voice macro arm")
-        usbDetail = "Connecting to Elecraft KX3…"
+        usbDetail = "Connecting to ${app.radioFamily.displayName}…"
         accept(transport.connect())
     }
     val connect: () -> Unit = { scope.launch { connectKx3() } }
@@ -196,7 +196,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         else if (risky) pendingRisk = command else direct(command)
     }
     val send: (String) -> Unit = { raw ->
-        if (app.radioFamily == RadioFamily.ELECRAFT_KX) sendKx(raw) else {
+        if (app.radioFamily.isElecraft) sendKx(raw) else {
             val frequency = Regex("FA(\\d{11});").find(raw.uppercase())?.groupValues?.get(1)?.toLongOrNull()
             val mode = Regex("MD([1-5]);").find(raw.uppercase())?.groupValues?.get(1)?.let { code ->
                 mapOf("1" to "LSB", "2" to "USB", "3" to "CW", "4" to "FM", "5" to "AM")[code]
@@ -208,9 +208,9 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     LaunchedEffect(transport, app.radioFamily) {
         audio.refreshDevices()
         delay(250)
-        if (app.radioFamily == RadioFamily.ELECRAFT_KX) {
+        if (app.radioFamily.isElecraft) {
             flex.disconnect(); connectKx3()
-            while (app.radioFamily == RadioFamily.ELECRAFT_KX) { delay(240); transport.poll()?.let(::accept) }
+            while (app.radioFamily.isElecraft) { delay(240); transport.poll()?.let(::accept) }
         } else {
             transport.disconnect(); app.disarmAll(); voiceTx.stop("FlexRadio selection closes KX CAT")
             if (destination in setOf(Destination.EQ, Destination.PANADAPTER)) destination = Destination.RADIO
@@ -353,7 +353,7 @@ private fun navIcon(item: Destination) = when (item) {
             Box(Modifier.weight(1f)) {
                 if (app.radioFamily == RadioFamily.FLEXRADIO) FlexRadioScreen(flex, openLogbook)
                 else if (!compact || !app.panadapterEnabled) RadioScreen(radio, detail, app, database, wavelog, callbook, cty,
-                    features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode,
+                    features, voiceStore, voiceTx, connect, send, direct, requestVoice, clearCwDecode,
                     portableDraft, consumePortableDraft, portable::notifyQsoChanged)
                 else Column(Modifier.fillMaxSize()) {
                     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
@@ -362,14 +362,14 @@ private fun navIcon(item: Destination) = when (item) {
                     }
                     if (compactPanadapter) PanadapterScreen(panadapter, radio, features.liveSpots, true) { compactPanadapter = false }
                     else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx,
-                        openEq, connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
+                        connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
                 }
             }
         }
-        Destination.PANADAPTER -> if (app.panadapterEnabled && app.radioFamily == RadioFamily.ELECRAFT_KX)
+        Destination.PANADAPTER -> if (app.panadapterEnabled && app.radioFamily.isElecraft)
             PanadapterScreen(panadapter, radio, features.liveSpots, compact)
         else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx,
-            openEq, connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
+            connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
         Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
         Destination.LOGBOOK -> Column(Modifier.fillMaxSize()) {
             PotaActivationStrip(activation, radio, openActivation)
@@ -458,7 +458,7 @@ private fun navIcon(item: Destination) = when (item) {
 @OptIn(ExperimentalFoundationApi::class)
 @Composable private fun RadioScreen(state: RadioState, detail: String, app: AppController, database: QsoDatabase,
     wavelog: WavelogController, callbook: CallbookController, cty: CtyController, features: FeatureController,
-    voiceStore: VoiceMacroStore, voiceTx: VoiceMacroTransmitController, openEq: () -> Unit, connect: () -> Unit, send: (String) -> Unit,
+    voiceStore: VoiceMacroStore, voiceTx: VoiceMacroTransmitController, connect: () -> Unit, send: (String) -> Unit,
     direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
     portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, onQsoSaved: () -> Unit) {
     var previousState by remember { mutableStateOf<RadioState?>(null) }
@@ -500,12 +500,13 @@ private fun navIcon(item: Destination) = when (item) {
     }
     BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF090B0C)).navigationBarsPadding().padding(10.dp)) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Column(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Kx3StatusRail(state, detail, connect, direct)
-                OutlinedButton(openEq, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("EQ STUDIO · READ · CAPTURE · COMPARE · APPLY & VERIFY") }
-                CompactKx3Face(state, send, radioFeedback, feedbackVisible, Modifier.fillMaxWidth().weight(1f))
+            Column(Modifier.fillMaxWidth().weight(1.25f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                KxStatusRail(app.radioFamily, state, detail, connect, direct)
+                if (app.radioFamily == RadioFamily.ELECRAFT_KX2)
+                    CompactKx2Face(state, send, radioFeedback, feedbackVisible, Modifier.fillMaxWidth().weight(1f))
+                else CompactKx3Face(state, send, radioFeedback, feedbackVisible, Modifier.fillMaxWidth().weight(1f))
             }
-            Row(Modifier.fillMaxWidth().weight(2f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth().weight(1.75f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(.8f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     when {
                         isCwMacroMode(state.mode) -> CwMacroStrip(state, app, send, Modifier.fillMaxWidth().height(54.dp))
@@ -523,7 +524,9 @@ private fun navIcon(item: Destination) = when (item) {
                         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (cwActive) CwDecodeLine(state.cwDecodedText, state.connected, clearCwDecode,
                                 Modifier.fillMaxWidth().heightIn(min = 48.dp))
-                            CompactKx3TuningDeck(state, send, Modifier.fillMaxWidth().weight(1f))
+                            if (app.radioFamily == RadioFamily.ELECRAFT_KX2)
+                                CompactKx2TuningDeck(state, send, Modifier.fillMaxWidth().weight(1f))
+                            else CompactKx3TuningDeck(state, send, Modifier.fillMaxWidth().weight(1f))
                         }
                         stationInsight?.takeIf { identityVisible }?.let { insight ->
                             CallbookIdentityOverlay(insight.record, { identityVisible = false }, Modifier.fillMaxSize())
@@ -559,7 +562,7 @@ private fun navIcon(item: Destination) = when (item) {
 
 @Composable private fun CwDecodeLine(text: String, connected: Boolean, clear: () -> Unit,
     modifier: Modifier = Modifier) {
-    val display = text.takeLast(48).ifBlank { if (connected) "WAITING FOR KX3 TEXT…" else "CONNECT RADIO TO DECODE" }
+    val display = text.takeLast(48).ifBlank { if (connected) "WAITING FOR RADIO TEXT…" else "CONNECT RADIO TO DECODE" }
     Surface(onClick = clear, enabled = text.isNotEmpty(), color = Color(0xFF171307),
         contentColor = Hold, shape = MaterialTheme.shapes.small,
         border = androidx.compose.foundation.BorderStroke(1.dp, Amber.copy(alpha = .82f)), modifier = modifier) {
@@ -627,22 +630,172 @@ private fun navIcon(item: Destination) = when (item) {
                             listOf(Kx3KeySpec("A/B", "SWT24;"), Kx3KeySpec("A → B", "SWT25;"), Kx3KeySpec("XIT", "SWT26;")),
                             listOf(Kx3KeySpec("REV", "SWH24;"), Kx3KeySpec("SPLIT", "SWH25;"), Kx3KeySpec("PF2", "SWH26;")),
                         ), state.connected, send, Modifier.fillMaxSize())
-                    RadioActionVisibility(feedback, feedbackVisible, Modifier.fillMaxSize())
+                    RadioActionVisibility(feedback, feedbackVisible, "KX3", Modifier.fillMaxSize())
                 }
             }
         }
     }
 }
 
-@Composable private fun RadioActionVisibility(feedback: RadioFeedback?, visible: Boolean, modifier: Modifier = Modifier) {
-    AnimatedVisibility(visible && feedback != null,
-        enter = fadeIn(tween(120)) + scaleIn(tween(160), initialScale = .96f),
-        exit = fadeOut(tween(300)) + scaleOut(tween(300), targetScale = .98f), modifier = modifier) {
-        feedback?.let { RadioActionOverlay(it, Modifier.fillMaxSize()) }
+@Composable private fun CompactKx2Face(state: RadioState, send: (String) -> Unit, feedback: RadioFeedback?,
+    feedbackVisible: Boolean, modifier: Modifier = Modifier) {
+    Surface(color = Color(0xFF111314), shape = MaterialTheme.shapes.medium,
+        border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF4B5052)), modifier = modifier) {
+        Box(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().padding(7.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(Modifier.fillMaxWidth().height(22.dp), verticalAlignment = Alignment.CenterVertically) {
+                    FaceplateScrew(); Spacer(Modifier.weight(1f))
+                    Text("ELECRAFT KX2 TRANSCEIVER", color = Ink, fontWeight = FontWeight.Black,
+                        letterSpacing = 2.4.sp, style = MaterialTheme.typography.labelLarge)
+                    Spacer(Modifier.weight(1f)); FaceplateScrew()
+                }
+                Kx2CompactLcd(state, send, Modifier.fillMaxWidth().weight(1.35f))
+                Column(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    kx2FaceKeys.chunked(6).forEach { row ->
+                        Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                            row.forEach { key ->
+                                Kx2DualKey(key, state.connected, send, Modifier.weight(1f).fillMaxHeight())
+                            }
+                        }
+                    }
+                    Row(Modifier.fillMaxWidth().height(46.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Kx3DirectKey("BAND −", state.connected,
+                            { send(kx2AdjacentBandCommand(state.frequencyHz, -1)) }, Modifier.weight(1f), compact = true)
+                        Kx3DirectKey("BAND +", state.connected,
+                            { send(kx2AdjacentBandCommand(state.frequencyHz, 1)) }, Modifier.weight(1f), compact = true)
+                        Kx3DirectKey("FREQ ENTRY", state.connected, { send("SWH41;") }, Modifier.weight(1f), compact = true)
+                        Kx3DirectKey("OFS / B", state.connected, { send("SWT35;") }, Modifier.weight(1f), compact = true)
+                        Kx3DirectKey("CLR", state.connected, { send("SWH35;") }, Modifier.weight(1f), secondary = true, compact = true)
+                    }
+                }
+            }
+            RadioActionVisibility(feedback, feedbackVisible, "KX2", Modifier.fillMaxSize())
+        }
     }
 }
 
-@Composable private fun RadioActionOverlay(feedback: RadioFeedback, modifier: Modifier = Modifier) {
+@OptIn(ExperimentalFoundationApi::class)
+@Composable private fun Kx2DualKey(key: Kx2FaceKey, enabled: Boolean, send: (String) -> Unit,
+    modifier: Modifier = Modifier) {
+    val edge = if (key.transmitRisk) Color(0xFFB39A57) else Color(0xFF777E81)
+    Surface(color = if (enabled) Color(0xFF34393B) else Color(0xFF242829), contentColor = Ink,
+        shape = RoundedCornerShape(4.dp), border = androidx.compose.foundation.BorderStroke(1.dp, edge), modifier = modifier
+            .padding(1.dp).semantics { contentDescription = "${key.tapLabel}; hold for ${key.holdLabel}" }
+            .combinedClickable(enabled = enabled, role = Role.Button, onClick = { send(key.tapCommand) },
+                onLongClick = { send(key.holdCommand) })) {
+        Box(Modifier.fillMaxSize().padding(horizontal = 3.dp), contentAlignment = Alignment.Center) {
+            Text("${key.tapLabel}  ·  HOLD ${key.holdLabel}", color = if (enabled) Ink else Muted,
+                fontWeight = FontWeight.Black, fontSize = 9.sp, lineHeight = 9.sp, maxLines = 1, softWrap = false)
+        }
+    }
+}
+
+@Composable private fun Kx2CompactLcd(state: RadioState, send: (String) -> Unit, modifier: Modifier = Modifier) {
+    val ink = Color(0xFF241A02)
+    val splitInk = Color(0xFF7E1510)
+    var picker by remember { mutableStateOf<Kx3LcdPicker?>(null) }
+    Surface(shape = MaterialTheme.shapes.small, border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF343839)),
+        modifier = modifier) {
+        Row(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFF7CA47), Color(0xFFE6A50E))))
+            .padding(horizontal = 9.dp, vertical = 7.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Kx2MeterAndFilter(state, ink, { picker = Kx3LcdPicker.FILTER }, Modifier.fillMaxHeight().weight(.42f))
+            Column(Modifier.fillMaxHeight().weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(Modifier.fillMaxWidth().weight(.58f), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.fillMaxHeight().weight(1f).clickable(enabled = state.connected) { picker = Kx3LcdPicker.BAND }
+                        .padding(horizontal = 16.dp, vertical = 7.dp)) {
+                        SegmentedReadout(if (state.connected) formatRadioFrequency(state.frequencyHz) else "--.---.---", ink,
+                            Modifier.fillMaxSize())
+                    }
+                    Kx2ModeColumn(state, ink, splitInk, { picker = Kx3LcdPicker.MODE }, Modifier.width(65.dp).fillMaxHeight())
+                }
+                Row(Modifier.fillMaxWidth().weight(.42f), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Kx2Annunciators(state, ink, { picker = Kx3LcdPicker.FILTER }, Modifier.weight(1.15f).fillMaxHeight())
+                    SegmentedReadout(if (state.frequencyBHz > 0) formatRadioFrequency(state.frequencyBHz) else "--.---.---",
+                        if (state.split) splitInk else ink, Modifier.weight(.85f).fillMaxHeight().padding(vertical = 5.dp))
+                    Column(Modifier.width(46.dp).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.SpaceEvenly) {
+                        Box(Modifier.border(1.dp, ink).padding(horizontal = 4.dp)) { Text("B", color = ink, fontWeight = FontWeight.Black) }
+                        Text(if (state.split) "TX" else "", color = splitInk, fontWeight = FontWeight.Black, fontSize = 13.sp)
+                    }
+                }
+            }
+        }
+    }
+    picker?.let { selected ->
+        Kx3LcdPickerDialog(selected, state.mode, { command -> send(command); picker = null }, { picker = null }, kx2 = true)
+    }
+}
+
+@Composable private fun Kx2ModeColumn(state: RadioState, ink: Color, activeInk: Color, action: () -> Unit,
+    modifier: Modifier = Modifier) {
+    Column(modifier.clickable(enabled = state.connected, onClick = action), horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceEvenly) {
+        Text("▰", color = ink.copy(alpha = if (state.connected) 1f else .28f), fontSize = 12.sp)
+        Box(Modifier.border(1.dp, ink).padding(horizontal = 4.dp)) { Text("A", color = ink, fontWeight = FontWeight.Black) }
+        listOf("LSB", "USB", "CW", "REV", "DATA", "AM-S").forEach { label ->
+            val selected = label == state.mode || (label == "REV" && state.mode == "CW-R") ||
+                (label == "DATA" && state.mode.startsWith("DATA"))
+            Text(label, color = if (selected) activeInk else ink.copy(alpha = .42f), fontWeight = FontWeight.Black,
+                fontSize = 10.sp, lineHeight = 10.sp)
+        }
+    }
+}
+
+@Composable private fun Kx2MeterAndFilter(state: RadioState, ink: Color, filterAction: () -> Unit,
+    modifier: Modifier = Modifier) {
+    val swr = if (state.transmitting && state.swrTenths >= 10) (state.swrTenths - 10) / 25f else 0f
+    Column(modifier.clickable(enabled = state.connected, onClick = filterAction), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Kx3BarMeter("S", "1  3  5  7  9  +20  40  60", state.meter / 21f, ink, Modifier.weight(1f).fillMaxWidth())
+        Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            Kx3BarMeter("SWR", "1  2  3", swr, ink, Modifier.weight(1f))
+            Kx3BarMeter("RF", "5  10", state.rfOutputTenths / 120f, ink, Modifier.weight(1f))
+        }
+        Canvas(Modifier.weight(.78f).fillMaxWidth()) {
+            val center = size.width * .48f
+            val half = (state.bandwidthHz.coerceIn(100, 4000) / 4000f) * size.width * .22f + size.width * .08f
+            val path = Path().apply {
+                moveTo(center - half, size.height * .82f); lineTo(center - half * .7f, size.height * .2f)
+                lineTo(center + half * .7f, size.height * .2f); lineTo(center + half, size.height * .82f)
+            }
+            drawPath(path, ink, style = Stroke(2.dp.toPx()))
+            drawLine(ink, Offset(size.width * .12f, size.height * .82f), Offset(size.width * .84f, size.height * .82f), 1.5.dp.toPx())
+        }
+        Text("NTCH   ◀  XFIL · FL1  ▶   II", color = ink, fontWeight = FontWeight.Black, fontSize = 11.sp, maxLines = 1)
+    }
+}
+
+@Composable private fun Kx2Annunciators(state: RadioState, ink: Color, filterAction: () -> Unit,
+    modifier: Modifier = Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.SpaceEvenly) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            listOf("VOX", "QSK", "ANT1", "RX", "ATU").forEach { Text(it, color = ink, fontWeight = FontWeight.Black, fontSize = 11.sp) }
+            Text(if (state.rit) "RIT" else "RIT", color = ink.copy(alpha = if (state.rit) 1f else .3f), fontWeight = FontWeight.Black, fontSize = 11.sp)
+            Text(if (state.xit) "XIT" else "XIT", color = ink.copy(alpha = if (state.xit) 1f else .3f), fontWeight = FontWeight.Black, fontSize = 11.sp)
+            Text("SPLT", color = ink.copy(alpha = if (state.split) 1f else .3f), fontWeight = FontWeight.Black, fontSize = 11.sp)
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(agcLabel(state.agcMode), color = ink, fontWeight = FontWeight.Black, fontSize = 11.sp)
+            Text("ATT", color = ink.copy(alpha = if (state.attenuator) 1f else .3f), fontWeight = FontWeight.Black, fontSize = 11.sp)
+            Text("PRE", color = ink.copy(alpha = if (state.preamp) 1f else .3f), fontWeight = FontWeight.Black, fontSize = 11.sp)
+            Text("NB", color = ink, fontWeight = FontWeight.Black, fontSize = 11.sp)
+            Text("NR", color = ink, fontWeight = FontWeight.Black, fontSize = 11.sp)
+            Text("XFIL FL1", color = ink, fontWeight = FontWeight.Black, fontSize = 11.sp,
+                modifier = Modifier.clickable(enabled = state.connected, onClick = filterAction))
+        }
+    }
+}
+
+@Composable private fun RadioActionVisibility(feedback: RadioFeedback?, visible: Boolean, model: String,
+    modifier: Modifier = Modifier) {
+    AnimatedVisibility(visible && feedback != null,
+        enter = fadeIn(tween(120)) + scaleIn(tween(160), initialScale = .96f),
+        exit = fadeOut(tween(300)) + scaleOut(tween(300), targetScale = .98f), modifier = modifier) {
+        feedback?.let { RadioActionOverlay(it, model, Modifier.fillMaxSize()) }
+    }
+}
+
+@Composable private fun RadioActionOverlay(feedback: RadioFeedback, model: String, modifier: Modifier = Modifier) {
     Box(modifier.background(Color(0xE6121718)).padding(12.dp), contentAlignment = Alignment.Center) {
         Surface(color = Color(0xFF17291F), contentColor = Ink, shape = RoundedCornerShape(10.dp),
             border = androidx.compose.foundation.BorderStroke(2.dp, Healthy), shadowElevation = 10.dp,
@@ -655,7 +808,7 @@ private fun navIcon(item: Destination) = when (item) {
                 if (feedback.details.isNotEmpty()) Text(feedback.details.joinToString("  ·  "), color = Healthy.copy(alpha = .9f),
                     fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 11.sp,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text("KX3 LIVE", color = Healthy.copy(alpha = .72f), fontWeight = FontWeight.Bold, fontSize = 9.sp,
+                Text("$model LIVE", color = Healthy.copy(alpha = .72f), fontWeight = FontWeight.Bold, fontSize = 9.sp,
                     letterSpacing = .8.sp)
             }
         }
@@ -819,11 +972,11 @@ private fun kx3FilterWidths(mode: String): List<Int> = when (mode) {
 }
 
 @Composable private fun Kx3LcdPickerDialog(picker: Kx3LcdPicker, mode: String, select: (String) -> Unit,
-    dismiss: () -> Unit) {
+    dismiss: () -> Unit, kx2: Boolean = false) {
     val choices = when (picker) {
         Kx3LcdPicker.BAND -> listOf("160m" to "BN00;", "80m" to "BN01;", "60m" to "BN02;", "40m" to "BN03;",
             "30m" to "BN04;", "20m" to "BN05;", "17m" to "BN06;", "15m" to "BN07;", "12m" to "BN08;", "10m" to "BN09;")
-        Kx3LcdPicker.MODE -> listOf("LSB" to "MD1;", "USB" to "MD2;", "CW" to "MD3;",
+        Kx3LcdPicker.MODE -> if (kx2) kx2ModeCommands else listOf("LSB" to "MD1;", "USB" to "MD2;", "CW" to "MD3;",
             "CW-R" to "MD7;", "AM" to "MD5;", "FM" to "MD4;")
         Kx3LcdPicker.FILTER -> kx3FilterWidths(mode).map { width ->
             (if (width >= 1000) "${width / 1000.0} kHz" else "$width Hz") to "BW%04d;".format(width / 10)
@@ -1100,6 +1253,56 @@ private enum class Kx3Adjustment(val title: String, val unit: String) {
                         Modifier.fillMaxSize())
                 }
             }
+        }
+    }
+}
+
+@Composable private fun CompactKx2TuningDeck(state: RadioState, send: (String) -> Unit, modifier: Modifier = Modifier) {
+    var step by remember { mutableIntStateOf(100) }
+    var af by remember(state.afGain) { mutableFloatStateOf(state.afGain.toFloat()) }
+    var rf by remember(state.rfGain) { mutableFloatStateOf(state.rfGain.toFloat()) }
+    var monitor by remember(state.monitorLevel) { mutableFloatStateOf(state.monitorLevel.coerceAtLeast(0).toFloat()) }
+    var width by remember(state.bandwidthHz) { mutableFloatStateOf(state.bandwidthHz.coerceIn(100, 4000).toFloat()) }
+    var keyer by remember(state.keyerSpeed) { mutableFloatStateOf(state.keyerSpeed.takeIf { it >= 8 }?.toFloat() ?: 20f) }
+    var mic by remember(state.micGain) { mutableFloatStateOf(state.micGain.coerceAtLeast(0).toFloat()) }
+    var power by remember(state.powerW) { mutableFloatStateOf(state.powerW.coerceIn(0, 12).toFloat()) }
+    Surface(color = Color(0xFF111516), shape = MaterialTheme.shapes.small,
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF434A4D)), modifier = modifier) {
+        Row(Modifier.fillMaxSize().padding(6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly) {
+                InlineKx3Slider("AF", af, KX3_AF_GAIN_MIN.toFloat()..KX3_AF_GAIN_MAX.toFloat(), { af = it },
+                    { send(kx3AfGainCommand(af.toInt())) }, state.connected) {}
+                InlineKx3Slider("RF", rf, KX3_RF_GAIN_MIN.toFloat()..KX3_RF_GAIN_MAX.toFloat(), { rf = it },
+                    { send(kx3RfGainCommand(rf.toInt())) }, state.connected) {}
+                InlineKx3Slider("MON", monitor, 0f..60f, { monitor = it },
+                    { send("ML%03d;".format(monitor.toInt())) }, state.connected) {}
+            }
+            Kx3DeckDivider()
+            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly) {
+                InlineKx3Slider("XFIL", width, 100f..4000f, { width = it },
+                    { send("BW%04d;".format((width.toInt() / 10).coerceIn(0, 9999))) }, state.connected) {}
+                Row(Modifier.fillMaxWidth().height(37.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    InlineKx3Button("RIT −", state.connected, Modifier.weight(1f)) { send("RD;") }
+                    InlineKx3Button("CLR", state.connected, Modifier.weight(1f)) { send("RC;") }
+                    InlineKx3Button("RIT +", state.connected, Modifier.weight(1f)) { send("RU;") }
+                }
+                Text("OFFSET  ${if (state.ritXitOffsetHz >= 0) "+" else ""}${state.ritXitOffsetHz} Hz",
+                    color = Hold, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Black,
+                    fontSize = 12.sp, modifier = Modifier.fillMaxWidth())
+            }
+            Kx3DeckDivider()
+            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly) {
+                InlineKx3Slider("KEYER", keyer, 8f..50f, { keyer = it },
+                    { send("KS%03d;".format(keyer.toInt())) }, state.connected) {}
+                InlineKx3Slider("MIC", mic, 0f..60f, { mic = it },
+                    { send("MG%03d;".format(mic.toInt())) }, state.connected) {}
+                InlineKx3Slider("PWR", power, 0f..12f, { power = it },
+                    { send("PC%03d;".format(power.toInt())) }, state.connected) {}
+            }
+            Kx3VfoWheel(state, step, send,
+                { step = when (step) { 10 -> 100; 100 -> 1000; 1000 -> 10000; else -> 10 } },
+                Modifier.fillMaxHeight().aspectRatio(1f))
         }
     }
 }
@@ -1802,12 +2005,14 @@ private fun spotStatusColor(status: String?): Color = when (status) {
     }
 }
 
-@Composable private fun Kx3StatusRail(state: RadioState, detail: String, connect: () -> Unit, direct: (String) -> Unit) {
+@Composable private fun KxStatusRail(family: RadioFamily, state: RadioState, detail: String, connect: () -> Unit,
+    direct: (String) -> Unit) {
     Surface(color = Color(0xFF15191B), shape = MaterialTheme.shapes.small,
         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF363D40)), modifier = Modifier.fillMaxWidth().height(48.dp)) {
         Row(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("KX3 TOUCH REMOTE", color = Amber, fontWeight = FontWeight.Black, letterSpacing = 1.sp)
+            Text("${family.displayName.uppercase()} TOUCH REMOTE", color = Amber, fontWeight = FontWeight.Black,
+                letterSpacing = 1.sp)
             StatusChip(if (state.connected) "CAT LIVE" else "CAT OFFLINE", state.connected)
             Text(if (state.connected) "${state.model} · ${state.mode}" else detail, color = Muted,
                 style = MaterialTheme.typography.labelMedium, maxLines = 1, modifier = Modifier.weight(1f))
@@ -2089,7 +2294,7 @@ private fun spotStatusColor(status: String?): Color = when (status) {
                         myGrid = station?.grid ?: app.stationGrid, myCountry = station?.country.orEmpty(), myDxcc = station?.dxcc.orEmpty(),
                         myCqZone = station?.cqZone.orEmpty(), myItuZone = station?.ituZone.orEmpty(), myState = station?.state.orEmpty(),
                         myIota = station?.iota.orEmpty(), mySotaRef = if (portableChaseDraft) "" else station?.sotaRef.orEmpty(), myWwffRef = if (portableChaseDraft) "" else station?.wwffRef.orEmpty(), myPotaRef = if (portableChaseDraft) "" else station?.potaRef.orEmpty(),
-                        radioModel = "Elecraft KX3", dxcc = dxcc, continent = continent, region = region, cqZone = cqZone,
+                        radioModel = app.radioFamily.displayName, dxcc = dxcc, continent = continent, region = region, cqZone = cqZone,
                         ituZone = ituZone, state = stateName, email = email, propagationMode = propagation, antennaPath = antennaPath,
                         qslSent = qslSent, qslMethod = qslMethod, qslVia = qslVia, qslMessage = qslMessage,
                         syncState = if (wavelog.logMode == LogMode.WAVELOG) "pending" else "local")
@@ -3018,7 +3223,8 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         if (section == SettingsSection.RADIO) SettingsCard("RADIO FAMILY") {
             Text("Select the single active radio backend. Switching closes the previous connection before the next backend starts.", color = Muted)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(app.radioFamily == RadioFamily.ELECRAFT_KX, { app.selectRadioFamily(RadioFamily.ELECRAFT_KX) }, { Text("Elecraft KX3/KX2") })
+                FilterChip(app.radioFamily == RadioFamily.ELECRAFT_KX3, { app.selectRadioFamily(RadioFamily.ELECRAFT_KX3) }, { Text("Elecraft KX3") })
+                FilterChip(app.radioFamily == RadioFamily.ELECRAFT_KX2, { app.selectRadioFamily(RadioFamily.ELECRAFT_KX2) }, { Text("Elecraft KX2") })
                 FilterChip(app.radioFamily == RadioFamily.FLEXRADIO, { app.selectRadioFamily(RadioFamily.FLEXRADIO) }, { Text("FlexRadio") })
             }
             if (app.radioFamily == RadioFamily.FLEXRADIO) {
@@ -3040,7 +3246,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                         systemMessage = if (manualFlexIp.isBlank()) "Manual FlexRadio address cleared" else "Manual FlexRadio address saved"
                     } else systemMessage = "Enter a valid IPv4 address"
                 }, enabled = !invalidManualFlexIp) { Text("SAVE FLEX ADDRESS") }
-            } else Text("KX USB CAT and all existing KX-specific tools remain active.", color = Muted)
+            } else Text("${app.radioFamily.displayName} USB CAT and its dedicated Radio console are active.", color = Muted)
             HorizontalDivider()
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -3048,7 +3254,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                     Text("Android can be unreliable with inexpensive USB sound cards and hubs. Leave this off unless your I/Q route is known-good.", color = Hold)
                 }
                 Switch(app.panadapterEnabled, app::updatePanadapterEnabled,
-                    enabled = app.radioFamily == RadioFamily.ELECRAFT_KX)
+                    enabled = app.radioFamily.isElecraft)
             }
         }
         if (section == SettingsSection.LOG || section == SettingsSection.MACROS) SettingsCard(if (section == SettingsSection.LOG) "LOCAL STATION" else "MACROS") {

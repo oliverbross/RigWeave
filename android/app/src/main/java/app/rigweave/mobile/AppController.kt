@@ -9,7 +9,19 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 enum class FieldProfile { DAY, NIGHT, FIELD }
-enum class RadioFamily { ELECRAFT_KX, FLEXRADIO }
+enum class RadioFamily { ELECRAFT_KX3, ELECRAFT_KX2, FLEXRADIO }
+
+internal val RadioFamily.isElecraft: Boolean get() = this != RadioFamily.FLEXRADIO
+internal val RadioFamily.displayName: String get() = when (this) {
+    RadioFamily.ELECRAFT_KX3 -> "Elecraft KX3"
+    RadioFamily.ELECRAFT_KX2 -> "Elecraft KX2"
+    RadioFamily.FLEXRADIO -> "FlexRadio"
+}
+
+internal fun decodeRadioFamily(stored: String?): RadioFamily = when (stored) {
+    null, "ELECRAFT_KX" -> RadioFamily.ELECRAFT_KX3
+    else -> runCatching { RadioFamily.valueOf(stored) }.getOrDefault(RadioFamily.ELECRAFT_KX3)
+}
 
 data class RadioPreset(
     val slot: Int,
@@ -24,7 +36,7 @@ class AppController(private val context: Context) {
     private val prefs = context.getSharedPreferences("rigweave-app", Context.MODE_PRIVATE)
     private val needsDxccCountryColumnMigration = !prefs.getBoolean("logbook_dxcc_country_v1", false)
     var fieldProfile by mutableStateOf(runCatching { FieldProfile.valueOf(prefs.getString("profile", "DAY")!!) }.getOrDefault(FieldProfile.DAY)); private set
-    var radioFamily by mutableStateOf(runCatching { RadioFamily.valueOf(prefs.getString("radio_family", RadioFamily.ELECRAFT_KX.name)!!) }.getOrDefault(RadioFamily.ELECRAFT_KX)); private set
+    var radioFamily by mutableStateOf(decodeRadioFamily(prefs.getString("radio_family", null))); private set
     var preferredFlexStation by mutableStateOf(prefs.getString("flex_station", "").orEmpty()); private set
     var manualFlexIp by mutableStateOf(prefs.getString("flex_manual_ip", "").orEmpty().takeIf { it.isBlank() || manualFlexDiscovery(it) != null }.orEmpty()); private set
     var panadapterEnabled by mutableStateOf(prefs.getBoolean("panadapter_enabled", false)); private set
@@ -63,6 +75,7 @@ class AppController(private val context: Context) {
 
     init {
         val defaults = prefs.edit()
+        if (prefs.getString("radio_family", null) == "ELECRAFT_KX") defaults.putString("radio_family", radioFamily.name)
         if (!prefs.contains("station_call")) defaults.putString("station_call", stationCallsign)
         if (!prefs.contains("station_name")) defaults.putString("station_name", stationName)
         if (!prefs.contains("station_grid")) defaults.putString("station_grid", stationGrid)
