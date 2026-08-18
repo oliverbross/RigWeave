@@ -15,6 +15,7 @@ class SettingsLayoutInstrumentedTest {
     @Test
     fun settingsSectionsExposeThePortedTabletLayouts() {
         compose.onNodeWithText("Settings").performClick()
+        compose.onNodeWithText("Diag").performClick()
         compose.onNodeWithTag("settings-default-cty").assertIsDisplayed()
 
         compose.onNodeWithText("Macros").performClick()
@@ -26,6 +27,6 @@ class SettingsLayoutInstrumentedTest {
 
         compose.onNodeWithText("About").performClick()
         compose.onNodeWithTag("settings-developer-information").assertIsDisplayed()
-        compose.onNodeWithText("Oliver Bross · OM0RX").assertIsDisplayed()
+        compose.onNodeWithText("Oliver Bross, OM0RX").assertIsDisplayed()
     }
 }

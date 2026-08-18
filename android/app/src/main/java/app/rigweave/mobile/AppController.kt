@@ -27,6 +27,7 @@ class AppController(private val context: Context) {
     var radioFamily by mutableStateOf(runCatching { RadioFamily.valueOf(prefs.getString("radio_family", RadioFamily.ELECRAFT_KX.name)!!) }.getOrDefault(RadioFamily.ELECRAFT_KX)); private set
     var preferredFlexStation by mutableStateOf(prefs.getString("flex_station", "").orEmpty()); private set
     var manualFlexIp by mutableStateOf(prefs.getString("flex_manual_ip", "").orEmpty().takeIf { it.isBlank() || manualFlexDiscovery(it) != null }.orEmpty()); private set
+    var panadapterEnabled by mutableStateOf(prefs.getBoolean("panadapter_enabled", false)); private set
     var transmitArmed by mutableStateOf(false); private set
     var cwMacrosArmed by mutableStateOf(false); private set
     var voiceMacrosArmed by mutableStateOf(false); private set
@@ -90,6 +91,11 @@ class AppController(private val context: Context) {
         manualFlexIp = normalized
         prefs.edit().putString("flex_manual_ip", manualFlexIp).apply()
         return true
+    }
+
+    fun updatePanadapterEnabled(value: Boolean) {
+        panadapterEnabled = value
+        prefs.edit().putBoolean("panadapter_enabled", value).apply()
     }
 
     fun updateTransmitArmed(value: Boolean) { transmitArmed = value }

@@ -35,7 +35,13 @@ class FlexRadioRulesTest {
     }
 
     @Test fun selectedFlexSliceMapsToSharedRadioState() {
-        val snapshot = parseFlexSnapshot("""{"connected":true,"handle":10940,"version":"3.8","model":"FLEX-8400","nickname":"Remote","callsign":"OM0RX","serial":"123","firmware":"3.8","clients":[{"handle":256,"clientId":"id","program":"SmartSDR","station":"Shack","connected":true,"gui":true}],"slices":[{"index":1,"letter":"B","inUse":true,"active":true,"tx":false,"clientHandle":256,"frequencyHz":14074000,"mode":"DIGU","filterLowHz":300,"filterHighHz":3000,"rxAntenna":"ANT1"}]}""")
+        // Android's platform JSONObject is a stub in host-side unit tests; exercise the
+        // radio-state mapping with the same decoded value used on-device.
+        val snapshot = FlexSnapshot(connected = true, handle = 10940, version = "3.8", model = "FLEX-8400",
+            nickname = "Remote", callsign = "OM0RX", serial = "123", firmware = "3.8",
+            clients = listOf(FlexClient(256, "id", "SmartSDR", "Shack", connected = true, gui = true)),
+            slices = listOf(FlexSlice(1, "B", inUse = true, active = true, tx = false, clientHandle = 256,
+                frequencyHz = 14_074_000, mode = "DIGU", filterLowHz = 300, filterHighHz = 3000, rxAntenna = "ANT1")))
         val state = snapshot.toRadioState(1)
         assertTrue(state.connected)
         assertEquals("FLEX-8400", state.model)

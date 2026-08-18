@@ -119,8 +119,8 @@ private enum class Destination(val label: String) {
     HOME("Home"), RADIO("Radio"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PRESETS("Presets"), DX("DX"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
-    DEFAULT("Default"), RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
-    SAFETY("Safety"), AUDIO("Audio"), HEALTH("Health"), DIAG("Diag"), ABOUT("About")
+    RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
+    AUDIO("Audio"), HEALTH("Health"), DIAG("Diag"), ABOUT("About")
 }
 private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Station"), GENERAL("General"), NOTES("Notes"), QSL("QSL") }
 
@@ -289,7 +289,10 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         if (maxWidth >= 700.dp) Row(Modifier.fillMaxSize()) {
             NavigationRail(containerColor = Panel) {
                 Text("RW", color = Amber, fontWeight = FontWeight.Black, modifier = Modifier.padding(18.dp))
-                Destination.entries.filterNot { app.radioFamily == RadioFamily.FLEXRADIO && it in setOf(Destination.PANADAPTER, Destination.EQ) }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
+                Destination.entries.filterNot { item ->
+                    (item == Destination.PANADAPTER && (!app.panadapterEnabled || app.radioFamily == RadioFamily.FLEXRADIO)) ||
+                        (item == Destination.EQ && app.radioFamily == RadioFamily.FLEXRADIO)
+                }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
             Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app, transport, flex,
@@ -326,7 +329,7 @@ private fun navIcon(item: Destination) = when (item) {
     when (destination) {
         Destination.HOME -> HomeScreen(radio, app, send)
         Destination.RADIO -> if (app.radioFamily == RadioFamily.FLEXRADIO) FlexRadioScreen(flex) {}
-        else if (!compact) RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode)
+        else if (!compact || !app.panadapterEnabled) RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode)
                 else Column(Modifier.fillMaxSize()) {
                     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                         SegmentedButton(!compactPanadapter, { compactPanadapter = false }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Controls") }
@@ -335,7 +338,9 @@ private fun navIcon(item: Destination) = when (item) {
                     if (compactPanadapter) PanadapterScreen(panadapter, radio, features.liveSpots, true) { compactPanadapter = false }
                     else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode)
                 }
-        Destination.PANADAPTER -> PanadapterScreen(panadapter, radio, features.liveSpots, compact)
+        Destination.PANADAPTER -> if (app.panadapterEnabled && app.radioFamily == RadioFamily.ELECRAFT_KX)
+            PanadapterScreen(panadapter, radio, features.liveSpots, compact)
+        else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode)
         Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
         Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog, callbook, app)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
@@ -995,7 +1000,9 @@ private enum class Kx3Adjustment(val title: String, val unit: String) {
                         { send("BW%04d;".format((width.toInt() / 10).coerceIn(0, 9999))) }, state.connected) { open(Kx3Adjustment.WIDTH) }
                     InlineKx3Slider("II/SHT", shift, 300f..3000f, { shift = it },
                         { send("IS %04d;".format(shift.toInt())) }, state.connected) { open(Kx3Adjustment.SHIFT) }
-                    InlineKx3Button("NORM", state.connected) { send("IS 9999;") }
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        InlineKx3Button("NORM", state.connected, Modifier.fillMaxWidth(.5f)) { send("IS 9999;") }
+                    }
                 }
                 Kx3DeckDivider()
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.SpaceEvenly) {
@@ -1095,8 +1102,8 @@ private enum class Kx3Adjustment(val title: String, val unit: String) {
 
 @Composable private fun Kx3DeckDivider() = Box(Modifier.width(1.dp).fillMaxHeight(.84f).background(Color(0xFF394044)))
 
-@Composable private fun InlineKx3Button(label: String, enabled: Boolean, action: () -> Unit) {
-    Button(action, enabled = enabled, modifier = Modifier.fillMaxWidth().height(37.dp), shape = RectangleShape,
+@Composable private fun InlineKx3Button(label: String, enabled: Boolean, modifier: Modifier = Modifier, action: () -> Unit) {
+    Button(action, enabled = enabled, modifier = modifier.height(37.dp), shape = RectangleShape,
         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF33383B), contentColor = Hold),
         contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp)) {
         Text(label, fontWeight = FontWeight.Black, fontSize = 12.sp, letterSpacing = .2.sp)
@@ -1194,9 +1201,15 @@ private enum class RadioActivityTab(val label: String) {
     var logPage by remember { mutableStateOf(QsoPage(emptyList(), 0, 0, 50)) }
     var page by remember { mutableIntStateOf(0) }
     var pageSize by remember { mutableIntStateOf(50) }
+    var spotPage by remember { mutableIntStateOf(0) }
     var spotStatuses by remember { mutableStateOf(emptyMap<String, SpotLogStatus>()) }
     var previousQsoRecord by remember { mutableStateOf<AndroidCallbookRecord?>(null) }
     val ctyRevision = cty.dataRevision
+    val spotPageCount = ((features.liveSpots.size + 49) / 50).coerceAtLeast(1)
+    val visibleSpots = features.liveSpots.drop(spotPage * 50).take(50)
+    LaunchedEffect(features.liveSpots.size) {
+        spotPage = spotPage.coerceAtMost(spotPageCount - 1)
+    }
     LaunchedEffect(insight?.record?.callsign) { if (insight != null) selected = RadioActivityTab.DETAILS }
     LaunchedEffect(wavelog.logMode, wavelog.stationId) { page = 0 }
     LaunchedEffect(selected, wavelog.logMode, wavelog.stationId, page, pageSize) {
@@ -1217,8 +1230,7 @@ private enum class RadioActivityTab(val label: String) {
     }
     LaunchedEffect(selected, features.liveSpots, wavelog.logMode, wavelog.stationId, wavelog.configured, ctyRevision) {
         if (selected != RadioActivityTab.SPOTS) return@LaunchedEffect
-        val visible = features.liveSpots.take(20)
-        val identities = visible.map { spot ->
+        val identities = visibleSpots.map { spot ->
             val entity = cty.lookup(spot.callsign)
             SpotLogIdentity(spot.id, spot.callsign, entity?.dxcc.orEmpty(),
                 entity?.country.orEmpty().ifBlank { spot.country }, spot.band, spot.mode)
@@ -1260,10 +1272,20 @@ private enum class RadioActivityTab(val label: String) {
                 if (selected == RadioActivityTab.LOG) {
                     CompactPager(logPage, pageSize, { pageSize = it; page = 0 }, { page = (page - 1).coerceAtLeast(0) },
                         { page = (page + 1).coerceAtMost(logPage.pageCount - 1) })
+                } else if (selected == RadioActivityTab.SPOTS) {
+                    Text("50 / PAGE · ${spotPage + 1} / $spotPageCount", color = Muted,
+                        style = MaterialTheme.typography.labelSmall)
+                    IconButton({ spotPage = (spotPage - 1).coerceAtLeast(0) }, enabled = spotPage > 0) {
+                        Icon(Icons.Outlined.ChevronLeft, "Previous spots")
+                    }
+                    IconButton({ spotPage = (spotPage + 1).coerceAtMost(spotPageCount - 1) },
+                        enabled = spotPage + 1 < spotPageCount) {
+                        Icon(Icons.Outlined.ChevronRight, "Next spots")
+                    }
                 }
             }
             when (selected) {
-                RadioActivityTab.SPOTS -> LiveSpotTable(features.liveSpots.take(20), spotStatuses, cty, send,
+                RadioActivityTab.SPOTS -> LiveSpotTable(visibleSpots, spotStatuses, cty, send,
                     { previousQsoRecord = it.previousQsoRecord(cty) }, Modifier.fillMaxSize())
                 RadioActivityTab.LOG -> RadioLogTable(logPage.rows, { previousQsoRecord = it.previousQsoRecord() }, Modifier.fillMaxSize())
                 RadioActivityTab.DETAILS -> QrzQsoDetails(insight, Modifier.fillMaxSize())
@@ -2828,7 +2850,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
     audio: AudioMonitorController, app: AppController, transport: UsbRadioTransport, flex: FlexRadioController, voiceStore: VoiceMacroStore,
     voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, openEq: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
-    var section by remember { mutableStateOf(SettingsSection.DEFAULT) }
+    var section by remember { mutableStateOf(SettingsSection.RADIO) }
     var host by remember { mutableStateOf(features.clusterHost) }; var port by remember { mutableStateOf(features.clusterPort.toString()) }
     var fallbackHost by remember { mutableStateOf(features.fallbackHost) }; var fallbackPort by remember { mutableStateOf(features.fallbackPort.toString()) }
     var fallback2Host by remember { mutableStateOf(features.fallback2Host) }; var fallback2Port by remember { mutableStateOf(features.fallback2Port.toString()) }
@@ -2908,7 +2930,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         pendingRecordSlot = null
         if (granted && slot != null) voiceAudio.startRecording(slot) else if (!granted) systemMessage = "Microphone permission was not granted"
     }
-    Page {
+    SettingsPage {
         Header("Complete station settings", state)
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             SettingsSection.entries.forEach { item -> FilterChip(section == item, { section = item }, { Text(item.label) }) }
@@ -2939,20 +2961,33 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                     } else systemMessage = "Enter a valid IPv4 address"
                 }, enabled = !invalidManualFlexIp) { Text("SAVE FLEX ADDRESS") }
             } else Text("KX USB CAT and all existing KX-specific tools remain active.", color = Muted)
-        }
-        if (section == SettingsSection.DEFAULT || section == SettingsSection.MACROS) SettingsCard(if (section == SettingsSection.DEFAULT) "LOCAL STATION" else "MACROS") {
-            if (section == SettingsSection.DEFAULT) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(stationCall, { stationCall = it.uppercase() }, label = { Text("Callsign") }, modifier = Modifier.weight(1f))
-                OutlinedTextField(stationName, { stationName = it }, label = { Text("Operator / station") }, modifier = Modifier.weight(1f))
-                OutlinedTextField(stationGrid, { stationGrid = it.uppercase() }, label = { Text("Grid") }, modifier = Modifier.weight(1f))
-            }
-            Button({ app.saveLocalSettings(stationCall, stationName, stationGrid, repeatSeconds, macroLabels, macroTexts) }) { Text("SAVE DEFAULTS") }
-            Text("Station identity is saved automatically and retained across app updates.", color = Muted)
             HorizontalDivider()
-            Column(Modifier.testTag("settings-default-cty"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                CtyUpdatePanel(cty)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("KX2 / KX3 PANADAPTER · IN DEVELOPMENT", color = Amber, fontWeight = FontWeight.Bold)
+                    Text("Android can be unreliable with inexpensive USB sound cards and hubs. Leave this off unless your I/Q route is known-good.", color = Hold)
+                }
+                Switch(app.panadapterEnabled, app::updatePanadapterEnabled,
+                    enabled = app.radioFamily == RadioFamily.ELECRAFT_KX)
             }
+        }
+        if (section == SettingsSection.LOG || section == SettingsSection.MACROS) SettingsCard(if (section == SettingsSection.LOG) "LOCAL STATION" else "MACROS") {
+            if (section == SettingsSection.LOG) {
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                if (maxWidth >= 600.dp) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(stationCall, { stationCall = it.uppercase() }, label = { Text("Callsign") }, singleLine = true, modifier = Modifier.weight(1f))
+                    OutlinedTextField(stationName, { stationName = it }, label = { Text("Operator / station") }, singleLine = true, modifier = Modifier.weight(1f))
+                    OutlinedTextField(stationGrid, { stationGrid = it.uppercase() }, label = { Text("Grid") }, singleLine = true, modifier = Modifier.weight(1f))
+                    Button({ app.saveLocalSettings(stationCall, stationName, stationGrid, repeatSeconds, macroLabels, macroTexts) },
+                        modifier = Modifier.heightIn(min = 56.dp)) { Text("SAVE DEFAULTS") }
+                } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(stationCall, { stationCall = it.uppercase() }, label = { Text("Callsign") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(stationName, { stationName = it }, label = { Text("Operator / station") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(stationGrid, { stationGrid = it.uppercase() }, label = { Text("Grid") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Button({ app.saveLocalSettings(stationCall, stationName, stationGrid, repeatSeconds, macroLabels, macroTexts) }) { Text("SAVE DEFAULTS") }
+                }
+            }
+            Text("Station identity is saved automatically and retained across app updates.", color = Muted)
             } else {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(macroKind == "CW", { macroKind = "CW" }, { Text("CW") })
@@ -2961,25 +2996,46 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                 if (macroKind == "CW") {
                     val configuredMacros = macroTexts.count(String::isNotBlank)
                     Text("$configuredMacros of $CW_MACRO_COUNT configured · blank messages stay hidden on the Radio screen.", color = Muted)
-                    Column(Modifier.fillMaxWidth().testTag("settings-cw-macro-grid"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Spacer(Modifier.width(42.dp))
-                        Text("BUTTON LABEL", color = Amber, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-                        Text("CW MESSAGE", color = Amber, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(3f))
-                    }
-                    repeat(CW_MACRO_COUNT) { index -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Surface(color = if (macroTexts[index].isBlank()) Color(0xFF303638) else Hold.copy(alpha = .18f),
-                            shape = RoundedCornerShape(6.dp), modifier = Modifier.size(42.dp)) {
-                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text("${index + 1}", color = if (macroTexts[index].isBlank()) Muted else Hold, fontWeight = FontWeight.Black)
+                    BoxWithConstraints(Modifier.fillMaxWidth().testTag("settings-cw-macro-grid")) {
+                        val wideMacros = maxWidth >= 600.dp
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (wideMacros) Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Spacer(Modifier.width(42.dp))
+                                Text("BUTTON LABEL", color = Amber, fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                                Text("CW MESSAGE", color = Amber, fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(3f))
+                            }
+                            repeat(CW_MACRO_COUNT) { index ->
+                                if (wideMacros) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    MacroNumber(index, macroTexts[index].isNotBlank())
+                                    OutlinedTextField(macroLabels[index], { macroLabels[index] = sanitizeCwMacroLabel(it) },
+                                        label = { Text("Button label") }, placeholder = { Text("M${index + 1}") },
+                                        singleLine = true, modifier = Modifier.weight(1f))
+                                    OutlinedTextField(macroTexts[index], { macroTexts[index] = sanitizeCwMacroText(it) },
+                                        label = { Text("CW message") },
+                                        trailingIcon = { Text("${macroTexts[index].length}/$CW_MACRO_TEXT_MAX", color = Muted,
+                                            style = MaterialTheme.typography.labelSmall) },
+                                        singleLine = true, modifier = Modifier.weight(3f))
+                                } else Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Raised)) {
+                                    Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            MacroNumber(index, macroTexts[index].isNotBlank())
+                                            OutlinedTextField(macroLabels[index], { macroLabels[index] = sanitizeCwMacroLabel(it) },
+                                                label = { Text("Button label") }, placeholder = { Text("M${index + 1}") },
+                                                singleLine = true, modifier = Modifier.weight(1f))
+                                        }
+                                        OutlinedTextField(macroTexts[index], { macroTexts[index] = sanitizeCwMacroText(it) },
+                                            label = { Text("CW message") },
+                                            trailingIcon = { Text("${macroTexts[index].length}/$CW_MACRO_TEXT_MAX", color = Muted,
+                                                style = MaterialTheme.typography.labelSmall) },
+                                            singleLine = true, modifier = Modifier.fillMaxWidth())
+                                    }
+                                }
                             }
                         }
-                        OutlinedTextField(macroLabels[index], { macroLabels[index] = sanitizeCwMacroLabel(it) },
-                            label = { Text("Button label") }, placeholder = { Text("M${index + 1}") }, singleLine = true, modifier = Modifier.weight(1f))
-                        OutlinedTextField(macroTexts[index], { macroTexts[index] = sanitizeCwMacroText(it) },
-                            label = { Text("CW message") }, supportingText = { Text("${macroTexts[index].length} / $CW_MACRO_TEXT_MAX") },
-                            singleLine = true, modifier = Modifier.weight(3f))
-                    } }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("CQ repeat"); Slider(repeatSeconds.toFloat(), { repeatSeconds = it.toInt() },
@@ -3066,25 +3122,66 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                 OutlinedButton(neuralDx::testNtfy, enabled = ntfyUrl.startsWith("https://")) { Text("TEST NTFY") }
             }
         }
-        if (section == SettingsSection.SAFETY) SettingsCard("TRANSMIT SAFETY") {
+        if (section == SettingsSection.RADIO) SettingsCard("TRANSMIT SAFETY & CAT") {
             Text("ATU/TX, CW and voice macro arms are session-only. Voice also clears on exact mode, route, focus, lifecycle, CAT, USB or audio failure.", color = Hold)
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                FilterChip(app.transmitArmed, { app.updateTransmitArmed(!app.transmitArmed) }, { Text(if (app.transmitArmed) "ATU / TX ARMED" else "ATU / TX SAFE") })
-                FilterChip(app.cwMacrosArmed, { app.updateCwMacrosArmed(!app.cwMacrosArmed) }, { Text(if (app.cwMacrosArmed) "CW MACROS ARMED" else "CW MACROS SAFE") })
-                FilterChip(app.voiceMacrosArmed, {}, { Text(if (app.voiceMacrosArmed) "VOICE MACROS ARMED" else "VOICE MACROS SAFE") }, enabled = false)
-                Button({ voiceTx.forceRx(); direct("RX;"); app.disarmAll() }, enabled = state.connected,
-                    colors = ButtonDefaults.buttonColors(containerColor = Healthy, contentColor = Chassis)) { Text("FORCE RX & DISARM") }
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                @Composable fun SafetyActions() {
+                    FilterChip(app.transmitArmed, { app.updateTransmitArmed(!app.transmitArmed) }, { Text(if (app.transmitArmed) "ATU / TX ARMED" else "ATU / TX SAFE") })
+                    FilterChip(app.cwMacrosArmed, { app.updateCwMacrosArmed(!app.cwMacrosArmed) }, { Text(if (app.cwMacrosArmed) "CW MACROS ARMED" else "CW MACROS SAFE") })
+                    FilterChip(app.voiceMacrosArmed, {}, { Text(if (app.voiceMacrosArmed) "VOICE MACROS ARMED" else "VOICE MACROS SAFE") }, enabled = false)
+                    Button({ voiceTx.forceRx(); direct("RX;"); app.disarmAll() }, enabled = state.connected,
+                        colors = ButtonDefaults.buttonColors(containerColor = Healthy, contentColor = Chassis)) { Text("FORCE RX & DISARM") }
+                }
+                if (maxWidth >= 720.dp) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically) { SafetyActions() }
+                else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) { SafetyActions() }
             }
             HorizontalDivider()
             Text("CAT ADAPTER", color = Amber, fontWeight = FontWeight.Bold)
             if (transport.candidates.isEmpty()) Text("No supported serial adapter detected", color = Muted)
             else {
-                val pendingCat = transport.candidates.firstOrNull { it.sessionKey == pendingCatKey }
-                ChoiceField("Selected CAT adapter", pendingCat?.label ?: "Selection required",
-                    transport.candidates.map { it.sessionKey to it.label }, pendingCatKey.orEmpty(), { key ->
-                    pendingCatKey = key
-                    catSelectionDirty = key != transport.selected?.sessionKey
-                })
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    @Composable fun AdapterCard(candidate: SerialDeviceDescriptor, modifier: Modifier) {
+                        val chosen = candidate.sessionKey == pendingCatKey
+                        Card(
+                            modifier.clickable {
+                                pendingCatKey = candidate.sessionKey
+                                catSelectionDirty = candidate.sessionKey != transport.selected?.sessionKey
+                            },
+                            border = androidx.compose.foundation.BorderStroke(1.dp, if (chosen) Amber else MaterialTheme.colorScheme.outline),
+                            colors = CardDefaults.cardColors(containerColor = if (chosen) Amber.copy(alpha = .10f) else Raised),
+                        ) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                RadioButton(chosen, {
+                                    pendingCatKey = candidate.sessionKey
+                                    catSelectionDirty = candidate.sessionKey != transport.selected?.sessionKey
+                                })
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(candidate.displayName, color = Ink, fontWeight = FontWeight.Bold)
+                                    Text(candidate.identityLine, color = Muted, style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(candidate.routeLine, color = if (chosen) Hold else Muted,
+                                        style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                if (candidate.sessionKey == transport.selected?.sessionKey)
+                                    Text("SAVED", color = Healthy, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                    if (maxWidth >= 700.dp && transport.candidates.size > 1) {
+                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            transport.candidates.chunked(2).forEach { pair ->
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    pair.forEach { candidate -> AdapterCard(candidate, Modifier.weight(1f)) }
+                                    if (pair.size == 1) Spacer(Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        transport.candidates.forEach { candidate -> AdapterCard(candidate, Modifier.fillMaxWidth()) }
+                    }
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button({
@@ -3108,18 +3205,34 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             }
         }
         if (section == SettingsSection.CLUSTER) SettingsCard("DX CLUSTER") {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(host, { host = it }, label = { Text("Host") }, modifier = Modifier.weight(2f))
-                OutlinedTextField(port, { port = it.filter(Char::isDigit) }, label = { Text("Port") }, modifier = Modifier.weight(1f))
-                OutlinedTextField(callsign, { callsign = it.uppercase() }, label = { Text("Callsign") }, modifier = Modifier.weight(1f))
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val wideCluster = maxWidth >= 700.dp
+                if (wideCluster) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(host, { host = it }, label = { Text("Primary host") }, singleLine = true, modifier = Modifier.weight(2f))
+                        OutlinedTextField(port, { port = it.filter(Char::isDigit) }, label = { Text("Port") }, singleLine = true, modifier = Modifier.weight(1f))
+                        OutlinedTextField(callsign, { callsign = it.uppercase() }, label = { Text("Callsign") }, singleLine = true, modifier = Modifier.weight(1f))
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(fallbackHost, { fallbackHost = it }, label = { Text("Fallback 1") }, singleLine = true, modifier = Modifier.weight(2f))
+                        OutlinedTextField(fallbackPort, { fallbackPort = it.filter(Char::isDigit) }, label = { Text("Port") }, singleLine = true, modifier = Modifier.weight(1f))
+                        OutlinedTextField(fallback2Host, { fallback2Host = it }, label = { Text("Fallback 2") }, singleLine = true, modifier = Modifier.weight(2f))
+                        OutlinedTextField(fallback2Port, { fallback2Port = it.filter(Char::isDigit) }, label = { Text("Port") }, singleLine = true, modifier = Modifier.weight(1f))
+                    }
+                } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(host, { host = it }, label = { Text("Primary host") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(port, { port = it.filter(Char::isDigit) }, label = { Text("Port") }, singleLine = true, modifier = Modifier.weight(1f))
+                        OutlinedTextField(callsign, { callsign = it.uppercase() }, label = { Text("Callsign") }, singleLine = true, modifier = Modifier.weight(1f))
+                    }
+                    OutlinedTextField(fallbackHost, { fallbackHost = it }, label = { Text("Fallback 1 host") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(fallbackPort, { fallbackPort = it.filter(Char::isDigit) }, label = { Text("Fallback 1 port") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(fallback2Host, { fallback2Host = it }, label = { Text("Fallback 2 host") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(fallback2Port, { fallback2Port = it.filter(Char::isDigit) }, label = { Text("Fallback 2 port") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(fallbackHost, { fallbackHost = it }, label = { Text("Fallback 1 host") }, modifier = Modifier.weight(2f))
-                OutlinedTextField(fallbackPort, { fallbackPort = it.filter(Char::isDigit) }, label = { Text("Port") }, modifier = Modifier.weight(1f))
-                OutlinedTextField(fallback2Host, { fallback2Host = it }, label = { Text("Fallback 2 host") }, modifier = Modifier.weight(2f))
-                OutlinedTextField(fallback2Port, { fallback2Port = it.filter(Char::isDigit) }, label = { Text("Port") }, modifier = Modifier.weight(1f))
-            }
-            OutlinedTextField(watch, { watch = it.uppercase() }, label = { Text("Watchlist · max 32 calls") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(watch, { watch = it.uppercase() }, label = { Text("Priority calls · up to 32") }, modifier = Modifier.fillMaxWidth())
+            Text("This list only highlights and alerts matching calls; it never limits incoming cluster spots. The Radio spots window shows 50 spots per page.", color = Muted)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button({ features.setWatchlist(watch); features.connectCluster(host, port.toIntOrNull() ?: 7300, callsign,
                     fallbackHost, fallbackPort.toIntOrNull() ?: 7300, fallback2Host, fallback2Port.toIntOrNull() ?: 7300) }, enabled = callsign.isNotBlank()) { Text("Connect") }
@@ -3142,44 +3255,83 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                     OutlinedButton({ exportAdif.launch("rigweave-local.adi") }) { Text("EXPORT ADIF") }
                 }
             } else {
-                OutlinedTextField(wavelog.baseURL, wavelog::updateBaseURL, label = { Text("HTTPS base URL") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(wavelog.apiKey, wavelog::updateApiKey, label = { Text("API key") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    val wideLog = maxWidth >= 760.dp
+                    if (wideLog) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(wavelog.baseURL, wavelog::updateBaseURL, label = { Text("HTTPS base URL") },
+                            singleLine = true, modifier = Modifier.weight(2f))
+                        OutlinedTextField(wavelog.apiKey, wavelog::updateApiKey, label = { Text("API key") },
+                            visualTransformation = PasswordVisualTransformation(), singleLine = true,
+                            modifier = Modifier.weight(1.25f))
+                        if (wavelog.stations.isEmpty()) OutlinedTextField(wavelog.stationId, wavelog::setStation,
+                            label = { Text("Station ID") }, singleLine = true,
+                            modifier = Modifier.weight(1f))
+                        else ChoiceField("Station", wavelog.selectedStation?.label.orEmpty(),
+                            wavelog.stations.map { it.id to it.label }, wavelog.stationId, wavelog::setStation,
+                            Modifier.weight(1.45f), compact = true)
+                    } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(wavelog.baseURL, wavelog::updateBaseURL, label = { Text("HTTPS base URL") },
+                            singleLine = true, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(wavelog.apiKey, wavelog::updateApiKey, label = { Text("API key") },
+                            visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth())
+                        if (wavelog.stations.isEmpty()) OutlinedTextField(wavelog.stationId, wavelog::setStation,
+                            label = { Text("Station ID") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        else ChoiceField("Station", wavelog.selectedStation?.label.orEmpty(),
+                            wavelog.stations.map { it.id to it.label }, wavelog.stationId, wavelog::setStation,
+                            Modifier.fillMaxWidth(), compact = true)
+                    }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     CredentialState("WAVELOG API KEY", wavelog.apiKey.isNotBlank(), Modifier.testTag("wavelog-api-key-state"))
                     CredentialState("WAVELOG STATION", wavelog.stationId.isNotBlank(), Modifier.testTag("wavelog-station-state"))
                 }
-                if (wavelog.stations.isEmpty()) OutlinedTextField(wavelog.stationId, wavelog::setStation, label = { Text("Station ID") })
-                else ChoiceField("Station location", wavelog.selectedStation?.label.orEmpty(), wavelog.stations.map { it.id to it.label },
-                    wavelog.stationId, wavelog::setStation)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Button({ wavelog.loadStations() }) { Text("Load stations") }; Button({ wavelog.syncQueue() }) { Text("Sync queue") }; Button({ wavelog.fullSync() }) { Text("Full log") } }
                 Text(wavelog.status, color = Muted)
                 Text("Wavelog URL, encrypted API key, selected station, and station list are retained across app updates.", color = Muted)
             }
             Text("QRZ.COM / HAMQTH ENRICHMENT", color = Amber, fontWeight = FontWeight.Bold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                FilterChip(qrzEnabled, { qrzEnabled = !qrzEnabled }, { Text("QRZ.COM") })
-                OutlinedTextField(qrzUser, { qrzUser = it }, label = { Text("QRZ account email / username") }, singleLine = true, modifier = Modifier.weight(1f))
-                OutlinedTextField(qrzPassword, { qrzPassword = it }, label = { Text("QRZ password") }, singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(), modifier = Modifier.weight(1f))
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val wideCallbook = maxWidth >= 900.dp
+                @Composable fun QrzFields(modifier: Modifier) {
+                    Row(modifier, horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+                        FilterChip(qrzEnabled, { qrzEnabled = !qrzEnabled }, { Text("QRZ.COM") })
+                        OutlinedTextField(qrzUser, { qrzUser = it }, label = { Text("Username") }, singleLine = true, modifier = Modifier.weight(1f))
+                        OutlinedTextField(qrzPassword, { qrzPassword = it }, label = { Text("Password") }, singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.weight(1f))
+                    }
+                }
+                @Composable fun HamQthFields(modifier: Modifier) {
+                    Row(modifier, horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+                        FilterChip(hamQthEnabled, { hamQthEnabled = !hamQthEnabled }, { Text("HAMQTH") })
+                        OutlinedTextField(hamQthUser, { hamQthUser = it }, label = { Text("Username") }, singleLine = true, modifier = Modifier.weight(1f))
+                        OutlinedTextField(hamQthPassword, { hamQthPassword = it }, label = { Text("Password") }, singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(), modifier = Modifier.weight(1f))
+                    }
+                }
+                if (wideCallbook) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    QrzFields(Modifier.weight(1f)); HamQthFields(Modifier.weight(1f))
+                    Button({ callbook.configureQrz(qrzEnabled, qrzUser, qrzPassword)
+                        callbook.configureHamQth(hamQthEnabled, hamQthUser, hamQthPassword) }) { Text("SAVE") }
+                } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    QrzFields(Modifier.fillMaxWidth()); HamQthFields(Modifier.fillMaxWidth())
+                    Button({ callbook.configureQrz(qrzEnabled, qrzUser, qrzPassword)
+                        callbook.configureHamQth(hamQthEnabled, hamQthUser, hamQthPassword) }) { Text("SAVE") }
+                }
             }
-            CredentialState("QRZ PASSWORD", qrzPassword.isNotBlank(), Modifier.testTag("qrz-password-state"))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                FilterChip(hamQthEnabled, { hamQthEnabled = !hamQthEnabled }, { Text("HAMQTH") })
-                OutlinedTextField(hamQthUser, { hamQthUser = it }, label = { Text("HamQTH username") }, singleLine = true, modifier = Modifier.weight(1f))
-                OutlinedTextField(hamQthPassword, { hamQthPassword = it }, label = { Text("HamQTH password") }, singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(), modifier = Modifier.weight(1f))
-                Button({ callbook.configureQrz(qrzEnabled, qrzUser, qrzPassword)
-                    callbook.configureHamQth(hamQthEnabled, hamQthUser, hamQthPassword) }) { Text("SAVE") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CredentialState("QRZ PASSWORD", qrzPassword.isNotBlank(), Modifier.testTag("qrz-password-state"))
+                if (hamQthEnabled || hamQthUser.isNotBlank() || hamQthPassword.isNotBlank())
+                    CredentialState("HAMQTH PASSWORD", hamQthPassword.isNotBlank(), Modifier.testTag("hamqth-password-state"))
             }
-            if (hamQthEnabled || hamQthUser.isNotBlank() || hamQthPassword.isNotBlank())
-                CredentialState("HAMQTH PASSWORD", hamQthPassword.isNotBlank(), Modifier.testTag("hamqth-password-state"))
             Text("Automatic lookup order: QRZ.COM → HamQTH → CTY.DAT. Email-style QRZ accounts use the configured station callsign for XML access; CTY.DAT supplements missing entity and zone fields.", color = Muted)
             Text("Callbook settings are saved automatically. Blank password fields keep the previously saved encrypted password.", color = Muted)
             Text("SAVED means a credential is present in encrypted app-private storage; use the test buttons in Diag to verify that it is valid.", color = Muted)
         }
         if (section == SettingsSection.AUDIO) SettingsCard("USB AUDIO ROUTES") {
             BoxWithConstraints(Modifier.fillMaxWidth().testTag("settings-audio-layout")) {
-                val expandedAudioLayout = maxWidth >= 900.dp
+                val expandedAudioLayout = maxWidth >= 700.dp
                 @Composable fun ReceivePanel(modifier: Modifier) {
                     Card(modifier, colors = CardDefaults.cardColors(containerColor = Raised)) {
                         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -3200,8 +3352,6 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                     Card(modifier, colors = CardDefaults.cardColors(containerColor = Raised)) {
                         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                             Text("CAPTURE & VOICE TX", color = Amber, fontWeight = FontWeight.Bold)
-                            Button(openEq, modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)) { Text("OPEN EQ STUDIO") }
-                            Text("EQ capture uses the selected USB input or a clearly labelled built-in reference mic.", color = Muted)
                             Text("VOICE MACRO TX OUTPUT", color = Amber, fontWeight = FontWeight.Bold)
                             if (audio.txOutputCandidates.isEmpty()) Text("No eligible USB output", color = Muted)
                             else ChoiceField("DigiRig USB output", audio.selectedTx?.label ?: "Selection required",
@@ -3217,12 +3367,20 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                         }
                     }
                 }
-                if (expandedAudioLayout) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    ReceivePanel(Modifier.weight(1f))
-                    CapturePanel(Modifier.weight(1f))
-                } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    ReceivePanel(Modifier.fillMaxWidth())
-                    CapturePanel(Modifier.fillMaxWidth())
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Button(openEq, modifier = Modifier.heightIn(min = 44.dp)) { Text("OPEN EQ STUDIO") }
+                        Text("EQ capture uses the selected USB input or a clearly labelled built-in reference mic.", color = Muted,
+                            modifier = Modifier.weight(1f))
+                    }
+                    if (expandedAudioLayout) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        ReceivePanel(Modifier.weight(1f))
+                        CapturePanel(Modifier.weight(1f))
+                    } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        ReceivePanel(Modifier.fillMaxWidth())
+                        CapturePanel(Modifier.fillMaxWidth())
+                    }
                 }
             }
         }
@@ -3240,6 +3398,11 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                 OutlinedButton(audio::refreshDevices) { Text("RESCAN AUDIO") }
             }
             Text(systemMessage, color = Muted)
+        }
+        if (section == SettingsSection.DIAG) SettingsCard("COUNTRY DATA") {
+            Column(Modifier.testTag("settings-default-cty"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                CtyUpdatePanel(cty)
+            }
         }
         if (section == SettingsSection.DIAG) SettingsCard("CAT DIAGNOSTICS") {
             Text("CAT · ${transport.selected?.label ?: "not selected"}", color = Muted)
@@ -3268,15 +3431,26 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             Text("Local-first tablet control and logging. Wavelog, callbook, CTY.DAT and DX-cluster integrations are optional.", color = Muted)
             Text("WSJT-X is intentionally not exposed in Settings yet.", color = Muted)
             HorizontalDivider()
-            Row(Modifier.fillMaxWidth().testTag("settings-developer-information"), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Image(painterResource(R.drawable.oliver_bross_om0rx), "Oliver Bross, OM0RX", contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(132.dp).clip(RoundedCornerShape(12.dp)))
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text("ABOUT THE DEVELOPER", color = Amber, fontWeight = FontWeight.Bold)
-                    Text("Oliver Bross · OM0RX", color = Ink, fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleLarge)
-                    Text("Amateur radio operator licensed since 2000 · JN88TQ", color = Muted)
-                    Text("RigWeave is built by a radio amateur for real portable and station operating.", color = Muted)
-                    Text("stationpilot.app", color = Hold, fontWeight = FontWeight.Bold)
+            BoxWithConstraints(Modifier.fillMaxWidth().testTag("settings-developer-information")) {
+                @Composable fun DeveloperCopy(modifier: Modifier) {
+                    Column(modifier, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Text("ABOUT THE DEVELOPER", color = Amber, fontWeight = FontWeight.Bold)
+                        Text("Oliver Bross, OM0RX", color = Ink, fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleLarge)
+                        Text("Amateur radio operator licensed since 2000 · JN88TQ", color = Muted)
+                        Text("RigWeave grew from real remote-station, DXing, CW, digital-mode, contesting, and award-chasing workflows.", color = Muted)
+                        Text("stationpilot.app", color = Hold, fontWeight = FontWeight.Bold)
+                    }
+                }
+                if (maxWidth >= 600.dp) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Image(painterResource(R.drawable.oliver_bross_om0rx), "Oliver Bross, OM0RX", contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(124.dp).clip(RoundedCornerShape(12.dp)))
+                    DeveloperCopy(Modifier.weight(1f))
+                } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally) {
+                    Image(painterResource(R.drawable.oliver_bross_om0rx), "Oliver Bross, OM0RX", contentScale = ContentScale.Crop,
+                        modifier = Modifier.size(104.dp).clip(RoundedCornerShape(12.dp)))
+                    DeveloperCopy(Modifier.fillMaxWidth())
                 }
             }
         }
@@ -3303,6 +3477,15 @@ private fun InputStream.readBoundedVoiceWave(maximumBytes: Int = 32 * 1024 * 102
         output.write(buffer, 0, count)
     }
     return output.toByteArray()
+}
+
+@Composable private fun MacroNumber(index: Int, configured: Boolean) {
+    Surface(color = if (configured) Hold.copy(alpha = .18f) else Color(0xFF303638),
+        shape = RoundedCornerShape(6.dp), modifier = Modifier.size(42.dp)) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("${index + 1}", color = if (configured) Hold else Muted, fontWeight = FontWeight.Black)
+        }
+    }
 }
 
 @Composable private fun VoiceWaveform(peaks: List<Float>, modifier: Modifier = Modifier) {
@@ -3379,9 +3562,19 @@ private fun InputStream.readBoundedVoiceWave(maximumBytes: Int = 32 * 1024 * 102
 }
 
 @Composable private fun SettingsCard(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Panel)) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Panel)) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, color = Amber, fontWeight = FontWeight.Bold); content()
     } }
+}
+
+@Composable private fun SettingsPage(content: @Composable ColumnScope.() -> Unit) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val padding = if (maxWidth < 600.dp) 10.dp else 16.dp
+        val spacing = if (maxHeight < 650.dp) 8.dp else 10.dp
+        LazyColumn(Modifier.fillMaxSize().padding(padding), verticalArrangement = Arrangement.spacedBy(spacing)) {
+            item { Column(verticalArrangement = Arrangement.spacedBy(spacing), content = content) }
+        }
+    }
 }
 
 @Composable private fun Page(content: @Composable ColumnScope.() -> Unit) {

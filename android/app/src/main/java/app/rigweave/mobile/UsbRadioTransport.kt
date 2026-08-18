@@ -42,10 +42,19 @@ data class SerialDeviceDescriptor(
     val deviceAddress: String,
 ) {
     val fallbackKey: String get() = listOf(driverFamily, manufacturer, product, vidPid, portIndex.toString()).joinToString("|")
+    val displayName: String get() = product.ifBlank { manufacturer }.ifBlank { driverFamily }
+    val identityLine: String get() = listOf(
+        manufacturer.takeIf { it.isNotBlank() && it != displayName },
+        vidPid,
+        serialNumber.takeIf(String::isNotBlank)?.let { "S/N ${it.compactIdentity()}" },
+    ).filterNotNull().joinToString(" · ")
+    val routeLine: String get() = "$driverFamily · Port ${portIndex + 1} · ${deviceAddress.substringAfterLast('/')}"
     val label: String get() = listOf(driverFamily, manufacturer.takeIf(String::isNotBlank), product.takeIf(String::isNotBlank), vidPid,
         serialNumber.takeIf(String::isNotBlank)?.let { "S/N $it" }, "port $portIndex", deviceAddress)
         .filterNotNull().filter(String::isNotBlank).joinToString(" · ")
 }
+
+private fun String.compactIdentity(): String = if (length <= 12) this else "…${takeLast(10)}"
 
 fun containsElecraftCatResponse(bytes: ByteArray): Boolean = bytes.toString(Charsets.US_ASCII).split(';').any { frame ->
     (frame.startsWith("K3") && frame.length == 3 && frame[2] in "01") ||
@@ -128,7 +137,7 @@ class UsbRadioTransport(private val context: Context) {
         candidates = available.map(Candidate::descriptor)
         val explicit = sessionSelection?.let { key -> available.firstOrNull { it.descriptor.sessionKey == key } }
         val choice = explicit ?: chooseConfiguredCandidate(available)
-        if (choice == null) return@withLock UsbResult.Unavailable(if (available.size > 1) "Multiple eligible devices detected; select one in Settings · Safety" else "No supported CAT adapter detected")
+        if (choice == null) return@withLock UsbResult.Unavailable(if (available.size > 1) "Multiple eligible devices detected; select one in Settings · Radio" else "No supported CAT adapter detected")
         selected = choice.descriptor
         if (!awaitPermission(choice.driver.device)) {
             return@withLock UsbResult.PermissionRequired("USB permission was not granted · tap Connect to try again")

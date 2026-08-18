@@ -30,6 +30,9 @@ import javax.crypto.spec.GCMParameterSpec
 
 enum class LogMode { LOCAL, WAVELOG }
 const val WAVELOG_SYNC_PAGE_SIZE = 1_000
+const val NTP_SYNC_INTERVAL_MILLIS = 60L * 60L * 1_000L
+internal fun ntpSyncDue(nowMillis: Long, lastSuccessMillis: Long): Boolean =
+    lastSuccessMillis <= 0L || nowMillis - lastSuccessMillis >= NTP_SYNC_INTERVAL_MILLIS
 
 data class AndroidWavelogStation(
     val id: String, val name: String, val callsign: String, val grid: String, val city: String,
@@ -60,10 +63,14 @@ class WavelogController(private val context: Context, private val database: QsoD
     private val prefs = context.getSharedPreferences("wavelog", Context.MODE_PRIVATE)
     private val queueFile = File(context.filesDir, "wavelog-queue.json")
     private val syncMutex = Mutex()
+    private val ntpMutex = Mutex()
     private val queueLock = Any()
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) { if (logMode == LogMode.WAVELOG) syncTwoWay() }
+        override fun onAvailable(network: Network) {
+            if (logMode == LogMode.WAVELOG) syncTwoWay()
+            scope.launch { synchronizeTime(force = false) }
+        }
     }
 
     var baseURL by mutableStateOf(prefs.getString("base_url", RigWeaveDefaults.WAVELOG_BASE_URL) ?: RigWeaveDefaults.WAVELOG_BASE_URL); private set
@@ -71,10 +78,12 @@ class WavelogController(private val context: Context, private val database: QsoD
     var apiKey by mutableStateOf(decrypt(prefs.getString("api_key", "") ?: "")); private set
     var ntpServer by mutableStateOf(prefs.getString("ntp_server", "time.google.com") ?: "time.google.com"); private set
     private var ntpOffsetMillis = prefs.getLong("ntp_offset_ms", 0L)
+    private var lastNtpSuccessMillis = prefs.getLong("ntp_last_success_ms", 0L)
+    private var lastNtpAttemptMillis = lastNtpSuccessMillis
     var logMode by mutableStateOf(runCatching { LogMode.valueOf(prefs.getString("log_mode", "LOCAL")!!) }.getOrDefault(LogMode.LOCAL)); private set
     var stations by mutableStateOf(decodeWavelogStations(prefs.getString("stations_json", null))); private set
     var status by mutableStateOf(if (stations.isEmpty()) "Wavelog not configured" else "${stations.size} saved Wavelog stations restored"); private set
-    var timeStatus by mutableStateOf("NTP not checked"); private set
+    var timeStatus by mutableStateOf(if (lastNtpSuccessMillis > 0L) "Automatic NTP active · hourly when online" else "Automatic NTP pending · hourly when online"); private set
     var pendingCount by mutableStateOf(loadQueue().length()); private set
     var syncPages by mutableStateOf(0); private set
 
@@ -86,10 +95,13 @@ class WavelogController(private val context: Context, private val database: QsoD
         if (!prefs.contains("base_url")) prefs.edit().putString("base_url", baseURL).apply()
         runCatching { connectivity.registerDefaultNetworkCallback(networkCallback) }
         scope.launch {
-            delay(1_000); if (logMode == LogMode.WAVELOG) runTwoWay()
+            delay(1_000)
+            if (logMode == LogMode.WAVELOG) runTwoWay()
+            synchronizeTime(force = false)
             while (isActive) {
                 delay(60_000)
                 if (logMode == LogMode.WAVELOG && (pendingCount > 0 || configured)) runTwoWay()
+                synchronizeTime(force = false)
             }
         }
     }
@@ -151,7 +163,14 @@ class WavelogController(private val context: Context, private val database: QsoD
         } catch (error: Exception) { publish("Wavelog test failed: ${error.message}") }
     }
 
-    fun checkTime() = scope.launch {
+    fun checkTime() = scope.launch { synchronizeTime(force = true) }
+
+    private suspend fun synchronizeTime(force: Boolean) = ntpMutex.withLock {
+        val now = System.currentTimeMillis()
+        if (!force) {
+            if (connectivity.activeNetwork == null || !ntpSyncDue(now, lastNtpAttemptMillis)) return@withLock
+            lastNtpAttemptMillis = now
+        }
         try {
             val host = ntpServer.ifBlank { "time.google.com" }; val data = ByteArray(48); data[0] = 0x1B
             val address = InetAddress.getByName(host); val sentAt = System.currentTimeMillis()
@@ -166,9 +185,10 @@ class WavelogController(private val context: Context, private val database: QsoD
             val serverMillis = (seconds - 2_208_988_800L) * 1_000L + (fraction * 1_000L / 0x1_0000_0000L)
             val drift = serverMillis - ((sentAt + receivedAt) / 2L); val absolute = kotlin.math.abs(drift)
             ntpOffsetMillis = drift
-            prefs.edit().putLong("ntp_offset_ms", drift).apply()
-            publishTime(if (absolute <= 1_000) "NTP synchronized · $host · drift ${absolute} ms" else
-                "NTP synchronized · app clock corrected ${drift} ms · enable Android automatic time for the system clock")
+            lastNtpSuccessMillis = System.currentTimeMillis()
+            prefs.edit().putLong("ntp_offset_ms", drift).putLong("ntp_last_success_ms", lastNtpSuccessMillis).apply()
+            publishTime(if (absolute <= 1_000) "NTP synchronized · $host · drift ${absolute} ms · automatic hourly sync active" else
+                "NTP synchronized · app clock corrected ${drift} ms · automatic hourly sync active; enable Android automatic time for the system clock")
         } catch (error: Exception) { publishTime("NTP check failed: ${error.message}") }
     }
 
