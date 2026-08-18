@@ -2,7 +2,7 @@
 
 RigWeave is a radio-native portable operating cockpit that connects discovery, tuning, operating, logging, synchronisation, and progress without requiring fabricated state or permanent network access.
 
-The current repository contains two native mobile clients—an iPad-focused SwiftUI client and an Android Jetpack Compose client—over a shared C++17 core. Elecraft KX3/KX2 is the current radio family. Android implements KX3 EQ Studio, SSB voice macros, the integrated Phase 2B Portable Chase workspace, and Phase 3A POTA Activate with recoverable local sessions and programme-correct ADIF export. SOTA live remains unavailable pending written programme API approval; RigWeave makes no unapproved SOTA API request. These capabilities are not claimed for Apple or unqualified KX2 writes. Desktop, FlexRadio, QMX, and SOTA/WWFF activation remain planned work.
+The current repository contains two native mobile clients—an iPad-focused SwiftUI client and an Android Jetpack Compose client—over a shared C++17 core. Android supports the existing Elecraft KX3/KX2 path plus receive-only FlexRadio LAN/SmartLink selected-slice control through a Nexus-derived Rust core; authenticated/physical Flex proof remains conditional on local owner-issued configuration and hardware. Android also implements KX3 EQ Studio, SSB voice macros, Portable Chase, POTA Activate, Sync Hub and Progress Intelligence. SOTA live remains unavailable pending written programme API approval. FlexRadio is not claimed for Apple, and desktop, QMX and SOTA/WWFF activation remain planned work.
 
 ## Current implementation
 
@@ -10,8 +10,8 @@ The current repository contains two native mobile clients—an iPad-focused Swif
 |---|---|---|
 | Shared core | KX3/KX2 CAT parsing and safety classes, ADIF, CTY, spot/DX analysis, operator intelligence, panadapter DSP, Wavelog retry policy, and bounded WSJT-X parsing behind a C ABI | core/include, core/portable, core/src |
 | Apple | SwiftUI app, Objective-C++ bridge, base USBDriverKit KXUSB transport, local SQLite/ADIF, callbook, Wavelog, cluster/DX, and physical-I/Q panadapter | ios/RigWeave, ios/CP210xDriver |
-| Android | Compose app, JNI bridge, USB serial, local SQLite/ADIF, local-authority QRZ/Club Log/eQSL Sync Hub, callbook, Wavelog, CW and SSB voice macros, hardware-backed KX3 EQ Studio, multi-program Portable Chase, POTA Activate sessions/export, DX/Neural DX surfaces, MapLibre maps, audio monitoring, and a dedicated KX3 stereo-I/Q panadapter behind one exclusive audio-owner contract | android/app/src/main |
-| Planned / gated | SOTA live API approval, further KX3/KX2 Studio hardening and platform parity, SOTA/WWFF Activate, Phase 4B Needs Board/statistics, FlexRadio SmartLink, Qt/QML desktop, then QMX and broader integrations | docs/ROADMAP.md |
+| Android | Compose app, JNI/C ABI bridge, KX USB serial, Nexus-derived Rust Flex LAN/SmartLink receive control, local SQLite/ADIF, Sync Hub, Progress Intelligence, callbook, Wavelog, CW/SSB macros, KX3 EQ Studio and panadapter, Portable Chase, POTA Activate and DX/Neural DX | android/app/src/main, rust/rigweave-flex |
+| Planned / gated | Flex Phase 5B spectrum/meters and 5C audio/TX, SOTA live API approval, platform parity, SOTA/WWFF Activate, Qt/QML desktop, QMX and broader integrations | docs/ROADMAP.md |
 
 The Apple Xcode targets are configured for device family 2 (iPad), deployment target iOS 17, and should not be described as proven iPhone support.
 
@@ -31,6 +31,8 @@ Android:
 cd android
 ./gradlew :app:testDebugUnitTest :app:assembleDebug
 ~~~
+
+The Android build also requires stable Rust, `cargo-ndk`, and the four Android Rust targets documented in [the FlexRadio port guide](docs/FLEXRADIO_NEXUS_PORT_ANDROID.md). The owner-issued SmartLink OAuth client ID belongs only in ignored `flex-developer.properties` or the documented environment variable. Fixed endpoints and command forms follow FlexRadio's April 2026 SmartLink API reference.
 
 The Android SDK path must be configured through ANDROID_HOME, ANDROID_SDK_ROOT, or an untracked local.properties. Do not accept SDK licences merely to turn an unavailable environment into a claimed pass.
 
@@ -59,7 +61,7 @@ Do not change signing identities, profiles, entitlements, DriverKit identifiers,
 | Physical iPad, KXUSB, KX3, and I/Q | Historical repository evidence, not repeated in Phase 0 | See docs/COMPLETION_REPORT.md and docs/PANADAPTER_DESIGN.md |
 | Physical Android KX3 EQ and USB audio | PASS WITH NOTES on 2026-08-17 UTC | Lenovo TB373FU, KXUSB, KX3 firmware 03.02, exact RX/TX write-readback-restore, and real 48 kHz mono capture/A-B; test input was too quiet for a credible acoustic recommendation |
 | Wavelog authenticated workflow | UNVERIFIED | No usable API key/station-profile proof was available in the recorded pass |
-| FlexRadio, desktop, QMX, portable-programme operation | ABSENT/PLANNED | No current implementation or physical proof |
+| FlexRadio Android Phase 5A | PASS WITH NOTES source/build; physical/auth unavailable | Nexus-derived Rust tests, four ABI/JNI link and Android build pass; owner-issued SmartLink values and a local FLEX radio were absent, so no physical/authenticated claim |
 
 A successful build is not proof of USB enumeration, DriverKit activation, CAT semantics, audio orientation, remote authentication, service terms, or physical-radio operation.
 
@@ -75,6 +77,7 @@ A successful build is not proof of USB enumeration, DriverKit activation, CAT se
 - [Next authorised phase gate](docs/phase-0/NEXT_AUTHORISED_PHASE.md)
 - [Android Phase 1 integration closure](docs/phase-1/ANDROID_STUDIO_INTEGRATION_CLOSURE.md)
 - [Android POTA Activate](docs/POTA_ACTIVATE_ANDROID.md)
+- [Android FlexRadio Nexus port](docs/FLEXRADIO_NEXUS_PORT_ANDROID.md)
 - [Next Phase 1 candidate](docs/phase-1/NEXT_AUTHORISED_PHASE.md)
 
 ## Licence
@@ -83,7 +86,7 @@ RigWeave is licensed under GPL-3.0-only. See [COPYING](COPYING) for the complete
 
 GPLv3 permits charging for binaries, support, and services; it does not require zero-price distribution. Every distributed covered binary must map to an immutable source commit/tag and be accompanied by, or provide equivalent access to, complete corresponding source, build instructions, dependency manifests/lock data, applicable patches, and notices.
 
-Nexus was inspected as an external GPLv3 upstream/reference during Phase 0. No Nexus source, binary, dependency, submodule, or derived implementation is included by this work.
+Nexus was inspected as an external GPLv3 upstream during Phase 0. Android Phase 5A now incorporates only the attributed Flex discovery and receive-control source recorded in [`rust/rigweave-flex/UPSTREAM.md`](rust/rigweave-flex/UPSTREAM.md); it imports no Nexus UI, DAX/TX orchestration or unrelated workspace component.
 
 ## Android implementation details
 

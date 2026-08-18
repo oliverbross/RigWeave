@@ -9,8 +9,15 @@ See docs/phase-0/LICENSING_AND_NEXUS_ASSESSMENT.md for the Phase 0
 dependency/provenance assessment. Each distributed release must also provide
 release-specific dependency, notice, build, and corresponding-source records.
 
-Nexus was evaluated as an external upstream/reference. No Nexus source, binary,
-dependency, submodule, or derived implementation is incorporated by Phase 0.
+Nexus was evaluated as an external upstream/reference during Phase 0. Android
+Phase 5A now incorporates selected GPL-3.0-only Flex protocol source derived
+from kd9taw/Nexus commit 6ec4a7925f1550cc364c7fd95967ce38c696ad3f,
+Copyright (C) 2026 KD9TAW <kd9taw@protonmail.com>. Only the audited discovery
+and receive-control portions of `crates/tempo-net/src/flexdisc.rs` and
+`flexcat.rs` were adapted. Exact source ranges, modifications, dependency
+closure and exclusions are recorded in rust/rigweave-flex/UPSTREAM.md. Nexus
+does not endorse RigWeave. The Rust runtime dependency `socket2` 0.6 is
+dual-licensed MIT OR Apache-2.0; its source version is fixed by Cargo.lock.
 
 The Android KX3 panadapter was independently implemented after behavior-only
 study of these pinned references:

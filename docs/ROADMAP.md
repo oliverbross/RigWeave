@@ -76,19 +76,20 @@ This is the normative product order. A phase starts only after separate owner au
 
 ### Phase 5A — Legitimate authentication, discovery, and control
 
-- Use an official developer path and legitimate SmartLink authentication.
-- Secure token storage, discovery/brokering, recovery, slice/frequency/mode state, tune/log integration.
-- Revalidate Nexus protocol candidates against current official interfaces; never reuse another application's client identity or credentials.
+- **Implemented on Android — PASS WITH NOTES:** official owner-issued client-ID path, restricted WebView implicit-token authentication, Keystore refresh-token storage, source-verified broker/direct TLS ordering, LAN discovery, Nexus-derived SmartSDR framing/state, existing GUI station/slice selection and receive-only frequency/mode/filter control integrated with logger, DX, Portable and POTA Activate.
+- Rust/JNI and Android builds pass, and radio-family/UI switching passed on a Lenovo TB373FU. The authorised SmartLink username/password could not reach a legitimate credential form without the separately required issued OAuth client ID, so authenticated SmartLink and physical FLEX proof remain unclaimed rather than treated as a permission blocker.
+- KX behaviour remains separate. iPadOS parity is deferred; SOTA live remains pending approval.
 
 ### Phase 5B — Spectrum, waterfall, and meters
 
 - Official TCP/UDP/VITA-49 interfaces.
-- Panadapter/waterfall streams, meters, and RigWeave overlays.
+- Import/adapt the separately audited Nexus `flexvita.rs` candidate for panadapter/waterfall streams, meters, and RigWeave overlays.
 
 ### Phase 5C — Remote audio and controlled TX
 
 - Only after 5A/5B physical proof.
 - Explicit operator control and safe recovery.
+- Carefully separate any RX-only audio work; wholesale Nexus `flexdax.rs` remains rejected.
 - No attempt to clone every SmartSDR or StationPilot feature.
 
 ## Phase 6 — Desktop client
