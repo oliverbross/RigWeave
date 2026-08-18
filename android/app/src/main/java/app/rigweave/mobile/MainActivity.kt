@@ -3089,6 +3089,10 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             } else {
                 OutlinedTextField(wavelog.baseURL, wavelog::updateBaseURL, label = { Text("HTTPS base URL") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(wavelog.apiKey, wavelog::updateApiKey, label = { Text("API key") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CredentialState("WAVELOG API KEY", wavelog.apiKey.isNotBlank(), Modifier.testTag("wavelog-api-key-state"))
+                    CredentialState("WAVELOG STATION", wavelog.stationId.isNotBlank(), Modifier.testTag("wavelog-station-state"))
+                }
                 if (wavelog.stations.isEmpty()) OutlinedTextField(wavelog.stationId, wavelog::setStation, label = { Text("Station ID") })
                 else ChoiceField("Station location", wavelog.selectedStation?.label.orEmpty(), wavelog.stations.map { it.id to it.label },
                     wavelog.stationId, wavelog::setStation)
@@ -3103,6 +3107,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                 OutlinedTextField(qrzPassword, { qrzPassword = it }, label = { Text("QRZ password") }, singleLine = true,
                     visualTransformation = PasswordVisualTransformation(), modifier = Modifier.weight(1f))
             }
+            CredentialState("QRZ PASSWORD", qrzPassword.isNotBlank(), Modifier.testTag("qrz-password-state"))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 FilterChip(hamQthEnabled, { hamQthEnabled = !hamQthEnabled }, { Text("HAMQTH") })
                 OutlinedTextField(hamQthUser, { hamQthUser = it }, label = { Text("HamQTH username") }, singleLine = true, modifier = Modifier.weight(1f))
@@ -3111,8 +3116,11 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                 Button({ callbook.configureQrz(qrzEnabled, qrzUser, qrzPassword)
                     callbook.configureHamQth(hamQthEnabled, hamQthUser, hamQthPassword) }) { Text("SAVE") }
             }
+            if (hamQthEnabled || hamQthUser.isNotBlank() || hamQthPassword.isNotBlank())
+                CredentialState("HAMQTH PASSWORD", hamQthPassword.isNotBlank(), Modifier.testTag("hamqth-password-state"))
             Text("Automatic lookup order: QRZ.COM → HamQTH → CTY.DAT. Email-style QRZ accounts use the configured station callsign for XML access; CTY.DAT supplements missing entity and zone fields.", color = Muted)
             Text("Callbook settings are saved automatically. Blank password fields keep the previously saved encrypted password.", color = Muted)
+            Text("SAVED means a credential is present in encrypted app-private storage; use the test buttons in Diag to verify that it is valid.", color = Muted)
         }
         if (section == SettingsSection.AUDIO) SettingsCard("USB AUDIO ROUTES") {
             BoxWithConstraints(Modifier.fillMaxWidth().testTag("settings-audio-layout")) {
@@ -3254,6 +3262,15 @@ private fun InputStream.readBoundedVoiceWave(maximumBytes: Int = 32 * 1024 * 102
                     Offset((index + .5f) * step, (size.height + height) / 2), maxOf(1f, step * .55f))
             }
         }
+    }
+}
+
+@Composable private fun CredentialState(label: String, configured: Boolean, modifier: Modifier = Modifier) {
+    val color = if (configured) Healthy else Danger
+    Surface(modifier, color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(50)) {
+        Text("$label · ${if (configured) "SAVED · ENCRYPTED" else "NOT SAVED"}", color = color,
+            fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelMedium,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp))
     }
 }
 
