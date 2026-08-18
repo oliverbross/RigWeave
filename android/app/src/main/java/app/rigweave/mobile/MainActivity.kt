@@ -131,6 +131,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val transport = remember { UsbRadioTransport(context) }
     val database = remember { QsoDatabase(context) }
     val portable = remember { PortableController(context, database) }
+    val activation = remember { PotaActivationController(context, database) }
     val features = remember { FeatureController(context) }
     val neuralDx = remember { NeuralDxController(context, database) }
     val wavelog = remember { WavelogController(context, database) }
@@ -298,22 +299,22 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
-            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, portable, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport,
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport,
                 flex,
                 voiceStore, voiceAudio, voiceTx, eqStudio, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.PORTABLE })
+                { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK })
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
             Destination.entries.filterNot { it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE }.forEach { item -> NavigationBarItem(destination == item, { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
-            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, portable, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport,
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport,
                 flex,
                 voiceStore, voiceAudio, voiceTx, eqStudio, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.PORTABLE })
+                { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK })
         } }
     }
 }
@@ -332,17 +333,22 @@ private fun navIcon(item: Destination) = when (item) {
 
 @Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase,
     features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
-    portable: PortableController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
+    portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
     transport: UsbRadioTransport, flex: FlexRadioController, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
     eqStudio: EqStudioController, compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
-    tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openPortable: () -> Unit) {
+    tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openPortable: () -> Unit,
+    openActivation: () -> Unit, openLogbook: () -> Unit) {
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     when (destination) {
         Destination.HOME -> HomeScreen(radio, app, send, openPortable)
-        Destination.RADIO -> if (app.radioFamily == RadioFamily.FLEXRADIO) FlexRadioScreen(flex) {}
-        else if (!compact || !app.panadapterEnabled) RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features,
-            voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
+        Destination.RADIO -> Column(Modifier.fillMaxSize()) {
+            PotaActivationStrip(activation, radio, openActivation)
+            Box(Modifier.weight(1f)) {
+                if (app.radioFamily == RadioFamily.FLEXRADIO) FlexRadioScreen(flex, openLogbook)
+                else if (!compact || !app.panadapterEnabled) RadioScreen(radio, detail, app, database, wavelog, callbook, cty,
+                    features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode,
+                    portableDraft, consumePortableDraft, portable::notifyQsoChanged)
                 else Column(Modifier.fillMaxSize()) {
                     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                         SegmentedButton(!compactPanadapter, { compactPanadapter = false }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Controls") }
@@ -352,15 +358,21 @@ private fun navIcon(item: Destination) = when (item) {
                     else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx,
                         openEq, connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
                 }
+            }
+        }
         Destination.PANADAPTER -> if (app.panadapterEnabled && app.radioFamily == RadioFamily.ELECRAFT_KX)
             PanadapterScreen(panadapter, radio, features.liveSpots, compact)
         else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx,
             openEq, connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
         Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
-        Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog, callbook, app)
+        Destination.LOGBOOK -> Column(Modifier.fillMaxSize()) {
+            PotaActivationStrip(activation, radio, openActivation)
+            Box(Modifier.weight(1f)) { LogbookScreen(radio, database, wavelog, callbook, app) }
+        }
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app, send)
-        Destination.PORTABLE -> PortableChaseScreen(portable, radio, app.stationGrid, foreground, compact, tunePortable, tuneLogPortable)
+        Destination.PORTABLE -> PortableWorkspaceScreen(portable, activation, radio, app.stationGrid, foreground, compact,
+            app, database, wavelog, callbook, cty, tunePortable, tuneLogPortable, openLogbook)
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, app,
             transport, flex, voiceStore, voiceAudio, voiceTx, openEq, connect, direct)
     }

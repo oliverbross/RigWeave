@@ -9,6 +9,8 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.abs
 
+internal const val SOTA_LIVE_APPROVED = false
+
 internal const val SOTA_SUMMITS_URL = "https://www.sotadata.org.uk/summitslist.csv"
 internal const val WWFF_SPOTS_URL = "https://spots.wwff.co/static/spots.json"
 internal const val WWFF_AGENDAS_URL = "https://spots.wwff.co/static/agendas_active.json"

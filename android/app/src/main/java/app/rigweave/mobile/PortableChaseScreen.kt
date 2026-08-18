@@ -66,6 +66,8 @@ internal fun PortableChaseScreen(
     compact: Boolean,
     onTune: (PortableSpot) -> Unit,
     onTuneAndLog: (PortableSpot) -> Unit,
+    potaActivationActive: Boolean = false,
+    onP2p: (PortableSpot) -> Unit = {},
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("rigweave-portable-filters", Context.MODE_PRIVATE) }
@@ -121,10 +123,10 @@ internal fun PortableChaseScreen(
                 if (!compact && maxWidth >= 900.dp) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PortableFilters(search, { search = it }, band, { band = it }, mode, { mode = it }, newOnly, { newOnly = it }, sort, { sort = it }, Modifier.width(220.dp).fillMaxHeight())
                     PortableList(filtered, selectedId, { selectedId = it }, Modifier.weight(1.2f).fillMaxHeight())
-                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) { PortableMap(filtered, selectedId, { selectedId = it }, Modifier.weight(1f)); PortableDetail(selected, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true }, Modifier.weight(.9f)) }
+                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) { PortableMap(filtered, selectedId, { selectedId = it }, Modifier.weight(1f)); PortableDetail(selected, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true }, potaActivationActive, onP2p, Modifier.weight(.9f)) }
                 } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     PortableCompactFilters(search, { search = it }, band, { band = it }, mode, { mode = it }, newOnly, { newOnly = it }, sort, { sort = it })
-                    PortableList(filtered, selectedId, { selectedId = it }, Modifier.weight(1f)); selected?.let { PortableDetail(it, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true }, Modifier.heightIn(min = 190.dp, max = 300.dp)) }
+                    PortableList(filtered, selectedId, { selectedId = it }, Modifier.weight(1f)); selected?.let { PortableDetail(it, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true }, potaActivationActive, onP2p, Modifier.heightIn(min = 190.dp, max = 320.dp)) }
                 }
             }
         }
@@ -181,13 +183,17 @@ internal fun PortableChaseScreen(
     } }
 }
 
-@Composable private fun PortableDetail(row: PortableOpportunity?, radio: RadioState, tune: (PortableOpportunity) -> Unit, tuneLog: (PortableOpportunity) -> Unit, modifier: Modifier) {
+@Composable private fun PortableDetail(row: PortableOpportunity?, radio: RadioState, tune: (PortableOpportunity) -> Unit, tuneLog: (PortableOpportunity) -> Unit,
+    potaActivationActive: Boolean, onP2p: (PortableSpot) -> Unit, modifier: Modifier) {
     Column(modifier.fillMaxWidth().background(PortablePanel, RoundedCornerShape(10.dp)).border(1.dp, PortableRaised, RoundedCornerShape(10.dp)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         if (row == null) { Text("SELECT AN ACTIVITY", color = PortableAmber, fontWeight = FontWeight.Black); Text("Selection never tunes. Review details, then choose Tune or Tune & Log.", color = PortableMuted); return@Column }
         val spot = row.spot; Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(spot.callsign, color = PortableAmber, fontWeight = FontWeight.Black); Text("SCORE ${row.score}", color = PortableMuted, fontFamily = FontFamily.Monospace) }
         spot.references.forEach { ref -> Text("${ref.program.label} ${ref.code} · ${ref.name.ifBlank { "name unavailable" }}", color = PortableInk, fontWeight = FontWeight.SemiBold); val detail = listOf(ref.association, ref.region, ref.altitudeM?.let { "$it m" }, ref.points?.let { "$it points" }, ref.activeAgenda.takeIf(String::isNotBlank)?.let { "AGENDA · $it" }).filterNotNull().filter(String::isNotBlank).joinToString(" · "); if (detail.isNotBlank()) Text(detail, color = PortableMuted, fontSize = 12.sp) }
         Text("${portableMHz(spot.frequencyHz)} MHz · ${spot.mode.ifBlank { "mode unspecified" }} · ${spot.band} · via ${spot.source}", color = PortableInk, fontFamily = FontFamily.Monospace); if (spot.comments.isNotBlank()) Text(spot.comments, color = PortableMuted, maxLines = 3, overflow = TextOverflow.Ellipsis)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedButton({ tune(row) }, enabled = radio.connected, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Tune") }; Button({ tuneLog(row) }, enabled = radio.connected, modifier = Modifier.weight(1.4f).heightIn(min = 48.dp)) { Text("Tune & Log", fontWeight = FontWeight.Black) } }
+        if (potaActivationActive && PortableProgram.POTA in spot.programs) Button({ onP2p(spot) }, Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+            Text("P2P LOG · OPEN EDITABLE DRAFT", fontWeight = FontWeight.Black)
+        }
         if (!radio.connected) Text("CAT offline · selection retained · zero commands sent", color = PortableDanger, fontSize = 12.sp)
     }
 }
