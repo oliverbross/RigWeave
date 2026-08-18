@@ -9,6 +9,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 enum class FieldProfile { DAY, NIGHT, FIELD }
+enum class RadioFamily { ELECRAFT_KX, FLEXRADIO }
 
 data class RadioPreset(
     val slot: Int,
@@ -22,6 +23,8 @@ data class RadioPreset(
 class AppController(private val context: Context) {
     private val prefs = context.getSharedPreferences("rigweave-app", Context.MODE_PRIVATE)
     var fieldProfile by mutableStateOf(runCatching { FieldProfile.valueOf(prefs.getString("profile", "DAY")!!) }.getOrDefault(FieldProfile.DAY)); private set
+    var radioFamily by mutableStateOf(runCatching { RadioFamily.valueOf(prefs.getString("radio_family", RadioFamily.ELECRAFT_KX.name)!!) }.getOrDefault(RadioFamily.ELECRAFT_KX)); private set
+    var preferredFlexStation by mutableStateOf(prefs.getString("flex_station", "").orEmpty()); private set
     var transmitArmed by mutableStateOf(false); private set
     var cwMacrosArmed by mutableStateOf(false); private set
     var voiceMacrosArmed by mutableStateOf(false); private set
@@ -56,6 +59,14 @@ class AppController(private val context: Context) {
 
     fun setProfile(value: FieldProfile) {
         fieldProfile = value; prefs.edit().putString("profile", value.name).apply()
+    }
+
+    fun selectRadioFamily(value: RadioFamily) {
+        disarmAll(); radioFamily = value; prefs.edit().putString("radio_family", value.name).apply()
+    }
+
+    fun savePreferredFlexStation(value: String) {
+        preferredFlexStation = value.take(64); prefs.edit().putString("flex_station", preferredFlexStation).apply()
     }
 
     fun updateTransmitArmed(value: Boolean) { transmitArmed = value }
