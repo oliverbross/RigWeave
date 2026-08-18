@@ -216,7 +216,7 @@ data class SmartLinkRadio(
         ?: -1
 }
 
-data class WanEndpoint(val host: String, val port: Int, val handle: String)
+data class WanEndpoint(val host: String, val port: Int, val handle: String, val serial: String)
 
 private fun brokerFields(value: String): Map<String, String> = value.split(Regex("\\s+"))
     .mapNotNull { token -> token.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1].trim('"') } }
@@ -247,7 +247,7 @@ fun parseWanEndpoint(line: String, radio: SmartLinkRadio): WanEndpoint? {
     val fields = brokerFields(line.removePrefix("radio connect_ready "))
     if (fields["serial"] != radio.serial || radio.publicIp.isBlank() || radio.tlsPort < 1) return null
     val handle = fields["handle"]?.takeIf(String::isNotBlank) ?: return null
-    return wanValidationFirst(handle)?.let { WanEndpoint(radio.publicIp, radio.tlsPort, handle) }
+    return wanValidationFirst(handle)?.let { WanEndpoint(radio.publicIp, radio.tlsPort, handle, radio.serial) }
 }
 
 class SmartLinkBrokerClient(private val config: SmartLinkConfig) : AutoCloseable {
@@ -327,16 +327,55 @@ private class ScopedRadioTrustManager : X509TrustManager {
     override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
         val leaf = chain?.firstOrNull() ?: throw CertificateException("Direct radio certificate missing")
         leaf.checkValidity()
+        if (leaf.subjectX500Principal != leaf.issuerX500Principal) {
+            throw CertificateException("Direct radio certificate is not self-signed")
+        }
+        runCatching { leaf.verify(leaf.publicKey) }.getOrElse {
+            throw CertificateException("Direct radio self-signature is invalid", it)
+        }
     }
 }
 
-fun connectValidatedWan(endpoint: WanEndpoint): Socket {
+class SmartLinkCertificateChanged(
+    val endpoint: WanEndpoint,
+    val expectedFingerprint: String,
+    val observedFingerprint: String,
+) : CertificateException("SmartLink radio certificate changed")
+
+class SmartLinkTrustStore(context: Context) {
+    private val values = context.getSharedPreferences("flex-smartlink-certificates", Context.MODE_PRIVATE)
+    private fun key(endpoint: WanEndpoint): String = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(endpoint.serial.toByteArray(StandardCharsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
+    fun load(endpoint: WanEndpoint): String? = values.getString(key(endpoint), null)
+    fun save(endpoint: WanEndpoint, fingerprint: String) {
+        values.edit().putString(key(endpoint), fingerprint).apply()
+    }
+}
+
+private fun certificateFingerprint(certificate: X509Certificate): String =
+    java.security.MessageDigest.getInstance("SHA-256").digest(certificate.encoded)
+        .joinToString(":") { "%02X".format(it) }
+
+fun connectValidatedWan(endpoint: WanEndpoint, trustStore: SmartLinkTrustStore): Socket {
     val factory = SSLContext.getInstance("TLS").apply {
         init(null, arrayOf(ScopedRadioTrustManager()), SecureRandom())
     }.socketFactory
     val socket = factory.createSocket(endpoint.host, endpoint.port) as SSLSocket
     socket.soTimeout = 750
     socket.startHandshake()
+    val leaf = socket.session.peerCertificates.firstOrNull() as? X509Certificate ?: run {
+        socket.close()
+        throw CertificateException("Direct radio certificate missing after TLS handshake")
+    }
+    val observed = certificateFingerprint(leaf)
+    val expected = trustStore.load(endpoint)
+    if (expected == null) {
+        trustStore.save(endpoint, observed)
+    } else if (expected != observed) {
+        socket.close()
+        throw SmartLinkCertificateChanged(endpoint, expected, observed)
+    }
     val validation = wanValidationFirst(endpoint.handle) ?: run {
         socket.close()
         error("Invalid WAN validation handle")

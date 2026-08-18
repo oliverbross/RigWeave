@@ -23,6 +23,7 @@ import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 enum class FlexConnectionState(val label: String) {
@@ -30,15 +31,21 @@ enum class FlexConnectionState(val label: String) {
     DISCOVERING_WAN("DISCOVERING SMARTLINK RADIOS"), CONNECTING("CONNECTING"), VALIDATING("VALIDATING WAN SESSION"),
     WAITING_HANDLE("WAITING FOR FLEX HANDLE"), CONNECTED("CONNECTED"), NO_STATION("NO GUI STATION"),
     NO_SLICE("NO EXISTING FLEX SLICE"), LOST("CONNECTION LOST"), RECONNECTING("RECONNECTING"),
+    CERTIFICATE_CHANGED("SMARTLINK RADIO CERTIFICATE CHANGED"),
     OWNER_CONFIG_REQUIRED("OWNER CONFIGURATION VALUES REQUIRED")
 }
 
 class FlexRadioController(context: Context, private val preferredStation: () -> String, private val saveStation: (String) -> Unit) : RadioBackend {
-    override val capabilities = setOf(RadioCapability.RECEIVE_STATE, RadioCapability.RECEIVE_TUNE, RadioCapability.FILTER)
+    override val capabilities = setOf(
+        RadioCapability.RECEIVE_STATE, RadioCapability.RECEIVE_TUNE, RadioCapability.FILTER,
+        RadioCapability.PANADAPTER, RadioCapability.MACROS, RadioCapability.TRANSMIT,
+    )
     private val native = NativeCore.flexCreate()
     private val controllerJob = SupervisorJob()
     private val scope = CoroutineScope(controllerJob + Dispatchers.IO)
     private val sequence = AtomicInteger(1)
+    private val pendingReplies = ConcurrentHashMap<Int, (Long, String) -> Unit>()
+    private val statusFramer = FlexStatusFramer()
     private var socket: Socket? = null
     private var reader: Job? = null
     private var keepalive: Job? = null
@@ -48,14 +55,45 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
     private var lastTarget: FlexDiscovery? = null
     private val smartLinkConfig = SmartLinkConfig.issued()
     private val refreshStore = SmartLinkRefreshStore(context)
+    private val trustStore = SmartLinkTrustStore(context)
+    var pendingCertificateChange by mutableStateOf<SmartLinkCertificateChanged?>(null); private set
     private var authSession: SmartLinkAuthSession? = null
     private var accessToken: String? = null
     private val refreshMutex = Mutex()
     private var broker: SmartLinkBrokerClient? = null
+    private val owned = FlexOwnedObjects()
+    private val meterBank = FlexMeterBank()
+    private val networkAudio = FlexAudioEngine()
+    private var audioRoutes: AudioMonitorController? = null
+    private var voiceMacroStore: VoiceMacroStore? = null
+    private var rxAudioStreamId: Long = 0
+    private val streamSession = FlexStreamSession(::sendBody, ::handleVitaEvent) { message ->
+        detail = message
+        if (message.contains("timed out", true)) connectionState = FlexConnectionState.LOST
+    }
+    private val extendedTracker = FlexExtendedStateTracker(
+        { id, kind -> streamSession.register(id, kind) },
+        meterBank,
+    )
+    private val micTx = FlexMicTxEngine(context, scope, streamSession::send) { message ->
+        detail = message
+        scope.launch { stopTransmit("microphone or route failure") }
+    }
+    private var remoteTxStreamId = 0L
+    val tx = FlexTxController(scope, ::sendBody, ::releaseFlexTxAudio)
+    private var currentUdpMode = FlexUdpMode.LAN
+    private var currentRadioHost = ""
     val radios = mutableStateListOf<FlexDiscovery>()
     val smartLinkRadios = mutableStateListOf<SmartLinkRadio>()
     var snapshot by mutableStateOf(FlexSnapshot()); private set
+    var extended by mutableStateOf(FlexExtendedSnapshot()); private set
+    var spectrum by mutableStateOf<FlexSpectrumFrame?>(null); private set
+    val waterfallRows = mutableStateListOf<FlexWaterfallRow>()
+    var meters by mutableStateOf<Map<String, Float>>(emptyMap()); private set
+    var displayMode by mutableStateOf(FlexDisplayMode.ATTACH); private set
+    var rxAudioEnabled by mutableStateOf(false); private set
     var selectedSliceIndex by mutableStateOf<Int?>(null); private set
+    var selectedTxSliceIndex by mutableStateOf<Int?>(null); private set
     var connectionState by mutableStateOf(FlexConnectionState.IDLE); private set
     var detail by mutableStateOf("FlexRadio is not connected"); private set
     val smartLinkConfigured get() = smartLinkConfig.complete
@@ -89,7 +127,14 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
         discoverSmartLinkRadios()
     }
 
-    fun logout() { accessToken = null; authSession = null; broker?.close(); broker = null; smartLinkRadios.clear(); refreshStore.clear(); connectionState = FlexConnectionState.SIGNED_OUT; detail = "SmartLink signed out" }
+    fun logout() {
+        scope.launch {
+            disconnectSession()
+            accessToken = null; authSession = null; broker?.close(); broker = null
+            smartLinkRadios.clear(); refreshStore.clear()
+            connectionState = FlexConnectionState.SIGNED_OUT; detail = "SmartLink signed out"
+        }
+    }
 
     private fun discoverSmartLinkRadios() {
         val token = accessToken ?: return
@@ -106,12 +151,45 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
 
     suspend fun connectSmartLink(radio: SmartLinkRadio): Boolean {
         disconnectSession(); connectionState = FlexConnectionState.CONNECTING; detail = "Requesting ${radio.nickname.ifBlank { radio.model }} through SmartLink"
-        return runCatching {
+        return try {
             val endpoint = withContext(Dispatchers.IO) { broker?.request(radio) ?: error("SmartLink broker did not provide a direct endpoint") }
             connectionState = FlexConnectionState.VALIDATING
-            val connected = withContext(Dispatchers.IO) { connectValidatedWan(endpoint) }
-            establishCommandChannel(connected, operatorInitiated = true)
-        }.getOrElse { detail = it.message ?: "SmartLink connection failed"; connectionState = FlexConnectionState.LOST; false }
+            val connected = withContext(Dispatchers.IO) { connectValidatedWan(endpoint, trustStore) }
+            establishCommandChannel(connected, operatorInitiated = true, FlexUdpMode.SMARTLINK, endpoint.host)
+        } catch (error: Exception) {
+            disconnectSession()
+            if (error is SmartLinkCertificateChanged) {
+                pendingCertificateChange = error
+                detail = "The selected radio presented a different TLS certificate. Review before connecting."
+                connectionState = FlexConnectionState.CERTIFICATE_CHANGED
+            } else {
+                detail = error.message ?: "SmartLink connection failed"
+                connectionState = FlexConnectionState.LOST
+            }
+            false
+        }
+    }
+
+    fun resolveCertificateChange(accept: Boolean) {
+        val change = pendingCertificateChange ?: return
+        pendingCertificateChange = null
+        if (!accept) {
+            connectionState = FlexConnectionState.LOST
+            detail = "SmartLink radio certificate change rejected"
+            return
+        }
+        trustStore.save(change.endpoint, change.observedFingerprint)
+        scope.launch {
+            connectionState = FlexConnectionState.CONNECTING
+            try {
+                val connected = withContext(Dispatchers.IO) { connectValidatedWan(change.endpoint, trustStore) }
+                establishCommandChannel(connected, operatorInitiated = true, FlexUdpMode.SMARTLINK, change.endpoint.host)
+            } catch (error: Exception) {
+                disconnectSession()
+                detail = error.message ?: "SmartLink reconnect after certificate approval failed"
+                connectionState = FlexConnectionState.LOST
+            }
+        }
     }
 
     fun discoverLan(seconds: Int = 4) {
@@ -143,20 +221,32 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
         lastTarget = radio
         disconnectSession()
         connectionState = FlexConnectionState.CONNECTING; detail = "Connecting to ${radio.nickname.ifBlank { radio.model }}"
-        return runCatching {
+        return try {
             val connected = withContext(Dispatchers.IO) { Socket().apply { connect(InetSocketAddress(radio.ip, radio.port), 5_000); soTimeout = 750 } }
-            establishCommandChannel(connected, operatorInitiated)
-        }.getOrElse { detail = it.message ?: "Flex connection failed"; connectionState = FlexConnectionState.LOST; false }
+            establishCommandChannel(connected, operatorInitiated, FlexUdpMode.LAN, radio.ip)
+        } catch (error: Exception) {
+            disconnectSession()
+            detail = error.message ?: "Flex connection failed"; connectionState = FlexConnectionState.LOST; false
+        }
     }
 
-    private suspend fun establishCommandChannel(connected: Socket, operatorInitiated: Boolean): Boolean {
+    private suspend fun establishCommandChannel(
+        connected: Socket,
+        operatorInitiated: Boolean,
+        udpMode: FlexUdpMode,
+        radioHost: String,
+    ): Boolean {
         socket = connected; connectionState = FlexConnectionState.WAITING_HANDLE
+        currentUdpMode = udpMode
+        currentRadioHost = radioHost
         reader = scope.launch { readLoop(connected) }
         val handleDeadline = android.os.SystemClock.elapsedRealtime() + 5_000
         while (snapshot.handle == 0L && android.os.SystemClock.elapsedRealtime() < handleDeadline) delay(100)
         if (snapshot.handle == 0L) error("Flex connected without a nonzero client handle")
         sendBody(NativeCore.flexIdentity("RigWeave"))
-        NativeCore.flexSubscriptions().lineSequence().filter(String::isNotBlank).forEach(::sendBody)
+        FlexCommands.subscriptions().forEach(::sendBody)
+        FlexCommands.requestProfiles().forEach(::sendBody)
+        if (!streamSession.start(udpMode, snapshot.handle, radioHost)) error("Flex UDP stream registration could not start")
         keepalive = scope.launch { while (isActive) { delay(5_000); sendBody(NativeCore.flexKeepalive()) } }
         updateSelection(); connectionState = effectiveState(); if (operatorInitiated) operatorEstablished = true
         return true
@@ -170,13 +260,21 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
             while (scope.isActive && !connected.isClosed) {
                 val count = try { connected.getInputStream().read(buffer) } catch (_: SocketTimeoutException) { continue }
                 if (count < 0) break
-                NativeCore.flexFeed(native, buffer.copyOf(count)); snapshot = parseFlexSnapshot(NativeCore.flexState(native)); updateSelection()
+                val chunk = buffer.copyOf(count)
+                statusFramer.feed(chunk).mapNotNull(::parseFlexProtocolLine).forEach(::handleProtocolLine)
+                NativeCore.flexFeed(native, chunk)
+                snapshot = parseFlexSnapshot(NativeCore.flexState(native))
+                extended = extendedTracker.snapshot()
+                updateTxEligibility()
+                updateSelection()
                 connectionState = effectiveState()
             }
         } catch (_: CancellationException) { throw CancellationException() }
         catch (error: Exception) { detail = error.message ?: "Flex connection lost" }
-        finally { if (socket === connected && !connected.isClosed) {
-            runCatching { connected.close() }; socket = null; connectionState = FlexConnectionState.LOST; detail = "Flex command channel closed"
+        finally { if (socket === connected) {
+            tx.connectionLost()
+            if (!connected.isClosed) runCatching { connected.close() }
+            socket = null; connectionState = FlexConnectionState.LOST; detail = "Flex command channel closed"
             scheduleReconnect()
         } }
     }
@@ -201,6 +299,10 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
     }
 
     private fun updateSelection() {
+        if (selectedTxSliceIndex != null && snapshot.slices.none { it.index == selectedTxSliceIndex && it.inUse }) {
+            selectedTxSliceIndex = null
+            tx.clearGate()
+        }
         if (snapshot.selected(selectedSliceIndex) != null) return
         val station = preferredStation()
         val stationHandles = snapshot.clients.filter { it.connected && it.station == station }.map { it.handle }.toSet()
@@ -208,14 +310,74 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
         selectedSliceIndex = when { compatible.size == 1 -> compatible.single().index; else -> null }
     }
 
+    private fun handleProtocolLine(line: FlexProtocolLine) {
+        when (line) {
+            is FlexProtocolLine.Reply -> pendingReplies.remove(line.sequence)?.invoke(line.code, line.body)
+            is FlexProtocolLine.Status -> extendedTracker.apply(line.body)
+            else -> Unit
+        }
+    }
+
+    private fun handleVitaEvent(event: FlexVitaEvent) {
+        when (event) {
+            is FlexVitaEvent.Spectrum -> spectrum = event.value
+            is FlexVitaEvent.Waterfall -> {
+                waterfallRows += event.value
+                while (waterfallRows.size > 180) waterfallRows.removeAt(0)
+            }
+            is FlexVitaEvent.Meters -> {
+                meterBank.apply(event.values)
+                meters = meterBank.snapshot()
+            }
+            is FlexVitaEvent.FloatAudio, is FlexVitaEvent.OpusAudio -> if (rxAudioEnabled) networkAudio.accept(event)
+        }
+    }
+
+    private fun updateTxEligibility() {
+        val selected = snapshot.slices.firstOrNull { it.index == selectedTxSliceIndex && it.inUse && it.tx }
+        tx.updateEligibility(
+            FlexTxEligibility(
+                connected = snapshot.connected && snapshot.handle != 0L,
+                stationCallsign = snapshot.callsign,
+                txSliceIndex = selected?.index,
+                txFrequencyHz = selected?.frequencyHz ?: 0,
+                txMode = selected?.mode.orEmpty(),
+                powerWatts = extended.transmit.rfPower,
+                txAntenna = extended.transmit.txAntenna,
+                interlockReady = extended.transmit.interlockReady,
+            )
+        )
+        tx.observedTransmit(extended.transmit.mox || extended.transmit.tune)
+    }
+
     fun selectStation(station: String) { saveStation(station); selectedSliceIndex = null; updateSelection(); connectionState = effectiveState() }
     fun selectSlice(index: Int) { selectedSliceIndex = snapshot.slices.firstOrNull { it.index == index && it.inUse && !it.tx }?.index; connectionState = effectiveState() }
+    fun requestTxSlice(index: Int, confirmed: Boolean): Boolean {
+        if (!confirmed || tx.state !in setOf(FlexTxState.DISABLED, FlexTxState.READY)) return false
+        val candidate = snapshot.slices.firstOrNull { it.index == index && it.inUse } ?: return false
+        if (candidate.clientHandle != snapshot.handle && !owned.mayRemoveSlice(index)) return false
+        val body = FlexCommands.txSlice(index) ?: return false
+        if (!sendBody(body)) return false
+        selectedTxSliceIndex = index
+        tx.clearGate()
+        return true
+    }
 
-    @Synchronized private fun sendBody(body: String): Boolean {
+    @Synchronized private fun sendBody(body: String): Boolean = sendBody(body, null)
+
+    @Synchronized private fun sendBody(body: String, reply: ((Long, String) -> Unit)?): Boolean {
         if (body.isBlank()) return false
         val active = socket ?: return false
         val seq = sequence.getAndUpdate { if (it == Int.MAX_VALUE) 1 else it + 1 }
-        return runCatching { active.getOutputStream().write("C$seq|$body\n".toByteArray(Charsets.US_ASCII)); active.getOutputStream().flush(); true }.getOrDefault(false)
+        reply?.let { pendingReplies[seq] = it }
+        return runCatching {
+            active.getOutputStream().write("C$seq|$body\n".toByteArray(Charsets.US_ASCII))
+            active.getOutputStream().flush()
+            true
+        }.getOrElse {
+            pendingReplies.remove(seq)
+            false
+        }
     }
 
     override suspend fun tune(request: ReceiveTuneRequest): Boolean {
@@ -230,9 +392,219 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
         sendBody(NativeCore.flexFilter(it.letter, lowHz, highHz))
     } ?: false
 
-    private fun disconnectSession() {
+    fun attachAudioRoutes(routes: AudioMonitorController) {
+        audioRoutes = routes
+    }
+
+    fun attachVoiceMacroStore(store: VoiceMacroStore) {
+        voiceMacroStore = store
+    }
+
+    fun chooseDisplayMode(mode: FlexDisplayMode) {
+        if (mode == displayMode) return
+        if (tx.state !in setOf(FlexTxState.DISABLED, FlexTxState.READY)) return
+        displayMode = mode
+        if (mode == FlexDisplayMode.ATTACH) removeOwnedDisplay()
+    }
+
+    fun createRigWeaveDisplay(centerHz: Long): Boolean {
+        if (displayMode != FlexDisplayMode.RIGWEAVE_CLIENT || snapshot.handle == 0L) return false
+        if (extended.pans.count { it.clientHandle == snapshot.handle } >= extended.capabilities.maxPanadapters) return false
+        return sendBody(FlexCommands.createPanafall()) { code, body ->
+            if (code != 0L) {
+                detail = "Flex panafall create failed: 0x${code.toString(16)}"
+                return@sendBody
+            }
+            val ids = extractFlexIds(body)
+            val pan = flexFields(body)["pan"]?.let(::parseFlexNumber) ?: ids.firstOrNull() ?: return@sendBody
+            val waterfall = flexFields(body)["waterfall"]?.let(::parseFlexNumber) ?: ids.getOrNull(1)
+            owned.ownPan(pan)
+            waterfall?.let(owned::ownWaterfall)
+            FlexCommands.configurePan(pan, 1024, 700, 20, -130, -30).forEach(::sendBody)
+            FlexCommands.createSlice(pan, centerHz)?.let { create ->
+                sendBody(create) { sliceCode, sliceBody ->
+                    if (sliceCode == 0L) extractFlexIds(sliceBody).firstOrNull()?.toInt()?.let(owned::ownSlice)
+                }
+            }
+        }
+    }
+
+    fun removeOwnedDisplay() {
+        extended.streams.map { it.id }.filter(owned::mayRemoveStream).forEach { FlexCommands.removeStream(it, owned)?.let(::sendBody) }
+        extended.waterfalls.map { it.id }.filter(owned::mayRemoveWaterfall).forEach { FlexCommands.removeWaterfall(it, owned)?.let(::sendBody) }
+        snapshot.slices.map { it.index }.filter(owned::mayRemoveSlice).forEach { FlexCommands.removeSlice(it, owned)?.let(::sendBody) }
+        extended.pans.map { it.id }.filter(owned::mayRemovePan).forEach { FlexCommands.removePan(it, owned)?.let(::sendBody) }
+    }
+
+    fun enableRxAudio(): Boolean {
+        if (rxAudioEnabled || snapshot.handle == 0L) return rxAudioEnabled
+        val routes = audioRoutes
+        if (routes != null && !routes.acquireAudio(AudioOwners.FLEX_RX_AUDIO, pauseMonitor = true)) {
+            detail = "Another audio operation owns the playback route"
+            return false
+        }
+        networkAudio.start()
+        val command = FlexCommands.createRxAudio("opus") ?: return false
+        val sent = sendBody(command) { code, body ->
+            if (code != 0L) {
+                disableRxAudio()
+                detail = "Flex RX audio create failed: 0x${code.toString(16)}"
+                return@sendBody
+            }
+            extractFlexIds(body).firstOrNull()?.let { id ->
+                rxAudioStreamId = id
+                owned.ownStream(id)
+                streamSession.register(id, FlexStreamKind.OPUS_AUDIO)
+            }
+        }
+        if (!sent) {
+            networkAudio.close()
+            routes?.releaseAudio(AudioOwners.FLEX_RX_AUDIO)
+            return false
+        }
+        rxAudioEnabled = true
+        return true
+    }
+
+    fun disableRxAudio() {
+        if (rxAudioStreamId != 0L) FlexCommands.removeStream(rxAudioStreamId, owned)?.let(::sendBody)
+        rxAudioStreamId = 0
+        rxAudioEnabled = false
+        networkAudio.close()
+        audioRoutes?.releaseAudio(AudioOwners.FLEX_RX_AUDIO)
+    }
+
+    fun setSliceAudio(gain: Int, pan: Int, muted: Boolean): Boolean {
+        val slice = snapshot.selected(selectedSliceIndex) ?: return false
+        return FlexCommands.audio(slice.index, gain, pan, muted).all(::sendBody)
+    }
+
+    fun setAgc(mode: String, threshold: Int): Boolean {
+        val slice = snapshot.selected(selectedSliceIndex) ?: return false
+        return FlexCommands.agc(slice.index, mode, threshold).all(::sendBody)
+    }
+
+    fun setRit(enabled: Boolean, offsetHz: Int): Boolean = snapshot.selected(selectedSliceIndex)
+        ?.let { FlexCommands.rit(it.index, enabled, offsetHz) }?.let(::sendBody) ?: false
+
+    fun setXit(enabled: Boolean, offsetHz: Int): Boolean = snapshot.selected(selectedSliceIndex)
+        ?.let { FlexCommands.xit(it.index, enabled, offsetHz) }?.let(::sendBody) ?: false
+
+    fun setRxAntenna(antenna: String): Boolean = snapshot.selected(selectedSliceIndex)
+        ?.let { FlexCommands.rxAntenna(it.index, antenna) }?.let(::sendBody) ?: false
+
+    fun setSliceLock(locked: Boolean): Boolean = snapshot.selected(selectedSliceIndex)
+        ?.let { FlexCommands.lock(it.index, locked) }?.let(::sendBody) ?: false
+
+    fun loadProfile(kind: String, name: String): Boolean = FlexCommands.loadProfile(kind, name)?.let(::sendBody) ?: false
+
+    fun enableTransmitForSession(acknowledgement: String): Boolean = tx.enableForSession(acknowledgement)
+    fun armTransmit(): Boolean = tx.arm()
+    suspend fun startMox(): Boolean = tx.startMox()
+    fun startMicrophoneTx(): Boolean {
+        if (tx.state != FlexTxState.ARMED || !tx.eligibility.ready) return false
+        disableRxAudio()
+        val routes = audioRoutes
+        if (routes != null && !routes.acquireAudio(AudioOwners.FLEX_MIC_TX, pauseMonitor = true)) {
+            detail = "Another audio operation owns the microphone route"
+            return false
+        }
+        return sendBody(FlexCommands.createTxAudio()) { code, body ->
+            val id = extractFlexIds(body).firstOrNull()
+            if (code != 0L || id == null) {
+                routes?.releaseAudio(AudioOwners.FLEX_MIC_TX)
+                detail = "Flex remote microphone stream creation failed"
+                return@sendBody
+            }
+            remoteTxStreamId = id
+            owned.ownStream(id)
+            scope.launch {
+                if (!tx.startMox() || !micTx.start(id)) {
+                    detail = micTx.error ?: "Flex microphone TX could not start"
+                    tx.stop("microphone start failure")
+                }
+            }
+        }
+    }
+    fun startVoiceMacroTx(slot: Int): Boolean {
+        if (tx.state != FlexTxState.ARMED || !tx.eligibility.ready) return false
+        val pcm = runCatching { voiceMacroStore?.read(slot) }.getOrNull() ?: return false
+        disableRxAudio()
+        val routes = audioRoutes
+        if (routes != null && !routes.acquireAudio(AudioOwners.FLEX_VOICE_TX, pauseMonitor = true)) {
+            detail = "Another audio operation owns the voice-macro route"
+            return false
+        }
+        return sendBody(FlexCommands.createTxAudio()) { code, body ->
+            val id = extractFlexIds(body).firstOrNull()
+            if (code != 0L || id == null) {
+                routes?.releaseAudio(AudioOwners.FLEX_VOICE_TX)
+                detail = "Flex remote voice stream creation failed"
+                return@sendBody
+            }
+            remoteTxStreamId = id
+            owned.ownStream(id)
+            scope.launch {
+                if (!tx.startMox() || !micTx.startVoiceMacro(id, pcm)) {
+                    detail = micTx.error ?: "Flex voice macro could not start"
+                    tx.stop("voice macro start failure")
+                    return@launch
+                }
+                delay(pcm.durationMillis + 500L)
+                stopTransmit("voice macro complete")
+            }
+        }
+    }
+    suspend fun startTune(): Boolean {
+        disableRxAudio()
+        val routes = audioRoutes
+        if (routes != null && !routes.acquireAudio(AudioOwners.FLEX_TUNE, pauseMonitor = true)) return false
+        return tx.startTune().also { if (!it) routes?.releaseAudio(AudioOwners.FLEX_TUNE) }
+    }
+    suspend fun sendCwx(text: String): Boolean {
+        disableRxAudio()
+        val routes = audioRoutes
+        if (routes != null && !routes.acquireAudio(AudioOwners.FLEX_CW_TX, pauseMonitor = true)) return false
+        return tx.sendCwx(text).also { if (!it) routes?.releaseAudio(AudioOwners.FLEX_CW_TX) }
+    }
+    suspend fun stopTransmit(reason: String = "operator") {
+        releaseFlexTxAudio()
+        tx.stop(reason)
+    }
+    suspend fun onForegroundChanged(foreground: Boolean) {
+        if (foreground) return
+        if (tx.state != FlexTxState.DISABLED) tx.stop("app background")
+        tx.clearGate()
+    }
+    fun streamPacketCount(): Long = streamSession.engine.packetCount
+    fun streamSequenceGaps(): Long = streamSession.engine.sequenceGaps
+    fun availableVoiceMacros(): List<VoiceMacroSlot> = voiceMacroStore?.slots.orEmpty()
+
+    private fun releaseFlexTxAudio() {
+        micTx.close()
+        if (remoteTxStreamId != 0L) FlexCommands.removeStream(remoteTxStreamId, owned)?.let(::sendBody)
+        remoteTxStreamId = 0
+        audioRoutes?.releaseAudio(AudioOwners.FLEX_MIC_TX)
+        audioRoutes?.releaseAudio(AudioOwners.FLEX_VOICE_TX)
+        audioRoutes?.releaseAudio(AudioOwners.FLEX_CW_TX)
+        audioRoutes?.releaseAudio(AudioOwners.FLEX_TUNE)
+    }
+
+    private fun extractFlexIds(body: String): List<Long> = Regex("0x[0-9A-Fa-f]+|(?<![A-Za-z0-9])\\d+")
+        .findAll(body).mapNotNull { parseFlexNumber(it.value) }.filter { it != 0L }.toList()
+
+    private suspend fun disconnectSession() {
+        if (tx.state !in setOf(FlexTxState.DISABLED, FlexTxState.READY)) tx.stop("disconnect")
+        tx.clearGate()
+        disableRxAudio()
+        streamSession.stop()
+        val activeSocket = socket
+        socket = null
         keepalive?.cancel(); reader?.cancel(); keepalive = null; reader = null
-        runCatching { socket?.close() }; socket = null; snapshot = FlexSnapshot(); selectedSliceIndex = null
+        pendingReplies.clear()
+        runCatching { activeSocket?.close() }
+        snapshot = FlexSnapshot(); extended = FlexExtendedSnapshot(); spectrum = null; waterfallRows.clear(); meters = emptyMap()
+        selectedSliceIndex = null; selectedTxSliceIndex = null; owned.clear(); extendedTracker.clear()
     }
 
     override suspend fun disconnect() {
@@ -243,6 +615,8 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
 
     override fun close() {
         operatorEstablished = false; discovery?.cancel(); reconnect?.cancel(); keepalive?.cancel(); reader?.cancel(); broker?.close(); broker = null
+        sendBody(FlexCommands.cwxClear()); sendBody(FlexCommands.tune(false)); sendBody(FlexCommands.mox(false))
+        tx.clearGate(); disableRxAudio(); streamSession.close()
         runCatching { socket?.close() }; socket = null; controllerJob.cancel(); NativeCore.flexDestroy(native)
     }
 }

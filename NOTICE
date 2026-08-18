@@ -13,11 +13,20 @@ Nexus was evaluated as an external upstream/reference during Phase 0. Android
 Phase 5A now incorporates selected GPL-3.0-only Flex protocol source derived
 from kd9taw/Nexus commit 6ec4a7925f1550cc364c7fd95967ce38c696ad3f,
 Copyright (C) 2026 KD9TAW <kd9taw@protonmail.com>. Only the audited discovery
-and receive-control portions of `crates/tempo-net/src/flexdisc.rs` and
-`flexcat.rs` were adapted. Exact source ranges, modifications, dependency
+receive-control and VITA portions of `crates/tempo-net/src/flexdisc.rs`,
+`flexcat.rs` and `flexvita.rs` were adapted. Exact source ranges, modifications, dependency
 closure and exclusions are recorded in rust/rigweave-flex/UPSTREAM.md. Nexus
 does not endorse RigWeave. The Rust runtime dependency `socket2` 0.6 is
 dual-licensed MIT OR Apache-2.0; its source version is fixed by Cargo.lock.
+
+Android Phase 5 also adapts selected GPL-3.0-only Flex interoperability
+behaviour from AetherSDR commit
+5a499ef6a436625fab353727e462b92d7436118e. This includes VITA display/audio
+framing, coverage assembly, Opus timing, WAN UDP registration, scoped
+certificate pinning and owned-object/TX cleanup policies. No Qt UI, assets,
+generic automation, or unconditional Nexus DAX TX path was imported. Exact
+local files, modifications and exclusions are recorded in
+rust/rigweave-flex/UPSTREAM.md. AetherSDR does not endorse RigWeave.
 
 The Android KX3 panadapter was independently implemented after behavior-only
 study of these pinned references:

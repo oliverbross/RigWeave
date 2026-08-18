@@ -8,6 +8,7 @@
 mod ffi;
 pub mod flexcat;
 pub mod flexdisc;
+pub mod vita;
 
 pub use flexcat::{
     client_identity_command, encode_command, filter_command, frequency_command, keepalive_command,

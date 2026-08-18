@@ -11,7 +11,7 @@ RigWeave is local-first. Radio control and local logging must remain useful with
 - Native Apple mobile client using SwiftUI. The current target and physical evidence are iPad-focused; iPhone support is not claimed.
 - Native Android client using Jetpack Compose, including a dedicated KX3 receive-I/Q panadapter with explicit stereo-route proof, shared native DSP, CAT-synchronized spectrum/waterfall, calibration, diagnostics and bounded replay. Its software/device path is integrated and fail-closed; physical KX3 quadrature-I/Q RF acceptance is deferred.
 - Shared C++17 core exposed through a C ABI.
-- Android radio-family selection between the preserved Elecraft KX path and receive-only FlexRadio LAN/SmartLink control. Flex uses an attributed Nexus-derived Rust static library, existing GUI station/slice selection, secure owner-issued authentication configuration and the normal logger/DX/Portable/POTA state flow; physical/authenticated support remains evidence-gated.
+- Android radio-family selection between the preserved Elecraft KX path and a full FlexRadio LAN/SmartLink operating cockpit. Flex uses attributed Nexus/AetherSDR-derived GPL behaviour, secure developer authentication configuration, VITA panafall/meters, capability-driven multi-slice control, PC audio and explicitly session-gated microphone/voice/CWX/MOX/TUNE paths; authenticated SmartLink, real VITA/audio and RF support remain evidence-gated.
 - Deep Elecraft KX3/KX2 integration: observed CAT state, radio controls, transport adapters, safety classification, logging, real spectrum paths, and DX intelligence.
 - Local SQLite journals and ADIF workflows.
 - Android Local authority includes a durable Sync Hub for independently enabled QRZ Logbook, Club Log, and eQSL.cc delivery. Wavelog authority pauses direct services to prevent duplicates; upload acceptance never implies remote confirmation.
@@ -39,7 +39,7 @@ The clients do not have identical surface coverage. Android currently contains t
 2. Preserve the integrated Android Portable Chase extension while SOTA live remains disabled pending documented API approval.
 3. Preserve the implemented Android POTA Activate workflow; SOTA/WWFF activation remains later work.
 4. Preserve Android Phase 4A local-log delivery; Phase 4B Needs Board and statistics is next.
-5. Preserve Android Phase 5A FlexRadio LAN/SmartLink selected-slice receive control; Phase 5B spectrum/meters and Phase 5C audio/TX remain gated.
+5. Preserve the Android Phase 5 complete FlexRadio source/build implementation; finish authenticated FLEX-8400/VITA/audio and controlled-RF acceptance before a support or release claim.
 6. One Qt 6/QML/CMake desktop client for macOS, Windows, and Linux.
 7. QMX, rigctld, additional radios, and additional programmes only after hardware/data/licence gates.
 

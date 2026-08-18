@@ -76,21 +76,20 @@ This is the normative product order. A phase starts only after separate owner au
 
 ### Phase 5A — Legitimate authentication, discovery, and control
 
-- **Implemented on Android — PASS WITH NOTES:** official owner-issued client-ID path, restricted WebView implicit-token authentication, Keystore refresh-token storage, source-verified broker/direct TLS ordering, LAN discovery, Nexus-derived SmartSDR framing/state, existing GUI station/slice selection and receive-only frequency/mode/filter control integrated with logger, DX, Portable and POTA Activate.
-- Rust/JNI and Android builds pass, and radio-family/UI switching passed on a Lenovo TB373FU. The authorised SmartLink username/password could not reach a legitimate credential form without the separately required issued OAuth client ID, so authenticated SmartLink and physical FLEX proof remain unclaimed rather than treated as a permission blocker.
+- **Implemented on Android — source/build/device-shell pass:** explicitly authorised shared StationPilot/AetherSDR client registration through ignored developer configuration, restricted WebView authentication, Keystore refresh-token storage, source-verified broker/direct TLS ordering, per-radio TOFU, LAN discovery and Nexus-derived SmartSDR framing/state.
+- Rust/JNI and Android builds pass, and the complete offline cockpit launches on a Lenovo TB373FU. The operator did not perform SmartLink authentication in this pass, so authenticated discovery and physical FLEX proof remain unclaimed.
 - KX behaviour remains separate. iPadOS parity is deferred; SOTA live remains pending approval.
 
 ### Phase 5B — Spectrum, waterfall, and meters
 
-- Official TCP/UDP/VITA-49 interfaces.
-- Import/adapt the separately audited Nexus `flexvita.rs` candidate for panadapter/waterfall streams, meters, and RigWeave overlays.
+- **Implemented in source/build:** official TCP/UDP/VITA-49 framing, attach/RigWeave-owned panafall, coverage-based spectrum/waterfall, live meters and tablet Canvas rendering.
+- Real FLEX-8400 LAN/SmartLink VITA acceptance remains required before a support claim.
 
 ### Phase 5C — Remote audio and controlled TX
 
-- Only after 5A/5B physical proof.
-- Explicit operator control and safe recovery.
-- Carefully separate any RX-only audio work; wholesale Nexus `flexdax.rs` remains rejected.
-- No attempt to clone every SmartSDR or StationPilot feature.
+- **Implemented in source/build:** Opus PC audio, exclusive audio ownership, microphone and stored voice-macro Opus TX, CWX, MOX/PTT, TUNE, one authoritative state machine, watchdog and fail-closed cleanup.
+- Wholesale Nexus `flexdax.rs` remains rejected; no unconditional DAX TX path was imported.
+- Authenticated SmartLink, real audio and controlled dummy-load/legal-frequency RF acceptance remain required. No SmartSDR or StationPilot parity claim is made.
 
 ## Phase 6 — Desktop client
 
