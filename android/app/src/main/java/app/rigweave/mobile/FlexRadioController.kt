@@ -431,6 +431,10 @@ class FlexRadioController(
         voiceMacroStore = store
     }
 
+    fun setDigitalRxSink(sink: ((samples: FloatArray, sampleRate: Int, channels: Int) -> Unit)?) {
+        networkAudio.pcmObserver = sink
+    }
+
     fun chooseDisplayMode(mode: FlexDisplayMode) {
         if (mode == displayMode) return
         if (tx.state !in setOf(FlexTxState.DISABLED, FlexTxState.READY)) return
@@ -597,6 +601,31 @@ class FlexRadioController(
             }
         }
     }
+    fun startDigitalTx(pcm: CanonicalVoicePcm): Boolean {
+        if (tx.state != FlexTxState.ARMED || !tx.eligibility.ready || pcm.samples.isEmpty()) return false
+        disableRxAudio()
+        val routes = audioRoutes
+        if (routes != null && !routes.acquireAudio(AudioOwners.FLEX_DIGI_TX, pauseMonitor = true)) {
+            detail = "Another audio operation owns the digital transmit route"
+            return false
+        }
+        return sendBody(FlexCommands.createTxAudio()) { code, body ->
+            val id = extractFlexIds(body).firstOrNull()
+            if (code != 0L || id == null) {
+                routes?.releaseAudio(AudioOwners.FLEX_DIGI_TX)
+                detail = "Flex digital transmit stream creation failed"
+                return@sendBody
+            }
+            remoteTxStreamId = id
+            owned.ownStream(id)
+            scope.launch {
+                if (!tx.startMox() || !micTx.startVoiceMacro(id, pcm)) {
+                    detail = micTx.error ?: "Flex digital transmit could not start"
+                    tx.stop("digital transmit start failure")
+                }
+            }
+        }
+    }
     suspend fun startTune(): Boolean {
         disableRxAudio()
         val routes = audioRoutes
@@ -630,6 +659,7 @@ class FlexRadioController(
         audioRoutes?.releaseAudio(AudioOwners.FLEX_VOICE_TX)
         audioRoutes?.releaseAudio(AudioOwners.FLEX_CW_TX)
         audioRoutes?.releaseAudio(AudioOwners.FLEX_TUNE)
+        audioRoutes?.releaseAudio(AudioOwners.FLEX_DIGI_TX)
     }
 
     private fun extractFlexIds(body: String): List<Long> = Regex("0x[0-9A-Fa-f]+|(?<![A-Za-z0-9])\\d+")

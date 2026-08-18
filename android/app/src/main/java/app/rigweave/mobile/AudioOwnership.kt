@@ -12,6 +12,9 @@ object AudioOwners {
     const val FLEX_VOICE_TX = "FLEX_VOICE_TX"
     const val FLEX_CW_TX = "FLEX_CW_TX"
     const val FLEX_TUNE = "FLEX_TUNE"
+    const val DIGI_RX = "DIGI_RX"
+    const val DIGI_TX = "DIGI_TX"
+    const val FLEX_DIGI_TX = "FLEX_DIGI_TX"
 }
 
 data class AudioLeaseDecision(

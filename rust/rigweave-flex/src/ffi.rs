@@ -3,12 +3,70 @@
 
 use crate::flexcat::{self, FlexFramer, FlexState};
 use crate::flexdisc;
+use crate::digi::{self, CwStreamDecoder, RttyStreamDecoder};
 use std::ffi::{c_char, CStr};
+use tempo_sstv::{SstvDecoder, SstvEvent, SourceImage};
+use tempo_sstv::modespec::{for_mode, SstvMode};
 
 #[repr(C)]
 pub struct FlexContext {
     framer: FlexFramer,
     state: FlexState,
+}
+
+#[repr(C)]
+pub struct DigiContext {
+    cw: CwStreamDecoder,
+    rtty: RttyStreamDecoder,
+    sstv: SstvDecoder,
+    sstv_mode: Option<SstvMode>,
+    sstv_line: i32,
+    sstv_complete: bool,
+    sstv_fsk_id: String,
+    image_width: u32,
+    image_height: u32,
+    image_rgb: Vec<u8>,
+}
+
+fn sstv_mode(index: i32) -> Option<SstvMode> {
+    Some(match index {
+        0 => SstvMode::Pd50,
+        1 => SstvMode::Pd90,
+        2 => SstvMode::Pd120,
+        3 => SstvMode::Pd160,
+        4 => SstvMode::Pd180,
+        5 => SstvMode::Pd240,
+        6 => SstvMode::Pd290,
+        7 => SstvMode::Robot24,
+        8 => SstvMode::Robot36,
+        9 => SstvMode::Robot72,
+        10 => SstvMode::Scottie1,
+        11 => SstvMode::Scottie2,
+        12 => SstvMode::ScottieDx,
+        13 => SstvMode::Martin1,
+        14 => SstvMode::Martin2,
+        _ => return None,
+    })
+}
+
+fn mode_index(mode: SstvMode) -> i32 {
+    match mode {
+        SstvMode::Pd50 => 0, SstvMode::Pd90 => 1, SstvMode::Pd120 => 2,
+        SstvMode::Pd160 => 3, SstvMode::Pd180 => 4, SstvMode::Pd240 => 5,
+        SstvMode::Pd290 => 6, SstvMode::Robot24 => 7, SstvMode::Robot36 => 8,
+        SstvMode::Robot72 => 9, SstvMode::Scottie1 => 10, SstvMode::Scottie2 => 11,
+        SstvMode::ScottieDx => 12, SstvMode::Martin1 => 13, SstvMode::Martin2 => 14,
+        _ => -1,
+    }
+}
+
+fn copy_samples(samples: &[f32], output: *mut f32, capacity: usize) -> i32 {
+    if output.is_null() || capacity == 0 {
+        return samples.len().try_into().unwrap_or(i32::MAX);
+    }
+    let count = samples.len().min(capacity);
+    unsafe { std::ptr::copy_nonoverlapping(samples.as_ptr(), output, count); }
+    count.try_into().unwrap_or(i32::MAX)
 }
 
 fn copy_text(value: &str, output: *mut c_char, capacity: usize) -> i32 {
@@ -166,6 +224,194 @@ pub unsafe extern "C" fn rw_flex_parse_discovery(
         .unwrap_or(-1)
 }
 
+#[no_mangle]
+pub extern "C" fn rw_digi_context_create(
+    sample_rate: u32,
+    cw_pitch_hz: f32,
+    rtty_reverse: bool,
+) -> *mut DigiContext {
+    if sample_rate == 0 {
+        return std::ptr::null_mut();
+    }
+    let Ok(sstv) = SstvDecoder::new(sample_rate) else {
+        return std::ptr::null_mut();
+    };
+    Box::into_raw(Box::new(DigiContext {
+        cw: CwStreamDecoder::new(sample_rate as f32, cw_pitch_hz),
+        rtty: RttyStreamDecoder::new(rtty_reverse),
+        sstv,
+        sstv_mode: None,
+        sstv_line: -1,
+        sstv_complete: false,
+        sstv_fsk_id: String::new(),
+        image_width: 0,
+        image_height: 0,
+        image_rgb: Vec::new(),
+    }))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rw_digi_context_destroy(context: *mut DigiContext) {
+    if !context.is_null() {
+        drop(Box::from_raw(context));
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rw_digi_feed_cw(
+    context: *mut DigiContext,
+    samples: *const f32,
+    count: usize,
+    output: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    let (Some(context), false) = (context.as_mut(), samples.is_null()) else { return -1; };
+    context.cw.push(std::slice::from_raw_parts(samples, count));
+    copy_text(
+        &format!("{{\"text\":{},\"wpm\":{}}}", json_string(context.cw.transcript()), context.cw.wpm()),
+        output,
+        capacity,
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rw_digi_feed_rtty(
+    context: *mut DigiContext,
+    samples: *const f32,
+    count: usize,
+    output: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    let (Some(context), false) = (context.as_mut(), samples.is_null()) else { return -1; };
+    let text = context.rtty.push(std::slice::from_raw_parts(samples, count)).to_string();
+    copy_text(
+        &format!(
+            "{{\"text\":{},\"afcHz\":{:.2},\"locked\":{}}}",
+            json_string(&text), context.rtty.afc_offset_hz(), context.rtty.afc_locked()
+        ),
+        output,
+        capacity,
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rw_digi_feed_sstv(
+    context: *mut DigiContext,
+    samples: *const f32,
+    count: usize,
+    output: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    let (Some(context), false) = (context.as_mut(), samples.is_null()) else { return -1; };
+    for event in context.sstv.process(std::slice::from_raw_parts(samples, count)) {
+        match event {
+            SstvEvent::VisDetected { mode, .. } => {
+                let spec = for_mode(mode);
+                context.sstv_mode = Some(mode);
+                context.sstv_line = -1;
+                context.sstv_complete = false;
+                context.sstv_fsk_id.clear();
+                context.image_width = spec.line_pixels;
+                context.image_height = spec.image_lines;
+                context.image_rgb = vec![0; spec.line_pixels as usize * spec.image_lines as usize * 3];
+            }
+            SstvEvent::LineDecoded { mode, line_index, pixels } => {
+                context.sstv_mode = Some(mode);
+                context.sstv_line = line_index as i32;
+                let width = context.image_width as usize;
+                let start = line_index as usize * width * 3;
+                for (offset, pixel) in pixels.iter().take(width).enumerate() {
+                    let at = start + offset * 3;
+                    if at + 2 < context.image_rgb.len() {
+                        context.image_rgb[at..at + 3].copy_from_slice(pixel);
+                    }
+                }
+            }
+            SstvEvent::ImageComplete { image, .. } => {
+                context.sstv_mode = Some(image.mode);
+                context.image_width = image.width;
+                context.image_height = image.height;
+                context.image_rgb = image.pixels.iter().flatten().copied().collect();
+                context.sstv_complete = true;
+            }
+            SstvEvent::FskId { text } => context.sstv_fsk_id = text,
+            SstvEvent::UnknownVis { .. } => {}
+            _ => {}
+        }
+    }
+    copy_text(
+        &format!(
+            "{{\"mode\":{},\"line\":{},\"complete\":{},\"width\":{},\"height\":{},\"fskId\":{}}}",
+            context.sstv_mode.map(mode_index).unwrap_or(-1), context.sstv_line,
+            context.sstv_complete, context.image_width, context.image_height,
+            json_string(&context.sstv_fsk_id)
+        ),
+        output,
+        capacity,
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rw_digi_copy_sstv_image(
+    context: *const DigiContext,
+    output: *mut u8,
+    capacity: usize,
+) -> i32 {
+    let Some(context) = context.as_ref() else { return -1; };
+    if output.is_null() || capacity == 0 {
+        return context.image_rgb.len().try_into().unwrap_or(i32::MAX);
+    }
+    let count = context.image_rgb.len().min(capacity);
+    std::ptr::copy_nonoverlapping(context.image_rgb.as_ptr(), output, count);
+    count.try_into().unwrap_or(i32::MAX)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rw_digi_encode_cw(
+    text: *const c_char,
+    wpm: u32,
+    pitch_hz: f32,
+    sample_rate: u32,
+    output: *mut f32,
+    capacity: usize,
+) -> i32 {
+    input(text)
+        .map(|text| copy_samples(&digi::morse_samples(&text, wpm, pitch_hz, sample_rate), output, capacity))
+        .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rw_digi_encode_rtty(
+    text: *const c_char,
+    sample_rate: u32,
+    reverse: bool,
+    output: *mut f32,
+    capacity: usize,
+) -> i32 {
+    input(text)
+        .map(|text| copy_samples(&digi::rtty_samples(&text, sample_rate, reverse), output, capacity))
+        .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rw_digi_encode_sstv(
+    mode: i32,
+    rgb: *const u8,
+    width: u32,
+    height: u32,
+    sample_rate: u32,
+    output: *mut f32,
+    capacity: usize,
+) -> i32 {
+    let (Some(mode), false) = (sstv_mode(mode), rgb.is_null()) else { return -1; };
+    let Some(pixel_count) = (width as usize).checked_mul(height as usize) else { return -1; };
+    let bytes = std::slice::from_raw_parts(rgb, pixel_count.saturating_mul(3));
+    let pixels = bytes.chunks_exact(3).map(|p| [p[0], p[1], p[2]]).collect();
+    tempo_sstv::encode_image(mode, &SourceImage { width, height, rgb: pixels }, sample_rate)
+        .map(|samples| copy_samples(&samples, output, capacity))
+        .unwrap_or(-1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +430,49 @@ mod tests {
         assert!(text.contains("\"handle\":10940"));
         assert!(text.contains("\"frequencyHz\":14074000"));
         unsafe { rw_flex_context_destroy(context) };
+    }
+
+    #[test]
+    fn digital_c_abi_generates_and_decodes_cw() {
+        let text = std::ffi::CString::new("CQ TEST").unwrap();
+        let count = unsafe { rw_digi_encode_cw(text.as_ptr(), 20, 700.0, 12_000, std::ptr::null_mut(), 0) };
+        assert!(count > 10_000);
+        let mut samples = vec![0.0_f32; count as usize];
+        assert_eq!(
+            unsafe { rw_digi_encode_cw(text.as_ptr(), 20, 700.0, 12_000, samples.as_mut_ptr(), samples.len()) },
+            count
+        );
+        let context = rw_digi_context_create(12_000, 700.0, false);
+        assert!(!context.is_null());
+        let mut padded = vec![0.0_f32; 1_200];
+        padded.extend(samples);
+        padded.extend(vec![0.0_f32; 7_200]);
+        let mut output = [0_i8; 4096];
+        assert!(unsafe {
+            rw_digi_feed_cw(context, padded.as_ptr(), padded.len(), output.as_mut_ptr(), output.len())
+        } > 0);
+        let decoded = unsafe { CStr::from_ptr(output.as_ptr()) }.to_string_lossy();
+        assert!(decoded.contains("CQ TEST"));
+        unsafe { rw_digi_context_destroy(context) };
+    }
+
+    #[test]
+    fn digital_c_abi_rtty_loopback_and_sstv_dimension_gate() {
+        let text = std::ffi::CString::new("CQ OM0RX 599").unwrap();
+        let count = unsafe { rw_digi_encode_rtty(text.as_ptr(), 12_000, false, std::ptr::null_mut(), 0) };
+        assert!(count > 1_000);
+        let mut samples = vec![0.0_f32; count as usize];
+        unsafe { rw_digi_encode_rtty(text.as_ptr(), 12_000, false, samples.as_mut_ptr(), samples.len()) };
+        let context = rw_digi_context_create(12_000, 700.0, false);
+        let mut output = [0_i8; 4096];
+        unsafe { rw_digi_feed_rtty(context, samples.as_ptr(), samples.len(), output.as_mut_ptr(), output.len()) };
+        let decoded = unsafe { CStr::from_ptr(output.as_ptr()) }.to_string_lossy();
+        assert!(decoded.contains("OM0RX"));
+        let bad_rgb = [0_u8; 3];
+        assert_eq!(
+            unsafe { rw_digi_encode_sstv(2, bad_rgb.as_ptr(), 1, 1, 12_000, std::ptr::null_mut(), 0) },
+            -1
+        );
+        unsafe { rw_digi_context_destroy(context) };
     }
 }

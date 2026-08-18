@@ -1,0 +1,18 @@
+[package]
+name = "tempo-sstv"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "SSTV receiver and transmitter core vendored from Nexus at 6ec4a7925f1550cc364c7fd95967ce38c696ad3f"
+
+[dependencies]
+thiserror = "2"
+rustfft = "6"
+
+[dev-dependencies]
+proptest = "1"
+tempo-sstv = { path = ".", features = ["test-support"] }
+
+[features]
+test-support = []

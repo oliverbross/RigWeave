@@ -117,7 +117,7 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Progress"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), DIGI("Digi"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Progress"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
@@ -143,6 +143,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val cty = remember { CtyController(context) }
     val audio = remember { AudioMonitorController(context) }
     flex.attachAudioRoutes(audio)
+    val digi = remember { DigiController(context, audio, transport, flex, { app.radioFamily }, { app.stationCallsign }) }
     val cwDecoder = remember { CwDecodeBuffer() }
     var kxRadio by remember { mutableStateOf(NativeCore.parseState(NativeCore.state(core))) }
     var radio by remember { mutableStateOf(kxRadio) }
@@ -206,6 +207,8 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         }
     }
     LaunchedEffect(transport, app.radioFamily) {
+        digi.stopRx("Radio selection changed · RX stopped")
+        digi.disarm()
         audio.refreshDevices()
         delay(250)
         if (app.radioFamily.isElecraft) {
@@ -244,6 +247,8 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
             Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> { foreground = true; syncHub.setForeground(true) }
             Lifecycle.Event.ON_STOP, Lifecycle.Event.ON_DESTROY -> {
                 foreground = false; syncHub.setForeground(false); app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
+                digi.stopRx("App left foreground · RX stopped")
+                digi.disarm()
                 voiceTx.stop("App left foreground; defensive RX cleanup requested")
                 scope.launch { flex.onForegroundChanged(false) }
             }
@@ -254,7 +259,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     }
     LaunchedEffect(voiceAudio) { voiceAudio.onFailure = { app.updateVoiceMacrosArmed(false) } }
     DisposableEffect(Unit) { onDispose {
-        app.disarmAll(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close()
+        app.disarmAll(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close()
         scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
         portable.close(); progress.close(); syncHub.close(); NativeCore.destroy(core); database.close()
     } }
@@ -304,21 +309,21 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
             Screen(destination, radio, usbDetail, database, progress, features, neuralDx, wavelog, syncHub, callbook, cty, audio,
-                panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex,
+                panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
                 voiceStore, voiceAudio, voiceTx, eqStudio, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS })
+                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI })
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
-            Destination.entries.filterNot { it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC }.forEach { item -> NavigationBarItem(destination == item, { destination = item },
+            Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
             Screen(destination, radio, usbDetail, database, progress, features, neuralDx, wavelog, syncHub, callbook, cty, audio,
-                panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex,
+                panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
                 voiceStore, voiceAudio, voiceTx, eqStudio, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS })
+                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI })
         } }
     }
 }
@@ -326,6 +331,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
 private fun navIcon(item: Destination) = when (item) {
     Destination.HOME -> Icons.Outlined.Home
     Destination.RADIO -> Icons.Outlined.SettingsInputAntenna
+    Destination.DIGI -> Icons.Outlined.GraphicEq
     Destination.PANADAPTER -> Icons.Outlined.WaterfallChart
     Destination.EQ -> Icons.Outlined.Equalizer
     Destination.LOGBOOK -> Icons.AutoMirrored.Outlined.List
@@ -340,16 +346,20 @@ private fun navIcon(item: Destination) = when (item) {
 @Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase, progress: ProgressController,
     features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, syncHub: SyncHubController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
     portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
-    transport: UsbRadioTransport, flex: FlexRadioController, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
+    transport: UsbRadioTransport, flex: FlexRadioController, digi: DigiController, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
     eqStudio: EqStudioController, compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
     tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openDx: () -> Unit, openPortable: () -> Unit,
-    openActivation: () -> Unit, openLogbook: () -> Unit, openSync: () -> Unit, openProgress: () -> Unit) {
+    openActivation: () -> Unit, openLogbook: () -> Unit, openSync: () -> Unit, openProgress: () -> Unit, openDigi: () -> Unit) {
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     when (destination) {
         Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, wavelog, cty, send,
             openDx, openPortable, openProgress)
         Destination.RADIO -> Column(Modifier.fillMaxSize()) {
+            if (compact) SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                SegmentedButton(true, {}, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Radio") }
+                SegmentedButton(false, openDigi, SegmentedButtonDefaults.itemShape(1, 2)) { Text("Digi") }
+            }
             PotaActivationStrip(activation, radio, openActivation)
             Box(Modifier.weight(1f)) {
                 if (app.radioFamily == RadioFamily.FLEXRADIO) FlexRadioScreen(flex, openLogbook)
@@ -367,6 +377,7 @@ private fun navIcon(item: Destination) = when (item) {
                 }
             }
         }
+        Destination.DIGI -> DigiScreen(digi, radio, compact)
         Destination.PANADAPTER -> if (app.panadapterEnabled && app.radioFamily.isElecraft)
             PanadapterScreen(panadapter, radio, features.liveSpots, compact)
         else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx,

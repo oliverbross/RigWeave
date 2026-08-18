@@ -18,6 +18,7 @@ Dense radio information is intentional. Do not turn the operator console into a 
 - No colour-only status, fabricated signal animation, placeholder QSO, or generated spectrum.
 - The panadapter axis follows live CAT and the physical audio sample rate. Empty/offline input stays visibly offline.
 - Android monitor, panadapter, EQ capture/playback, voice record/import/preview, and voice TX are mutually exclusive audio owners. Only the monitor may be paused and restored by the central coordinator; no other owner is preempted.
+- Digi RX, DigiRig TX, and Flex digital TX participate in the same exclusive audio ownership model. A digital transmission acquires its route before PTT, arms for one attempt, and must return to explicit RX truth.
 - Future desktop panels may resize or detach, but no desktop implementation is implied by this contract.
 - Before public binary distribution, an About/Licences surface must make GPL and applicable third-party notices readily accessible.
 
@@ -29,13 +30,15 @@ Android Home is a native Flightline interpretation of the OpenHamClock operating
 
 On Android, Panadapter is a first-class expanded destination and a segmented Radio subview on compact layouts so the existing six-item bottom navigation remains stable. The Flightline instrument keeps spectrum/waterfall dominant and unscrolled, offers a draggable split or either pane alone, and separates view gestures from explicit marker QSY actions. Setup and diagnostics may scroll; the live instrument does not.
 
+Android Digi is a cycle-sequencer console. Expanded layouts place mode and route acquisition on the left, decoded traffic or the SSTV image in the dominant center, and a one-shot transmit sequencer on the right. Compact layouts preserve that order vertically. The truth rail always names radio, mode, RX, and TX state; no synthetic waterfall or fabricated decode is rendered.
+
 - Scene: field and station operation in mixed or low ambient light requires a dark, low-glare chassis with a high-contrast warm instrument face.
 - Color strategy: restrained graphite application shell plus a committed amber radio region. Amber is measurement surface, not decorative accent.
 - Core colors: graphite `#111519`, panel `#1B2228`, raised `#283139`, line `#4A555D`, ink `#F4F0E7`, muted `#A5ADB2`, amber `#E9A72B`, amber-dark `#201708`, hold `#F4C94E`, healthy `#42C77B`, danger `#E4544D`, split `#8F1D24`.
 - Typography: Android system sans for navigation, forms, and actions; monospace only for frequency, CAT, meters, time, and tabular measurements.
 - Shape: 8–12 dp instrument and panel radii; small state chips may be pill-shaped. Dense operational content uses regions and tables, not nested decorative cards.
 - Controls: every paired control presents primary tap text and secondary yellow hold text. Minimum target 48 dp with clear pressed, disabled, armed, pending, and error states.
-- Navigation: Material navigation rail/drawer on expanded width; navigation bar on compact width. The compact bar retains Home, Radio, Logbook, Presets, DX, and Settings. EQ and Portable are first-class expanded destinations; compact layouts reach EQ through Radio/Settings Audio and Portable Chase through Home.
+- Navigation: Material navigation rail/drawer on expanded width; navigation bar on compact width. The compact bar retains Home, Radio, Digi, Logbook, Presets, DX, and Settings. EQ and Portable are first-class expanded destinations; compact layouts reach EQ through Radio/Settings Audio and Portable Chase through Home.
 - Portable Chase: wide tablets use programme/status controls, a filter rail, stable ranked activity, and a shared map/detail cockpit; compact layouts use On Air, Map, and Places destinations. Graphite surfaces, restrained provider marker colours, explicit independent freshness, and selection-before-tune keep the multi-program decision path readable without turning rows into bright cards.
 - POTA Activate: Portable owns a CHASE/ACTIVATE mode switch rather than another top-level destination. Expanded tablets pair a fixed session/logger panel with progress and recent-QSO context; compact layouts use one predictable vertical surface. A slim, non-transmitting active-session strip appears on Radio, Portable, and Logbook.
 - EQ Studio: a Flightline audio bench, not a music-player equalizer. Graphite instrument regions hold exact green radio readback, yellow local draft state, amber response/measurement plots, real waveform/spectrum data, source/baseline provenance, touch-safe eight-band controls, and a fixed apply-and-verify action. Compact layouts stack the same workflow without shrinking the controls into narrow faders.

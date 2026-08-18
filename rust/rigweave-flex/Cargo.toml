@@ -10,4 +10,5 @@ crate-type = ["rlib", "staticlib"]
 
 [dependencies]
 socket2 = "0.6"
-
+microfft = "0.6"
+tempo-sstv = { path = "../tempo-sstv" }

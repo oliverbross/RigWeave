@@ -12,6 +12,7 @@ rw_context *context(jlong handle) { return reinterpret_cast<rw_context *>(static
 rw_feature_context *features(jlong handle) { return reinterpret_cast<rw_feature_context *>(static_cast<intptr_t>(handle)); }
 rw_panadapter_context *panadapter(jlong handle) { return reinterpret_cast<rw_panadapter_context *>(static_cast<intptr_t>(handle)); }
 rw_flex_context *flex(jlong handle) { return reinterpret_cast<rw_flex_context *>(static_cast<intptr_t>(handle)); }
+rw_digi_context *digi(jlong handle) { return reinterpret_cast<rw_digi_context *>(static_cast<intptr_t>(handle)); }
 std::string utf(JNIEnv *env, jstring value) {
     if (!value) return {};
     const char *chars = env->GetStringUTFChars(value, nullptr);
@@ -83,6 +84,97 @@ Java_app_rigweave_mobile_NativeCore_flexParseDiscovery(JNIEnv *env, jobject, jby
     const int size = rw_flex_parse_discovery(reinterpret_cast<const uint8_t *>(bytes), static_cast<size_t>(length), output, sizeof(output));
     env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
     return env->NewStringUTF(size >= 0 ? output : "");
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_app_rigweave_mobile_NativeCore_digiCreate(JNIEnv *, jobject, jint sampleRate, jfloat pitch, jboolean reverse) {
+    return static_cast<jlong>(reinterpret_cast<intptr_t>(
+        rw_digi_context_create(static_cast<uint32_t>(sampleRate), pitch, reverse == JNI_TRUE)));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_rigweave_mobile_NativeCore_digiDestroy(JNIEnv *, jobject, jlong handle) {
+    rw_digi_context_destroy(digi(handle));
+}
+
+jstring digi_feed(JNIEnv *env, jlong handle, jfloatArray data,
+                  const std::function<int(rw_digi_context *, const float *, size_t, char *, size_t)> &feed) {
+    if (!data || !handle) return env->NewStringUTF("{}");
+    const jsize length = env->GetArrayLength(data);
+    jfloat *samples = env->GetFloatArrayElements(data, nullptr);
+    std::string output(16384, '\0');
+    const int size = feed(digi(handle), samples, static_cast<size_t>(length), output.data(), output.size());
+    env->ReleaseFloatArrayElements(data, samples, JNI_ABORT);
+    return env->NewStringUTF(size >= 0 ? output.c_str() : "{}");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeCore_digiFeedCw(JNIEnv *env, jobject, jlong handle, jfloatArray data) {
+    return digi_feed(env, handle, data, rw_digi_feed_cw);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeCore_digiFeedRtty(JNIEnv *env, jobject, jlong handle, jfloatArray data) {
+    return digi_feed(env, handle, data, rw_digi_feed_rtty);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeCore_digiFeedSstv(JNIEnv *env, jobject, jlong handle, jfloatArray data) {
+    return digi_feed(env, handle, data, rw_digi_feed_sstv);
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_app_rigweave_mobile_NativeCore_digiSstvImage(JNIEnv *env, jobject, jlong handle) {
+    const int size = rw_digi_copy_sstv_image(digi(handle), nullptr, 0);
+    if (size <= 0) return env->NewByteArray(0);
+    jbyteArray result = env->NewByteArray(size);
+    jbyte *bytes = env->GetByteArrayElements(result, nullptr);
+    rw_digi_copy_sstv_image(digi(handle), reinterpret_cast<uint8_t *>(bytes), static_cast<size_t>(size));
+    env->ReleaseByteArrayElements(result, bytes, 0);
+    return result;
+}
+
+jfloatArray digi_samples(JNIEnv *env, const std::function<int(float *, size_t)> &encode) {
+    const int size = encode(nullptr, 0);
+    if (size <= 0) return env->NewFloatArray(0);
+    jfloatArray result = env->NewFloatArray(size);
+    jfloat *samples = env->GetFloatArrayElements(result, nullptr);
+    encode(samples, static_cast<size_t>(size));
+    env->ReleaseFloatArrayElements(result, samples, 0);
+    return result;
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_app_rigweave_mobile_NativeCore_digiEncodeCw(JNIEnv *env, jobject, jstring text, jint wpm, jfloat pitch, jint sampleRate) {
+    const auto value = utf(env, text);
+    return digi_samples(env, [&](float *out, size_t count) {
+        return rw_digi_encode_cw(value.c_str(), static_cast<uint32_t>(wpm), pitch,
+                                 static_cast<uint32_t>(sampleRate), out, count);
+    });
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_app_rigweave_mobile_NativeCore_digiEncodeRtty(JNIEnv *env, jobject, jstring text, jint sampleRate, jboolean reverse) {
+    const auto value = utf(env, text);
+    return digi_samples(env, [&](float *out, size_t count) {
+        return rw_digi_encode_rtty(value.c_str(), static_cast<uint32_t>(sampleRate),
+                                   reverse == JNI_TRUE, out, count);
+    });
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_app_rigweave_mobile_NativeCore_digiEncodeSstv(JNIEnv *env, jobject, jint mode, jbyteArray rgb,
+                                                    jint width, jint height, jint sampleRate) {
+    if (!rgb) return env->NewFloatArray(0);
+    jbyte *bytes = env->GetByteArrayElements(rgb, nullptr);
+    auto encode = [&](float *out, size_t count) {
+        return rw_digi_encode_sstv(mode, reinterpret_cast<const uint8_t *>(bytes),
+                                   static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                                   static_cast<uint32_t>(sampleRate), out, count);
+    };
+    jfloatArray result = digi_samples(env, encode);
+    env->ReleaseByteArrayElements(rgb, bytes, JNI_ABORT);
+    return result;
 }
 }
 

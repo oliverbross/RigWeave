@@ -65,6 +65,7 @@ class FlexAudioEngine : AutoCloseable {
     private var lastNibble = -1
     private val opusJitter = FlexAudioJitterBuffer<ByteArray>()
     private var lastPcm = FloatArray(0)
+    var pcmObserver: ((samples: FloatArray, sampleRate: Int, channels: Int) -> Unit)? = null
     var gainDb: Float = 0f
     var muted: Boolean = false
     var running: Boolean = false
@@ -179,6 +180,7 @@ class FlexAudioEngine : AutoCloseable {
 
     private fun writeFloat(samples: FloatArray) {
         if (samples.isEmpty()) return
+        pcmObserver?.invoke(samples, FLEX_AUDIO_RATE, FLEX_AUDIO_CHANNELS)
         val scalar = if (muted) 0f else 10f.pow(gainDb.coerceIn(-60f, 12f) / 20f)
         val rendered = FloatArray(samples.size) { (samples[it] * scalar).coerceIn(-1f, 1f) }
         track?.write(rendered, 0, rendered.size, AudioTrack.WRITE_NON_BLOCKING)
@@ -204,6 +206,7 @@ class FlexAudioEngine : AutoCloseable {
         runCatching { track?.flush() }
         runCatching { track?.release() }
         track = null
+        pcmObserver = null
         lastPcm = FloatArray(0)
         extendedSequence = -1
         lastNibble = -1

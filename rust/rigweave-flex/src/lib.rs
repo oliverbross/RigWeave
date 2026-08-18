@@ -6,6 +6,7 @@
 // 6ec4a7925f1550cc364c7fd95967ce38c696ad3f. See ../UPSTREAM.md.
 
 mod ffi;
+pub mod digi;
 pub mod flexcat;
 pub mod flexdisc;
 pub mod vita;

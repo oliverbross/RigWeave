@@ -37,3 +37,12 @@ The local files are adapted derivatives, not verbatim snapshots. The cited upstr
 - Nexus Tauri/React UI, `src-tauri`, `tempo-app`, `tempo-audio`, Hamlib, DSP/digital-mode crates, release scripts and unrelated features.
 
 The dependency lock is committed at `Cargo.lock`; generated libraries and Cargo targets are excluded from source control.
+## Nexus digital DSP
+
+- Repository: https://github.com/kd9taw/Nexus
+- Immutable commit: `6ec4a7925f1550cc364c7fd95967ce38c696ad3f`
+- Imported components: `tempo-sstv` (complete MIT crate with its LICENSE and
+  NOTICE), deterministic CW synthesis/decoder, ITA2/AFSK RTTY synthesis, and
+  the GPL-compatible fldigi-derived RTTY demodulator.
+- Excluded components: Tauri/Qt desktop UI, desktop audio backends, Hamlib,
+  provider credentials, and the Fortran/C++ WSJT-X modem build.
