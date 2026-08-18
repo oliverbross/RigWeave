@@ -1,0 +1,134 @@
+# FlexRadio complete Android client
+
+## Status
+
+Phase 5 source implementation is complete on branch `feature/android-flexradio-complete-client`. Host tests, Android unit tests, all four Android Rust ABIs, JNI/C++ linkage, debug APK assembly, installation, launch and the offline Flex cockpit on a Lenovo TB373FU pass.
+
+Acceptance remains **STOPPED at external physical validation**. This pass did not enter an operator password, authenticate a real SmartLink account, connect a FLEX-8400, receive real VITA traffic, play real radio audio, or transmit RF. Those outcomes must not be inferred from source, tests, build, or an offline tablet screenshot.
+
+## Developer configuration
+
+The SmartLink OAuth client registration is supplied only through ignored `flex-developer.properties` or environment variables:
+
+~~~properties
+FLEX_SMARTLINK_CLIENT_ID=...
+FLEX_SMARTLINK_AUTH_DOMAIN=...
+FLEX_SMARTLINK_REDIRECT_URI=...
+FLEX_SMARTLINK_SERVER=...
+~~~
+
+The current developer build uses the StationPilot/AetherSDR registration after explicit authorization from a developer of those projects. The registration value is not written to tracked source, documentation, logs, screenshots, or this report. It is a public OAuth client identifier, not the operator password; the operator still authenticates in the official Auth0 browser flow.
+
+## Connection architecture
+
+- LAN discovery listens on UDP 4992 and parses only valid Flex discovery VITA.
+- SmartLink uses random OAuth state, exact HTTPS redirect validation, an in-memory short-lived token and an Android-Keystore-encrypted refresh token.
+- Broker registration precedes list/connect requests and uses validated public TLS.
+- Direct-radio TLS is socket-scoped. The self-signed leaf must be valid and self-signed; its SHA-256 fingerprint is recorded on first connection.
+- A later fingerprint mismatch stops before `wan validate` and requires explicit accept or reject in the cockpit.
+- `wan validate` remains the first direct WAN command.
+- A nonzero client handle is required before normal subscriptions or UDP registration.
+- LAN sends `client udpport <port>` once.
+- SmartLink uses an unconnected UDP socket and sends `client udp_register handle=0x...` every 50 ms until the first structurally valid Flex-OUI VITA packet or a 30-second timeout. It then sends `client ping handle=...` every five seconds.
+
+## VITA stream core
+
+The reusable GPL-3.0-only Rust core and Android runtime adapter implement:
+
+- declared-length, class-ID, timestamps and trailer-aware VITA framing;
+- bounded acceptance of Flex byte-exact Opus packets whose VITA word count rounds up by at most three bytes;
+- Flex OUI and registered stream/class validation;
+- per-stream sequence gap and duplicate accounting;
+- coverage-based FFT and waterfall assembly that rejects duplicate/overlapping bins;
+- radio-`ypixels` FFT pixel-to-dBm scaling;
+- 36-byte Flex waterfall metadata and signed Q7.8 dB bins;
+- meter definition/status parsing and unit-aware values;
+- float stereo, reduced-bandwidth mono and Opus audio dispatch;
+- bounded display sizes, waterfall history and audio queues;
+- exact 24 kHz, stereo, 10 ms Opus TX packet construction.
+
+The Compose renderer uses one Canvas per spectrum/waterfall instrument. It creates no per-bin composables and shows an explicit waiting surface until registered real VITA arrives.
+
+## Ownership and multi-slice
+
+The cockpit has two deliberate modes:
+
+- **ATTACH** observes and controls an explicitly selected compatible GUI station/slice without claiming ownership.
+- **RIGWEAVE CLIENT** requests a radio-created panafall and initial slice, records returned IDs, and may remove only those recorded IDs.
+
+Panadapter, waterfall, slice and stream removal builders fail closed for foreign IDs. Ownership state is cleared on disconnect and raw IDs are not reused across sessions. Slice limits come from radio capability status. TX-slice assignment requires a separate confirmation and is rejected during active TX.
+
+## Receive controls and audio
+
+Implemented controls include frequency, mode, filter, slice audio gain/pan/mute, AGC mode/threshold, RIT, XIT, RX antenna, lock, explicit TX-slice assignment, profiles, panafall geometry/FPS/dBm range and PC audio.
+
+PC audio requests `remote_audio_rx compression=opus`, acquires `FLEX_RX_AUDIO` from RigWeave's exclusive audio coordinator and plays 24 kHz stereo through `AudioTrack`. Float/reduced-bandwidth paths remain supported. The jitter buffer is bounded; sequence discontinuities are counted; the fallback concealment path is bounded and never invents meter or spectrum state.
+
+## Controlled transmit
+
+Flex transmit defaults disabled on every process start. Enabling requires the exact phrase:
+
+~~~text
+ENABLE FLEX TRANSMIT FOR THIS SESSION
+~~~
+
+Eligibility also requires a live connection, station callsign, confirmed TX slice, valid frequency/mode, TX antenna and observed ready interlock.
+
+One serialized controller owns states `DISABLED`, `READY`, `ARMED`, `KEYING`, `TRANSMITTING`, `TUNING`, `STOPPING` and `FAULT`. It is the only production path that issues `xmit`, `transmit tune` or CWX commands.
+
+- Live microphone: `remote_audio_tx compression=opus`, 24 kHz stereo 10 ms Opus frames, exact unpadded VITA packets and a bounded 200 ms queue.
+- Voice macros: existing private 48 kHz mono recordings are downsampled to 24 kHz, packetized through the same Opus/VITA path, run once and return to RX. There is no automatic repeat.
+- CW: explicit CWX text, `cwx clear` cleanup and no arbitrary command UI.
+- MOX/PTT and TUNE: explicit buttons, maximum-duration watchdogs and permanent Stop/RX access.
+- Owners: `FLEX_MIC_TX`, `FLEX_VOICE_TX`, `FLEX_CW_TX` and `FLEX_TUNE`.
+- Cleanup: microphone/encoder/stream release, CWX clear, TUNE off and MOX off on normal stop, failure, cancellation, backgrounding and disconnect.
+- Network loss cannot confirm RX; the gate clears and `RX UNCONFIRMED` remains visible. Reconnect never automatically re-keys.
+
+The audited production TX command surface is limited to TX-slice assignment, MOX, TUNE, power/tune power, mic/processor/TX filter/VOX/monitor, remote audio stream ownership, CWX and ATU. There is no generic arbitrary Flex command field.
+
+## Build and test
+
+Verified on 2026-08-18:
+
+~~~sh
+cd rust/rigweave-flex
+cargo fmt -- --check
+cargo test
+
+cd android
+./gradlew :app:testDebugUnitTest :app:assembleDebug
+
+cmake -S core -B core/build-phase5 -DCMAKE_BUILD_TYPE=Debug
+cmake --build core/build-phase5 --parallel
+ctest --test-dir core/build-phase5 --output-on-failure
+~~~
+
+Results:
+
+- Rust: 13 passed, 0 failed.
+- Android/JVM: passed, including focused VITA, ownership, command-injection and TX-state tests.
+- Rust Android targets: `armeabi-v7a`, `arm64-v8a`, `x86` and `x86_64` built and linked.
+- CTest: 1 passed, 0 failed.
+- Debug APK: assembled, installed and launched on Lenovo `TB373FU`.
+- Tablet evidence: [`screenshots/phase5/flex-offline-cockpit.png`](screenshots/phase5/flex-offline-cockpit.png) and [`screenshots/phase5/flex-tx-safety-offline.png`](screenshots/phase5/flex-tx-safety-offline.png) show the no-radio state, zero live packets/meters and fail-closed TX controls from that installed build.
+
+## Physical validation still required
+
+The operator must manually perform SmartLink authentication. Codex must not request or enter the password.
+
+With a real FLEX-8400, validate separately:
+
+1. LAN discovery and SmartLink discovery/connect.
+2. First-use TOFU and a controlled mismatch accept/reject exercise.
+3. WAN UDP register cadence, first-VITA transition and ping maintenance.
+4. Real FFT frequency/scale, waterfall continuity, meters and stream diagnostics.
+5. Opus RX audio continuity, mute/gain, background and route-loss cleanup.
+6. Receive controls and multi-slice ownership alongside SmartSDR/Maestro.
+7. Only with a dummy load or legal clear frequency/antenna at minimum power: microphone, one voice macro, CWX, TUNE and interruption/watchdog cleanup.
+8. Confirm RX at the radio after every TX test.
+
+Until those steps exist as evidence, SmartLink, real VITA, RX audio and every RF/TX result are **unverified**, not failed and not passed.
+
+## Provenance
+
+Nexus and AetherSDR commits, file-level adaptations, licence, exclusions and endorsement disclaimers are recorded in [`rust/rigweave-flex/UPSTREAM.md`](../rust/rigweave-flex/UPSTREAM.md). RigWeave is GPL-3.0-only. No Nexus DAX orchestration, Qt UI, assets or unconditional `transmit set dax=1` path were imported.

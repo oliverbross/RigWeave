@@ -137,10 +137,12 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val callbook = remember { CallbookController(context) { app.stationCallsign } }
     val cty = remember { CtyController(context) }
     val audio = remember { AudioMonitorController(context) }
+    flex.attachAudioRoutes(audio)
     val cwDecoder = remember { CwDecodeBuffer() }
     var kxRadio by remember { mutableStateOf(NativeCore.parseState(NativeCore.state(core))) }
     var radio by remember { mutableStateOf(kxRadio) }
     val voiceStore = remember { VoiceMacroStore(context) { app.voiceMacroLabels.toList() } }
+    flex.attachVoiceMacroStore(voiceStore)
     val voiceAudio = remember { VoiceMacroAudioController(context, audio, voiceStore) }
     val eqAudio = remember { EqAudioController(context, audio) }
     val eqProfiles = remember { EqProfileStore(context) }
@@ -234,7 +236,9 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         val observer = LifecycleEventObserver { _, event -> when (event) {
             Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> foreground = true
             Lifecycle.Event.ON_STOP, Lifecycle.Event.ON_DESTROY -> {
-                foreground = false; app.disarmAll(); voiceAudio.stopCurrent(); voiceTx.stop("App left foreground; defensive RX cleanup requested")
+                foreground = false; app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
+                voiceTx.stop("App left foreground; defensive RX cleanup requested")
+                scope.launch { flex.onForegroundChanged(false) }
             }
             else -> Unit
         } }
@@ -2916,7 +2920,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             }
             if (app.radioFamily == RadioFamily.FLEXRADIO) {
                 Text(flex.connectionState.label, color = Hold, fontWeight = FontWeight.Bold)
-                Text("KX USB polling, EQ, macros and panadapter are disabled while FlexRadio is selected. Flex control is receive-only.", color = Muted)
+        Text("KX USB polling, KX EQ and the physical-I/Q panadapter are disabled while FlexRadio is selected. Flex uses its own SmartLink/LAN, VITA panafall, PC audio and session-gated transmit cockpit.", color = Muted)
             } else Text("KX USB CAT and all existing KX-specific tools remain active.", color = Muted)
         }
         if (section == SettingsSection.DEFAULT || section == SettingsSection.MACROS) SettingsCard(if (section == SettingsSection.DEFAULT) "LOCAL STATION" else "MACROS") {
