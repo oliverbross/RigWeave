@@ -34,6 +34,8 @@ data class Qso(
     val dclSent: String = "N", val dclReceived: String = "N",
     val qrzSent: String = "N", val qrzReceived: String = "N", val qslImages: String = "",
     val syncState: String = "local", val remoteId: String = "",
+    val activationSessionId: String = "", val activationProgram: String = "",
+    val myPotaRefs: List<String> = emptyList(), val potaRefs: List<String> = emptyList(),
 )
 
 data class QsoPage(val rows: List<Qso>, val total: Int, val page: Int, val pageSize: Int) {
@@ -145,7 +147,11 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             eqslSent = remote.eqslSent.ifBlank { existing.eqslSent }, eqslReceived = remote.eqslReceived.ifBlank { existing.eqslReceived },
             dclSent = remote.dclSent.ifBlank { existing.dclSent }, dclReceived = remote.dclReceived.ifBlank { existing.dclReceived },
             qrzSent = remote.qrzSent.ifBlank { existing.qrzSent }, qrzReceived = remote.qrzReceived.ifBlank { existing.qrzReceived },
-            qslImages = remote.qslImages.ifBlank { existing.qslImages }, syncState = "synced",
+            qslImages = remote.qslImages.ifBlank { existing.qslImages },
+            activationSessionId = remote.activationSessionId.ifBlank { existing.activationSessionId },
+            activationProgram = remote.activationProgram.ifBlank { existing.activationProgram },
+            myPotaRefs = remote.myPotaRefs.ifEmpty { existing.myPotaRefs }, potaRefs = remote.potaRefs.ifEmpty { existing.potaRefs },
+            syncState = "synced",
             remoteId = remote.remoteId.ifBlank { existing.remoteId })
         update(merged); return false
     }
@@ -547,7 +553,9 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             eqslReceived = value("eqslReceived").ifBlank { "N" }, dclSent = value("dclSent").ifBlank { "N" },
             dclReceived = value("dclReceived").ifBlank { "N" }, qrzSent = value("qrzSent").ifBlank { "N" },
             qrzReceived = value("qrzReceived").ifBlank { "N" }, qslImages = value("qslImages"),
-            syncState = value("syncState").ifBlank { "local" }, remoteId = value("remoteId"))
+            syncState = value("syncState").ifBlank { "local" }, remoteId = value("remoteId"),
+            activationSessionId = value("activationSessionId"), activationProgram = value("activationProgram"),
+            myPotaRefs = row.optJSONArray("myPotaRefs").jsonStringList(), potaRefs = row.optJSONArray("potaRefs").jsonStringList())
     }
     private fun details(qso: Qso) = JSONObject().apply {
         put("band", qso.band); put("grid", qso.grid); put("iota", qso.iota); put("sotaRef", qso.sotaRef)
@@ -571,5 +579,11 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         put("dclSent", qso.dclSent); put("dclReceived", qso.dclReceived)
         put("qrzSent", qso.qrzSent); put("qrzReceived", qso.qrzReceived); put("qslImages", qso.qslImages)
         put("syncState", qso.syncState); put("remoteId", qso.remoteId)
+        put("activationSessionId", qso.activationSessionId); put("activationProgram", qso.activationProgram)
+        put("myPotaRefs", org.json.JSONArray(qso.myPotaRefs)); put("potaRefs", org.json.JSONArray(qso.potaRefs))
     }
+}
+
+internal fun org.json.JSONArray?.jsonStringList(): List<String> = if (this == null) emptyList() else buildList {
+    for (index in 0 until length()) optString(index).takeIf(String::isNotBlank)?.let(::add)
 }
