@@ -1,5 +1,7 @@
 # Android POTA Chase
 
+Phase 2A remains the POTA source-specific record. The unified Phase 2B workspace and its current SOTA API approval gate are documented in [PORTABLE_CHASE_ANDROID.md](PORTABLE_CHASE_ANDROID.md).
+
 ## Purpose
 
 Portable → POTA Chase is a read-only hunter workspace joining a current activator spot, a useful local worked-state decision, receive-only CAT tuning, and an editable draft in RigWeave's existing logger. Saving continues through the normal local SQLite and optional Wavelog outbox path; hunter credit still comes from activator-submitted POTA logs.
