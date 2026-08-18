@@ -1,6 +1,7 @@
 package app.rigweave.mobile
 
 import android.Manifest
+import android.content.Intent
 import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.util.LruCache
@@ -118,7 +119,7 @@ private enum class Destination(val label: String) {
     HOME("Home"), RADIO("Radio"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PRESETS("Presets"), DX("DX"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
-    DEFAULT("Default"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
+    DEFAULT("Default"), RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
     SAFETY("Safety"), AUDIO("Audio"), HEALTH("Health"), DIAG("Diag"), ABOUT("About")
 }
 private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Station"), GENERAL("General"), NOTES("Notes"), QSL("QSL") }
@@ -132,11 +133,13 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val neuralDx = remember { NeuralDxController(context, database) }
     val wavelog = remember { WavelogController(context, database) }
     val app = remember { AppController(context) }
+    val flex = remember { FlexRadioController(context, { app.preferredFlexStation }, app::savePreferredFlexStation) }
     val callbook = remember { CallbookController(context) { app.stationCallsign } }
     val cty = remember { CtyController(context) }
     val audio = remember { AudioMonitorController(context) }
     val cwDecoder = remember { CwDecodeBuffer() }
-    var radio by remember { mutableStateOf(NativeCore.parseState(NativeCore.state(core))) }
+    var kxRadio by remember { mutableStateOf(NativeCore.parseState(NativeCore.state(core))) }
+    var radio by remember { mutableStateOf(kxRadio) }
     val voiceStore = remember { VoiceMacroStore(context) { app.voiceMacroLabels.toList() } }
     val voiceAudio = remember { VoiceMacroAudioController(context, audio, voiceStore) }
     val eqAudio = remember { EqAudioController(context, audio) }
@@ -146,7 +149,8 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val voiceTx = remember { VoiceMacroTransmitController(context, transport, audio, voiceStore, app,
         radioState = { radio }, foreground = { foreground }, audioOperationIdle = { voiceAudio.state is VoiceAudioState.Idle }, onFrames = { frames ->
             NativeCore.feed(core, frames)
-            radio = NativeCore.parseState(NativeCore.state(core)).copy(cwDecodedText = cwDecoder.text)
+            kxRadio = NativeCore.parseState(NativeCore.state(core)).copy(cwDecodedText = cwDecoder.text)
+            if (app.radioFamily == RadioFamily.ELECRAFT_KX) radio = kxRadio
         }) }
     var usbDetail by remember { mutableStateOf("No USB CAT adapter opened") }
     var destination by remember { mutableStateOf(Destination.HOME) }
@@ -159,7 +163,8 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
             is UsbResult.Connected -> {
                 cwDecoder.feed(result.cwFrames)
                 NativeCore.feed(core, result.frames)
-                radio = NativeCore.parseState(NativeCore.state(core)).copy(cwDecodedText = cwDecoder.text)
+                kxRadio = NativeCore.parseState(NativeCore.state(core)).copy(cwDecodedText = cwDecoder.text)
+                if (app.radioFamily == RadioFamily.ELECRAFT_KX) radio = kxRadio
                 usbDetail = result.detail
             }
             is UsbResult.PermissionRequired -> { usbDetail = result.detail; app.disarmAll(); voiceTx.stop("CAT permission unavailable") }
@@ -174,7 +179,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val connect: () -> Unit = { scope.launch { connectKx3() } }
     val direct: (String) -> Unit = { command -> scope.launch { accept(transport.send(command)) } }
     val panadapter = remember { PanadapterController(context, audio, { radio }, direct) }
-    val send: (String) -> Unit = { raw ->
+    val sendKx: (String) -> Unit = { raw ->
         val command = raw.uppercase()
         val cwMacro = command.startsWith("KY ")
         val risky = command.startsWith("TX") || cwMacro ||
@@ -182,11 +187,28 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         if (cwMacro && app.cwMacrosArmed) direct(command)
         else if (risky) pendingRisk = command else direct(command)
     }
-    LaunchedEffect(transport) {
+    val send: (String) -> Unit = { raw ->
+        if (app.radioFamily == RadioFamily.ELECRAFT_KX) sendKx(raw) else {
+            val frequency = Regex("FA(\\d{11});").find(raw.uppercase())?.groupValues?.get(1)?.toLongOrNull()
+            val mode = Regex("MD([1-5]);").find(raw.uppercase())?.groupValues?.get(1)?.let { code ->
+                mapOf("1" to "LSB", "2" to "USB", "3" to "CW", "4" to "FM", "5" to "AM")[code]
+            }
+            val target = frequency ?: flex.snapshot.selected(flex.selectedSliceIndex)?.frequencyHz
+            if (target != null) scope.launch { flex.tune(ReceiveTuneRequest(target, mode)) }
+        }
+    }
+    LaunchedEffect(transport, app.radioFamily) {
         audio.refreshDevices()
         delay(250)
-        connectKx3()
-        while (true) { delay(240); transport.poll()?.let(::accept) }
+        if (app.radioFamily == RadioFamily.ELECRAFT_KX) {
+            flex.disconnect(); connectKx3()
+            while (app.radioFamily == RadioFamily.ELECRAFT_KX) { delay(240); transport.poll()?.let(::accept) }
+        } else {
+            transport.disconnect(); app.disarmAll(); voiceTx.stop("FlexRadio selection closes KX CAT")
+            if (destination in setOf(Destination.EQ, Destination.PANADAPTER)) destination = Destination.RADIO
+            flex.discoverLan()
+            while (app.radioFamily == RadioFamily.FLEXRADIO) { radio = flex.state; delay(120) }
+        }
     }
     LaunchedEffect(features) { features.connectConfiguredCluster() }
     LaunchedEffect(transport, radio.mode) {
@@ -221,8 +243,8 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     }
     LaunchedEffect(voiceAudio) { voiceAudio.onFailure = { app.updateVoiceMacrosArmed(false) } }
     DisposableEffect(Unit) { onDispose {
-        scope.launch { transport.disconnect() }; panadapter.close(); audio.close(); neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
-        voiceAudio.close(); voiceTx.close(); eqAudio.close(); app.disarmAll()
+        app.disarmAll(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close()
+        scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
         NativeCore.destroy(core); database.close()
     } }
     pendingRisk?.let { command ->
@@ -263,17 +285,17 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         if (maxWidth >= 700.dp) Row(Modifier.fillMaxSize()) {
             NavigationRail(containerColor = Panel) {
                 Text("RW", color = Amber, fontWeight = FontWeight.Black, modifier = Modifier.padding(18.dp))
-                Destination.entries.forEach { item -> NavigationRailItem(destination == item, { destination = item },
+                Destination.entries.filterNot { app.radioFamily == RadioFamily.FLEXRADIO && it in setOf(Destination.PANADAPTER, Destination.EQ) }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
-            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app, transport,
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app, transport, flex,
                 voiceStore, voiceAudio, voiceTx, eqStudio, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode)
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
             Destination.entries.filterNot { it == Destination.EQ || it == Destination.PANADAPTER }.forEach { item -> NavigationBarItem(destination == item, { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
-            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app, transport,
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app, transport, flex,
                 voiceStore, voiceAudio, voiceTx, eqStudio, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode)
         } }
@@ -293,28 +315,29 @@ private fun navIcon(item: Destination) = when (item) {
 
 @Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase,
     features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController, app: AppController,
-    transport: UsbRadioTransport, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
+    transport: UsbRadioTransport, flex: FlexRadioController, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
     eqStudio: EqStudioController, compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit) {
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     when (destination) {
         Destination.HOME -> HomeScreen(radio, app, send)
-        Destination.RADIO -> if (!compact) RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode)
-        else Column(Modifier.fillMaxSize()) {
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
-                SegmentedButton(!compactPanadapter, { compactPanadapter = false }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Controls") }
-                SegmentedButton(compactPanadapter, { compactPanadapter = true }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("Panadapter") }
-            }
-            if (compactPanadapter) PanadapterScreen(panadapter, radio, features.liveSpots, true) { compactPanadapter = false }
-            else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode)
-        }
+        Destination.RADIO -> if (app.radioFamily == RadioFamily.FLEXRADIO) FlexRadioScreen(flex) {}
+        else if (!compact) RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode)
+                else Column(Modifier.fillMaxSize()) {
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                        SegmentedButton(!compactPanadapter, { compactPanadapter = false }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Controls") }
+                        SegmentedButton(compactPanadapter, { compactPanadapter = true }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("Panadapter") }
+                    }
+                    if (compactPanadapter) PanadapterScreen(panadapter, radio, features.liveSpots, true) { compactPanadapter = false }
+                    else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode)
+                }
         Destination.PANADAPTER -> PanadapterScreen(panadapter, radio, features.liveSpots, compact)
         Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
         Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog, callbook, app)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app, send)
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, app,
-            transport, voiceStore, voiceAudio, voiceTx, openEq, connect, direct)
+            transport, flex, voiceStore, voiceAudio, voiceTx, openEq, connect, direct)
     }
 }
 
@@ -322,7 +345,7 @@ private fun navIcon(item: Destination) = when (item) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         Column { Text("RIGWEAVE", color = Amber, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
             Text(title.uppercase(), color = Muted, style = MaterialTheme.typography.labelSmall) }
-        state?.let { StatusChip(if (it.connected) "CAT LIVE" else "CAT OFFLINE", it.connected) }
+        state?.let { StatusChip(if (it.connected) "RADIO LIVE" else "RADIO OFFLINE", it.connected) }
     }
 }
 
@@ -2798,7 +2821,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
 
 @Composable private fun SettingsScreen(state: RadioState, detail: String, database: QsoDatabase, features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController,
     callbook: CallbookController, cty: CtyController,
-    audio: AudioMonitorController, app: AppController, transport: UsbRadioTransport, voiceStore: VoiceMacroStore,
+    audio: AudioMonitorController, app: AppController, transport: UsbRadioTransport, flex: FlexRadioController, voiceStore: VoiceMacroStore,
     voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, openEq: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
     var section by remember { mutableStateOf(SettingsSection.DEFAULT) }
@@ -2884,6 +2907,17 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         Header("Complete station settings", state)
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             SettingsSection.entries.forEach { item -> FilterChip(section == item, { section = item }, { Text(item.label) }) }
+        }
+        if (section == SettingsSection.RADIO) SettingsCard("RADIO FAMILY") {
+            Text("Select the single active radio backend. Switching closes the previous connection before the next backend starts.", color = Muted)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(app.radioFamily == RadioFamily.ELECRAFT_KX, { app.selectRadioFamily(RadioFamily.ELECRAFT_KX) }, { Text("Elecraft KX3/KX2") })
+                FilterChip(app.radioFamily == RadioFamily.FLEXRADIO, { app.selectRadioFamily(RadioFamily.FLEXRADIO) }, { Text("FlexRadio") })
+            }
+            if (app.radioFamily == RadioFamily.FLEXRADIO) {
+                Text(flex.connectionState.label, color = Hold, fontWeight = FontWeight.Bold)
+                Text("KX USB polling, EQ, macros and panadapter are disabled while FlexRadio is selected. Flex control is receive-only.", color = Muted)
+            } else Text("KX USB CAT and all existing KX-specific tools remain active.", color = Muted)
         }
         if (section == SettingsSection.DEFAULT || section == SettingsSection.MACROS) SettingsCard(if (section == SettingsSection.DEFAULT) "LOCAL STATION" else "MACROS") {
             if (section == SettingsSection.DEFAULT) {

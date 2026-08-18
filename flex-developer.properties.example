@@ -1,0 +1,7 @@
+# Copy to ../flex-developer.properties beside the repository checkout, or export these names.
+# Never commit issued values.
+FLEX_SMARTLINK_CLIENT_ID=
+# The following official April 2026 defaults are built in. Override only if FlexRadio issued different values.
+FLEX_SMARTLINK_AUTH_DOMAIN=
+FLEX_SMARTLINK_REDIRECT_URI=
+FLEX_SMARTLINK_SERVER=
