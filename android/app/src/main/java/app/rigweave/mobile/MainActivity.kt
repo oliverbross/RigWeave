@@ -130,7 +130,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val core = remember { NativeCore.create() }
     val transport = remember { UsbRadioTransport(context) }
     val database = remember { QsoDatabase(context) }
-    val pota = remember { PotaController(context, database) }
+    val portable = remember { PortableController(context, database) }
     val features = remember { FeatureController(context) }
     val neuralDx = remember { NeuralDxController(context, database) }
     val wavelog = remember { WavelogController(context, database) }
@@ -158,7 +158,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         }) }
     var usbDetail by remember { mutableStateOf("No USB CAT adapter opened") }
     var destination by remember { mutableStateOf(Destination.HOME) }
-    var pendingPotaDraft by remember { mutableStateOf<PotaLogDraft?>(null) }
+    var pendingPortableDraft by remember { mutableStateOf<PortableLogDraft?>(null) }
     var pendingRisk by remember { mutableStateOf<String?>(null) }
     var pendingVoiceSlot by remember { mutableStateOf<Int?>(null) }
     var voiceArmedMode by remember { mutableStateOf<String?>(null) }
@@ -252,7 +252,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     DisposableEffect(Unit) { onDispose {
         app.disarmAll(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close()
         scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
-        pota.close(); NativeCore.destroy(core); database.close()
+        portable.close(); NativeCore.destroy(core); database.close()
     } }
     pendingRisk?.let { command ->
         val cwMacro = command.startsWith("KY ")
@@ -298,21 +298,21 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
-            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter,
-                pota, pendingPotaDraft, { pendingPotaDraft = null }, foreground, app, transport, flex,
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, portable, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport,
+                flex,
                 voiceStore, voiceAudio, voiceTx, eqStudio, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
-                connect, send, direct, requestVoice, clearCwDecode, { spot -> executePotaTune(radio.connected, spot, direct) },
-                { spot -> if (executePotaTune(radio.connected, spot, direct)) { pendingPotaDraft = toPotaLogDraft(spot); destination = Destination.RADIO } },
+                connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
+                { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
                 { destination = Destination.PORTABLE })
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
             Destination.entries.filterNot { it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE }.forEach { item -> NavigationBarItem(destination == item, { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
-            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter,
-                pota, pendingPotaDraft, { pendingPotaDraft = null }, foreground, app, transport, flex,
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, portable, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport,
+                flex,
                 voiceStore, voiceAudio, voiceTx, eqStudio, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
-                connect, send, direct, requestVoice, clearCwDecode, { spot -> executePotaTune(radio.connected, spot, direct) },
-                { spot -> if (executePotaTune(radio.connected, spot, direct)) { pendingPotaDraft = toPotaLogDraft(spot); destination = Destination.RADIO } },
+                connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
+                { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
                 { destination = Destination.PORTABLE })
         } }
     }
@@ -332,17 +332,17 @@ private fun navIcon(item: Destination) = when (item) {
 
 @Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase,
     features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
-    pota: PotaController, potaDraft: PotaLogDraft?, consumePotaDraft: () -> Unit, foreground: Boolean, app: AppController,
+    portable: PortableController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
     transport: UsbRadioTransport, flex: FlexRadioController, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
     eqStudio: EqStudioController, compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
-    tunePota: (PotaSpot) -> Unit, tuneLogPota: (PotaSpot) -> Unit, openPortable: () -> Unit) {
+    tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openPortable: () -> Unit) {
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     when (destination) {
         Destination.HOME -> HomeScreen(radio, app, send, openPortable)
         Destination.RADIO -> if (app.radioFamily == RadioFamily.FLEXRADIO) FlexRadioScreen(flex) {}
         else if (!compact || !app.panadapterEnabled) RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features,
-            voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode, potaDraft, consumePotaDraft, pota::notifyQsoChanged)
+            voiceStore, voiceTx, openEq, connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
                 else Column(Modifier.fillMaxSize()) {
                     SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                         SegmentedButton(!compactPanadapter, { compactPanadapter = false }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Controls") }
@@ -350,17 +350,17 @@ private fun navIcon(item: Destination) = when (item) {
                     }
                     if (compactPanadapter) PanadapterScreen(panadapter, radio, features.liveSpots, true) { compactPanadapter = false }
                     else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx,
-                        openEq, connect, send, direct, requestVoice, clearCwDecode, potaDraft, consumePotaDraft, pota::notifyQsoChanged)
+                        openEq, connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
                 }
         Destination.PANADAPTER -> if (app.panadapterEnabled && app.radioFamily == RadioFamily.ELECRAFT_KX)
             PanadapterScreen(panadapter, radio, features.liveSpots, compact)
         else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx,
-            openEq, connect, send, direct, requestVoice, clearCwDecode, potaDraft, consumePotaDraft, pota::notifyQsoChanged)
+            openEq, connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
         Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
         Destination.LOGBOOK -> LogbookScreen(radio, database, wavelog, callbook, app)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app, send)
-        Destination.PORTABLE -> PotaChaseScreen(pota, radio, app.stationGrid, foreground, compact, tunePota, tuneLogPota)
+        Destination.PORTABLE -> PortableChaseScreen(portable, radio, app.stationGrid, foreground, compact, tunePortable, tuneLogPortable)
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, app,
             transport, flex, voiceStore, voiceAudio, voiceTx, openEq, connect, direct)
     }
@@ -435,7 +435,7 @@ private fun navIcon(item: Destination) = when (item) {
     wavelog: WavelogController, callbook: CallbookController, cty: CtyController, features: FeatureController,
     voiceStore: VoiceMacroStore, voiceTx: VoiceMacroTransmitController, openEq: () -> Unit, connect: () -> Unit, send: (String) -> Unit,
     direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
-    potaDraft: PotaLogDraft?, consumePotaDraft: () -> Unit, onQsoSaved: () -> Unit) {
+    portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, onQsoSaved: () -> Unit) {
     var previousState by remember { mutableStateOf<RadioState?>(null) }
     var radioFeedback by remember { mutableStateOf<RadioFeedback?>(null) }
     var feedbackVisible by remember { mutableStateOf(false) }
@@ -487,7 +487,7 @@ private fun navIcon(item: Destination) = when (item) {
                         isVoiceMacroMode(state.mode) -> VoiceMacroStrip(state, voiceStore, voiceTx, requestVoice,
                             Modifier.fillMaxWidth().heightIn(min = 54.dp))
                     }
-                    CompactLogger(state, database, wavelog, callbook, cty, app, send, potaDraft, consumePotaDraft, onQsoSaved,
+                CompactLogger(state, database, wavelog, callbook, cty, app, send, portableDraft, consumePortableDraft, onQsoSaved,
                         onInsight = { stationInsight = it; identityVisible = true },
                         onInsightCleared = { stationInsight = null; identityVisible = false },
                         modifier = Modifier.weight(1f).fillMaxWidth())
@@ -1881,7 +1881,7 @@ private fun spotStatusColor(status: String?): Color = when (status) {
 
 @Composable private fun CompactLogger(state: RadioState, database: QsoDatabase, wavelog: WavelogController,
     callbook: CallbookController, cty: CtyController, app: AppController, send: (String) -> Unit,
-    potaDraft: PotaLogDraft?, consumePotaDraft: () -> Unit, onQsoSaved: () -> Unit,
+    portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, onQsoSaved: () -> Unit,
     onInsight: (StationInsight) -> Unit, onInsightCleared: () -> Unit, modifier: Modifier = Modifier) {
     var tab by remember { mutableStateOf(QsoEditorTab.QSO) }
     var call by remember { mutableStateOf("") }; var sent by remember { mutableStateOf("59") }; var received by remember { mutableStateOf("59") }
@@ -1898,7 +1898,7 @@ private fun spotStatusColor(status: String?): Color = when (status) {
     var lookupGeneration by remember { mutableStateOf(0) }
     var logFrequencyMHz by remember { mutableStateOf(if (state.frequencyHz > 0) "%.6f".format(Locale.US, state.frequencyHz / 1_000_000.0) else "") }
     var logMode by remember { mutableStateOf(state.mode.takeUnless { it == "--" }.orEmpty()) }
-    var potaChaseDraft by remember { mutableStateOf(false) }
+    var portableChaseDraft by remember { mutableStateOf(false) }
     val lookupScope = rememberCoroutineScope()
     val selectedStation = wavelog.selectedStation
     val utc = wavelog.synchronizedNow().atZone(ZoneOffset.UTC)
@@ -1907,22 +1907,22 @@ private fun spotStatusColor(status: String?): Color = when (status) {
         call = ""; sent = "59"; received = "59"; name = ""; qth = ""; grid = ""; iota = ""; sota = ""; wwff = ""; pota = ""
         comment = ""; notes = ""; country = ""; dxcc = ""; continent = ""; region = ""; cqZone = ""; ituZone = ""
         stateName = ""; email = ""; propagation = ""; antennaPath = ""; qslSent = "N"; qslMethod = ""; qslVia = ""; qslMessage = ""
-        logFrequencyMHz = if (state.frequencyHz > 0) "%.6f".format(Locale.US, state.frequencyHz / 1_000_000.0) else ""; logMode = state.mode.takeUnless { it == "--" }.orEmpty(); potaChaseDraft = false
+        logFrequencyMHz = if (state.frequencyHz > 0) "%.6f".format(Locale.US, state.frequencyHz / 1_000_000.0) else ""; logMode = state.mode.takeUnless { it == "--" }.orEmpty(); portableChaseDraft = false
         enrichment = "Enter a callsign"; tab = QsoEditorTab.QSO
         onInsightCleared()
     }
-    LaunchedEffect(state.frequencyHz, state.mode, potaChaseDraft) {
-        if (!potaChaseDraft) {
+    LaunchedEffect(state.frequencyHz, state.mode, portableChaseDraft) {
+        if (!portableChaseDraft) {
             if (state.frequencyHz > 0) logFrequencyMHz = "%.6f".format(Locale.US, state.frequencyHz / 1_000_000.0)
             if (state.mode.isNotBlank() && state.mode != "--") logMode = state.mode
         }
     }
-    LaunchedEffect(potaDraft?.token) {
-        val draft = potaDraft ?: return@LaunchedEffect
-        call = draft.callsign; pota = draft.potaRef; qth = listOf(draft.parkName, draft.location).filter(String::isNotBlank).joinToString(" · ")
+    LaunchedEffect(portableDraft?.token) {
+        val draft = portableDraft ?: return@LaunchedEffect
+        call = draft.callsign; pota = draft.potaRef; sota = draft.sotaRef; wwff = draft.wwffRef; qth = draft.referenceNames
         comment = draft.comment; logFrequencyMHz = "%.6f".format(Locale.US, draft.frequencyHz / 1_000_000.0); logMode = draft.mode
-        potaChaseDraft = true; status = "POTA DRAFT · REVIEW BEFORE SAVE"; tab = QsoEditorTab.QSO
-        consumePotaDraft()
+        portableChaseDraft = true; status = "PORTABLE CHASE DRAFT · REVIEW BEFORE SAVE"; tab = QsoEditorTab.QSO
+        consumePortableDraft()
     }
     fun applyCty(): Boolean {
         val row = cty.lookup(call) ?: return false
@@ -2063,7 +2063,7 @@ private fun spotStatusColor(status: String?): Color = when (status) {
                         stationProfileId = if (wavelog.logMode == LogMode.WAVELOG) wavelog.stationId else "", stationLocation = station?.name ?: app.stationName,
                         myGrid = station?.grid ?: app.stationGrid, myCountry = station?.country.orEmpty(), myDxcc = station?.dxcc.orEmpty(),
                         myCqZone = station?.cqZone.orEmpty(), myItuZone = station?.ituZone.orEmpty(), myState = station?.state.orEmpty(),
-                        myIota = station?.iota.orEmpty(), mySotaRef = station?.sotaRef.orEmpty(), myWwffRef = station?.wwffRef.orEmpty(), myPotaRef = if (potaChaseDraft) "" else station?.potaRef.orEmpty(),
+                        myIota = station?.iota.orEmpty(), mySotaRef = if (portableChaseDraft) "" else station?.sotaRef.orEmpty(), myWwffRef = if (portableChaseDraft) "" else station?.wwffRef.orEmpty(), myPotaRef = if (portableChaseDraft) "" else station?.potaRef.orEmpty(),
                         radioModel = "Elecraft KX3", dxcc = dxcc, continent = continent, region = region, cqZone = cqZone,
                         ituZone = ituZone, state = stateName, email = email, propagationMode = propagation, antennaPath = antennaPath,
                         qslSent = qslSent, qslMethod = qslMethod, qslVia = qslVia, qslMessage = qslMessage,
