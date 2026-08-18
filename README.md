@@ -2,7 +2,7 @@
 
 RigWeave is a radio-native portable operating cockpit that connects discovery, tuning, operating, logging, synchronisation, and progress without requiring fabricated state or permanent network access.
 
-The current repository contains two native mobile clients—an iPad-focused SwiftUI client and an Android Jetpack Compose client—over a shared C++17 core. Elecraft KX3/KX2 is the current radio family. Android implements KX3 EQ Studio, SSB voice macros, POTA Chase, and the integrated Phase 2B Portable Chase workspace with WWFF live activity and an offline SOTA summit catalogue. SOTA live remains unavailable pending written programme API approval; RigWeave makes no unapproved SOTA API request. These capabilities are not claimed for Apple or unqualified KX2 writes. Desktop, FlexRadio, QMX, and Portable Activate remain planned work.
+The current repository contains two native mobile clients—an iPad-focused SwiftUI client and an Android Jetpack Compose client—over a shared C++17 core. Elecraft KX3/KX2 is the current radio family. Android implements KX3 EQ Studio, SSB voice macros, the integrated Phase 2B Portable Chase workspace, and Phase 3A POTA Activate with recoverable local sessions and programme-correct ADIF export. SOTA live remains unavailable pending written programme API approval; RigWeave makes no unapproved SOTA API request. These capabilities are not claimed for Apple or unqualified KX2 writes. Desktop, FlexRadio, QMX, and SOTA/WWFF activation remain planned work.
 
 ## Current implementation
 
@@ -10,8 +10,8 @@ The current repository contains two native mobile clients—an iPad-focused Swif
 |---|---|---|
 | Shared core | KX3/KX2 CAT parsing and safety classes, ADIF, CTY, spot/DX analysis, operator intelligence, panadapter DSP, Wavelog retry policy, and bounded WSJT-X parsing behind a C ABI | core/include, core/portable, core/src |
 | Apple | SwiftUI app, Objective-C++ bridge, base USBDriverKit KXUSB transport, local SQLite/ADIF, callbook, Wavelog, cluster/DX, and physical-I/Q panadapter | ios/RigWeave, ios/CP210xDriver |
-| Android | Compose app, JNI bridge, USB serial, local SQLite/ADIF, callbook, Wavelog, CW and SSB voice macros, hardware-backed KX3 EQ Studio, POTA Chase plus the integrated multi-program Portable Chase workspace, DX/Neural DX surfaces, MapLibre maps, audio monitoring, and a dedicated KX3 stereo-I/Q panadapter behind one exclusive audio-owner contract | android/app/src/main |
-| Planned / gated | SOTA live API approval, further KX3/KX2 Studio hardening and platform parity, Portable Activate, Sync and Progress, FlexRadio SmartLink, Qt/QML desktop, then QMX and broader integrations | docs/ROADMAP.md |
+| Android | Compose app, JNI bridge, USB serial, local SQLite/ADIF, callbook, Wavelog, CW and SSB voice macros, hardware-backed KX3 EQ Studio, multi-program Portable Chase, POTA Activate sessions/export, DX/Neural DX surfaces, MapLibre maps, audio monitoring, and a dedicated KX3 stereo-I/Q panadapter behind one exclusive audio-owner contract | android/app/src/main |
+| Planned / gated | SOTA live API approval, further KX3/KX2 Studio hardening and platform parity, SOTA/WWFF Activate, Sync and Progress, FlexRadio SmartLink, Qt/QML desktop, then QMX and broader integrations | docs/ROADMAP.md |
 
 The Apple Xcode targets are configured for device family 2 (iPad), deployment target iOS 17, and should not be described as proven iPhone support.
 
@@ -74,6 +74,7 @@ A successful build is not proof of USB enumeration, DriverKit activation, CAT se
 - [Phase 0 audit](docs/phase-0/PHASE0_AUDIT.md)
 - [Next authorised phase gate](docs/phase-0/NEXT_AUTHORISED_PHASE.md)
 - [Android Phase 1 integration closure](docs/phase-1/ANDROID_STUDIO_INTEGRATION_CLOSURE.md)
+- [Android POTA Activate](docs/POTA_ACTIVATE_ANDROID.md)
 - [Next Phase 1 candidate](docs/phase-1/NEXT_AUTHORISED_PHASE.md)
 
 ## Licence

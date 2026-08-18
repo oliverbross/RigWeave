@@ -52,15 +52,16 @@ This is the normative product order. A phase starts only after separate owner au
 - **Phase 2A implemented on Android:** POTA live activator feed; honest live/cache/stale states; source-stamped replaceable park database; offline search and nearby; local worked labels; deterministic recommendation reasons; joined list/map selection; operator-confirmed receive-only tune; and the existing logger/Wavelog handoff.
 - **Phase 2B integrated — PASS WITH EXTERNAL DEPENDENCY:** unified POTA/SOTA/WWFF model and UI, WWFF Spotline/agendas, staged offline SOTA summits, grouping, programme-specific worked state, map/Places, and multi-reference Tune & Log are present. SOTA live remains disabled pending written approval for the replacement API; RigWeave makes no request to an unapproved or deprecated endpoint.
 - WWFF full offline directory storage is deferred pending programme permission. iPadOS Portable Chase parity remains deferred.
-- Portable Activate remains Phase 3. Panadapter spot overlays remain deferred.
+- Phase 3A POTA Activate is implemented on Android. Panadapter spot overlays remain deferred.
 - No Nexus source or dependency is incorporated.
 
 **Gate:** Data access/licensing confirmed; no false universal coverage.
 
 ## Phase 3 — Portable Activate v1
 
-- Activation sessions, fast logger, multi-reference handling, P2P/S2S, supported spotting, crash recovery, and programme-aware ADIF/export.
-- Do not claim a universal upload route.
+- **Phase 3A implemented on Android:** recoverable POTA sessions, explicit boundary acknowledgement, CAT-optional fast logger, multi-own-park metadata, P2P handoff, UTC progress/rollover, programme-correct ADIF fan-out, file sharing, and official-site spotting/upload handoffs.
+- SOTA/WWFF activation remains later work. Direct programme spotting/log upload APIs remain excluded; no universal upload route is claimed.
+- iPadOS parity remains deferred. No Nexus source or dependency is incorporated.
 
 ## Phase 4 — Sync and Progress v1
 

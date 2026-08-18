@@ -40,6 +40,10 @@ data remain attributable to Parks on the Air. RigWeave is an independent
 application and does not imply official hunter credit, affiliation, or
 authoritative park boundaries.
 
+Android POTA Activate uses the downloaded catalogue and official POTA rules to
+prepare local ADIF files. Spotting and log submission are operator-controlled
+browser handoffs to pota.app; RigWeave uses no POTA write API or credentials.
+
 Android Portable Chase consumes the WWFF Spotline public integration spot and
 active-agenda JSON feeds from spots.wwff.co and the official downloadable SOTA
 summit list from sotadata.org.uk. WWFF and SOTA names and data remain

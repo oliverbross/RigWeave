@@ -23,7 +23,7 @@ Dense radio information is intentional. Do not turn the operator console into a 
 
 ## Current surface truth
 
-Android implements the KX3-style console, the broader Neural DX workspace, and POTA Chase. Apple implements a native iPad-focused navigation and radio/log/DX/panadapter flow. Their destination sets need not be forced into artificial parity; durable behaviour and evidence must remain clear.
+Android implements the KX3-style console, the broader Neural DX workspace, Portable Chase, and POTA Activate. Apple implements a native iPad-focused navigation and radio/log/DX/panadapter flow. Their destination sets need not be forced into artificial parity; durable behaviour and evidence must remain clear.
 
 On Android, Panadapter is a first-class expanded destination and a segmented Radio subview on compact layouts so the existing six-item bottom navigation remains stable. The Flightline instrument keeps spectrum/waterfall dominant and unscrolled, offers a draggable split or either pane alone, and separates view gestures from explicit marker QSY actions. Setup and diagnostics may scroll; the live instrument does not.
 
@@ -35,6 +35,7 @@ On Android, Panadapter is a first-class expanded destination and a segmented Rad
 - Controls: every paired control presents primary tap text and secondary yellow hold text. Minimum target 48 dp with clear pressed, disabled, armed, pending, and error states.
 - Navigation: Material navigation rail/drawer on expanded width; navigation bar on compact width. The compact bar retains Home, Radio, Logbook, Presets, DX, and Settings. EQ and Portable are first-class expanded destinations; compact layouts reach EQ through Radio/Settings Audio and Portable Chase through Home.
 - Portable Chase: wide tablets use programme/status controls, a filter rail, stable ranked activity, and a shared map/detail cockpit; compact layouts use On Air, Map, and Places destinations. Graphite surfaces, restrained provider marker colours, explicit independent freshness, and selection-before-tune keep the multi-program decision path readable without turning rows into bright cards.
+- POTA Activate: Portable owns a CHASE/ACTIVATE mode switch rather than another top-level destination. Expanded tablets pair a fixed session/logger panel with progress and recent-QSO context; compact layouts use one predictable vertical surface. A slim, non-transmitting active-session strip appears on Radio, Portable, and Logbook.
 - EQ Studio: a Flightline audio bench, not a music-player equalizer. Graphite instrument regions hold exact green radio readback, yellow local draft state, amber response/measurement plots, real waveform/spectrum data, source/baseline provenance, touch-safe eight-band controls, and a fixed apply-and-verify action. Compact layouts stack the same workflow without shrinking the controls into narrow faders.
 - Motion: short Material fade-through/shared-axis transitions only where state or destination changes. No decorative entrance choreography.
 - Safety: transmit state overrides ordinary color and hierarchy with redundant red text, full-width warning, and permanent emergency RX access.
