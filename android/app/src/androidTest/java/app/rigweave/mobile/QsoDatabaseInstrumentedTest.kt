@@ -1,5 +1,6 @@
 package app.rigweave.mobile
 
+import android.database.sqlite.SQLiteDatabase
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
@@ -189,6 +190,77 @@ class QsoDatabaseInstrumentedTest {
         assertEquals("Slovak Republic", insight.record.country)
         assertEquals("JN98WT", insight.record.grid)
         assertEquals("504", insight.record.dxcc)
+    }
+
+    @Test fun deliveryRowsRoundTripIndependentlyAndAcceptanceTouchesOnlyMatchingFlag() {
+        val qso = Qso(id = "delivery-qso", callsign = "VK8ABC", frequencyHz = 14_200_000, mode = "SSB",
+            rstSent = "59", rstReceived = "59", createdAt = 1_700_000_000, stationCallsign = "OM0RX",
+            qrzReceived = "Y", clublogReceived = "Y", eqslReceived = "Y")
+        assertTrue(database.save(qso))
+        assertTrue(database.enqueueDelivery(qso.id, SyncProvider.QRZ))
+        assertTrue(database.enqueueDelivery(qso.id, SyncProvider.CLUB_LOG))
+        assertFalse(database.enqueueDelivery(qso.id, SyncProvider.QRZ))
+
+        val qrz = database.deliveries(SyncProvider.QRZ).single()
+        database.updateDelivery(qrz.copy(state = DeliveryState.ACCEPTED, updatedAt = qrz.updatedAt + 1,
+            attemptCount = 1, payloadHash = "hash", remoteId = "123", providerMessage = "Accepted"))
+        database.markProviderAccepted(qso.id, SyncProvider.QRZ)
+
+        database.close()
+        database = QsoDatabase(context, databaseName)
+        val stored = database.deliveries()
+        assertEquals(2, stored.size)
+        assertEquals(DeliveryState.ACCEPTED, stored.single { it.provider == SyncProvider.QRZ }.state)
+        assertEquals(DeliveryState.QUEUED, stored.single { it.provider == SyncProvider.CLUB_LOG }.state)
+        val updated = database.qso(qso.id)!!
+        assertEquals("Y", updated.qrzSent)
+        assertEquals("N", updated.clublogSent)
+        assertEquals("N", updated.eqslSent)
+        assertEquals("Y", updated.qrzReceived)
+        assertEquals("Y", updated.clublogReceived)
+        assertEquals("Y", updated.eqslReceived)
+    }
+
+    @Test fun editingAcceptedQsoMarksLocalChangedWithoutResending() {
+        val qso = Qso(id = "edited-qso", callsign = "VK8EDIT", frequencyHz = 7_100_000, mode = "SSB",
+            rstSent = "59", rstReceived = "57", createdAt = 1_700_000_100, stationCallsign = "OM0RX")
+        assertTrue(database.save(qso))
+        assertTrue(database.enqueueDelivery(qso.id, SyncProvider.QRZ))
+        val accepted = database.deliveries().single().copy(state = DeliveryState.ACCEPTED, updatedAt = 2_000,
+            attemptCount = 1, payloadHash = "old")
+        database.updateDelivery(accepted)
+
+        database.updateLocal(qso.copy(notes = "Corrected locally"))
+
+        assertEquals(DeliveryState.LOCAL_CHANGED, database.deliveries().single().state)
+        assertEquals("Corrected locally", database.qso(qso.id)?.notes)
+    }
+
+    @Test fun deletingLocalQsoCancelsItsDeliveryWithoutRemoteAction() {
+        val qso = Qso(id = "delete-qso", callsign = "VK8DEL", frequencyHz = 7_100_000, mode = "SSB",
+            rstSent = "59", rstReceived = "59", createdAt = 1_700_000_200)
+        assertTrue(database.save(qso))
+        assertTrue(database.enqueueDelivery(qso.id, SyncProvider.CLUB_LOG))
+        database.deleteLocal(qso.id)
+        assertEquals(null, database.qso(qso.id))
+        assertTrue(database.deliveries().isEmpty())
+    }
+
+    @Test fun versionSixMigrationPreservesQsoAndAddsDeliveryTable() {
+        database.close()
+        context.deleteDatabase(databaseName)
+        SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath(databaseName), null).use { legacy ->
+            legacy.execSQL("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            legacy.execSQL("CREATE TABLE radio_profile(id TEXT PRIMARY KEY, model TEXT NOT NULL)")
+            legacy.execSQL("CREATE TABLE qso(id TEXT PRIMARY KEY, callsign TEXT NOT NULL, frequency_hz INTEGER NOT NULL, mode TEXT NOT NULL, rst_sent TEXT NOT NULL, rst_received TEXT NOT NULL, created_at INTEGER NOT NULL, name TEXT NOT NULL DEFAULT '', qth TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '', details_json TEXT NOT NULL DEFAULT '{}')")
+            legacy.execSQL("INSERT INTO qso(id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at) VALUES('legacy','VK8OLD',14200000,'SSB','59','59',1700000000)")
+            legacy.version = 6
+        }
+        database = QsoDatabase(context, databaseName)
+
+        assertEquals("VK8OLD", database.qso("legacy")?.callsign)
+        assertTrue(database.enqueueDelivery("legacy", SyncProvider.EQSL))
+        assertEquals(DeliveryState.QUEUED, database.deliveries().single().state)
     }
 
     companion object { private const val databaseName = "rigweave-instrumented.sqlite" }

@@ -112,7 +112,7 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     DEFAULT("Default"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
@@ -131,6 +131,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val neuralDx = remember { NeuralDxController(context, database) }
     val wavelog = remember { WavelogController(context, database) }
     val app = remember { AppController(context) }
+    val syncHub = remember { SyncHubController(context, database, { wavelog.logMode }, { app.stationGrid }) }
     val callbook = remember { CallbookController(context) { app.stationCallsign } }
     val cty = remember { CtyController(context) }
     val audio = remember { AudioMonitorController(context) }
@@ -189,6 +190,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         while (true) { delay(240); transport.poll()?.let(::accept) }
     }
     LaunchedEffect(features) { features.connectConfiguredCluster() }
+    LaunchedEffect(wavelog.logMode) { syncHub.setAuthority(wavelog.logMode) }
     LaunchedEffect(transport, radio.mode) {
         while (isCwMacroMode(radio.mode)) { delay(90); transport.pollCwText()?.let(::accept) }
     }
@@ -210,9 +212,9 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event -> when (event) {
-            Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> foreground = true
+            Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> { foreground = true; syncHub.setForeground(true) }
             Lifecycle.Event.ON_STOP, Lifecycle.Event.ON_DESTROY -> {
-                foreground = false; app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
+                foreground = false; syncHub.setForeground(false); app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
                 voiceTx.stop("App left foreground; defensive RX cleanup requested")
             }
             else -> Unit
@@ -224,7 +226,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     DisposableEffect(Unit) { onDispose {
         app.disarmAll(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); audio.close()
         scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
-        portable.close(); NativeCore.destroy(core); database.close()
+        portable.close(); syncHub.close(); NativeCore.destroy(core); database.close()
     } }
     pendingRisk?.let { command ->
         val cwMacro = command.startsWith("KY ")
@@ -264,23 +266,23 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         if (maxWidth >= 700.dp) Row(Modifier.fillMaxSize()) {
             NavigationRail(containerColor = Panel) {
                 Text("RW", color = Amber, fontWeight = FontWeight.Black, modifier = Modifier.padding(18.dp))
-                Destination.entries.forEach { item -> NavigationRailItem(destination == item, { destination = item },
+                Destination.entries.filterNot { it == Destination.SYNC }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
-            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport,
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, syncHub, callbook, cty, audio, panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport,
                 voiceStore, voiceAudio, voiceTx, eqStudio, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK })
+                { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC })
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
-            Destination.entries.filterNot { it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE }.forEach { item -> NavigationBarItem(destination == item, { destination = item },
+            Destination.entries.filterNot { it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.SYNC }.forEach { item -> NavigationBarItem(destination == item, { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
-            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport,
+            Screen(destination, radio, usbDetail, database, features, neuralDx, wavelog, syncHub, callbook, cty, audio, panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport,
                 voiceStore, voiceAudio, voiceTx, eqStudio, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK })
+                { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC })
         } }
     }
 }
@@ -291,6 +293,7 @@ private fun navIcon(item: Destination) = when (item) {
     Destination.PANADAPTER -> Icons.Outlined.WaterfallChart
     Destination.EQ -> Icons.Outlined.Equalizer
     Destination.LOGBOOK -> Icons.AutoMirrored.Outlined.List
+    Destination.SYNC -> Icons.Outlined.CloudSync
     Destination.PRESETS -> Icons.Outlined.Bookmarks
     Destination.DX -> Icons.Outlined.Public
     Destination.PORTABLE -> Icons.Outlined.Hiking
@@ -298,13 +301,13 @@ private fun navIcon(item: Destination) = when (item) {
 }
 
 @Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase,
-    features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
+    features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, syncHub: SyncHubController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
     portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
     transport: UsbRadioTransport, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
     eqStudio: EqStudioController, compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
     tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openPortable: () -> Unit,
-    openActivation: () -> Unit, openLogbook: () -> Unit) {
+    openActivation: () -> Unit, openLogbook: () -> Unit, openSync: () -> Unit) {
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     when (destination) {
         Destination.HOME -> HomeScreen(radio, app, send, openPortable)
@@ -326,14 +329,15 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
         Destination.LOGBOOK -> Column(Modifier.fillMaxSize()) {
             PotaActivationStrip(activation, radio, openActivation)
-            Box(Modifier.weight(1f)) { LogbookScreen(radio, database, wavelog, app) }
+            Box(Modifier.weight(1f)) { LogbookScreen(radio, database, wavelog, syncHub, app, openSync) }
         }
+        Destination.SYNC -> SyncHubScreen(database, syncHub, wavelog, openLogbook)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, cty, app, send)
         Destination.PORTABLE -> PortableWorkspaceScreen(portable, activation, radio, app.stationGrid, foreground, compact, app, database,
             wavelog, callbook, cty, tunePortable, tuneLogPortable, openLogbook)
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
-            transport, voiceStore, voiceAudio, voiceTx, openEq, connect, direct)
+            transport, voiceStore, voiceAudio, voiceTx, openEq, openSync, connect, direct)
     }
 }
 
@@ -2332,7 +2336,8 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
         trailingContent = { Text(trailing, color = if (alert) Hold else Muted) }, colors = ListItemDefaults.colors(containerColor = Color.Transparent))
 }
 
-@Composable private fun LogbookScreen(state: RadioState, database: QsoDatabase, wavelog: WavelogController, app: AppController) {
+@Composable private fun LogbookScreen(state: RadioState, database: QsoDatabase, wavelog: WavelogController, syncHub: SyncHubController, app: AppController,
+    openSync: () -> Unit) {
     var showFilters by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf(LogbookFilter()) }
     var applied by remember { mutableStateOf(LogbookFilter()) }
@@ -2393,13 +2398,18 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
             OutlinedButton({ if (wavelog.logMode == LogMode.WAVELOG) wavelog.syncTwoWay(); refreshGeneration++ }, modifier = Modifier.heightIn(min = 48.dp)) {
                 Icon(Icons.Outlined.Refresh, null); Spacer(Modifier.width(6.dp)); Text(if (wavelog.logMode == LogMode.WAVELOG) "SYNC" else "REFRESH")
             }
+            Button(openSync, modifier = Modifier.heightIn(min = 48.dp)) {
+                Icon(Icons.Outlined.CloudSync, null); Spacer(Modifier.width(6.dp)); Text("SYNC HUB")
+            }
             Text("${pageData.rows.size} / ${pageData.total} RESULTS", color = Ink, fontWeight = FontWeight.Black, fontSize = 16.sp)
             CompactPager(pageData, applied.limit, { limit ->
                 draft = draft.copy(limit = limit); applied = applied.copy(limit = limit); page = 0; selectedId = null
             }, { page = (page - 1).coerceAtLeast(0); selectedId = null },
                 { page = (page + 1).coerceAtMost(pageData.pageCount - 1); selectedId = null })
         }
-        LogbookTable(pageData.rows, selectedId, { selectedId = it }, applied, app.visibleLogbookColumns,
+        val deliveryStates = syncHub.records.filter { record -> pageData.rows.any { it.id == record.qsoId } }
+            .groupBy { it.qsoId }.mapValues { entry -> entry.value.associate { it.provider to it.state } }
+        LogbookTable(pageData.rows, deliveryStates, selectedId, { selectedId = it }, applied, app.visibleLogbookColumns,
             { previousQsoRecord = it.previousQsoRecord() }, Modifier.weight(1f)) { sort ->
             val direction = if (applied.sort == sort && applied.direction == LogbookSortDirection.DESCENDING)
                 LogbookSortDirection.ASCENDING else LogbookSortDirection.DESCENDING
@@ -2534,7 +2544,8 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
     else -> today to today
 }
 
-@Composable private fun LogbookTable(records: List<Qso>, selectedId: String?, select: (String) -> Unit,
+@Composable private fun LogbookTable(records: List<Qso>, deliveries: Map<String, Map<SyncProvider, DeliveryState>>,
+    selectedId: String?, select: (String) -> Unit,
     filter: LogbookFilter, visibleColumns: List<LogbookColumn>, previousQsos: (Qso) -> Unit,
     modifier: Modifier = Modifier, sort: (LogbookSort) -> Unit) {
     val horizontal = rememberScrollState()
@@ -2567,10 +2578,10 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
                             LogbookColumn.FREQUENCY -> LogbookCell("${qso.frequencyHz / 1_000} kHz", column.width)
                             LogbookColumn.GRID -> LogbookCell(qso.grid, column.width)
                             LogbookColumn.QSL -> LogbookQslCell(qso.qslSent, qso.qslReceived, column.width)
-                            LogbookColumn.EQSL -> LogbookQslCell(qso.eqslSent, qso.eqslReceived, column.width)
+                            LogbookColumn.EQSL -> LogbookQslCell(qso.eqslSent, qso.eqslReceived, column.width, deliveries[qso.id]?.get(SyncProvider.EQSL))
                             LogbookColumn.LOTW -> LogbookQslCell(qso.lotwSent, qso.lotwReceived, column.width)
-                            LogbookColumn.CLUBLOG -> LogbookQslCell(qso.clublogSent, qso.clublogReceived, column.width)
-                            LogbookColumn.QRZ -> LogbookQslCell(qso.qrzSent, qso.qrzReceived, column.width)
+                            LogbookColumn.CLUBLOG -> LogbookQslCell(qso.clublogSent, qso.clublogReceived, column.width, deliveries[qso.id]?.get(SyncProvider.CLUB_LOG))
+                            LogbookColumn.QRZ -> LogbookQslCell(qso.qrzSent, qso.qrzReceived, column.width, deliveries[qso.id]?.get(SyncProvider.QRZ))
                             LogbookColumn.DXCC -> LogbookCell(qso.country.ifBlank { qso.dxcc }, column.width, Healthy)
                             LogbookColumn.STATE -> LogbookCell(qso.state, column.width)
                             LogbookColumn.COUNTY -> LogbookCell(qso.county, column.width)
@@ -2612,11 +2623,20 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
     }
 }
 
-@Composable private fun RowScope.LogbookQslCell(sent: String, received: String, width: Int) {
+@Composable private fun RowScope.LogbookQslCell(sent: String, received: String, width: Int, delivery: DeliveryState? = null) {
     Row(Modifier.width(width.dp).heightIn(min = 60.dp).border(width = 0.5.dp, color = Color(0xFF39434A)).padding(horizontal = 9.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
         Text("▲", color = if (positiveLogStatus(sent)) Healthy else Danger, fontSize = 18.sp)
         Text("▼", color = if (positiveLogStatus(received)) Healthy else Danger, fontSize = 18.sp)
+        delivery?.let {
+            val attention = it in setOf(DeliveryState.REJECTED, DeliveryState.AUTH_BLOCKED, DeliveryState.BATCH_AUTH_BLOCKED, DeliveryState.PROFILE_REQUIRED,
+                DeliveryState.CONFIG_REQUIRED, DeliveryState.LOCAL_CHANGED)
+            Text(if (attention) "!" else if (it in setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE,
+                DeliveryState.ACCEPTED_MODIFIED, DeliveryState.SUBMITTED_BATCH)) "✓" else "•",
+                color = if (attention) Danger else if (it in setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE,
+                    DeliveryState.ACCEPTED_MODIFIED, DeliveryState.SUBMITTED_BATCH)) Healthy else Amber,
+                fontSize = 14.sp, fontWeight = FontWeight.Black)
+        }
     }
 }
 
@@ -2737,7 +2757,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
 @Composable private fun SettingsScreen(state: RadioState, detail: String, database: QsoDatabase, features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController,
     callbook: CallbookController, cty: CtyController,
     audio: AudioMonitorController, panadapter: PanadapterController, app: AppController, transport: UsbRadioTransport, voiceStore: VoiceMacroStore,
-    voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, openEq: () -> Unit,
+    voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, openEq: () -> Unit, openSync: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
     var section by remember { mutableStateOf(SettingsSection.DEFAULT) }
     var host by remember { mutableStateOf(features.clusterHost) }; var port by remember { mutableStateOf(features.clusterPort.toString()) }
@@ -2985,6 +3005,9 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             Text(features.clusterStatus, color = Muted)
         }
         if (section == SettingsSection.LOG) SettingsCard("LOCAL LOG & WAVELOG") {
+            Button(openSync, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Icon(Icons.Outlined.CloudSync, null); Spacer(Modifier.width(7.dp)); Text("OPEN LOG SERVICES · SYNC HUB")
+            }
             Text("LOG DESTINATION", color = Amber, fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(wavelog.logMode == LogMode.LOCAL, { wavelog.updateLogMode(LogMode.LOCAL) }, { Text("LOCAL ADIF") })
