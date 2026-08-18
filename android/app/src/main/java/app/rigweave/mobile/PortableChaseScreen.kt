@@ -88,7 +88,11 @@ internal fun PortableChaseScreen(
     }
     LaunchedEffect(search, band, mode, newOnly, sort, program) { prefs.edit().putString("search", search).putString("band", band).putString("mode", mode).putBoolean("new_only", newOnly).putString("sort", sort.name).putString("program", program).apply() }
 
-    val all = remember(controller.pota.spots, controller.sotaSpots, controller.wwffSpots, controller.lastQsoRevision, now / 15, radio.frequencyHz, stationGrid) { controller.opportunities(now, radio.frequencyHz, stationGrid) }
+    LaunchedEffect(controller.pota.spots, controller.sotaSpots, controller.wwffSpots, controller.lastQsoRevision,
+        now / 15, radio.frequencyHz, stationGrid) {
+        controller.refreshOpportunities(now, radio.frequencyHz, stationGrid)
+    }
+    val all = controller.rankedOpportunities
     val filtered = remember(all, program, search, band, mode, newOnly, sort) {
         val query = search.trim().uppercase(Locale.US)
         sortedPortable(all.filter { row -> val spot = row.spot
@@ -213,7 +217,18 @@ internal fun PortableChaseScreen(
 
 @Composable private fun WwffPlaces(controller: PortableController, modifier: Modifier) { val context = LocalContext.current; var query by rememberSaveable { mutableStateOf("") }; val rows = remember(controller.wwffSpots, query) { controller.recentWwff(query) }; Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) { Surface(color = PortablePanel, shape = RoundedCornerShape(10.dp), border = androidx.compose.foundation.BorderStroke(1.dp, PortableRaised)) { Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) { Text("WWFF LIVE-CACHE PLACES", color = PortableAmber, fontWeight = FontWeight.Black); Text("Search covers only recently seen Spotline references. The full WWFF Directory is not stored because programme permission is required.", color = PortableMuted); Button({ context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://wwff.co/directory/"))) }) { Icon(Icons.Outlined.OpenInNew, null); Spacer(Modifier.width(6.dp)); Text("Open official WWFF Directory") } } }; OutlinedTextField(query, { query = it.uppercase() }, label = { Text("Recent reference or name") }, leadingIcon = { Icon(Icons.Outlined.Search, null) }, modifier = Modifier.fillMaxWidth(), singleLine = true); LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(rows, key = PortableReference::code) { ref -> Row(Modifier.fillMaxWidth().background(PortablePanel, RoundedCornerShape(8.dp)).padding(10.dp)) { Column { Text("${ref.code} · ${ref.name.ifBlank { "Name unavailable" }}", color = PortableInk, fontWeight = FontWeight.Bold); if (ref.activeAgenda.isNotBlank()) Text("ACTIVE AGENDA · ${ref.activeAgenda}", color = PortableMuted) } } } } } }
 
-@Composable private fun PortableMap(rows: List<PortableOpportunity>, selectedId: String?, select: (String) -> Unit, modifier: Modifier) { val valid = rows.filter { it.spot.latitude != null && it.spot.longitude != null }; Box(modifier.fillMaxSize().background(Color(0xFF06151C), RoundedCornerShape(10.dp)).border(1.dp, PortableRaised, RoundedCornerShape(10.dp))) { if (valid.isNotEmpty()) PortableNativeMap(valid, selectedId, select, Modifier.fillMaxSize()) else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No filtered activity has coordinates", color = PortableMuted) }; Surface(color = Color(0xE6192228), shape = RoundedCornerShape(5.dp), modifier = Modifier.align(Alignment.TopStart).padding(8.dp)) { Text("${valid.size} mapped · ${rows.size - valid.size} without coordinates\n© CARTO · © OpenStreetMap contributors", color = PortableMuted, fontSize = 10.sp, modifier = Modifier.padding(6.dp)) } } }
+@Composable private fun PortableMap(rows: List<PortableOpportunity>, selectedId: String?, select: (String) -> Unit, modifier: Modifier) {
+    val valid = rows.filter { it.spot.latitude != null && it.spot.longitude != null }
+    val mapped = valid.take(200)
+    Box(modifier.fillMaxSize().background(Color(0xFF06151C), RoundedCornerShape(10.dp)).border(1.dp, PortableRaised, RoundedCornerShape(10.dp))) {
+        if (mapped.isNotEmpty()) PortableNativeMap(mapped, selectedId, select, Modifier.fillMaxSize())
+        else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No filtered activity has coordinates", color = PortableMuted) }
+        Surface(color = Color(0xE6192228), shape = RoundedCornerShape(5.dp), modifier = Modifier.align(Alignment.TopStart).padding(8.dp)) {
+            Text("${mapped.size} of ${valid.size} mapped · ${rows.size - valid.size} without coordinates\n© CARTO · © OpenStreetMap contributors",
+                color = PortableMuted, fontSize = 10.sp, modifier = Modifier.padding(6.dp))
+        }
+    }
+}
 
 @Composable private fun PortableNativeMap(rows: List<PortableOpportunity>, selectedId: String?, select: (String) -> Unit, modifier: Modifier) {
     val context = LocalContext.current; val lifecycle = LocalLifecycleOwner.current.lifecycle; val currentRows by rememberUpdatedState(rows); val currentSelect by rememberUpdatedState(select); val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null) } }; var map by remember { mutableStateOf<MapLibreMap?>(null) }; var styleReady by remember { mutableStateOf(false) }; var userMoved by remember { mutableStateOf(false) }

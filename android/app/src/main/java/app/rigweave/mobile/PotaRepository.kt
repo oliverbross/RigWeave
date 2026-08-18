@@ -193,9 +193,12 @@ internal class PotaController(context: Context, private val qsoDatabase: QsoData
     private fun loadCachedSpots() {
         fetchedAt = prefs.getLong("spots_fetched_at", 0)
         if (!cacheFile.exists()) { feedKind = PotaFeedKind.LOADING; return }
-        runCatching { parsePotaSpots(cacheFile.readText(Charsets.UTF_8)) }.onSuccess {
-            spots = it; feedKind = if (it.isEmpty()) PotaFeedKind.LOADING else PotaFeedKind.CACHED
-        }.onFailure { feedKind = PotaFeedKind.FAILED; feedError = "Saved POTA snapshot is unreadable" }
+        scope.launch {
+            val cached = withContext(Dispatchers.IO) { runCatching { parsePotaSpots(cacheFile.readText(Charsets.UTF_8)) } }
+            cached.onSuccess {
+                spots = it; feedKind = if (it.isEmpty()) PotaFeedKind.LOADING else PotaFeedKind.CACHED
+            }.onFailure { feedKind = PotaFeedKind.FAILED; feedError = "Saved POTA snapshot is unreadable" }
+        }
     }
 
     private fun openConnection(url: String): HttpURLConnection = (URL(url).openConnection() as HttpURLConnection).apply {

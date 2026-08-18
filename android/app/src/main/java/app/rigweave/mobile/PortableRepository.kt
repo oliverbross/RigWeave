@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
@@ -66,9 +67,13 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
     var sotaStatus by mutableStateOf(ProviderStatus(PortableFeedKind.UNAVAILABLE, error = "SOTA live API approval required")); private set
     var wwffStatus by mutableStateOf(ProviderStatus()); private set
     var lastQsoRevision by mutableLongStateOf(qsoDatabase.changeToken()); private set
-    private var qsoSnapshot = qsoDatabase.all()
+    var rankedOpportunities by mutableStateOf<List<PortableOpportunity>>(emptyList()); private set
+    private var qsoSnapshot: List<Qso> = emptyList()
+    private var qsoRefreshJob: Job? = null
+    private var opportunityJob: Job? = null
+    private var opportunityKey: Any? = null
 
-    init { loadWwffCache() }
+    init { refreshQsoSnapshot(); loadWwffCache() }
 
     fun close() { scope.cancel(); pota.close(); sotaCatalogue.close() }
     fun refreshAll() { pota.refreshSpots(); refreshWwff() }
@@ -90,11 +95,22 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
         PortableProgram.WWFF -> wwffStatus
     }
 
-    fun opportunities(now: Long, radioFrequencyHz: Long, stationGrid: String): List<PortableOpportunity> {
+    fun refreshOpportunities(now: Long, radioFrequencyHz: Long, stationGrid: String) {
+        val key = listOf(lastQsoRevision, now / 15, radioFrequencyHz, stationGrid,
+            pota.spots.size, pota.spots.maxOfOrNull(PotaSpot::spottedAt),
+            sotaSpots.size, sotaSpots.maxOfOrNull(PortableSpot::spottedAt),
+            wwffSpots.size, wwffSpots.maxOfOrNull(PortableSpot::spottedAt))
+        if (key == opportunityKey) return
+        opportunityKey = key
+        opportunityJob?.cancel()
         val raw = pota.spots.map(PotaSpot::toPortable) + sotaSpots + wwffSpots
-        val grouped = groupPortableSpots(raw)
-        val station = maidenheadCenter(stationGrid)
-        return grouped.map { rankPortableSpot(it, qsoSnapshot, now, radioFrequencyHz, station) }
+        val qsos = qsoSnapshot
+        opportunityJob = scope.launch {
+            rankedOpportunities = withContext(Dispatchers.Default) {
+                val station = maidenheadCenter(stationGrid)
+                groupPortableSpots(raw).map { rankPortableSpot(it, qsos, now, radioFrequencyHz, station) }
+            }
+        }
     }
 
     fun recentWwff(query: String): List<PortableReference> {
@@ -103,7 +119,16 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
             (q.isBlank() || it.code.contains(q) || it.name.uppercase(Locale.US).contains(q)) }.distinctBy(PortableReference::code).take(100)
     }
 
-    private fun refreshQsoSnapshot() { qsoSnapshot = qsoDatabase.all(); lastQsoRevision = qsoDatabase.changeToken() }
+    private fun refreshQsoSnapshot() {
+        qsoRefreshJob?.cancel()
+        qsoRefreshJob = scope.launch {
+            val revision = qsoDatabase.changeToken()
+            val rows = withContext(Dispatchers.IO) { qsoDatabase.all() }
+            qsoSnapshot = rows
+            lastQsoRevision = revision
+            opportunityKey = null
+        }
+    }
 
     private suspend fun refreshWwffNow(now: Long = Instant.now().epochSecond) = wwffMutex.withLock {
         if (wwffSpots.isEmpty()) wwffStatus = ProviderStatus(PortableFeedKind.LOADING)
@@ -158,9 +183,13 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
 
     private fun loadWwffCache() {
         if (!wwffCache.exists()) return
-        runCatching { parseWwffSpots(wwffCache.readText(), wwffAgendaCache.takeIf(File::exists)?.readText().orEmpty().ifBlank { "[]" }) }
-            .onSuccess { wwffSpots = it; wwffStatus = ProviderStatus(PortableFeedKind.CACHED, prefs.getLong("wwff_fetched", 0), it.size) }
-            .onFailure { wwffStatus = ProviderStatus(PortableFeedKind.FAILED, error = "Saved WWFF snapshot is unreadable") }
+        scope.launch {
+            val cached = withContext(Dispatchers.IO) {
+                runCatching { parseWwffSpots(wwffCache.readText(), wwffAgendaCache.takeIf(File::exists)?.readText().orEmpty().ifBlank { "[]" }) }
+            }
+            cached.onSuccess { wwffSpots = it; wwffStatus = ProviderStatus(PortableFeedKind.CACHED, prefs.getLong("wwff_fetched", 0), it.size) }
+                .onFailure { wwffStatus = ProviderStatus(PortableFeedKind.FAILED, error = "Saved WWFF snapshot is unreadable") }
+        }
     }
 
     private fun cacheAtomically(file: File, body: String) {
