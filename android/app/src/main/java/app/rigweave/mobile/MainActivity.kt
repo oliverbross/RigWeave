@@ -347,7 +347,8 @@ private fun navIcon(item: Destination) = when (item) {
     openActivation: () -> Unit, openLogbook: () -> Unit, openSync: () -> Unit, openProgress: () -> Unit) {
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     when (destination) {
-        Destination.HOME -> HomeScreen(radio, app, send, openPortable, openProgress)
+        Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, wavelog, cty, send,
+            openDx, openPortable, openProgress)
         Destination.RADIO -> Column(Modifier.fillMaxSize()) {
             PotaActivationStrip(activation, radio, openActivation)
             Box(Modifier.weight(1f)) {
@@ -423,28 +424,6 @@ private fun navIcon(item: Destination) = when (item) {
             LinearProgressIndicator({ if (state.transmitting) (state.rfOutputTenths / 120f).coerceIn(0f, 1f) else (state.meter / 30f).coerceIn(0f, 1f) },
                 Modifier.fillMaxWidth(), color = Amber)
         }
-    }
-}
-
-@Composable private fun HomeScreen(state: RadioState, app: AppController, send: (String) -> Unit, openPortable: () -> Unit,
-    openProgress: () -> Unit) = Page {
-    Header("Field dashboard", state)
-    OutlinedButton(openPortable, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Icon(Icons.Outlined.Hiking, null); Spacer(Modifier.width(8.dp)); Text("PORTABLE · POTA CHASE") }
-    OutlinedButton(openProgress, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Icon(Icons.Outlined.Insights, null); Spacer(Modifier.width(8.dp)); Text("PROGRESS · NEEDS & LOCAL ESTIMATES") }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FieldProfile.entries.forEach { profile -> FilterChip(app.fieldProfile == profile, { app.setProfile(profile) }, { Text(profile.name) }) }
-    }
-    Instrument(state)
-    Text("QUICK FREQUENCIES", color = Muted)
-    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        app.favoriteBands.forEach { value -> OutlinedButton({
-            value.toDoubleOrNull()?.let { send("FA%011d;".format((it * 1_000_000).toLong())) }
-        }, enabled = state.connected) { Text(value, fontFamily = FontFamily.Monospace) } }
-    }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        HealthTile("RADIO", if (state.connected) state.model else "Not connected", state.connected, Modifier.weight(1f))
-        HealthTile("OPERATING", if (state.connected) "${state.mode} · ${state.bandwidthHz} Hz" else "No live state", state.connected, Modifier.weight(1f))
-        HealthTile("TX SAFETY", if (app.transmitArmed) "ARMED" else "SAFE / RX", !app.transmitArmed, Modifier.weight(1f))
     }
 }
 
@@ -3903,6 +3882,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             Text("Radio. Spectrum. Spots. Logs.", color = Amber)
             Text("Local-first tablet control and logging. Wavelog, callbook, CTY.DAT and DX-cluster integrations are optional.", color = Muted)
             Text("WSJT-X is intentionally not exposed in Settings yet.", color = Muted)
+            Text("Home is inspired by the MIT-licensed OpenHamClock; the native RigWeave implementation remains GPL-3.0-only and shares RigWeave station and provider settings.", color = Muted)
             HorizontalDivider()
             BoxWithConstraints(Modifier.fillMaxWidth().testTag("settings-developer-information")) {
                 @Composable fun DeveloperCopy(modifier: Modifier) {

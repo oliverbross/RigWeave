@@ -15,11 +15,12 @@ RigWeave is local-first. Radio control and local logging must remain useful with
 - Local SQLite journals and ADIF workflows.
 - Android Local authority includes a durable Sync Hub for independently enabled QRZ Logbook, Club Log, and eQSL.cc delivery. Wavelog authority pauses direct services to prevent duplicates; upload acceptance never implies remote confirmation.
 - Optional Wavelog, QRZ/HamQTH, CTY, cluster, NOAA/solar, and other Android Neural DX data sources where implemented and configured.
+- Android Home is a native OpenHamClock-inspired operating dashboard that combines shared station identity, UTC/local time, live CAT truth, solar and band conditions, world DX paths, cluster spots, PSK Reporter reception, portable activity, propagation predictions, local weather, and satellite passes without duplicating settings or service credentials.
 - CW text macros with explicit operator safety controls. Android also implements six operator-controlled SSB voice-macro slots with explicit CAT/PTT ownership and fail-closed audio routing; this is not claimed for Apple.
 
 The clients do not have identical surface coverage. Android currently contains the larger Neural DX workspace plus the implemented KX3 EQ Studio and SSB voice macros; Apple contains the physically proven iPad KXUSB and stereo-I/Q path. Cross-platform claims must name the client and evidence level.
 
-- Retained compact destinations: Home, Radio, Logbook, Presets, DX, and Settings. Expanded navigation also exposes EQ and Portable as first-class destinations; compact layouts open EQ Studio from Radio or Settings → Audio and Portable Chase from Home without adding bottom-bar items.
+- Retained compact destinations: Home, Radio, Logbook, Presets, DX, and Settings. Home is the native ham-clock operations overview. Expanded navigation also exposes EQ and Portable as first-class destinations; compact layouts open EQ Studio from Radio or Settings → Audio and Portable Chase from Home without adding bottom-bar items.
 - Android EQ Studio reads exact KX3 RX/TX curves, keeps radio/draft/profile state separate, records one finite local audio sample, previews an approximate eight-band response with matched/blind A/B, and applies only through an exclusive CAT transaction with exact readback verification. It never keys the transmitter or claims to reproduce Elecraft's undocumented DSP topology.
 - Panadapter is implemented on Android as an expanded destination and compact Radio subview. Portable spot overlays and Digital/WSJT-X remain deferred.
 - The consolidated DX destination owns live cluster browsing and analyzed DX views.

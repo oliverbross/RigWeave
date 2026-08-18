@@ -50,3 +50,12 @@ summit list from sotadata.org.uk. WWFF and SOTA names and data remain
 attributable to their respective programmes. The full WWFF Directory is not
 stored without permission. SOTA live access is disabled pending approval under
 the current private-API terms; no deprecated or unauthorized endpoint is used.
+
+The Android Home operating dashboard is a native RigWeave integration inspired
+by OpenHamClock (https://github.com/accius/openhamclock), inspected at immutable
+commit d4a50eaaa61d3432a1de5f80cbe61790739930a5. OpenHamClock is distributed
+under the MIT License, Copyright 2024-2026 OpenHamClock Contributors. RigWeave
+does not embed its React/Express application, source files, artwork, server,
+deployment controls, or runtime dependencies. The native Compose implementation
+reuses RigWeave data controllers and design language. See
+docs/OPENHAMCLOCK_INTEGRATION.md for the recorded integration boundary.
