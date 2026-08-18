@@ -249,7 +249,7 @@ internal fun PotaChaseScreen(
     }
 }
 
-@Composable private fun PotaParks(controller: PotaController, stationGrid: String, modifier: Modifier) {
+@Composable internal fun PotaParks(controller: PotaController, stationGrid: String, modifier: Modifier) {
     val context = LocalContext.current
     var query by rememberSaveable { mutableStateOf("") }; var location by rememberSaveable { mutableStateOf("") }; var grid by rememberSaveable { mutableStateOf(stationGrid) }; var nearby by rememberSaveable { mutableStateOf(false) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) lastDeviceGrid(context)?.let { grid = it; nearby = true; controller.searchParks(query, location, grid, true) } }
