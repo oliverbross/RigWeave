@@ -50,6 +50,7 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
     private var reader: Job? = null
     private var keepalive: Job? = null
     private var discovery: Job? = null
+    private var smartLinkDiscovery: Job? = null
     private var reconnect: Job? = null
     private var operatorEstablished = false
     private var lastTarget: FlexDiscovery? = null
@@ -97,6 +98,7 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
     var connectionState by mutableStateOf(FlexConnectionState.IDLE); private set
     var detail by mutableStateOf("FlexRadio is not connected"); private set
     val smartLinkConfigured get() = smartLinkConfig.complete
+    val smartLinkSignedIn get() = accessToken != null
     override val state get() = snapshot.toRadioState(selectedSliceIndex)
 
     init {
@@ -130,6 +132,7 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
     fun logout() {
         scope.launch {
             disconnectSession()
+            smartLinkDiscovery?.cancel(); smartLinkDiscovery = null
             accessToken = null; authSession = null; broker?.close(); broker = null
             smartLinkRadios.clear(); refreshStore.clear()
             connectionState = FlexConnectionState.SIGNED_OUT; detail = "SmartLink signed out"
@@ -138,15 +141,30 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
 
     private fun discoverSmartLinkRadios() {
         val token = accessToken ?: return
-        scope.launch {
+        smartLinkDiscovery?.cancel()
+        smartLinkDiscovery = scope.launch {
             val result = runCatching {
                 broker?.close(); SmartLinkBrokerClient(smartLinkConfig).also { broker = it }.connectAndList(token)
             }
             withContext(Dispatchers.Main) {
                 result.onSuccess { smartLinkRadios.clear(); smartLinkRadios.addAll(it); detail = "${it.size} SmartLink radio(s) available" }
-                    .onFailure { detail = it.message ?: "SmartLink broker discovery failed"; connectionState = FlexConnectionState.LOST }
+                    .onFailure {
+                        broker?.close(); broker = null
+                        detail = it.message ?: "SmartLink broker discovery failed"; connectionState = FlexConnectionState.LOST
+                    }
             }
         }
+    }
+
+    fun refreshSmartLinkRadios() {
+        if (accessToken == null) {
+            detail = "Sign in to SmartLink before refreshing the radio directory"
+            connectionState = FlexConnectionState.SIGNED_OUT
+            return
+        }
+        connectionState = FlexConnectionState.DISCOVERING_WAN
+        detail = "Waiting up to 30 seconds for a SmartLink radio directory update"
+        discoverSmartLinkRadios()
     }
 
     suspend fun connectSmartLink(radio: SmartLinkRadio): Boolean {
@@ -614,7 +632,7 @@ class FlexRadioController(context: Context, private val preferredStation: () -> 
     }
 
     override fun close() {
-        operatorEstablished = false; discovery?.cancel(); reconnect?.cancel(); keepalive?.cancel(); reader?.cancel(); broker?.close(); broker = null
+        operatorEstablished = false; discovery?.cancel(); smartLinkDiscovery?.cancel(); reconnect?.cancel(); keepalive?.cancel(); reader?.cancel(); broker?.close(); broker = null
         sendBody(FlexCommands.cwxClear()); sendBody(FlexCommands.tune(false)); sendBody(FlexCommands.mox(false))
         tx.clearGate(); disableRxAudio(); streamSession.close()
         runCatching { socket?.close() }; socket = null; controllerJob.cancel(); NativeCore.flexDestroy(native)

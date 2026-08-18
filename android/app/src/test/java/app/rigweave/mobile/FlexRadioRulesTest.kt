@@ -64,4 +64,15 @@ class FlexRadioRulesTest {
         assertEquals(4992, endpoint?.port)
         assertNull(parseWanEndpoint("radio connect_ready serial=other handle=0xABCD", radios.first()))
     }
+
+    @Test fun brokerParserAcceptsStationPilotFieldAliasesAndRecordPrefixes() {
+        val radios = parseSmartLinkRadios(
+            "  radio list radio_name=Home_Radio callsign=OM0RX serial=8400-1 model=FLEX-8400 status=Available tls_port=4992|" +
+                "name=Backup station=OM0RX serial=8400-2 model=FLEX-6400 status=Available upnp_tls_port=443  ",
+        )
+        assertEquals(2, radios.size)
+        assertEquals("Home Radio", radios.first().nickname)
+        assertEquals("OM0RX", radios.last().callsign)
+        assertEquals(443, radios.last().tlsPort)
+    }
 }

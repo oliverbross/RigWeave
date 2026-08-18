@@ -96,6 +96,7 @@ fun FlexRadioScreen(controller: FlexRadioController, openLog: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton({ controller.discoverLan() }) { Text("SEARCH LAN") }
                 OutlinedButton({ authUri = controller.beginSmartLinkSignIn() }, enabled = controller.smartLinkConfigured) { Text("SIGN IN") }
+                OutlinedButton({ controller.refreshSmartLinkRadios() }, enabled = controller.smartLinkSignedIn) { Text("REFRESH SMARTLINK") }
                 OutlinedButton({ scope.launch { controller.disconnect() } }) { Text("DISCONNECT") }
                 OutlinedButton({
                     CookieManager.getInstance().removeAllCookies(null)
