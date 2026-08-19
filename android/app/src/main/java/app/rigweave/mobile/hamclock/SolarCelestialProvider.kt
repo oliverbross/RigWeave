@@ -21,9 +21,9 @@ import kotlin.math.tan
 internal class SolarCelestialProvider(
     cacheDirectory: File,
     private val http: HamClockHttpClient = HamClockUrlConnectionClient(),
+    private val coalescer: HamClockInFlightCoalescer = HamClockInFlightCoalescer(),
 ) {
     private val cache = HamClockLastGoodCache(cacheDirectory, "goes-xray")
-    private val flight = HamClockSingleFlight<HamClockFeed<HamClockSolarCelestialSnapshot>>()
 
     fun cached(
         latitude: Double,
@@ -43,7 +43,9 @@ internal class SolarCelestialProvider(
         longitude: Double,
         force: Boolean = false,
         nowEpoch: Long = Instant.now().epochSecond,
-    ): HamClockFeed<HamClockSolarCelestialSnapshot> = flight.run {
+    ): HamClockFeed<HamClockSolarCelestialSnapshot> = coalescer.run(
+        "solar-celestial:${"%.3f".format(Locale.US, latitude)}:${"%.3f".format(Locale.US, longitude)}",
+    ) {
         require(latitude in -90.0..90.0 && longitude in -180.0..180.0) { "Station coordinates are invalid" }
         val saved = cache.read()
         if (!force && saved != null && nowEpoch - saved.fetchedAtEpoch < TTL_SECONDS) {

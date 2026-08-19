@@ -514,6 +514,15 @@ private fun HamClockHeader(now: Instant, call: String, grid: String, radio: Radi
         LazyColumn(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             item { Text("Choose modules, place them left or right, and change their order. Layout profiles and all view state are saved locally and survive app upgrades.", color = HcMuted) }
             item {
+                Column(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("SETTINGS TRUTH", color = HcAmber, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                    Text("Active: panel visibility, order, column and row span; map-layer visibility.", color = HcInk, fontSize = 10.sp)
+                    Text("Planned, not currently available: column span/collapse; basemap, follow, centre, zoom and opacity; cluster/PSK timing and filters; portable programme/WWBOTA preferences; satellite preferences; manual or locked DX target; density, time-zone/hour format, units and low-data mode.", color = HcMuted, fontSize = 10.sp)
+                    Text("Imported values for planned settings are preserved but do not appear active.", color = HcMuted, fontSize = 10.sp)
+                    HorizontalDivider(color = HcLine)
+                }
+            }
+            item {
                 Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("LAYOUT PROFILES", color = HcAmber, fontSize = 10.sp, fontWeight = FontWeight.Black,

@@ -11,9 +11,9 @@ import java.util.Locale
 internal class DxpeditionScheduleProvider(
     cacheDirectory: File,
     private val http: HamClockHttpClient = HamClockUrlConnectionClient(),
+    private val coalescer: HamClockInFlightCoalescer = HamClockInFlightCoalescer(),
 ) {
     private val cache = HamClockLastGoodCache(cacheDirectory, "dxpeditions-ng3k")
-    private val flight = HamClockSingleFlight<HamClockFeed<List<HamClockDxpedition>>>()
 
     fun cached(nowEpoch: Long = Instant.now().epochSecond): HamClockFeed<List<HamClockDxpedition>> =
         cache.read()?.let { entry ->
@@ -23,7 +23,8 @@ internal class DxpeditionScheduleProvider(
             }
         } ?: HamClockFeed(emptyList(), HamClockFeedState.UNAVAILABLE, SOURCE, error = "No saved DXpedition schedule")
 
-    fun refresh(force: Boolean = false, nowEpoch: Long = Instant.now().epochSecond): HamClockFeed<List<HamClockDxpedition>> = flight.run {
+    fun refresh(force: Boolean = false, nowEpoch: Long = Instant.now().epochSecond): HamClockFeed<List<HamClockDxpedition>> =
+        coalescer.run("dxpedition-schedule") {
         val saved = cache.read()
         if (!force && saved != null && nowEpoch - saved.fetchedAtEpoch < TTL_SECONDS) {
             val rows = runCatching { dxpeditionsFromJson(saved.body, nowEpoch) }.getOrNull()
@@ -47,7 +48,7 @@ internal class DxpeditionScheduleProvider(
             if (fallback != null) HamClockFeed(fallback, HamClockFeedState.STALE, SOURCE, saved.fetchedAtEpoch, providerError(error))
             else HamClockFeed(emptyList(), HamClockFeedState.UNAVAILABLE, SOURCE, error = providerError(error))
         }
-    }
+        }
 
     private companion object {
         const val URL = "https://www.ng3k.com/Misc/adxoplain.html"

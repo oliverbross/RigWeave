@@ -4,6 +4,11 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.UnknownHostException
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executor
+import java.util.concurrent.ForkJoinPool
 
 internal data class HamClockHttpResponse(
     val body: String,
@@ -98,10 +103,33 @@ internal fun providerError(error: Throwable): String = when (error) {
     else -> error.message?.take(120)?.ifBlank { "Unavailable" } ?: "Unavailable"
 }
 
-/** Prevents parallel UI refreshes from stampeding the same upstream. */
-internal class HamClockSingleFlight<T> {
-    @Synchronized fun run(block: () -> T): T {
-        // Android callers currently serialize refreshes on IO; this lock also protects future callers.
-        return block()
+/** Shares one active provider request without retaining completed results. */
+internal class HamClockInFlightCoalescer(
+    private val executor: Executor = ForkJoinPool.commonPool(),
+) {
+    private val active = ConcurrentHashMap<String, CompletableFuture<Any?>>()
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T> run(key: String, block: () -> T): T {
+        val candidate = CompletableFuture<Any?>()
+        val shared = active.putIfAbsent(key, candidate) ?: candidate.also { future ->
+            executor.execute {
+                try {
+                    val result = block()
+                    active.remove(key, future)
+                    future.complete(result)
+                } catch (error: Throwable) {
+                    active.remove(key, future)
+                    future.completeExceptionally(error)
+                }
+            }
+        }
+        return try {
+            shared.get() as T
+        } catch (error: ExecutionException) {
+            throw (error.cause ?: error)
+        }
     }
+
+    internal fun activeRequestCount(): Int = active.size
 }
