@@ -117,6 +117,7 @@ final class WavelogSync: ObservableObject {
             status = queue.isEmpty ? "Wavelog not configured" : "Wavelog credentials required; QSOs remain queued"
             return
         }
+        if apiKey.hasPrefix("wl2_") { await syncNativeV2(core: core); return }
         let endpoints = endpointCandidates("qso", core: core)
         guard !endpoints.isEmpty else { status = "Wavelog requires a valid HTTPS URL"; return }
         syncing = true; defer { syncing = false; persist() }
@@ -142,6 +143,15 @@ final class WavelogSync: ObservableObject {
             status = "Wavelog URL and API key are required"
             return
         }
+        if apiKey.hasPrefix("wl2_") {
+            status = "Loading Wavelog API v2 stations…"
+            do {
+                stations = try await WavelogNativeV2Client(baseURL: baseURL, token: apiKey).stations()
+                if stationProfile.isEmpty, let preferred = stations.first(where: \.active) ?? stations.first { stationProfile = preferred.id }
+                status = stations.isEmpty ? "No Wavelog stations available to this token" : "\(stations.count) Wavelog API v2 stations loaded"
+            } catch { status = "Load stations failed: \(error.localizedDescription)" }
+            return
+        }
         let endpoints = endpointCandidates("station_info", core: core).map { $0.appendingPathComponent(apiKey) }
         guard !endpoints.isEmpty else { status = "Wavelog requires a valid HTTPS URL"; return }
         status = "Loading Wavelog stations…"
@@ -164,10 +174,12 @@ final class WavelogSync: ObservableObject {
 
     func fullSync() async {
         guard !syncing else { return }
-        guard let core, !apiKey.isEmpty, let stationID = Int(stationProfile) else {
+        guard let core, !apiKey.isEmpty else {
             status = "Wavelog URL, API key and station are required"
             return
         }
+        if apiKey.hasPrefix("wl2_") { await fullSyncNativeV2(); return }
+        guard let stationID = Int(stationProfile) else { status = "Select a numeric Wavelog station"; return }
         let endpoints = endpointCandidates("get_contacts_adif", core: core)
         guard !endpoints.isEmpty else { status = "Wavelog requires a valid HTTPS URL"; return }
         syncing = true; defer { syncing = false }
@@ -210,6 +222,15 @@ final class WavelogSync: ObservableObject {
     func testConnection() async {
         guard let core, !apiKey.isEmpty else {
             status = "Wavelog URL and API key are required"
+            return
+        }
+        if apiKey.hasPrefix("wl2_") {
+            status = "Testing Wavelog API v2 token…"
+            do {
+                let metadata = try await WavelogNativeV2Client(baseURL: baseURL, token: apiKey).metadata()
+                let expiry = metadata.expiresAt.isEmpty ? "no expiry reported" : "expires \(metadata.expiresAt)"
+                status = "Wavelog API v2 connected · \(metadata.owner) · \(metadata.scopes.sorted().joined(separator: ", ")) · \(expiry)"
+            } catch { status = "Wavelog API v2 test failed: \(error.localizedDescription)" }
             return
         }
         let endpoints = endpointCandidates("version", core: core)
@@ -259,6 +280,59 @@ final class WavelogSync: ObservableObject {
         case 3: queue[index].state = "quarantined"; queue[index].lastError = "Request rejected"
         default: queue[index].state = "inspect"; queue[index].lastError = "Ambiguous response"
         }
+    }
+
+    private func syncNativeV2(core: FeatureCore) async {
+        syncing = true; defer { syncing = false; persist() }
+        do {
+            let client = try WavelogNativeV2Client(baseURL: baseURL, token: apiKey)
+            for index in queue.indices where ["pending", "retry"].contains(queue[index].state) && queue[index].nextAttempt <= Date() {
+                queue[index].attempts += 1
+                do {
+                    try await client.create(stationID: stationProfile, adif: queue[index].adif, idempotencyKey: queue[index].id)
+                    queue[index].state = "acknowledged"; queue[index].lastError = ""
+                } catch WavelogV2ClientError.network(let message) {
+                    queue[index].state = "inspect"; queue[index].lastError = "Ambiguous write: \(message)"
+                } catch WavelogV2ClientError.response(let http, let message, let retryAfter) {
+                    apply(action: core.syncAction(status: http, networkError: false, ambiguous: false), index: index,
+                          retryAfter: retryAfter, core: core); queue[index].lastError = message
+                } catch {
+                    queue[index].state = "quarantined"; queue[index].lastError = error.localizedDescription
+                }
+            }
+            status = summary
+        } catch { status = "Wavelog API v2 sync failed: \(error.localizedDescription)" }
+    }
+
+    private func fullSyncNativeV2() async {
+        guard !stationProfile.isEmpty else { status = "Select a Wavelog station"; return }
+        syncing = true; defer { syncing = false }
+        var loaded: [WavelogContact] = []
+        do {
+            let client = try WavelogNativeV2Client(baseURL: baseURL, token: apiKey)
+            for pageNumber in 1...256 {
+                let page = try await client.qsoPage(stationID: stationProfile, page: pageNumber)
+                loaded.append(contentsOf: page.rows.compactMap(Self.v2Contact))
+                syncPages = pageNumber; status = "Wavelog API v2 page \(pageNumber) · \(loaded.count) QSOs"
+                if !page.hasMore {
+                    contacts = Self.deduplicated(loaded); lastFullSync = Date()
+                    if let data = try? JSONEncoder().encode(contacts) { try data.write(to: contactsURL, options: .atomic) }
+                    status = "Full Wavelog API v2 sync complete · \(contacts.count) QSOs · \(pageNumber) pages"
+                    return
+                }
+            }
+            status = "Full Wavelog API v2 sync stopped at the safety page limit"
+        } catch { status = "Full Wavelog API v2 sync failed: \(error.localizedDescription)" }
+    }
+
+    private static func v2Contact(_ row: [String: Any]) -> WavelogContact? {
+        func field(_ name: String) -> String { text(row.first(where: { $0.key.uppercased() == name })?.value) }
+        let call = field("CALL").uppercased(); guard !call.isEmpty else { return nil }
+        let remoteID = text(row["id"]); let id = remoteID.isEmpty
+            ? [call, field("QSO_DATE"), field("TIME_ON"), field("BAND"), field("MODE")].joined(separator: "-") : remoteID
+        return WavelogContact(id: id, callsign: call, name: field("NAME"), band: field("BAND"), mode: field("MODE"),
+            submode: field("SUBMODE"), country: field("COUNTRY"), date: field("QSO_DATE"), time: field("TIME_ON"),
+            frequency: field("FREQ"), rstSent: field("RST_SENT"), rstReceived: field("RST_RCVD"))
     }
 
     private var summary: String {
