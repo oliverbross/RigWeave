@@ -37,6 +37,7 @@ data class Qso(
     val syncState: String = "local", val remoteId: String = "",
     val activationSessionId: String = "", val activationProgram: String = "",
     val myPotaRefs: List<String> = emptyList(), val potaRefs: List<String> = emptyList(),
+    val extraAdifFields: Map<String, String> = emptyMap(),
 )
 
 enum class QsoOrigin { OPERATOR, IMPORT, REMOTE_SYNC }
@@ -76,7 +77,7 @@ fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
     in 50_000_000L..54_000_000L -> "6m"; else -> ""
 }
 
-class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 7) {
+class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 8) {
     private val changeRevision = AtomicLong(0)
     var operatorSaveHandler: ((Qso) -> Unit)? = null
     override fun onConfigure(db: SQLiteDatabase) {
@@ -88,6 +89,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         db.execSQL("CREATE TABLE qso(id TEXT PRIMARY KEY, callsign TEXT NOT NULL, frequency_hz INTEGER NOT NULL, mode TEXT NOT NULL, rst_sent TEXT NOT NULL, rst_received TEXT NOT NULL, created_at INTEGER NOT NULL, name TEXT NOT NULL DEFAULT '', qth TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '', details_json TEXT NOT NULL DEFAULT '{}')")
         createPagingIndexes(db)
         createDeliveryTable(db)
+        createWavelogSyncTables(db)
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
@@ -100,6 +102,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         if (oldVersion < 5) createPagingIndexes(db)
         if (oldVersion < 6) createSpotStatusIndexes(db)
         if (oldVersion < 7) createDeliveryTable(db)
+        if (oldVersion < 8) createWavelogSyncTables(db)
     }
 
     private fun createPagingIndexes(db: SQLiteDatabase) {
@@ -400,6 +403,11 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             "APP_RIGWEAVE_QSL_IMAGES" to qso.qslImages)
         fields.forEach { (name, value) -> if (value.isNotBlank())
             adif = adif.replace("<EOR>", "<$name:${value.toByteArray(Charsets.UTF_8).size}>$value<EOR>") }
+        qso.extraAdifFields.toSortedMap().forEach { (rawName, value) ->
+            val name = rawName.uppercase(java.util.Locale.US)
+            if (name !in WavelogCanonicalizer.rigWeaveFields && name !in WavelogCanonicalizer.excludedFields && value.isNotBlank())
+                adif = adif.replace("<EOR>", "<$name:${value.toByteArray(Charsets.UTF_8).size}>$value<EOR>")
+        }
         return adif
     }
 
@@ -407,18 +415,17 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         var added = 0; var skipped = 0
         Regex("(?is)(.*?<EOR>)").findAll(text.substringAfter("<EOH>", text)).forEach { match ->
             val record = match.value
-            fun field(name: String): String {
-                val tag = Regex("(?i)<${Regex.escape(name)}:(\\d+)(?::[^>]*)?>").find(record) ?: return ""
-                val length = tag.groupValues[1].toIntOrNull() ?: return ""
-                return record.substring(tag.range.last + 1).take(length)
-            }
-            val qso = qsoFromFields(::field, "", "")
+            val parsed = WavelogCanonicalizer.fromAdif(record).fields
+            fun field(name: String) = parsed[name.uppercase(java.util.Locale.US)].orEmpty()
+            val extras = parsed.filterKeys { it !in WavelogCanonicalizer.rigWeaveFields && it !in WavelogCanonicalizer.excludedFields }
+            val qso = qsoFromFields(::field, "", "", extras)
             if (qso == null) skipped++ else if (save(qso, QsoOrigin.IMPORT)) added++ else skipped++
         }
         return added to skipped
     }
 
-    fun qsoFromFields(field: (String) -> String, remoteId: String, stationProfileId: String): Qso? {
+    fun qsoFromFields(field: (String) -> String, remoteId: String, stationProfileId: String,
+        extraAdifFields: Map<String, String> = emptyMap()): Qso? {
         val call = field("CALL").uppercase(); val mode = field("MODE").uppercase()
         val frequency = field("FREQ").toDoubleOrNull(); val date = field("QSO_DATE"); val time = field("TIME_ON")
         val epoch = runCatching { LocalDateTime.parse(date + time.padEnd(6, '0').take(6),
@@ -459,7 +466,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             dclSent = field("DCL_QSL_SENT"), dclReceived = field("DCL_QSL_RCVD"),
             qrzSent = field("QRZCOM_QSO_UPLOAD_STATUS"), qrzReceived = field("QRZCOM_QSO_DOWNLOAD_STATUS"),
             qslImages = field("APP_RIGWEAVE_QSL_IMAGES"), syncState = if (remoteId.isBlank()) "local" else "synced",
-            remoteId = remoteId)
+            remoteId = remoteId, extraAdifFields = extraAdifFields)
     }
 
     private fun insert(qso: Qso) {
@@ -478,6 +485,17 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         arrayOf(qso.callsign, qso.frequencyHz.toString(), qso.mode, (qso.createdAt - 15).toString(), (qso.createdAt + 15).toString())).firstOrNull()
     private fun findById(id: String): Qso? = queryWhere("id=? LIMIT 1", arrayOf(id)).firstOrNull()
     fun qso(id: String): Qso? = findById(id)
+
+    fun naturalCandidates(qso: Qso): List<Qso> = queryWhere(
+        "UPPER(callsign)=? AND frequency_hz=? AND UPPER(mode)=? AND created_at BETWEEN ? AND ? ORDER BY created_at",
+        arrayOf(qso.callsign.uppercase(), qso.frequencyHz.toString(), qso.mode.uppercase(),
+            (qso.createdAt - 15).toString(), (qso.createdAt + 15).toString()))
+
+    fun insertRemoteDistinct(qso: Qso): Boolean {
+        if (findById(qso.id) != null) return false
+        insert(qso.copy(syncState = "synced"))
+        return true
+    }
 
     fun enqueueDelivery(qsoId: String, provider: SyncProvider, state: DeliveryState = DeliveryState.QUEUED,
         now: Long = System.currentTimeMillis() / 1_000): Boolean {
@@ -674,7 +692,8 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             qrzReceived = value("qrzReceived").ifBlank { "N" }, qslImages = value("qslImages"),
             syncState = value("syncState").ifBlank { "local" }, remoteId = value("remoteId"),
             activationSessionId = value("activationSessionId"), activationProgram = value("activationProgram"),
-            myPotaRefs = row.optJSONArray("myPotaRefs").jsonStringList(), potaRefs = row.optJSONArray("potaRefs").jsonStringList())
+            myPotaRefs = row.optJSONArray("myPotaRefs").jsonStringList(), potaRefs = row.optJSONArray("potaRefs").jsonStringList(),
+            extraAdifFields = row.optJSONObject("extraAdifFields").jsonStringMap())
     }
     private fun details(qso: Qso) = JSONObject().apply {
         put("band", qso.band); put("grid", qso.grid); put("iota", qso.iota); put("sotaRef", qso.sotaRef)
@@ -700,9 +719,14 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         put("syncState", qso.syncState); put("remoteId", qso.remoteId)
         put("activationSessionId", qso.activationSessionId); put("activationProgram", qso.activationProgram)
         put("myPotaRefs", org.json.JSONArray(qso.myPotaRefs)); put("potaRefs", org.json.JSONArray(qso.potaRefs))
+        put("extraAdifFields", JSONObject(qso.extraAdifFields))
     }
 }
 
 internal fun org.json.JSONArray?.jsonStringList(): List<String> = if (this == null) emptyList() else buildList {
     for (index in 0 until length()) optString(index).takeIf(String::isNotBlank)?.let(::add)
+}
+
+internal fun org.json.JSONObject?.jsonStringMap(): Map<String, String> = if (this == null) emptyMap() else buildMap {
+    keys().forEach { key -> optString(key).takeIf(String::isNotBlank)?.let { put(key, it) } }
 }

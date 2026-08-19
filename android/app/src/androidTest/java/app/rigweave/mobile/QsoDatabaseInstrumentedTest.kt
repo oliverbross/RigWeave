@@ -263,5 +263,29 @@ class QsoDatabaseInstrumentedTest {
         assertEquals(DeliveryState.QUEUED, database.deliveries().single().state)
     }
 
+    @Test fun nativeWavelogStatePersistsUnknownAdifAndAtomicOutbox() {
+        val binding = WavelogBinding(
+            baseUrl = "https://example.invalid/index.php", credentialAlias = "wavelog-v2",
+            apiGeneration = WavelogApiGeneration.V2,
+            capabilities = WavelogCapabilities(setOf("qso:read", "qso:write"), true, true),
+            remoteStationId = "11",
+        )
+        val store = WavelogSyncStore(database)
+        store.saveBinding(binding)
+        val qso = Qso(id = "native-sync", callsign = "OM0RX", frequencyHz = 14_060_000, mode = "CW",
+            rstSent = "599", rstReceived = "599", createdAt = 1_700_000_300,
+            extraAdifFields = mapOf("APP_VENDOR_PRIVATE" to "preserved"))
+
+        assertTrue(store.saveWithOutbox(qso, binding))
+        assertEquals(binding.id, store.activeBinding()?.id)
+        assertEquals(WavelogOperation.CREATE, store.pending(binding.id).single().operation)
+        assertTrue(database.exportADIF().contains("<APP_VENDOR_PRIVATE:9>preserved"))
+
+        database.close()
+        database = QsoDatabase(context, databaseName)
+        assertEquals("preserved", database.qso(qso.id)?.extraAdifFields?.get("APP_VENDOR_PRIVATE"))
+        assertEquals(1, WavelogSyncStore(database).pending(binding.id).size)
+    }
+
     companion object { private const val databaseName = "rigweave-instrumented.sqlite" }
 }
