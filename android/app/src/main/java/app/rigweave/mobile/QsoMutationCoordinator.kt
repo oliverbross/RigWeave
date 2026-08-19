@@ -25,18 +25,27 @@ class QsoMutationCoordinator(
         recordMutation(qso, origin, WavelogOperation.UPDATE)
     }
 
-    fun delete(id: String, origin: QsoOrigin = QsoOrigin.OPERATOR) = database.transaction {
+    fun delete(id: String, intent: QsoDeleteIntent, origin: QsoOrigin = QsoOrigin.OPERATOR) = database.transaction {
         val qso = database.qso(id) ?: return@transaction
-        val binding = store.activeBinding()?.takeIf { applies(it, qso) }
+        val binding = store.configuredBinding()?.takeIf { applies(it, qso) }
+        if (origin == QsoOrigin.REMOTE_SYNC) {
+            require(intent == QsoDeleteIntent.REMOTE_SYNC)
+        } else if (intent == QsoDeleteIntent.DELETE_REMOTE_IF_UNCHANGED) {
+            requireNotNull(binding) { "This QSO is not mapped to Wavelog" }
+            require(binding.state != WavelogBindingState.READ_ONLY) { "Read-only Wavelog tokens cannot delete remote QSOs" }
+            require(binding.capabilities.canDeleteQsos) { "The Wavelog token is missing qso:delete; no QSO was deleted" }
+        }
         if (origin != QsoOrigin.REMOTE_SYNC && binding != null) {
             val link = store.link(binding.id, id)
             if (link == null) {
                 store.cancelUnsentCreate(binding.id, id)
             } else {
                 store.saveTombstone(WavelogTombstone(binding.id, id, link.remoteQsoId, link.baselineHash,
-                    System.currentTimeMillis() / 1_000), link.baselineCanonical)
-                if (binding.state == WavelogBindingState.ENABLED && binding.capabilities.canDeleteQsos) {
-                    store.enqueue(binding.id, id, WavelogOperation.DELETE, CanonicalQso(emptyMap()))
+                    System.currentTimeMillis() / 1_000, intent = intent), link.baselineCanonical)
+                if (intent == QsoDeleteIntent.DELETE_REMOTE_IF_UNCHANGED) {
+                    store.enqueue(binding.id, id, WavelogOperation.DELETE, CanonicalQso(emptyMap()),
+                        state = if (binding.state == WavelogBindingState.PAUSED)
+                            WavelogOutboxState.PAUSED else WavelogOutboxState.PENDING)
                 }
             }
         }
@@ -52,19 +61,30 @@ class QsoMutationCoordinator(
     fun localStationIds(): List<String> = listOf(DEFAULT_LOCAL_STATION) + database.all().map(Qso::stationProfileId)
         .filter(String::isNotBlank).distinct().sorted()
 
-    fun isMapped(qso: Qso): Boolean = store.activeBinding()?.let { applies(it, qso) } == true
+    fun isMapped(qso: Qso): Boolean = store.configuredBinding()?.let { applies(it, qso) } == true
+
+    fun remoteDeleteUnavailableReason(qso: Qso): String? {
+        val binding = store.configuredBinding()?.takeIf { applies(it, qso) }
+            ?: return "This QSO is not mapped to Wavelog"
+        if (store.link(binding.id, qso.id) == null) return "This QSO has no accepted remote link"
+        if (binding.state == WavelogBindingState.READ_ONLY) return "The Wavelog binding is read-only"
+        if (!binding.capabilities.canDeleteQsos) return "The token is missing qso:delete"
+        return null
+    }
 
     private fun recordMutation(qso: Qso, origin: QsoOrigin, operation: WavelogOperation) {
         if (origin == QsoOrigin.REMOTE_SYNC) return
-        val binding = store.activeBinding()?.takeIf { applies(it, qso) } ?: return
+        val binding = store.configuredBinding()?.takeIf { applies(it, qso) } ?: return
         val canonical = WavelogCanonicalizer.fromAdif(database.toADIF(qso))
-        if (binding.state == WavelogBindingState.ENABLED) {
+        if (binding.state != WavelogBindingState.READ_ONLY) {
             val actual = if (operation == WavelogOperation.UPDATE && store.link(binding.id, qso.id) == null)
                 WavelogOperation.CREATE else operation
-            store.enqueue(binding.id, qso.id, actual, canonical)
+            store.enqueue(binding.id, qso.id, actual, canonical,
+                state = if (binding.state == WavelogBindingState.PAUSED)
+                    WavelogOutboxState.PAUSED else WavelogOutboxState.PENDING)
         } else {
             store.enqueue(binding.id, qso.id, operation, canonical, WavelogOutboxState.BLOCKED,
-                "Read-only Wavelog binding; local divergence recorded")
+                "Read-only Wavelog binding; local divergence recorded", WavelogErrorClass.MISSING_SCOPE)
         }
     }
 

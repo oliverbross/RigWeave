@@ -8,11 +8,12 @@ import org.json.JSONObject
 enum class WavelogApiGeneration { LEGACY, V2 }
 enum class WavelogBindingState { ENABLED, PAUSED, READ_ONLY }
 enum class WavelogOperation { CREATE, UPDATE, DELETE }
-enum class WavelogOutboxState { PENDING, RETRY_WAIT, BLOCKED, ACCEPTED }
+enum class WavelogOutboxState { PENDING, RETRY_WAIT, PAUSED, BLOCKED, ACCEPTED }
 enum class WavelogConflictState { OPEN, KEEP_LOCAL, KEEP_REMOTE, MERGED }
+enum class QsoDeleteIntent { LOCAL_ONLY, DELETE_REMOTE_IF_UNCHANGED, REMOTE_SYNC }
 enum class WavelogErrorClass {
     NONE, AUTHENTICATION, EXPIRED_TOKEN, MISSING_SCOPE, NOT_FOUND, VALIDATION,
-    CONFLICT, RATE_LIMIT, TEMPORARY, MALFORMED_RESPONSE
+    CONFLICT, RATE_LIMIT, TEMPORARY, MALFORMED_RESPONSE, AMBIGUOUS_WRITE
 }
 
 data class WavelogCapabilities(
@@ -68,6 +69,7 @@ data class WavelogOutboxEntry(
     val lastError: String,
     val createdAt: Long,
     val updatedAt: Long,
+    val errorClass: WavelogErrorClass = WavelogErrorClass.NONE,
 )
 
 data class WavelogSyncCheckpoint(
@@ -92,6 +94,9 @@ data class WavelogConflict(
     val state: WavelogConflictState,
     val createdAt: Long,
     val resolvedAt: Long? = null,
+    val resolutionIntent: WavelogConflictState? = null,
+    val resolutionCanonical: String = "",
+    val resolutionOutboxId: String = "",
 )
 
 data class WavelogTombstone(
@@ -101,6 +106,7 @@ data class WavelogTombstone(
     val canonicalHash: String,
     val deletedAt: Long,
     val acknowledgedAt: Long? = null,
+    val intent: QsoDeleteIntent = QsoDeleteIntent.LOCAL_ONLY,
 )
 
 data class CanonicalQso(val fields: Map<String, String>) {

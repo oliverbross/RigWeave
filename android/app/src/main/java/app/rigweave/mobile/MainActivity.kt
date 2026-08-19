@@ -2914,6 +2914,7 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
     var applied by remember { mutableStateOf(LogbookFilter()) }
     var fromDate by remember { mutableStateOf("") }; var toDate by remember { mutableStateOf("") }
     var filterError by remember { mutableStateOf("") }; var selectedId by remember { mutableStateOf<String?>(null) }
+    var deleteQso by remember { mutableStateOf<Qso?>(null) }
     var page by remember { mutableIntStateOf(0) }
     var pageData by remember { mutableStateOf(QsoPage(emptyList(), 0, 0, applied.limit)) }
     var refreshGeneration by remember { mutableIntStateOf(0) }
@@ -2963,6 +2964,8 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                 }
                 draft = updated; applied = updated; page = 0; selectedId = null
             }
+            OutlinedButton({ selected?.let { deleteQso = it } }, enabled = selected != null,
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("DELETE QSO") }
             LogbookColumnMenu(app)
             if (activeLogbookFilterCount(applied) > 0) OutlinedButton({
                 val cleared = LogbookFilter(limit = applied.limit)
@@ -3015,10 +3018,38 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
         if (showFastEntry) FastEntryDialog(mutations, wavelog, app.stationCallsign, { _, _ -> refreshGeneration++ }) {
             showFastEntry = false
         }
+        deleteQso?.let { qso -> DeleteQsoDialog(qso, mutations, onDeleted = {
+            deleteQso = null; selectedId = null; refreshGeneration++
+        }, onDismiss = { deleteQso = null }) }
     }
     previousQsoRecord?.let { record ->
         PreviousQsosDialog(record, database, wavelog, callbook) { previousQsoRecord = null }
     }
+}
+
+@Composable private fun DeleteQsoDialog(qso: Qso, mutations: QsoMutationCoordinator,
+    onDeleted: () -> Unit, onDismiss: () -> Unit) {
+    val unavailable = mutations.remoteDeleteUnavailableReason(qso)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("DELETE ${qso.callsign} QSO?") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Choose the deletion intent explicitly. Both choices remove the local QSO.")
+            Text("LOCAL ONLY keeps remote identity metadata so Wavelog can be shown, re-imported, or relinked later.")
+            Text(if (unavailable == null)
+                "DELETE REMOTE IF UNCHANGED verifies the Wavelog QSO still matches its accepted baseline before deleting it. A changed remote QSO becomes a conflict."
+            else "Remote deletion unavailable: $unavailable", color = if (unavailable == null) Ink else Muted)
+        } },
+        confirmButton = {
+            Button({ mutations.delete(qso.id, QsoDeleteIntent.LOCAL_ONLY); onDeleted() }) { Text("LOCAL ONLY") }
+        },
+        dismissButton = { Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            if (unavailable == null) OutlinedButton({
+                mutations.delete(qso.id, QsoDeleteIntent.DELETE_REMOTE_IF_UNCHANGED); onDeleted()
+            }) { Text("DELETE REMOTE IF UNCHANGED") }
+            TextButton(onDismiss) { Text("CANCEL") }
+        } },
+    )
 }
 
 @Composable private fun LogbookColumnMenu(app: AppController) {

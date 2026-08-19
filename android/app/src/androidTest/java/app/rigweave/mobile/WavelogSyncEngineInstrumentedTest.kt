@@ -48,7 +48,7 @@ class WavelogSyncEngineInstrumentedTest {
         assertTrue(mutations.save(otherStation))
         assertNull(store.pendingFor(binding.id, otherStation.id))
 
-        mutations.delete(local.id)
+        mutations.delete(local.id, QsoDeleteIntent.DELETE_REMOTE_IF_UNCHANGED)
         assertNull(database.qso(local.id))
         assertTrue(store.pending(binding.id).isEmpty())
 
@@ -89,7 +89,7 @@ class WavelogSyncEngineInstrumentedTest {
         assertEquals(1, engine.drainOutbox(binding))
         assertTrue(requests.single { it.method == "PATCH" }.body.orEmpty().contains("\"notes\":\"corrected\""))
 
-        mutations.delete(local.id)
+        mutations.delete(local.id, QsoDeleteIntent.DELETE_REMOTE_IF_UNCHANGED)
         assertNull(database.qso(local.id))
         assertNull(store.link(binding.id, local.id))
         assertTrue(store.tombstone(binding.id, local.id) != null)
@@ -136,7 +136,7 @@ class WavelogSyncEngineInstrumentedTest {
         assertEquals(1, posts)
     }
 
-    @Test fun cancelledFullScanResumesCheckpointAndOnlyCompletedScanInfersHistoricDeletion() {
+    @Test fun cancelledFullScanRestartsAtPageOneAndOnlyStableTwoPassInventoryInfersHistoricDeletion() {
         val binding = writableBinding()
         store.saveBinding(binding)
         val historic = qso("historic", "VK8OLD")
@@ -154,21 +154,48 @@ class WavelogSyncEngineInstrumentedTest {
         assertTrue(first.cancelled)
         assertFalse(first.completed)
         assertTrue(database.qso(historic.id) != null)
-        assertEquals(2, store.checkpoint(binding.id, "FULL")?.page)
+        assertEquals(2, store.checkpoint(binding.id, "FULL_A")?.page)
 
         database.close()
         database = QsoDatabase(context, databaseName)
         store = WavelogSyncStore(database)
         mutations = QsoMutationCoordinator(database, store)
+        var calls = 0
         val secondClient = client { request ->
-            require(request.url.contains("page=2"))
+            calls++
+            require(request.url.contains("page=1"))
             WavelogV2Response(200, pageEnvelope(emptyList(), false, 2))
         }
         val second = WavelogSyncEngine(database, store, secondClient, mutations).fullReconcile(binding)
-        assertEquals(2, second.resumedFromPage)
+        assertEquals(1, second.resumedFromPage)
         assertTrue(second.completed)
+        assertTrue(second.inventoryStable)
+        assertEquals(2, calls)
         assertEquals(1, second.deleted)
         assertNull(database.qso(historic.id))
+    }
+
+    @Test fun concurrentNewestFirstInsertMakesFullInventoryUnstableAndNeverInfersDeletion() {
+        val binding = writableBinding()
+        store.saveBinding(binding)
+        val historic = qso("unstable-historic", "VK8OLD")
+        database.save(historic, QsoOrigin.REMOTE_SYNC)
+        val baseline = canonical(historic)
+        store.saveLink(WavelogRemoteLink(binding.id, historic.id, "5", baseline.hash, baseline.encoded))
+        var pass = 0
+        val engine = WavelogSyncEngine(database, store, client { request ->
+            require(request.url.contains("page=1"))
+            pass++
+            val rows = if (pass == 1) listOf(remoteRow("99", "VK8PAGE"))
+            else listOf(remoteRow("100", "VK8NEW"), remoteRow("99", "VK8PAGE"))
+            WavelogV2Response(200, pageEnvelope(rows, false, 1))
+        }, mutations)
+
+        val summary = engine.fullReconcile(binding)
+
+        assertFalse(summary.completed)
+        assertFalse(summary.inventoryStable)
+        assertTrue(database.qso(historic.id) != null)
     }
 
     @Test fun quickPullsRecentEditAndFullFindsEditBeyondTheQuickOverlap() {
@@ -218,7 +245,7 @@ class WavelogSyncEngineInstrumentedTest {
         }
         val engine = WavelogSyncEngine(database, store, client, mutations)
         val summary = engine.fullReconcile(binding)
-        assertEquals(1, summary.conflicts)
+        assertTrue(summary.conflicts >= 1)
         val conflict = store.conflicts(binding.id).single()
         assertEquals(setOf("NOTES"), conflict.conflictingFields)
         assertEquals("local", CanonicalQso.decode(conflict.localCanonical).fields["NOTES"])
@@ -245,17 +272,97 @@ class WavelogSyncEngineInstrumentedTest {
         store.saveConflict(keepLocal)
         engine.resolveConflict(binding, keepLocal, WavelogConflictState.KEEP_LOCAL)
         assertEquals(1, outstandingWrites(binding.id, base.id))
-        store.pendingFor(binding.id, base.id)?.let {
-            store.updateOutbox(it.copy(state = WavelogOutboxState.ACCEPTED))
-        }
+        assertEquals(WavelogConflictState.OPEN, store.conflicts(binding.id).single().state)
+        assertEquals(WavelogConflictState.KEEP_LOCAL, store.conflicts(binding.id).single().resolutionIntent)
+
+        database.close()
+        database = QsoDatabase(context, databaseName)
+        store = WavelogSyncStore(database)
+        mutations = QsoMutationCoordinator(database, store)
+        assertEquals(WavelogConflictState.KEEP_LOCAL, store.conflicts(binding.id).single().resolutionIntent)
+        val accepting = WavelogSyncEngine(database, store, client { request ->
+            require(request.method == "PATCH")
+            WavelogV2Response(200, envelope(remoteRow("62", "VK8RES", notes = "local")))
+        }, mutations)
+        accepting.drainOutbox(binding)
+        assertEquals(WavelogConflictState.KEEP_LOCAL, store.conflicts(binding.id).single().state)
 
         val mergeConflict = conflict(binding, base.id, "62", baseline, local, remote)
         store.saveConflict(mergeConflict)
         val merged = canonical(base.copy(notes = "operator merge"))
-        engine.resolveConflict(binding, mergeConflict, WavelogConflictState.MERGED, merged)
+        val rejecting = WavelogSyncEngine(database, store, client { error("offline") }, mutations)
+        rejecting.resolveConflict(binding, mergeConflict, WavelogConflictState.MERGED, merged)
         assertEquals("operator merge", database.qso(base.id)?.notes)
         assertEquals(1, outstandingWrites(binding.id, base.id))
-        assertEquals(WavelogConflictState.MERGED, store.conflicts(binding.id).last().state)
+        assertEquals(WavelogConflictState.OPEN, store.conflicts(binding.id).last().state)
+        assertEquals(WavelogConflictState.MERGED, store.conflicts(binding.id).last().resolutionIntent)
+    }
+
+    @Test fun pausedMutationsStayVisibleAndResumeDoesNotRetryAmbiguousCreate() {
+        val binding = writableBinding()
+        store.saveBinding(binding)
+        store.pauseBinding(binding.id)
+        val paused = qso("paused", "VK8PAU")
+        mutations.save(paused)
+        assertEquals(WavelogOutboxState.PAUSED, store.outboxEntries(binding.id).single().state)
+
+        store.resumeBinding(binding.id)
+        val entry = store.outboxEntries(binding.id).single()
+        store.updateOutbox(entry.copy(state = WavelogOutboxState.BLOCKED,
+            errorClass = WavelogErrorClass.AMBIGUOUS_WRITE, lastError = "response lost"))
+        store.pauseBinding(binding.id)
+        store.resumeBinding(binding.id)
+
+        assertEquals(WavelogOutboxState.BLOCKED, store.outboxEntries(binding.id).single().state)
+        assertEquals(WavelogErrorClass.AMBIGUOUS_WRITE, store.outboxEntries(binding.id).single().errorClass)
+    }
+
+    @Test fun deleteIntentMatrixPreservesLocalOnlyMetadataAndGuardsRemoteCapability() {
+        val binding = writableBinding()
+        store.saveBinding(binding)
+        val localOnly = qso("local-only", "VK8LOC")
+        database.save(localOnly, QsoOrigin.REMOTE_SYNC)
+        val baseline = canonical(localOnly)
+        store.saveLink(WavelogRemoteLink(binding.id, localOnly.id, "201", baseline.hash, baseline.encoded))
+        mutations.delete(localOnly.id, QsoDeleteIntent.LOCAL_ONLY)
+        assertNull(database.qso(localOnly.id))
+        assertEquals(QsoDeleteIntent.LOCAL_ONLY, store.tombstone(binding.id, localOnly.id)?.first?.intent)
+        assertNull(store.deleteDecision(binding.id, localOnly.id))
+
+        val missingScope = binding.copy(capabilities = binding.capabilities.copy(canDeleteQsos = false,
+            scopes = binding.capabilities.scopes - "qso:delete"))
+        store.saveBinding(missingScope)
+        val guarded = qso("guarded", "VK8GRD")
+        database.save(guarded, QsoOrigin.REMOTE_SYNC)
+        val guardedBaseline = canonical(guarded)
+        store.saveLink(WavelogRemoteLink(binding.id, guarded.id, "202", guardedBaseline.hash, guardedBaseline.encoded))
+        assertTrue(runCatching { mutations.delete(guarded.id, QsoDeleteIntent.DELETE_REMOTE_IF_UNCHANGED) }.isFailure)
+        assertTrue(database.qso(guarded.id) != null)
+    }
+
+    @Test fun ambiguousDeleteIsBlockedUntilStableFullScanProvesRemoteAbsence() {
+        val binding = writableBinding()
+        store.saveBinding(binding)
+        val qso = qso("ambiguous-delete", "VK8ADE")
+        database.save(qso, QsoOrigin.REMOTE_SYNC)
+        val baseline = canonical(qso)
+        store.saveLink(WavelogRemoteLink(binding.id, qso.id, "203", baseline.hash, baseline.encoded))
+        mutations.delete(qso.id, QsoDeleteIntent.DELETE_REMOTE_IF_UNCHANGED)
+        var deletes = 0
+        val engine = WavelogSyncEngine(database, store, client { request -> when {
+            request.method == "GET" && !request.url.contains("/qso?") -> WavelogV2Response(200, envelope(remoteRow("203", "VK8ADE")))
+            request.method == "DELETE" -> { deletes++; throw IOException("response lost") }
+            request.method == "GET" && request.url.contains("/qso?") -> WavelogV2Response(200, pageEnvelope(emptyList(), false, 1))
+            else -> error("Unexpected request")
+        } }, mutations)
+
+        engine.drainOutbox(binding)
+        assertEquals(1, deletes)
+        assertEquals(WavelogErrorClass.AMBIGUOUS_WRITE, store.outboxEntries(binding.id).single().errorClass)
+        engine.drainOutbox(binding)
+        assertEquals(1, deletes)
+        assertTrue(engine.fullReconcile(binding).completed)
+        assertEquals(WavelogOutboxState.ACCEPTED, store.outboxEntries(binding.id).single().state)
     }
 
     @Test fun remoteChangeAfterLocalDeleteBlocksDeleteAndKeepRemoteRestoresTheQso() {
@@ -265,7 +372,7 @@ class WavelogSyncEngineInstrumentedTest {
         database.save(base, QsoOrigin.REMOTE_SYNC)
         val baseline = canonical(base)
         store.saveLink(WavelogRemoteLink(binding.id, base.id, "73", baseline.hash, baseline.encoded))
-        mutations.delete(base.id)
+        mutations.delete(base.id, QsoDeleteIntent.DELETE_REMOTE_IF_UNCHANGED)
         var deletes = 0
         val changedRemote = remoteRow("73", "VK8DEL", notes = "changed remotely")
         val engine = WavelogSyncEngine(database, store, client { request ->
@@ -303,6 +410,67 @@ class WavelogSyncEngineInstrumentedTest {
             while (cursor.moveToNext()) columns += cursor.getString(1)
         }
         assertTrue("baseline_canonical" in columns)
+    }
+
+    @Test fun bindingUpsertPreservesAllChildMetadataNullableTimestampsAndRejectsSecondWritable() {
+        val binding = writableBinding().copy(lastQuickSync = 101, lastFullReconcile = 202)
+        store.saveBinding(binding)
+        val qso = qso("metadata", "VK8META")
+        database.save(qso, QsoOrigin.REMOTE_SYNC)
+        val canonical = canonical(qso)
+        store.saveLink(WavelogRemoteLink(binding.id, qso.id, "301", canonical.hash, canonical.encoded))
+        store.enqueue(binding.id, qso.id, WavelogOperation.UPDATE, canonical)
+        store.saveCheckpoint(WavelogSyncCheckpoint(binding.id, "FULL_A", 2, updatedAt = 1))
+        store.markSeen(binding.id, "FULL_A", listOf("301"))
+        store.saveConflict(conflict(binding, qso.id, "301", canonical,
+            canonical(qso.copy(notes = "local")), canonical(qso.copy(notes = "remote"))))
+        store.saveTombstone(WavelogTombstone(binding.id, qso.id, "301", canonical.hash, 1), canonical.encoded)
+
+        store.saveBinding(writableBinding().copy(remoteStationName = "Remapped"))
+
+        assertEquals("301", store.link(binding.id, qso.id)?.remoteQsoId)
+        assertEquals(1, store.outboxEntries(binding.id).size)
+        assertEquals(2, store.checkpoint(binding.id, "FULL_A")?.page)
+        assertEquals(setOf("301"), store.seenIds(binding.id, "FULL_A"))
+        assertEquals(1, store.conflicts(binding.id).size)
+        assertEquals(1, store.tombstones(binding.id).size)
+        assertEquals(101, store.configuredBinding()?.lastQuickSync)
+        assertEquals(202, store.configuredBinding()?.lastFullReconcile)
+        store.pauseBinding(binding.id)
+        assertEquals(WavelogBindingState.PAUSED, store.configuredBinding()?.state)
+        store.resumeBinding(binding.id)
+        assertEquals("301", store.link(binding.id, qso.id)?.remoteQsoId)
+        assertEquals(1, store.outboxEntries(binding.id).size)
+        assertEquals(setOf("301"), store.seenIds(binding.id, "FULL_A"))
+        assertTrue(runCatching { store.saveBinding(binding.copy(id = "second")) }.isFailure)
+        store.removeBinding(binding.id)
+        assertEquals("VK8META", database.qso(qso.id)?.callsign)
+    }
+
+    @Test fun versionNineMigrationAddsPhaseOneBOperationalColumns() {
+        database.readableDatabase
+        database.close()
+        SQLiteDatabase.openDatabase(context.getDatabasePath(databaseName).path, null, SQLiteDatabase.OPEN_READWRITE).use { raw ->
+            raw.execSQL("ALTER TABLE wavelog_outbox DROP COLUMN error_class")
+            raw.execSQL("ALTER TABLE wavelog_conflict DROP COLUMN resolution_intent")
+            raw.execSQL("ALTER TABLE wavelog_conflict DROP COLUMN resolution_canonical")
+            raw.execSQL("ALTER TABLE wavelog_conflict DROP COLUMN resolution_outbox_id")
+            raw.execSQL("ALTER TABLE wavelog_tombstone DROP COLUMN delete_intent")
+            raw.version = 9
+        }
+        database = QsoDatabase(context, databaseName)
+        store = WavelogSyncStore(database)
+        mutations = QsoMutationCoordinator(database, store)
+
+        fun columns(table: String) = buildSet {
+            database.readableDatabase.rawQuery("PRAGMA table_info($table)", null).use { cursor ->
+                while (cursor.moveToNext()) add(cursor.getString(1))
+            }
+        }
+        assertTrue("error_class" in columns("wavelog_outbox"))
+        assertTrue(setOf("resolution_intent", "resolution_canonical", "resolution_outbox_id")
+            .all { it in columns("wavelog_conflict") })
+        assertTrue("delete_intent" in columns("wavelog_tombstone"))
     }
 
     private fun writableBinding() = WavelogBinding(

@@ -14,14 +14,17 @@ Evidence is repository-local unless explicitly marked external. “Implemented�
 | Explicit local station ↔ remote Wavelog station mapping | Implemented | Native dialog mapping controls and binding persistence | Requires operator selection |
 | Atomic create link/baseline/acceptance | Implemented | `acceptWithLink`; database-backed create/update/delete fixture | No authenticated write |
 | Ambiguous create recovery without blind retry | Implemented | Blocked create plus unique natural-key page reconciliation fixture | Network failure simulated |
-| Resumable initial/full scan and safe cancellation | Implemented | Durable checkpoint/seen set; restart fixture resumes page 2 | Database-backed test requires Android runner |
-| Historic remote deletion only after completed Full scan | Implemented | Completed-scan seen-set sweep; interrupted scan fixture proves no inference | Database-backed test requires Android runner |
-| Durable local tombstone and changed-remote delete conflict | Implemented | Schema v9 tombstone baseline; restore/keep-remote fixture | Database-backed test requires Android runner |
-| Field-level conflict UI with Keep Local, Keep Remote, and Merged | Implemented | Native conflict card and engine resolution paths | Compose/device interaction not physically exercised |
+| Conservative Full scan and safe cancellation | Implemented | Two complete page-1 passes must produce identical remote-ID inventories; cancellation and concurrent-insert fixtures refuse deletion inference | Database-backed test requires Android runner |
+| Historic remote deletion only after stable Full inventory | Implemented | Two-pass seen-set comparison plus stable deletion sweep; shifting newest-first inventory fixture preserves local data | Database-backed test requires Android runner |
+| Explicit local-only or guarded remote deletion | Implemented | Schema v10 intent tombstone; Logbook choice; missing-scope, changed-remote, and ambiguous-delete fixtures | Database-backed test requires Android runner |
+| Convergent field-level conflict UI with Keep Local, Keep Remote, and Merged | Implemented | Baseline/local/remote conflict card; durable pending intent; acceptance and restart fixtures | Compose/device interaction not physically exercised |
 | Automatic foreground and connectivity-return outbox drain | Implemented | Lifecycle and default-network callbacks start bounded quick sync with a 30-second guard | Device behaviour unverified |
 | Honest Quick versus Full status, progress, cancellation, resume | Implemented | Native dialog/controller labels bounded overlap and full-history completion separately | Compose/device interaction unverified |
 | Read-only divergence and station isolation | Implemented | Coordinator records blocked divergence and filters by mapped local station | Database-backed test requires Android runner |
 | Migration and restart preservation | Implemented | v8→v9 migration fixture and reopened checkpoint fixture | Database-backed test requires Android runner |
+| Binding UPSERT and complete lifecycle | Implemented | In-place update preserves all six child table types and nullable timestamps; paused/configured queries; remap, pause/resume, reset, and remove controls | Compose/device interaction not physically exercised |
+| Native outbox and operational errors | Implemented | CREATE/UPDATE/DELETE identity, state, attempts, retry time, safe error class, conflict/tombstone relation, invariant warning, and ambiguity-safe actions | Compose/device interaction not physically exercised |
+| Schema v9→v10 migration | Implemented | Migration fixture covers outbox error class, conflict intent fields, and deletion intent | Database-backed test requires Android runner |
 
 ## Phase 1 validation record
 

@@ -25,6 +25,7 @@ data class WavelogSyncSummary(
     val resumedFromPage: Int = 1,
     val completed: Boolean = false,
     val cancelled: Boolean = false,
+    val inventoryStable: Boolean = false,
     val scope: String = "",
 ) {
     operator fun plus(other: WavelogSyncSummary) = copy(
@@ -79,7 +80,19 @@ class WavelogSyncEngine(
         isCancelled: () -> Boolean = { false },
     ): WavelogSyncSummary {
         drainOutbox(binding)
-        return pagedSync(binding, "FULL", 10_000, isCancelled, onProgress)
+        val first = pagedSync(binding, "FULL_A", 10_000, isCancelled, onProgress, restartAtFirstPage = true)
+        if (!first.completed || first.cancelled) return first.copy(scope = "FULL", completed = false)
+        val firstSeen = store.seenIds(binding.id, "FULL_A")
+        val second = pagedSync(binding, "FULL_B", 10_000, isCancelled, onProgress, restartAtFirstPage = true)
+        var combined = first + second
+        if (!second.completed || second.cancelled) {
+            return combined.copy(scope = "FULL", completed = false, inventoryStable = false)
+        }
+        val secondSeen = store.seenIds(binding.id, "FULL_B")
+        val stable = firstSeen == secondSeen
+        if (stable) combined += reconcileRemoteDeletions(binding, secondSeen)
+        return combined.copy(scope = "FULL", completed = stable, inventoryStable = stable, cancelled = false,
+            resumedFromPage = 1)
     }
 
     fun drainOutbox(binding: WavelogBinding): Int {
@@ -142,6 +155,7 @@ class WavelogSyncEngine(
                                     attemptCount = entry.attemptCount + 1,
                                     nextAttemptAt = null,
                                     lastError = "Remote QSO changed after local deletion; operator decision required",
+                                    errorClass = WavelogErrorClass.CONFLICT,
                                     updatedAt = now,
                                 ))
                                 return@forEach
@@ -153,16 +167,18 @@ class WavelogSyncEngine(
                 }
                 accepted++
             } catch (error: WavelogApiException) {
-                val ambiguous = error.status == 0 || error.status >= 500
-                val retryable = error.status == 429
+                val uncertainWrite = error.status == 0 || error.status >= 500
+                val ambiguous = uncertainWrite && entry.operation in setOf(WavelogOperation.CREATE, WavelogOperation.DELETE)
+                val retryable = error.status == 429 || (uncertainWrite && entry.operation == WavelogOperation.UPDATE)
                 val delay = error.retryAfterSeconds ?: (60L shl entry.attemptCount.coerceIn(0, 6))
                 store.updateOutbox(entry.copy(
                     state = if (retryable) WavelogOutboxState.RETRY_WAIT else WavelogOutboxState.BLOCKED,
                     attemptCount = entry.attemptCount + 1,
                     nextAttemptAt = if (retryable) now + delay else null,
-                    lastError = if (ambiguous && entry.operation == WavelogOperation.CREATE)
-                        "Ambiguous create result; scan Wavelog and reconcile before retry"
+                    lastError = if (ambiguous)
+                        "Ambiguous ${entry.operation.name.lowercase()} result; scan Wavelog and reconcile before retry"
                     else error.message.orEmpty().take(500),
+                    errorClass = if (ambiguous) WavelogErrorClass.AMBIGUOUS_WRITE else error.errorClass,
                     updatedAt = now,
                 ))
             } catch (error: Exception) {
@@ -171,6 +187,7 @@ class WavelogSyncEngine(
                     attemptCount = entry.attemptCount + 1,
                     nextAttemptAt = null,
                     lastError = error.message.orEmpty().take(500),
+                    errorClass = WavelogErrorClass.VALIDATION,
                     updatedAt = now,
                 ))
             }
@@ -185,38 +202,50 @@ class WavelogSyncEngine(
         merged: CanonicalQso? = null,
     ) {
         require(resolution != WavelogConflictState.OPEN)
+        conflict.resolutionIntent?.let { existing ->
+            require(existing == resolution) { "A different conflict resolution is already pending" }
+            drainOutbox(binding)
+            return
+        }
         val local = CanonicalQso.decode(conflict.localCanonical)
         val remote = CanonicalQso.decode(conflict.remoteCanonical)
         when (resolution) {
-            WavelogConflictState.KEEP_LOCAL -> when {
-                "LOCAL_DELETE" in conflict.conflictingFields -> store.resumeDelete(binding.id, conflict.localQsoId)
-                "REMOTE_DELETE" in conflict.conflictingFields -> {
+            WavelogConflictState.KEEP_LOCAL -> {
+                val outboxId = when {
+                    "LOCAL_DELETE" in conflict.conflictingFields -> store.resumeDelete(binding.id, conflict.localQsoId)
+                    "REMOTE_DELETE" in conflict.conflictingFields -> {
                     store.deleteLink(binding.id, conflict.localQsoId)
                     store.enqueue(binding.id, conflict.localQsoId, WavelogOperation.CREATE, local)
+                    }
+                    else -> store.enqueue(binding.id, conflict.localQsoId, WavelogOperation.UPDATE, local)
                 }
-                else -> store.enqueue(binding.id, conflict.localQsoId, WavelogOperation.UPDATE, local)
+                store.setConflictResolutionIntent(conflict.id, resolution, local, outboxId)
+                drainOutbox(binding)
             }
-            WavelogConflictState.KEEP_REMOTE -> when {
-                "REMOTE_DELETE" in conflict.conflictingFields -> {
-                    store.cancelWrites(binding.id, conflict.localQsoId, "Superseded by Keep Remote deletion")
-                    mutations.delete(conflict.localQsoId, QsoOrigin.REMOTE_SYNC)
+            WavelogConflictState.KEEP_REMOTE -> {
+                when {
+                    "REMOTE_DELETE" in conflict.conflictingFields -> {
+                        store.cancelWrites(binding.id, conflict.localQsoId, "Superseded by Keep Remote deletion")
+                        mutations.delete(conflict.localQsoId, QsoDeleteIntent.REMOTE_SYNC, QsoOrigin.REMOTE_SYNC)
+                    }
+                    "LOCAL_DELETE" in conflict.conflictingFields -> {
+                        val restored = qsoFromCanonical(binding, remote, conflict.remoteQsoId, conflict.localQsoId)
+                            ?: error("Remote conflict value is not a valid QSO")
+                        mutations.save(restored, QsoOrigin.REMOTE_SYNC)
+                        store.cancelDelete(binding.id, conflict.localQsoId)
+                        store.saveLink(WavelogRemoteLink(binding.id, conflict.localQsoId, conflict.remoteQsoId,
+                            remote.hash, remote.encoded))
+                    }
+                    else -> {
+                        store.cancelWrites(binding.id, conflict.localQsoId, "Superseded by Keep Remote resolution")
+                        val replacement = qsoFromCanonical(binding, remote, conflict.remoteQsoId, conflict.localQsoId)
+                            ?: error("Remote conflict value is not a valid QSO")
+                        mutations.update(replacement, QsoOrigin.REMOTE_SYNC)
+                        store.saveLink(WavelogRemoteLink(binding.id, conflict.localQsoId, conflict.remoteQsoId,
+                            remote.hash, remote.encoded))
+                    }
                 }
-                "LOCAL_DELETE" in conflict.conflictingFields -> {
-                    val restored = qsoFromCanonical(binding, remote, conflict.remoteQsoId, conflict.localQsoId)
-                        ?: error("Remote conflict value is not a valid QSO")
-                    mutations.save(restored, QsoOrigin.REMOTE_SYNC)
-                    store.cancelDelete(binding.id, conflict.localQsoId)
-                    store.saveLink(WavelogRemoteLink(binding.id, conflict.localQsoId, conflict.remoteQsoId,
-                        remote.hash, remote.encoded))
-                }
-                else -> {
-                    store.cancelWrites(binding.id, conflict.localQsoId, "Superseded by Keep Remote resolution")
-                    val replacement = qsoFromCanonical(binding, remote, conflict.remoteQsoId, conflict.localQsoId)
-                        ?: error("Remote conflict value is not a valid QSO")
-                    mutations.update(replacement, QsoOrigin.REMOTE_SYNC)
-                    store.saveLink(WavelogRemoteLink(binding.id, conflict.localQsoId, conflict.remoteQsoId,
-                        remote.hash, remote.encoded))
-                }
+                store.resolveConflict(conflict.id, resolution)
             }
             WavelogConflictState.MERGED -> {
                 val chosen = requireNotNull(merged) { "Merged field values are required" }
@@ -224,16 +253,17 @@ class WavelogSyncEngine(
                     ?: error("Merged conflict value is not a valid QSO")
                 if (database.qso(conflict.localQsoId) == null) mutations.save(replacement, QsoOrigin.REMOTE_SYNC)
                 else mutations.update(replacement, QsoOrigin.REMOTE_SYNC)
-                if ("REMOTE_DELETE" in conflict.conflictingFields) {
+                val outboxId = if ("REMOTE_DELETE" in conflict.conflictingFields) {
                     store.deleteLink(binding.id, conflict.localQsoId)
                     store.enqueue(binding.id, conflict.localQsoId, WavelogOperation.CREATE, chosen)
                 } else {
                     store.enqueue(binding.id, conflict.localQsoId, WavelogOperation.UPDATE, chosen)
                 }
+                store.setConflictResolutionIntent(conflict.id, resolution, chosen, outboxId)
+                drainOutbox(binding)
             }
             WavelogConflictState.OPEN -> Unit
         }
-        store.resolveConflict(conflict.id, resolution)
     }
 
     private fun pagedSync(
@@ -242,11 +272,12 @@ class WavelogSyncEngine(
         maxPages: Int,
         isCancelled: () -> Boolean,
         onProgress: (Int, WavelogSyncSummary) -> Unit,
+        restartAtFirstPage: Boolean = false,
     ): WavelogSyncSummary {
         require(binding.capabilities.canReadQsos) { "qso:read scope is required" }
         require(binding.remoteStationId.isNotBlank()) { "Select a Wavelog station before syncing" }
         val resumable = kind != "QUICK"
-        val saved = if (resumable) store.checkpoint(binding.id, kind)?.takeUnless { it.completed } else null
+        val saved = if (resumable && !restartAtFirstPage) store.checkpoint(binding.id, kind)?.takeUnless { it.completed } else null
         val startPage = saved?.page?.coerceAtLeast(1) ?: 1
         if (startPage == 1 && resumable) store.clearSeen(binding.id, kind)
         var summary = WavelogSyncSummary(resumedFromPage = startPage, scope = kind)
@@ -286,9 +317,6 @@ class WavelogSyncEngine(
             }
             if (!hasNextWithinScope) break
             pageNumber++
-        }
-        if (completed && kind == "FULL") {
-            summary += reconcileRemoteDeletions(binding, store.seenIds(binding.id, kind))
         }
         return summary.copy(completed = completed || kind == "QUICK", cancelled = false)
     }
@@ -345,6 +373,16 @@ class WavelogSyncEngine(
         remoteCanonical: CanonicalQso,
     ): WavelogSyncSummary {
         val local = database.qso(link.localQsoId) ?: return WavelogSyncSummary(rejected = 1)
+        store.openConflict(binding.id, link.localQsoId)?.let { conflict ->
+            val intended = conflict.resolutionIntent?.let { CanonicalQso.decode(conflict.resolutionCanonical) }
+            if (intended != null && intended.hash == remoteCanonical.hash) {
+                store.acceptConverged(conflict, link.copy(
+                    baselineHash = remoteCanonical.hash,
+                    baselineCanonical = remoteCanonical.encoded,
+                ))
+                return WavelogSyncSummary(linked = 1)
+            }
+        }
         val base = CanonicalQso.decode(link.baselineCanonical)
         val localCanonical = canonical(local)
         val result = WavelogCanonicalizer.merge(base, localCanonical, remoteCanonical)
@@ -380,15 +418,24 @@ class WavelogSyncEngine(
 
     private fun reconcileRemoteDeletions(binding: WavelogBinding, seen: Set<String>): WavelogSyncSummary {
         var summary = WavelogSyncSummary()
+        store.tombstones(binding.id)
+            .filter { it.intent == QsoDeleteIntent.DELETE_REMOTE_IF_UNCHANGED && it.acknowledgedAt == null && it.remoteQsoId !in seen }
+            .forEach { tombstone ->
+                store.deleteDecision(binding.id, tombstone.localQsoId)?.let {
+                    store.acceptDelete(it)
+                    summary += WavelogSyncSummary(deleted = 1)
+                }
+            }
         store.remoteLinks(binding.id).filter { it.remoteQsoId !in seen }.forEach { link ->
             val local = database.qso(link.localQsoId)
             if (local == null) {
+                store.deleteDecision(binding.id, link.localQsoId)?.let(store::acceptDelete)
                 store.deleteLink(binding.id, link.localQsoId)
             } else {
                 val baseline = CanonicalQso.decode(link.baselineCanonical)
                 val current = canonical(local)
                 if (current.hash == baseline.hash) {
-                    mutations.delete(local.id, QsoOrigin.REMOTE_SYNC)
+                    mutations.delete(local.id, QsoDeleteIntent.REMOTE_SYNC, QsoOrigin.REMOTE_SYNC)
                     store.deleteLink(binding.id, local.id)
                     summary += WavelogSyncSummary(deleted = 1)
                 } else {
@@ -410,6 +457,7 @@ class WavelogSyncEngine(
         remote: CanonicalQso,
         fields: Set<String>,
     ) {
+        if (store.openConflict(binding.id, localId) != null) return
         store.saveConflict(WavelogConflict(
             UUID.randomUUID().toString(), binding.id, localId, remoteId,
             base.encoded, local.encoded, remote.encoded, fields,

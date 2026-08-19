@@ -77,7 +77,7 @@ fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
     in 50_000_000L..54_000_000L -> "6m"; else -> ""
 }
 
-class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 9) {
+class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 10) {
     private val changeRevision = AtomicLong(0)
     var operatorSaveHandler: ((Qso) -> Unit)? = null
     override fun onConfigure(db: SQLiteDatabase) {
@@ -104,6 +104,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         if (oldVersion < 7) createDeliveryTable(db)
         if (oldVersion < 8) createWavelogSyncTables(db)
         if (oldVersion < 9) migrateWavelogSyncV9(db)
+        if (oldVersion < 10) migrateWavelogSyncV10(db)
     }
 
     private fun createPagingIndexes(db: SQLiteDatabase) {

@@ -123,10 +123,13 @@ class WavelogController(private val context: Context, private val database: QsoD
 
     fun enqueue(id: String, adif: String) {
         if (apiGeneration == WavelogApiGeneration.V2) {
-            val binding = WavelogSyncStore(database).activeBinding()
+            val store = WavelogSyncStore(database)
+            val binding = store.configuredBinding()
             val qso = database.qso(id)
-            if (binding != null && qso != null && binding.state == WavelogBindingState.ENABLED)
-                WavelogSyncStore(database).enqueue(binding.id, id, WavelogOperation.CREATE, WavelogCanonicalizer.fromAdif(adif))
+            if (binding != null && qso != null && binding.state != WavelogBindingState.READ_ONLY)
+                store.enqueue(binding.id, id, WavelogOperation.CREATE, WavelogCanonicalizer.fromAdif(adif),
+                    state = if (binding.state == WavelogBindingState.PAUSED)
+                        WavelogOutboxState.PAUSED else WavelogOutboxState.PENDING)
             status = if (binding == null) "API v2 QSO remains local · bind a station in Sync Hub" else "API v2 QSO queued durably"
             return
         }

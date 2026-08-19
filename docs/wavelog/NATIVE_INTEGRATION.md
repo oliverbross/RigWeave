@@ -9,7 +9,7 @@
 
 ## Placement
 
-RigWeave remains local-first. `QsoDatabase` is the one Android QSO store and existing ADIF import/export remains the serialization boundary. The schema-v9 migration adds only synchronization metadata tables and the durable deletion baseline required for safe remote deletes. `WavelogSyncStore`, `WavelogApiV2Client`, `WavelogSyncEngine`, and `QsoMutationCoordinator` are separate from downstream QRZ/Club Log/eQSL delivery.
+RigWeave remains local-first. `QsoDatabase` is the one Android QSO store and existing ADIF import/export remains the serialization boundary. Schema v10 extends only synchronization metadata: durable error classes, conflict-resolution intent, and explicit deletion intent. `WavelogSyncStore`, `WavelogApiV2Client`, `WavelogSyncEngine`, and `QsoMutationCoordinator` are separate from downstream QRZ/Club Log/eQSL delivery.
 
 One enabled writable Wavelog binding is enforced by a partial unique index. A binding stores a credential alias, never a token. Existing Android Wavelog secrets remain AES-GCM encrypted with an Android Keystore key; existing iOS Wavelog secrets remain in Keychain. A `wl2_` token is never reinterpreted as a legacy API key, and the existing legacy adapter remains available for older installations.
 
@@ -22,9 +22,11 @@ The Apple client negotiates token metadata/scopes, discovers stations, performs 
 - Unknown valid ADIF fields are retained in `extraAdifFields`, persisted inside the existing QSO details JSON, and exported again.
 - Every Android operator save, POTA save, Fast Entry batch, ADIF import, edit, and delete routes through `QsoMutationCoordinator`. Local writes and native Wavelog outbox insertion share one SQLite transaction. Pending updates coalesce; an unacknowledged create remains a create.
 - Reconciliation uses the last common baseline. Same-field divergent edits create a persisted conflict; disjoint field edits merge; timestamp-based last-write-wins is not used.
-- API v2 list pagination uses the server's `page`, `per_page`, `total_pages`, and `has_more` metadata. Initial and full runs persist the next page and scan membership only after a page is reconciled. A cancelled or interrupted run resumes there. Quick sync uses three newest pages as a bounded overlap and explicitly directs historic edits/deletes to Full.
-- A single JSON create captures the returned remote QSO ID, link, and baseline before the outbox operation is accepted. Failed or lost create responses are blocked and recovered only by a unique natural-key scan; Wavelog 3.1.0 has no server idempotency facility. Only HTTP 429 is retried automatically.
-- Remote deletions are inferred only after a completed Full scan. Local deletes retain a tombstone containing remote identity and the common baseline; a remotely changed QSO becomes an operator-visible delete conflict.
+- API v2 list pagination uses the server's `page`, `per_page`, `total_pages`, and `has_more` metadata. Quick sync remains a bounded newest-page overlap. Full reconciliation restarts safely at page 1 and requires two complete passes with identical remote-ID inventories before it may infer deletion; cancellation, an incomplete pass, or a shifting inventory never infers deletion.
+- A single JSON create captures the returned remote QSO ID, link, and baseline before the outbox operation is accepted. Failed or lost CREATE and DELETE responses are classified as ambiguous, remain operator-visible, and cannot be blindly retried. Natural-key or stable-inventory reconciliation may later prove their outcome. Rate limits and baseline-guarded UPDATE operations use bounded retry scheduling.
+- Operator deletion always records an explicit `LOCAL_ONLY` or `DELETE_REMOTE_IF_UNCHANGED` intent. Local-only deletion retains remote identity and baseline metadata. Remote deletion requires `qso:delete`, verifies the remote canonical value against the accepted baseline, and turns a remote change into an operator-visible conflict.
+- Keep Remote conflict resolution completes after its durable local/baseline update. Keep Local and Merged persist their intent and remain open across restart or network failure until their CREATE/PATCH/DELETE is accepted or later reconciliation proves convergence.
+- A paused binding remains configured and receives durable `PAUSED` outbox work. Resume moves only paused work back to the safe pending queue; blocked ambiguous CREATE/DELETE operations remain blocked. The native dialog exposes lifecycle controls, destructive confirmations, operational error classes, remote/local identities, conflicts, tombstones, and the outbox state machine.
 - API v2 requires HTTPS and platform certificate validation. Bearer tokens and QSO comments are absent from normal diagnostic messages.
 
 ## API 3.1.0 contract reviewed
