@@ -4,7 +4,9 @@
 #include <functional>
 #include <sstream>
 #include <string>
+#include <vector>
 #include "rigweave/core.h"
+#include "rigweave/satellite.h"
 #include "rigweave_flex.h"
 
 namespace {
@@ -53,6 +55,46 @@ jstring flex_text(JNIEnv *env, const std::function<int(char *, size_t)> &builder
     char output[512]{};
     return env->NewStringUTF(builder(output, sizeof(output)) >= 0 ? output : "");
 }
+template <typename Work>
+jstring satellite_text(JNIEnv *env, Work work) {
+    std::vector<char> output(512 * 1024);
+    const int written = work(output.data(), output.size());
+    if (written < 0) return env->NewStringUTF("{\"version\":1,\"ok\":false,\"error\":{\"code\":\"OUTPUT_LIMIT\"}}");
+    return env->NewStringUTF(output.data());
+}
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeSatellite_propagateNative(JNIEnv *env, jobject, jstring format, jstring name,
+    jstring elementOne, jstring elementTwo, jlong epoch, jlong maxAge, jdouble latitude, jdouble longitude, jdouble altitude) {
+    const std::string f = utf(env, format), n = utf(env, name), one = utf(env, elementOne), two = utf(env, elementTwo);
+    return satellite_text(env, [&](char *out, size_t size) { return rw_satellite_propagate_json(out, size, f.c_str(), n.c_str(), one.c_str(), two.c_str(),
+        static_cast<int64_t>(epoch), static_cast<int64_t>(maxAge), latitude, longitude, altitude); });
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeSatellite_passesNative(JNIEnv *env, jobject, jstring format, jstring name,
+    jstring elementOne, jstring elementTwo, jlong start, jlong end, jlong maxAge, jdouble latitude, jdouble longitude,
+    jdouble altitude, jdouble horizon, jdouble minimumPeak, jint step, jint maximumPasses) {
+    const std::string f = utf(env, format), n = utf(env, name), one = utf(env, elementOne), two = utf(env, elementTwo);
+    return satellite_text(env, [&](char *out, size_t size) { return rw_satellite_passes_json(out, size, f.c_str(), n.c_str(), one.c_str(), two.c_str(),
+        static_cast<int64_t>(start), static_cast<int64_t>(end), static_cast<int64_t>(maxAge), latitude, longitude, altitude,
+        horizon, minimumPeak, step, maximumPasses); });
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeSatellite_samplesNative(JNIEnv *env, jobject, jstring format, jstring name,
+    jstring elementOne, jstring elementTwo, jlong start, jlong end, jlong maxAge, jdouble latitude, jdouble longitude,
+    jdouble altitude, jint step, jint maximumSamples, jint kind) {
+    const std::string f = utf(env, format), n = utf(env, name), one = utf(env, elementOne), two = utf(env, elementTwo);
+    return satellite_text(env, [&](char *out, size_t size) { return rw_satellite_samples_json(out, size, f.c_str(), n.c_str(), one.c_str(), two.c_str(),
+        static_cast<int64_t>(start), static_cast<int64_t>(end), static_cast<int64_t>(maxAge), latitude, longitude, altitude,
+        step, maximumSamples, kind); });
+}
+
+extern "C" JNIEXPORT jdouble JNICALL
+Java_app_rigweave_mobile_NativeSatellite_dopplerNative(JNIEnv *, jobject, jdouble frequency, jdouble rangeRate) {
+    return rw_satellite_doppler_hz(frequency, rangeRate);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
