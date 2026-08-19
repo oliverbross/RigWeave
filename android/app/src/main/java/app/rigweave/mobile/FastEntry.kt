@@ -70,7 +70,9 @@ object FastEntryParser {
             if (mode.isBlank()) issues += FastEntryIssue(lineNumber, "Mode is required") else if (tokens.none(modePattern::matches)) inherited += "mode"
             if (time.isBlank()) issues += FastEntryIssue(lineNumber, "UTC time is required") else if (tokens.none { it.matches(Regex("^[0-2]\\d[0-5]\\d$")) }) inherited += "time"
             val frequencyHz = frequencyMhz?.times(1_000_000)?.toLong() ?: defaultFrequency(band, mode)
-            if (frequencyHz <= 0) issues += FastEntryIssue(lineNumber, "Frequency is unknown for $band $mode")
+            if (frequencyHz <= 0 && band.isNotBlank() && mode.isNotBlank()) {
+                issues += FastEntryIssue(lineNumber, "Frequency is unknown for $band $mode")
+            }
             if (issues.any { it.line == lineNumber && !it.warning }) return@forEachIndexed
             val local = LocalDateTime.of(date.year, date.month, date.dayOfMonth, time.take(2).toInt(), time.drop(2).take(2).toInt())
             val utc = local.minusHours(timezoneOffset.toLong()); val report = defaultReport(mode); val allFields = retained + fields

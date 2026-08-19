@@ -23,6 +23,6 @@ class FastEntryTest {
     }
     @Test fun reportsLineSpecificMissingContextWithoutCreatingHiddenRows() {
         val result = FastEntryParser.parse("2134 OM0RX", defaults); assertEquals(0, result.rows.size)
-        assertEquals(setOf("Band or frequency is required", "Mode is required", "Frequency is unknown for  "), result.errors.map { it.message }.toSet())
+        assertEquals(setOf("Band or frequency is required", "Mode is required"), result.errors.map { it.message }.toSet())
     }
 }
