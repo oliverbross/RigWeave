@@ -66,6 +66,7 @@ internal fun OperationsScreen(
     openDx: () -> Unit,
     openPortable: () -> Unit,
     openLogbook: () -> Unit,
+    tuneReceive: (Long, String?) -> Unit,
 ) {
     var selected by rememberSaveable { mutableStateOf(controller.section) }
     LaunchedEffect(controller.section) { selected = controller.section }
@@ -73,19 +74,21 @@ internal fun OperationsScreen(
     Column(Modifier.fillMaxSize().background(Color(0xFF111519)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) { Text("OPERATIONS", color = OpsInk, fontWeight = FontWeight.Black, style = MaterialTheme.typography.headlineSmall)
-                Text("CALENDAR · CONTESTS · ACTIVATION PLANNING", color = OpsMuted) }
-            OutlinedButton({ controller.refresh(true) }, enabled = !controller.refreshing) {
+                Text("CALENDAR · CONTESTS · ACTIVATIONS · SATELLITES", color = OpsMuted) }
+            OutlinedButton({ if (selected == "SATELLITES") controller.satellites.refresh(true) else controller.refresh(true) }, enabled = !controller.refreshing && !controller.satellites.busy) {
                 Icon(Icons.Outlined.Refresh, null); Spacer(Modifier.width(5.dp)); Text(if (controller.refreshing) "REFRESHING" else "REFRESH")
             }
         }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("DX CALENDAR", "CONTESTS", "ACTIVATION PLANNER").forEach { label ->
+            listOf("DX CALENDAR", "CONTESTS", "ACTIVATION PLANNER", "SATELLITES").forEach { label ->
                 FilterChip(selected == label, { selected = label; controller.openSection(label) }, { Text(label) })
             }
         }
         when (selected) {
             "CONTESTS" -> ContestOperations(controller, progress, mutations, wavelog, callbook, app, openLogbook)
             "ACTIVATION PLANNER" -> ActivationPlanner(controller, portable, activation, app, openPortable)
+            "SATELLITES" -> SatelliteOperationsScreen(controller.satellites, app.stationCallsign, app.stationGrid, controller.nextPlan?.grid,
+                mutations, wavelog, callbook, progress, openLogbook, tuneReceive)
             else -> DxOperations(controller, features, progress, cty, openDx, openLogbook)
         }
     }

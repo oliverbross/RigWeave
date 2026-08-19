@@ -446,7 +446,9 @@ private fun navIcon(item: Destination) = when (item) {
             progress.snapshot.needs.mapNotNull { need -> need.portableSpot?.id?.let { it to need.reasons } }.toMap(), openLogbook,
             operations.nextPlan, openOperations)
         Destination.OPERATIONS -> OperationsScreen(operations, portable, activation, features, progress, mutations, wavelog, callbook, cty,
-            app, compact, openDx, openPortable, openLogbook)
+            app, compact, openDx, openPortable, openLogbook, { frequency, mode ->
+                send("FA${frequency.toString().padStart(11, '0')};")
+            })
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
             transport, flex, voiceStore, voiceAudio, voiceTx, openEq, openSync, connect, direct)
     }

@@ -86,7 +86,7 @@ private val ProgressGreen = Color(0xFF48C78E)
 private val ProgressBlue = Color(0xFF65A6C7)
 private enum class ProgressSection(val label: String) {
     OVERVIEW("OVERVIEW"), ACTIVITY("ACTIVITY"), GEOGRAPHY("GEOGRAPHY"), CONFIRMATIONS("CONFIRMATIONS"),
-    OPERATORS("OPERATORS"), PORTABLE("PORTABLE"), NEEDS("NEEDS"), AWARDS("AWARDS")
+    OPERATORS("OPERATORS"), PORTABLE("PORTABLE"), SATELLITE("SATELLITE"), NEEDS("NEEDS"), AWARDS("AWARDS")
 }
 
 @Composable
@@ -194,6 +194,7 @@ internal fun ProgressScreen(
                 ProgressSection.CONFIRMATIONS -> confirmationItems(snapshot, progressLogbookFilter(filters), openLogbookFilter)
                 ProgressSection.OPERATORS -> operatorItems(snapshot, progressLogbookFilter(filters), openLogbookFilter)
                 ProgressSection.PORTABLE -> portableItems(snapshot, portable, openPortable, progressLogbookFilter(filters), openLogbookFilter)
+                ProgressSection.SATELLITE -> satelliteItems(snapshot, progressLogbookFilter(filters), openLogbookFilter)
                 ProgressSection.NEEDS -> needsItems(snapshot, openDx, openPortable, progressLogbookFilter(filters), openLogbookFilter)
                 ProgressSection.AWARDS -> awardsItems(snapshot, controller.selectedAward, controller::selectAward,
                     progressLogbookFilter(filters), openLogbookFilter)
@@ -202,6 +203,64 @@ internal fun ProgressScreen(
         }
     }
     if (goalDialog) GoalDialog(controller, { goalDialog = false })
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.satelliteItems(
+    snapshot: ProgressSnapshot,
+    base: LogbookFilter,
+    openLogbook: (LogbookFilter) -> Unit,
+) {
+    val satellite = snapshot.satellite
+    val satelliteFilter = base.copy(propagation = "SAT")
+    item {
+        ProgressCard("SATELLITE LOG INTELLIGENCE") {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Kpi("QSOs", satellite.qsos.toString(), action = { openLogbook(satelliteFilter) })
+                Kpi("SATELLITES", satellite.satellites.toString(), action = { openLogbook(satelliteFilter.copy(satellite = "*")) })
+                Kpi("CALLS", satellite.uniqueCalls.toString(), action = { openLogbook(satelliteFilter) })
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Kpi("GRIDS", satellite.grids.toString(), action = { openLogbook(satelliteFilter.copy(grid = "*")) })
+                Kpi("CONF GRIDS", satellite.confirmed.toString(), action = { openLogbook(satelliteFilter.copy(grid = "*", confirmationSource = "AWARD")) })
+                Kpi("ROVER GRIDS", satellite.ownGrids.toString(), action = { openLogbook(satelliteFilter) })
+            }
+            Text("Local log estimates only · confirmations use paper QSL or LoTW · official award credit is not claimed", color = ProgressMuted)
+        }
+    }
+    item {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val birds = satellite.bySatellite.map { ProgressBucket(it.key, it.value) }
+            val modes = satellite.byMode.map { ProgressBucket(it.key, it.value) }
+            if (maxWidth > 700.dp) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ChartCard("SATELLITES", birds, Modifier.weight(1f))
+                ChartCard("MODES", modes, Modifier.weight(1f))
+            } else Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ChartCard("SATELLITES", birds, Modifier.fillMaxWidth())
+                ChartCard("MODES", modes, Modifier.fillMaxWidth())
+            }
+        }
+    }
+    item {
+        ProgressCard("WORKED / CONFIRMED GRID MATRIX") {
+            satellite.workedConfirmed.entries.take(20).forEach { (name, count) ->
+                TextButton({ openLogbook(satelliteFilter.copy(satellite = name)) }, Modifier.fillMaxWidth()) {
+                    Row(Modifier.fillMaxWidth()) {
+                        Text(name, modifier = Modifier.weight(1f)); Text("${count.worked} QSOs · ${count.confirmed} confirmed grids")
+                    }
+                }
+            }
+            val favourite = satellite.bySatellite.maxByOrNull { it.value }
+            Text(favourite?.let { "Best local history · ${it.key} · ${it.value} QSOs" } ?: "No satellite history in the current filter", color = ProgressMuted)
+        }
+    }
+    item {
+        ProgressCard("RECENT ACTIVITY & BREAKDOWN") {
+            Text("Bands · ${satellite.byBand.entries.joinToString(" · ") { "${it.key} ${it.value}" }.ifBlank { "none" }}", color = ProgressMuted)
+            Text("Recent · ${satellite.recentActivity.entries.take(12).joinToString(" · ") { "${it.key} ${it.value}" }.ifBlank { "none" }}", color = ProgressMuted)
+            Text("Next Needed is intentionally not inferred from local history; current catalogue/status opportunities remain in Operations → Satellites.", color = ProgressMuted)
+        }
+    }
+    item { OutlinedButton({ openLogbook(satelliteFilter) }, Modifier.fillMaxWidth()) { Text("OPEN SATELLITE LOGBOOK") } }
 }
 
 private fun androidx.compose.foundation.lazy.LazyListScope.overviewItems(

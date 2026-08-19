@@ -334,7 +334,9 @@ internal fun HamClockHomeScreen(
             HamClockPanelId.DX_TARGET -> DxTargetPanel(visibleMapSpots, stationGrid, modifier)
             HamClockPanelId.VOACAP -> VoacapPanel(visibleMapSpots, features, pathPrediction, modifier)
             HamClockPanelId.PORTABLE -> PortablePanel(portable, openPortable, modifier)
-            HamClockPanelId.SATELLITES -> SatellitePanel(neuralDx.passes, neuralDx.status, neuralDx.lastRefreshEpoch, openDx, modifier)
+            HamClockPanelId.SATELLITES -> SatellitePanel(operations.satellites, {
+                operations.openSection("SATELLITES"); openOperations()
+            }, modifier)
             HamClockPanelId.CONTESTS -> ContestsPanel(contestFeed, modifier)
         }
     }
@@ -417,7 +419,9 @@ internal fun HamClockHomeScreen(
                 if (dashboardConfig.voacap) item { VoacapPanel(visibleMapSpots, features, pathPrediction, Modifier.fillMaxWidth()) }
                 if (dashboardConfig.portable) item { PortablePanel(portable, openPortable, Modifier.fillMaxWidth()) }
                 if (dashboardConfig.bandActivity) item { BandConditionsPanel(neuralDx.bandActivity, openProgress, Modifier.fillMaxWidth()) }
-                if (dashboardConfig.satellites) item { SatellitePanel(neuralDx.passes, neuralDx.status, neuralDx.lastRefreshEpoch, openDx, Modifier.fillMaxWidth()) }
+                if (dashboardConfig.satellites) item { SatellitePanel(operations.satellites, {
+                    operations.openSection("SATELLITES"); openOperations()
+                }, Modifier.fillMaxWidth()) }
                 if (dashboardConfig.contests) item { ContestsPanel(contestFeed, Modifier.fillMaxWidth()) }
                 item { PropagationStrip(neuralDx, Modifier.fillMaxWidth()) }
             }
@@ -898,17 +902,28 @@ private fun hamClockReliability(band: String, zone: String, sfi: Float, kp: Floa
     }
 }
 
-@Composable private fun SatellitePanel(passes: List<SatellitePass>, sourceStatus: String, refreshedAt: Long, openDx: () -> Unit, modifier: Modifier) {
-    Module("Satellite passes", "NEXT ${passes.size}", openDx, modifier) {
-        if (passes.isEmpty()) EmptyLine(if (sourceStatus.contains("Satellites unavailable")) "Satellites unavailable · cached data retained"
-            else if (refreshedAt == 0L) "Satellite source has not refreshed yet" else "No upcoming passes · refreshed ${ageLabel(refreshedAt)}")
-        else passes.take(4).forEach { pass ->
-            Row(Modifier.fillMaxWidth()) {
-                Text(pass.name, color = HcCyan, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1)
-                Text(Instant.ofEpochSecond(pass.aosEpoch).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm")),
-                    color = HcInk, fontFamily = FontFamily.Monospace)
-                Spacer(Modifier.width(8.dp)); Text("${pass.maxElevation.roundToInt()}°", color = HcGreen, fontFamily = FontFamily.Monospace)
+@Composable private fun SatellitePanel(controller: SatelliteOperationsController, openSatellites: () -> Unit, modifier: Modifier) {
+    val next = controller.nextFavouritePass
+    val state = controller.elements.metadata.state.name.replace('_', ' ')
+    Module("Satellite operations", state, openSatellites, modifier) {
+        if (next == null) {
+            EmptyLine(controller.message)
+        } else {
+            val now = Instant.now().epochSecond
+            val untilAos = (next.pass.aos - now).coerceAtLeast(0)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(next.satellite.name, color = HcCyan, fontWeight = FontWeight.Bold, maxLines = 1)
+                    Text(
+                        "AOS ${Instant.ofEpochSecond(next.pass.aos).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm"))} · " +
+                            "T− ${untilAos / 3600}h ${(untilAos % 3600) / 60}m · ${next.pass.maximumElevationDeg.roundToInt()}°",
+                        color = HcInk,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+                Text("OPEN", color = HcGreen, fontWeight = FontWeight.Bold)
             }
+            Text("Favourite-first · local pinned SGP4 · tap for passes, track and sky plot", color = HcMuted)
         }
     }
 }

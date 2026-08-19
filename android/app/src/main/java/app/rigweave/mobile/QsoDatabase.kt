@@ -636,6 +636,9 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     fun stationProfileIds(): List<String> = readableDatabase.rawQuery(
         "SELECT DISTINCT station_profile_id FROM qso_projection WHERE station_profile_id<>'' ORDER BY station_profile_id", null
     ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+    fun satelliteObserverProfiles(): List<Pair<String,String>> = readableDatabase.rawQuery(
+        "SELECT station_profile_id,my_grid_norm FROM qso_projection WHERE station_profile_id<>'' AND my_grid_norm<>'' GROUP BY station_profile_id,my_grid_norm ORDER BY COUNT(*) DESC LIMIT 50", null
+    ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0) to cursor.getString(1)) } }
     fun activationQsos(sessionId:String):List<Qso>{val ids=readableDatabase.rawQuery("SELECT qso_id FROM qso_projection WHERE activation_session_id=? ORDER BY created_at,qso_id",arrayOf(sessionId)).use{c->buildList{while(c.moveToNext())add(c.getString(0))}};return qsos(ids)}
     fun catchUpCandidates(fromEpoch:Long,toEpochExclusive:Long,station:String=""):List<QsoCatchUpCandidate>{val args=mutableListOf(fromEpoch.toString(),toEpochExclusive.toString());val stationClause=if(station.isBlank())"" else " AND station_callsign_norm=?".also{args+=station.trim().uppercase()};return readableDatabase.rawQuery("SELECT qso_id,station_callsign_norm FROM qso_projection WHERE created_at>=? AND created_at<?$stationClause ORDER BY created_at,qso_id",args.toTypedArray()).use{c->buildList{while(c.moveToNext())add(QsoCatchUpCandidate(c.getString(0),c.getString(1)))}}}
 

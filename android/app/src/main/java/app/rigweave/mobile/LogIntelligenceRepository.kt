@@ -32,11 +32,19 @@ internal class LogIntelligenceRepository(private val database:QsoDatabase){
         val stationProfiles=grouped("station_profile_id");val stationCallsigns=grouped("station_callsign_norm");val radios=grouped("radio_model_norm")
         val continents=progress("continent");val geography=dxccMap.entries.sortedByDescending{it.value.worked}.map{GeographyProgress(it.key,it.key,it.value)}
         val portable=portable(where,args)
-        val satelliteRows=scalar("SUM(CASE WHEN satellite_name<>'' OR propagation_mode='SAT' OR band_norm='SAT' THEN 1 ELSE 0 END)")
-        val satellite=SatelliteAnalytics(satelliteRows,scalar("COUNT(DISTINCT NULLIF(satellite_name,''))"),
-            scalar("COUNT(DISTINCT CASE WHEN satellite_name<>'' OR propagation_mode='SAT' THEN NULLIF(grid_norm,'') END)"),
-            scalar("SUM(CASE WHEN (satellite_name<>'' OR propagation_mode='SAT') AND (paper_received=1 OR lotw_received=1) THEN 1 ELSE 0 END)"),
-            grouped("satellite_name"),grouped("satellite_mode"))
+        val satelliteWhere="($where) AND (satellite_name<>'' OR propagation_mode='SAT' OR band_norm='SAT')"
+        fun satelliteScalar(expr:String):Int=db.rawQuery("SELECT $expr FROM qso_projection p WHERE $satelliteWhere",args).use{if(it.moveToFirst())it.getInt(0)else 0}
+        fun satelliteGrouped(column:String,limit:Int=100):Map<String,Int> = db.rawQuery("SELECT $column,COUNT(*) FROM qso_projection p WHERE $satelliteWhere AND $column<>'' GROUP BY $column ORDER BY COUNT(*) DESC LIMIT $limit",args).use{c->buildMap{while(c.moveToNext())put(c.getString(0),c.getInt(1))}}
+        val satelliteMatrix=db.rawQuery("SELECT satellite_name,COUNT(*),COUNT(DISTINCT CASE WHEN paper_received=1 OR lotw_received=1 THEN NULLIF(grid_norm,'') END) FROM qso_projection p WHERE $satelliteWhere AND satellite_name<>'' GROUP BY satellite_name ORDER BY COUNT(*) DESC LIMIT 100",args).use{c->buildMap{while(c.moveToNext())put(c.getString(0),ProgressCount(c.getInt(1),c.getInt(2)))}}
+        val satellite=SatelliteAnalytics(
+            qsos=satelliteScalar("COUNT(*)"),satellites=satelliteScalar("COUNT(DISTINCT NULLIF(satellite_name,''))"),
+            grids=satelliteScalar("COUNT(DISTINCT NULLIF(grid_norm,''))"),
+            confirmed=satelliteScalar("COUNT(DISTINCT CASE WHEN paper_received=1 OR lotw_received=1 THEN NULLIF(grid_norm,'') END)"),
+            bySatellite=satelliteGrouped("satellite_name"),byMode=satelliteGrouped("satellite_mode"),
+            uniqueCalls=satelliteScalar("COUNT(DISTINCT NULLIF(callsign_norm,''))"),ownGrids=satelliteScalar("COUNT(DISTINCT NULLIF(my_grid_norm,''))"),
+            byBand=satelliteGrouped("band_norm"),workedConfirmed=satelliteMatrix,
+            recentActivity=db.rawQuery("SELECT utc_day,COUNT(*) FROM qso_projection p WHERE $satelliteWhere AND utc_day<>'' GROUP BY utc_day ORDER BY utc_day DESC LIMIT 30",args).use{c->buildMap{while(c.moveToNext())put(c.getString(0),c.getInt(1))}},
+        )
         val antennas=db.rawQuery("SELECT antenna_path_norm,COUNT(*),SUM(CASE WHEN paper_received=1 OR lotw_received=1 THEN 1 ELSE 0 END),AVG(NULLIF(distance_km,0)),MAX(distance_km) FROM qso_projection p WHERE $where AND antenna_path_norm<>'' GROUP BY antenna_path_norm ORDER BY COUNT(*) DESC LIMIT 50",args).use{c->buildList{while(c.moveToNext())add(AntennaAnalytics(c.getString(0),c.getInt(1),c.getInt(2),c.getDouble(3).takeUnless{c.isNull(3)},c.getDouble(4).takeUnless{c.isNull(4)}))}}
         val activity=activity(where,args,filters.period)
         val heatmap=db.rawQuery("SELECT CAST(strftime('%w',created_at,'unixepoch') AS INTEGER),CAST(strftime('%H',created_at,'unixepoch') AS INTEGER),COUNT(*) FROM qso_projection p WHERE $where GROUP BY 1,2",args).use{c->buildList{while(c.moveToNext())add(ProgressHeatCell((c.getInt(0)+6)%7,c.getInt(1),c.getInt(2)))}}

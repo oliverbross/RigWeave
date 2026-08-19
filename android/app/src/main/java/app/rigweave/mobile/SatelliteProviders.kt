@@ -112,6 +112,11 @@ internal class SatelliteProviderRepository(context: Context) {
         return true
     }
 
+    fun removeManualElements(noradId: Long) {
+        val rows = parseManualElements().filterNot { it.noradId == noradId }
+        prefs.edit().putString("manual_elements", JSONArray(rows.map(::elementJson)).toString()).apply()
+    }
+
     fun transponders(now: Long = Instant.now().epochSecond): SatelliteProviderData<SatelliteTransponder> {
         val provider = parseTransponders(cache("satnogs.json"))
         val manual = parseTransponders(prefs.getString("manual_transponders", "[]").orEmpty(), manual = true)
@@ -137,6 +142,11 @@ internal class SatelliteProviderRepository(context: Context) {
         require(row.noradId > 0 && listOfNotNull(row.uplinkLowHz, row.downlinkLowHz).any(::validFrequency))
         val rows = parseTransponders(prefs.getString("manual_transponders", "[]").orEmpty(), manual = true)
             .filterNot { it.id == row.id } + row.copy(manual = true)
+        prefs.edit().putString("manual_transponders", JSONArray(rows.map(::transponderJson)).toString()).apply()
+    }
+
+    fun removeManualTransponder(id: String) {
+        val rows = parseTransponders(prefs.getString("manual_transponders", "[]").orEmpty(), manual = true).filterNot { it.id == id }
         prefs.edit().putString("manual_transponders", JSONArray(rows.map(::transponderJson)).toString()).apply()
     }
 

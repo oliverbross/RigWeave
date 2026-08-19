@@ -23,6 +23,7 @@ internal class OperationsController(
     database: QsoDatabase,
 ) {
     private val logRepository=OperationsLogRepository(database)
+    val satellites = SatelliteOperationsController(context, database)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val plansFile = AtomicFile(File(context.filesDir, "operations-plans.json"))
     var dxItems by mutableStateOf(dxCalendarItems(providers.dxpeditions.cached())); private set
@@ -65,7 +66,7 @@ internal class OperationsController(
         createdAt = Instant.now().epochSecond, updatedAt = Instant.now().epochSecond))
 
     fun delete(id: String) { plans = plans.filterNot { it.id == id }; persistPlans() }
-    fun close() = scope.cancel()
+    fun close() { satellites.close(); scope.cancel() }
 
     private fun apply(dx: HamClockFeed<List<app.rigweave.mobile.hamclock.HamClockDxpedition>>,
         contests: HamClockFeed<List<app.rigweave.mobile.hamclock.HamClockContest>>) {

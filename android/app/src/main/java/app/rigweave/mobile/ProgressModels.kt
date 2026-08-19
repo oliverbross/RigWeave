@@ -66,6 +66,8 @@ internal data class AwardEstimate(
 internal data class SatelliteAnalytics(
     val qsos: Int = 0, val satellites: Int = 0, val grids: Int = 0, val confirmed: Int = 0,
     val bySatellite: Map<String, Int> = emptyMap(), val byMode: Map<String, Int> = emptyMap(),
+    val uniqueCalls: Int = 0, val ownGrids: Int = 0, val byBand: Map<String, Int> = emptyMap(),
+    val workedConfirmed: Map<String, ProgressCount> = emptyMap(), val recentActivity: Map<String, Int> = emptyMap(),
 )
 internal data class AntennaAnalytics(
     val path: String, val qsos: Int, val confirmed: Int, val averageDistanceKm: Double?, val bestDistanceKm: Double?,
@@ -423,6 +425,12 @@ internal fun buildProgressSnapshot(
         confirmed = satelliteRows.count(::isAwardConfirmed),
         bySatellite = satelliteRows.map { it.extraAdifFields["SAT_NAME"].orEmpty().uppercase(Locale.US).ifBlank { "UNKNOWN" } }.groupingBy { it }.eachCount(),
         byMode = satelliteRows.map { it.extraAdifFields["SAT_MODE"].orEmpty().uppercase(Locale.US).ifBlank { it.submode.ifBlank { it.mode } } }.groupingBy { it }.eachCount(),
+        uniqueCalls = satelliteRows.map(Qso::callsign).filter(String::isNotBlank).distinctBy { it.uppercase(Locale.US) }.size,
+        ownGrids = satelliteRows.map { it.extraAdifFields["MY_GRIDSQUARE"].orEmpty() }.filter(String::isNotBlank).distinctBy { it.uppercase(Locale.US) }.size,
+        byBand = satelliteRows.map(::qsoBand).filter(String::isNotBlank).groupingBy { it }.eachCount(),
+        workedConfirmed = satelliteRows.groupBy { it.extraAdifFields["SAT_NAME"].orEmpty().uppercase(Locale.US).ifBlank { "UNKNOWN" } }
+            .mapValues { (_, values) -> ProgressCount(values.size, values.filter(::isAwardConfirmed).map(Qso::grid).filter(String::isNotBlank).distinct().size) },
+        recentActivity = satelliteRows.groupingBy { Instant.ofEpochSecond(it.createdAt).atZone(ZoneOffset.UTC).toLocalDate().toString() }.eachCount(),
     )
     val antennas = rows.filter { it.antennaPath.isNotBlank() }.groupBy { it.antennaPath.trim().uppercase(Locale.US) }.map { (path, values) ->
         val distances = values.map(Qso::distanceKm).filter { it > 0 }
