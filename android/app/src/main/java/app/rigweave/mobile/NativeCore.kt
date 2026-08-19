@@ -85,9 +85,13 @@ object NativeCore {
     external fun digiFeedCw(handle: Long, samples: FloatArray): String
     external fun digiFeedRtty(handle: Long, samples: FloatArray): String
     external fun digiFeedSstv(handle: Long, samples: FloatArray): String
+    external fun digiDecodeSlot(mode: Int, samples: FloatArray, sampleRate: Int): String
+    external fun digiDecodePsk31(samples: FloatArray): String
     external fun digiSstvImage(handle: Long): ByteArray
     external fun digiEncodeCw(text: String, wpm: Int, pitchHz: Float, sampleRate: Int): FloatArray
     external fun digiEncodeRtty(text: String, sampleRate: Int, reverse: Boolean): FloatArray
+    external fun digiEncodeSlot(mode: Int, text: String, baseHz: Float): FloatArray
+    external fun digiEncodePsk31(text: String, carrierHz: Float): FloatArray
     external fun digiEncodeSstv(mode: Int, rgb: ByteArray, width: Int, height: Int, sampleRate: Int): FloatArray
 
     fun parseState(value: String): RadioState {

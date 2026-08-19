@@ -39,6 +39,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
 import org.maplibre.android.MapLibre
+import org.maplibre.android.annotations.Annotation
 import org.maplibre.android.annotations.Icon
 import org.maplibre.android.annotations.IconFactory
 import org.maplibre.android.annotations.MarkerOptions
@@ -68,7 +69,11 @@ private val MapGreen = ComposeColor(0xFF42C77B)
 private val MapAmber = ComposeColor(0xFFE9A72B)
 private val MapYellow = ComposeColor(0xFFF4C94E)
 private val MapRed = ComposeColor(0xFFE4544D)
-private const val MaxVisibleDxPaths = 300
+private val MapPurple = ComposeColor(0xFFB783F5)
+// Legacy MapLibre annotations are Java objects backed by native map state. Hundreds of
+// multi-point paths push 256 MB Android tablets over their heap limit during a refresh.
+// Eighty keeps the map useful while the keyed diff below preserves the newest paths.
+private const val MaxVisibleDxPaths = 80
 
 private enum class NeuralBasemap(val label: String, val styleJson: String) {
     SATELLITE("ESRI SATELLITE", satelliteStyleJson()),
@@ -87,6 +92,12 @@ private data class MapMarker(
 
 private data class MapPath(val points: List<LatLng>, val color: Int, val widthDp: Float = 1.5f)
 private data class MapArea(val points: List<LatLng>, val fill: Int, val stroke: Int)
+private class RenderedMapAnnotations {
+    var markers: Map<MapMarker, Annotation> = emptyMap()
+    var paths: Map<MapPath, Annotation> = emptyMap()
+    var areas: Map<MapArea, Annotation> = emptyMap()
+    fun reset() { markers = emptyMap(); paths = emptyMap(); areas = emptyMap() }
+}
 
 @Composable
 private fun NativeNeuralMap(
@@ -110,6 +121,7 @@ private fun NativeNeuralMap(
     }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var styleReady by remember { mutableStateOf(false) }
+    val renderedAnnotations = remember(mapView) { RenderedMapAnnotations() }
 
     DisposableEffect(mapView, lifecycle) {
         var started = false
@@ -177,11 +189,20 @@ private fun NativeNeuralMap(
             readyMap.setMinZoomPreference(0.8)
             readyMap.setMaxZoomPreference(12.0)
             readyMap.cameraPosition = CameraPosition.Builder().target(center).zoom(zoom).build()
-            readyMap.setStyle(Style.Builder().fromJson(basemap.styleJson)) { styleReady = true }
+            readyMap.setStyle(Style.Builder().fromJson(basemap.styleJson)) {
+                renderedAnnotations.reset()
+                styleReady = true
+            }
         }
         onDispose {
             disposed = true
             lifecycle.removeObserver(observer)
+            map?.let { readyMap ->
+                val annotations = renderedAnnotations.areas.values +
+                    renderedAnnotations.paths.values + renderedAnnotations.markers.values
+                if (annotations.isNotEmpty()) readyMap.removeAnnotations(annotations)
+            }
+            renderedAnnotations.reset()
             map = null
             styleReady = false
             destroy()
@@ -191,22 +212,28 @@ private fun NativeNeuralMap(
     LaunchedEffect(map, styleReady, markers, paths, areas) {
         val readyMap = map ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
-        readyMap.clear()
-        areas.forEach { area ->
-            readyMap.addPolygon(PolygonOptions().addAll(area.points).fillColor(area.fill).strokeColor(area.stroke))
+        val oldAreas = renderedAnnotations.areas
+        val nextAreas = areas.associateWith { area -> oldAreas[area] ?: readyMap.addPolygon(
+            PolygonOptions().addAll(area.points).fillColor(area.fill).strokeColor(area.stroke)
+        ) }
+        val oldPaths = renderedAnnotations.paths
+        val nextPaths = paths.associateWith { path -> oldPaths[path] ?: readyMap.addPolyline(
+            PolylineOptions().addAll(path.points).color(path.color).width(path.widthDp * density)
+        ) }
+        val oldMarkers = renderedAnnotations.markers
+        val nextMarkers = markers.associateWith { marker -> oldMarkers[marker] ?: readyMap.addMarker(
+            MarkerOptions().position(LatLng(marker.latitude, marker.longitude)).title(marker.title)
+                .snippet(marker.detail).icon(mapMarkerIcon(context, marker.color, marker.sizeDp, marker.ring))
+        ) }
+        val stale = buildList {
+            oldAreas.filterKeys { it !in nextAreas }.values.let(::addAll)
+            oldPaths.filterKeys { it !in nextPaths }.values.let(::addAll)
+            oldMarkers.filterKeys { it !in nextMarkers }.values.let(::addAll)
         }
-        paths.forEach { path ->
-            readyMap.addPolyline(PolylineOptions().addAll(path.points).color(path.color).width(path.widthDp * density))
-        }
-        markers.forEach { marker ->
-            readyMap.addMarker(
-                MarkerOptions()
-                    .position(LatLng(marker.latitude, marker.longitude))
-                    .title(marker.title)
-                    .snippet(marker.detail)
-                    .icon(mapMarkerIcon(context, marker.color, marker.sizeDp, marker.ring))
-            )
-        }
+        renderedAnnotations.areas = nextAreas
+        renderedAnnotations.paths = nextPaths
+        renderedAnnotations.markers = nextMarkers
+        if (stale.isNotEmpty()) readyMap.removeAnnotations(stale)
     }
 
     Box(
@@ -263,21 +290,35 @@ private fun NativeNeuralMap(
 
 @Composable
 internal fun DxWorldCanvas(rows: List<AndroidDXSpot>, stationGrid: String, hearsMe: Boolean,
-    cty: CtyController, showPaths: Boolean, modifier: Modifier) {
-    val qth = maidenheadCenter(stationGrid)
-    val resolvedPaths = if (!showPaths) emptyList() else rows.asSequence().mapNotNull { spot ->
-        val reporter = cty.lookup(spot.spotter) ?: return@mapNotNull null
-        val segments = dxReportRoute(reporter, spot)
-        if (segments.isEmpty()) null else Triple(spot, reporter, segments)
-    }.take(MaxVisibleDxPaths).toList()
-    val markers = buildList {
+    cty: CtyController, showPaths: Boolean, modifier: Modifier, showGreyline: Boolean = false,
+    signalReports: List<SignalReport> = emptyList(), portableSpots: List<PortableSpot> = emptyList(),
+    satellites: List<SatellitePosition> = emptyList(), loggedQsos: List<Qso> = emptyList(),
+    lightning: List<LightningStrike> = emptyList()) {
+    var currentTime by remember { mutableStateOf(Instant.now()) }
+    LaunchedEffect(showGreyline) {
+        currentTime = Instant.now()
+        while (showGreyline) {
+            delay(60_000)
+            currentTime = Instant.now()
+        }
+    }
+    val qth = remember(stationGrid) { maidenheadCenter(stationGrid) }
+    val resolvedPaths = remember(rows, showPaths, cty.dataRevision) {
+        if (!showPaths) emptyList() else rows.asSequence().mapNotNull { spot ->
+            val reporter = cty.lookup(spot.spotter) ?: return@mapNotNull null
+            val segments = dxReportRoute(reporter, spot)
+            if (segments.isEmpty()) null else Triple(spot, reporter, segments)
+        }.take(MaxVisibleDxPaths).toList()
+    }
+    val markers = remember(qth, rows, resolvedPaths, hearsMe, signalReports, portableSpots,
+        satellites, loggedQsos, lightning, cty.dataRevision) { buildList {
         qth?.let { add(qthMarker(it)) }
         rows.forEach { spot ->
             if (spot.latitude != 0.0 || spot.longitude != 0.0) {
                 add(MapMarker(
                     spot.latitude, spot.longitude, spot.callsign,
                     "${spot.band} ${spot.mode} · ${"%.3f".format(spot.frequencyHz / 1_000_000.0)} MHz · ${spot.country} · DX de ${spot.spotter}",
-                    when { spot.watchlisted -> colorInt(MapYellow); hearsMe -> colorInt(MapGreen); else -> colorInt(MapCyan) },
+                    when { spot.watchlisted -> colorInt(MapYellow); hearsMe -> colorInt(MapGreen); else -> colorInt(dxBandColor(spot.band)) },
                     if (spot.watchlisted) 15 else 11,
                     spot.watchlisted,
                 ))
@@ -288,19 +329,96 @@ internal fun DxWorldCanvas(rows: List<AndroidDXSpot>, stationGrid: String, hears
                 "Reported ${spot.callsign} · ${spot.band} ${spot.mode} · approximate CTY location",
                 colorInt(MapAmber), 9))
         }
-    }
-    val paths = resolvedPaths.flatMap { (spot, _, segments) ->
+        signalReports.take(60).forEach { report ->
+            val latitude = report.latitude ?: return@forEach
+            val longitude = report.longitude ?: return@forEach
+            add(MapMarker(latitude, longitude, report.callsign,
+                "Heard ${report.band} ${report.mode} · ${report.snr?.let { "$it dB" } ?: "SNR —"} · PSK Reporter",
+                colorInt(MapPurple), 9))
+        }
+        portableSpots.take(160).forEach { spot ->
+            val latitude = spot.latitude ?: return@forEach
+            val longitude = spot.longitude ?: return@forEach
+            val color = when {
+                PortableProgram.POTA in spot.programs -> MapGreen
+                PortableProgram.SOTA in spot.programs -> MapCyan
+                else -> ComposeColor(0xFFC481D8)
+            }
+            add(MapMarker(latitude, longitude, spot.callsign,
+                "${spot.programs.joinToString { it.label }} ${spot.primary.code} · ${spot.band} ${spot.mode}",
+                colorInt(color), 10))
+        }
+        satellites.take(40).forEach { satellite ->
+            add(MapMarker(satellite.latitude, satellite.longitude, satellite.name,
+                "Az ${satellite.azimuth.roundToInt()}° · El ${satellite.elevation.roundToInt()}° · ${satellite.altitudeKm.roundToInt()} km",
+                colorInt(if (satellite.visible) MapGreen else MapCyan), if (satellite.visible) 13 else 9, satellite.visible))
+        }
+        loggedQsos.take(120).forEach { qso ->
+            val point = qsoMapPoint(qso, cty) ?: return@forEach
+            add(MapMarker(point.latitude, point.longitude, qso.callsign,
+                "Logged ${qso.band.ifBlank { bandForFrequency(qso.frequencyHz) }} ${qso.mode} · ${qso.country.ifBlank { "entity unresolved" }}",
+                colorInt(MapInk), 8))
+        }
+        lightning.take(120).forEach { strike ->
+            add(MapMarker(strike.latitude, strike.longitude, "Lightning",
+                "${strike.distanceKm.roundToInt()} km ${strike.bearing} · ${((Instant.now().epochSecond - strike.epoch) / 60).coerceAtLeast(0)}m ago",
+                colorInt(MapRed), 8, strike.epoch >= Instant.now().epochSecond - 300))
+        }
+    } }
+    val dxPaths = remember(resolvedPaths) { resolvedPaths.flatMap { (spot, _, segments) ->
         segments.map { points ->
-            MapPath(points, colorInt((if (spot.watchlisted) MapYellow else MapCyan).copy(alpha = if (spot.watchlisted) .72f else .42f)),
+            MapPath(points, colorInt((if (spot.watchlisted) MapYellow else dxBandColor(spot.band)).copy(alpha = if (spot.watchlisted) .78f else .54f)),
                 if (spot.watchlisted) 1.65f else 1.1f)
         }
-    }
+    } }
+    val signalPaths = remember(qth, signalReports) { qth?.let { station -> signalReports.take(60).flatMap { report ->
+        val latitude = report.latitude ?: return@flatMap emptyList()
+        val longitude = report.longitude ?: return@flatMap emptyList()
+        splitAtDateline(greatCirclePath(LatLng(station.latitude, station.longitude), LatLng(latitude, longitude)))
+            .map { MapPath(it, colorInt(MapPurple.copy(alpha = .48f)), 1.15f) }
+    } }.orEmpty() }
+    val loggedPaths = remember(qth, loggedQsos, cty.dataRevision) { qth?.let { station -> loggedQsos.take(120).flatMap { qso ->
+        val point = qsoMapPoint(qso, cty) ?: return@flatMap emptyList()
+        splitAtDateline(greatCirclePath(LatLng(station.latitude, station.longitude), LatLng(point.latitude, point.longitude)))
+            .map { MapPath(it, colorInt(MapInk.copy(alpha = .32f)), .9f) }
+    } }.orEmpty() }
+    val greylinePaths = remember(showGreyline, currentTime) { if (showGreyline) listOf(greylinePath(currentTime)) else emptyList() }
+    val greylineAreas = remember(showGreyline, currentTime) { if (showGreyline) listOf(greylineArea(currentTime)) else emptyList() }
+    val sun = remember(showGreyline, currentTime) { if (showGreyline) {
+        val (latitude, longitude) = sunPosition(currentTime)
+        listOf(MapMarker(latitude, longitude, "Sun", "Current subsolar point", colorInt(MapYellow), 15, true))
+    } else emptyList() }
     val pathLabel = if (showPaths) " · ${resolvedPaths.size} PATHS" else ""
     val cappedLabel = if (resolvedPaths.size == MaxVisibleDxPaths && rows.size > MaxVisibleDxPaths) " · MAX $MaxVisibleDxPaths SHOWN" else ""
-    val legend = if (showPaths) "AMBER DX DE → CYAN DX · APPROX. CTY CENTRES$cappedLabel" else ""
-    NativeNeuralMap(markers, paths, emptyList(), LatLng(20.0, 0.0), 1.35, NeuralBasemap.SATELLITE,
-        "LIVE DX$pathLabel", "Interactive world map with ${rows.size} DX observations and ${resolvedPaths.size} resolved reporting paths",
+    val legend = buildList {
+        if (showPaths) add("DX DE → DX · BAND COLOURS · APPROX. CTY CENTRES$cappedLabel")
+        if (signalReports.isNotEmpty()) add("PURPLE PSK REPORTER")
+        if (portableSpots.isNotEmpty()) add("GREEN POTA · CYAN SOTA · PURPLE WWFF")
+        if (loggedQsos.isNotEmpty()) add("WHITE LOGGED QSO")
+        if (lightning.isNotEmpty()) add("RED LIGHTNING")
+    }.joinToString(" · ")
+    NativeNeuralMap(markers + sun, greylinePaths + dxPaths + signalPaths + loggedPaths, greylineAreas, LatLng(20.0, 0.0), 1.35, NeuralBasemap.SATELLITE,
+        "LIVE DX$pathLabel", "Interactive world map with ${rows.size} DX observations, ${resolvedPaths.size} reporting paths, ${signalReports.size} PSK Reporter receivers, ${portableSpots.size} portable activations, ${satellites.size} satellites, ${loggedQsos.size} logged contacts, and ${lightning.size} lightning strikes",
         modifier, legend)
+}
+
+private fun qsoMapPoint(qso: Qso, cty: CtyController): GeoPoint? = maidenheadCenter(qso.grid)
+    ?: cty.lookup(qso.callsign)?.let { entity ->
+        if (entity.latitude == 0.0 && entity.longitude == 0.0) null else GeoPoint(entity.latitude, entity.longitude)
+    }
+
+private fun dxBandColor(band: String): ComposeColor = when (band.trim().lowercase()) {
+    "160m" -> ComposeColor(0xFFFF6B6B)
+    "80m" -> ComposeColor(0xFFFF9F68)
+    "60m", "40m" -> MapYellow
+    "30m" -> ComposeColor(0xFF8FDF62)
+    "20m" -> MapGreen
+    "17m" -> ComposeColor(0xFF4ED9B2)
+    "15m" -> MapCyan
+    "12m" -> ComposeColor(0xFF69A7F5)
+    "10m" -> ComposeColor(0xFF9D72F2)
+    "6m" -> ComposeColor(0xFFE86AD7)
+    else -> MapCyan
 }
 
 internal fun dxReportRoute(reporter: AndroidCtyRecord, spot: AndroidDXSpot): List<List<LatLng>> {
@@ -579,9 +697,15 @@ private fun sunPosition(instant: Instant): Pair<Double, Double> {
     return declination to longitude
 }
 
-private fun terminatorPoints(instant: Instant): List<LatLng> {
+internal fun terminatorPoints(instant: Instant): List<LatLng> {
     val (declination, sunLongitude) = sunPosition(instant)
-    if (kotlin.math.abs(declination) < .001) return emptyList()
+    if (kotlin.math.abs(declination) < .01) {
+        fun normalized(longitude: Double) = ((longitude + 540.0) % 360.0) - 180.0
+        val first = normalized(sunLongitude - 90.0)
+        val second = normalized(sunLongitude + 90.0)
+        return (-90..90 step 2).map { LatLng(it.toDouble(), first) } +
+            (90 downTo -90 step 2).map { LatLng(it.toDouble(), second) }
+    }
     return (-180..180 step 2).map { longitude ->
         val hourAngle = Math.toRadians(longitude - sunLongitude)
         val latitude = Math.toDegrees(kotlin.math.atan(-cos(hourAngle) / kotlin.math.tan(Math.toRadians(declination))))
@@ -591,6 +715,9 @@ private fun terminatorPoints(instant: Instant): List<LatLng> {
 
 private fun greylineArea(instant: Instant): MapArea {
     val terminator = terminatorPoints(instant)
+    if (kotlin.math.abs(sunPosition(instant).first) < .01) {
+        return MapArea(terminator, Color.argb(92, 0, 2, 36), Color.TRANSPARENT)
+    }
     val pole = if (sunPosition(instant).first >= 0) -85.0 else 85.0
     return MapArea(terminator + listOf(LatLng(pole, 180.0), LatLng(pole, -180.0)), Color.argb(92, 0, 2, 36), Color.TRANSPARENT)
 }

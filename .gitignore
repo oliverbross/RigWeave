@@ -11,3 +11,4 @@ android/app/build/
 xcuserdata/
 flex-developer.properties
 rust/rigweave-flex/target/
+third_party/*/target/

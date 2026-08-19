@@ -143,7 +143,8 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val cty = remember { CtyController(context) }
     val audio = remember { AudioMonitorController(context) }
     flex.attachAudioRoutes(audio)
-    val digi = remember { DigiController(context, audio, transport, flex, { app.radioFamily }, { app.stationCallsign }) }
+    val digi = remember { DigiController(context, audio, transport, flex, { app.radioFamily },
+        { app.stationCallsign }, { app.stationGrid }) }
     val cwDecoder = remember { CwDecodeBuffer() }
     var kxRadio by remember { mutableStateOf(NativeCore.parseState(NativeCore.state(core))) }
     var radio by remember { mutableStateOf(kxRadio) }
@@ -161,7 +162,13 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
             if (app.radioFamily.isElecraft) radio = kxRadio
         }) }
     var usbDetail by remember { mutableStateOf("No USB CAT adapter opened") }
-    var destination by remember { mutableStateOf(Destination.HOME) }
+    val navigationPrefs = remember { context.getSharedPreferences("navigation", android.content.Context.MODE_PRIVATE) }
+    var destination by rememberSaveable {
+        mutableStateOf(runCatching {
+            Destination.valueOf(navigationPrefs.getString("destination", Destination.HOME.name).orEmpty())
+        }.getOrDefault(Destination.HOME))
+    }
+    LaunchedEffect(destination) { navigationPrefs.edit().putString("destination", destination.name).apply() }
     var pendingPortableDraft by remember { mutableStateOf<PortableLogDraft?>(null) }
     var pendingRisk by remember { mutableStateOf<String?>(null) }
     var pendingVoiceSlot by remember { mutableStateOf<Int?>(null) }
@@ -353,7 +360,7 @@ private fun navIcon(item: Destination) = when (item) {
     openActivation: () -> Unit, openLogbook: () -> Unit, openSync: () -> Unit, openProgress: () -> Unit, openDigi: () -> Unit) {
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     when (destination) {
-        Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, wavelog, cty, send,
+        Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, send,
             openDx, openPortable, openProgress)
         Destination.RADIO -> Column(Modifier.fillMaxSize()) {
             if (compact) SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
@@ -1959,7 +1966,7 @@ private data class SpotColumn(val label: String, val width: Dp, val mono: Boolea
     }
 }
 
-@Composable private fun SpotFilterOverlay(dimension: SpotFilterDimension, filters: SpotFilters,
+@Composable internal fun SpotFilterOverlay(dimension: SpotFilterDimension, filters: SpotFilters,
     modeOptions: List<String>, dismiss: () -> Unit, apply: (SpotFilters) -> Unit,
     modifier: Modifier = Modifier) {
     val options = when (dimension) {

@@ -16,8 +16,11 @@ class SafeAreaInstrumentedTest {
 
     @Test
     fun dxTabsAndLogbookStayInsideTheNavigationBarSafeArea() {
-        compose.onNodeWithText("DX").performClick()
         val rootBottom = compose.onRoot().fetchSemanticsNode().boundsInRoot.bottom
+        val homeBottom = compose.onNodeWithTag("openhamclock-safe-content").assertIsDisplayed().fetchSemanticsNode().boundsInRoot.bottom
+        assertTrue("Open Ham Clock must reserve space above the Android navigation bar", homeBottom < rootBottom)
+
+        compose.onNodeWithText("DX").performClick()
         val safeBottom = compose.onNodeWithTag("dx-safe-content").fetchSemanticsNode().boundsInRoot.bottom
         assertTrue("DX must reserve space above the Android navigation bar", safeBottom < rootBottom)
 

@@ -3,45 +3,87 @@
 ## Provenance
 
 - Source: https://github.com/accius/openhamclock
-- Inspected commit: `d4a50eaaa61d3432a1de5f80cbe61790739930a5`
-- Inspected release metadata: `26.5.0`
+- Audited commit: `d4a50eaaa61d3432a1de5f80cbe61790739930a5`
+- Audited release: `26.5.0`
 - Licence: MIT
-- Copyright notice: Copyright 2024-2026 OpenHamClock Contributors
-- Upstream paths inspected: `README.md`, `LICENSE`, `package.json`, `src/`, and `server/`
+- Copyright: Copyright 2024-2026 OpenHamClock Contributors
+- Audited surfaces: every panel, map plugin, settings tab, layout, theme,
+  language, server provider and persistence implementation under `src/` and `server/`.
 
-## RigWeave implementation
+RigWeave implements the operating surface natively in Jetpack Compose. It does
+not embed the upstream React application or run its Node server. The root
+`NOTICE` retains upstream attribution; RigWeave remains GPL-3.0-only.
 
-RigWeave does not vendor or execute the upstream React/Vite client, Express
-server, deployment files, plugins, artwork, or JavaScript dependencies. The
-Android implementation is a new native Jetpack Compose surface in
-`HamClockHomeScreen.kt`, integrated through `MainActivity.kt`. It adopts the
-operating-dashboard concept and module hierarchy while retaining RigWeave's
-Flightline design system, platform navigation, accessibility, touch targets,
-local-first state, and explicit provider failure states.
+## Shared authorities
 
-The Home surface reuses these existing RigWeave authorities:
+The integration shares RigWeave's existing operational state:
 
-- `AppController` and the selected Wavelog station for callsign and grid;
-- `RadioState` for observed CAT and transceiver state;
-- `FeatureController` for DX cluster spots and solar indices;
-- `NeuralDxController` for weather, PSK Reporter, propagation, WSPR, and satellites;
-- `PortableController` for authorised POTA and WWFF feeds and the explicitly
-  unavailable SOTA live-feed state;
-- `CtyController` for approximate reporting-path endpoint resolution.
+- station identity and recovery: `AppController` and the selected Wavelog station;
+- CAT/radio state: `RadioState` and the existing radio backends;
+- live DX and space weather: `FeatureController`;
+- weather, PSK Reporter, WSPR, satellites and hazards: `NeuralDxController`;
+- POTA/WWFF/SOTA catalogue and activation state: `PortableController`;
+- QSOs and worked/confirmed status: `QsoDatabase` and `WavelogController`;
+- entity and approximate geometry: `CtyController`;
+- presentation state: the credential-free, versioned `HamClockSettingsStore`.
 
-No OpenHamClock-specific callsign, location, cluster, provider credential, or
-radio setting is created. Existing RigWeave persistence therefore remains the
-single settings authority across reloads, replacement development builds, and
-the Home, Radio, DX, Portable, Log, and Settings surfaces.
+No second callsign, grid, radio, log, cluster endpoint, Wavelog credential or
+callbook credential is introduced. HamClock presentation profiles exclude
+secrets by schema and are included in RigWeave recovery data.
 
-## Deliberately excluded upstream infrastructure
+## Implemented and functional
 
-The port excludes upstream deployment/update/donation UI, Node proxies,
-standalone profiles, plugins, cloud hosting controls, and bridge services that
-would duplicate RigWeave or have no implemented local authority (including
-APRS, Meshtastic, rotator, and upstream WSJT-X relay operation). Their absence
-is intentional: RigWeave does not present an integration until it has a real,
-authorised data source and an honest unavailable/error state.
+- persistent native Home dashboard with wide-tablet and compact phone layouts;
+- safe drawing insets above Android taskbars and navigation bars;
+- stable native map instance with keyed marker/path/area diffs and no empty
+  overlay refresh frame;
+- live DX spots and band-coloured great-circle reporting paths;
+- sun position, grayline/night polygon and equinox-safe terminator geometry;
+- PSK Reporter paths, portable markers, satellites, logged QSOs and lightning;
+- live cluster status plus persistent, combined multi-select Band, Mode, CS and
+  DS filters; the filtered set drives the table, map and DX target;
+- geometry-backed DX-target distance and bearing;
+- cached propagation API integration with explicit model/provenance truth; a
+  non-P.533 response is labelled `DX path estimate`, never VOACAP;
+- structured NG3K DXpeditions and WA7BNM contests;
+- NOAA solar indices and GOES X-ray class, NASA SDO image metadata, moon phase
+  and illumination, and local sunrise/sunset calculations;
+- local weather, PSK Reporter summary, POTA/WWFF activity, band activity,
+  WSPR/propagation intelligence and satellite-pass panels;
+- versioned settings with panel position/size state, map state and opacity,
+  provider view preferences, DX target, named profiles, validated import/export
+  and legacy migration.
 
-This record and the root `NOTICE` retain the upstream licence and attribution.
-RigWeave remains distributed under GPL-3.0-only as described in `COPYING`.
+Public providers keep an atomic last-good cache and expose `LIVE`, `CACHED`,
+`STALE` or `UNAVAILABLE`; a failed refresh never replaces good data with empty data.
+
+## Function-by-function audit gaps
+
+These upstream functions are audited but are not claimed as complete. They must
+stay visibly unavailable or labelled as estimates until their real authority exists:
+
+- native ITU-R P.533/VOACAP engine and map heatmap;
+- real-time PSK Reporter MQTT/SSE Heard/Hearing stream;
+- RBN, IBP, MUF, WSPR-grid, Winlink and contest-QSO map layers;
+- aurora/radar/storm/wildfire/earthquake/aircraft/ATC/user map layers;
+- satellite tracks, footprints and Doppler controls;
+- rendered solar product selector, N0NBH panel, analog clock, DX ticker, On-Air
+  and ID-timer panels;
+- complete theme, language, azimuthal projection and map-style matrix;
+- APRS, Meshtastic, MeshCom, rotator, Ambient Weather and external contest
+  logger bridges, which require actual configured hardware or services;
+- live SOTA spots, which require provider authorisation;
+- WWBOTA, which needs a stable, authorised provider contract.
+
+This is an acceptance ledger, not an exclusion list. A feature moves to the
+implemented section only after source integration, failure handling, tests and
+tablet/phone validation. Build success or a visible placeholder is not parity.
+
+## Verification record
+
+- Android compile, complete debug unit suite and native APK assembly: passed.
+- Lenovo TB373FU: installed in place with `adb install -r`; app data preserved.
+- OM0RX/JN88TQ, Wavelog, CAT and cluster state retained.
+- Refresh capture: basemap, markers and paths remained present in every sampled frame.
+- Safe-area capture: dashboard content terminates above the Android taskbar.
+- Filter capture: centered multi-select Band modal; Mode/CS/DS share the component.

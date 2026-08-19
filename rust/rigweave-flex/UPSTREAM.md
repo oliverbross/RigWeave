@@ -40,9 +40,18 @@ The dependency lock is committed at `Cargo.lock`; generated libraries and Cargo 
 ## Nexus digital DSP
 
 - Repository: https://github.com/kd9taw/Nexus
-- Immutable commit: `6ec4a7925f1550cc364c7fd95967ce38c696ad3f`
+- Original imported commit: `6ec4a7925f1550cc364c7fd95967ce38c696ad3f`
+- Digital-mode parity audit commit: `750407eafd60905550e561be2eacec642751fc51`
 - Imported components: `tempo-sstv` (complete MIT crate with its LICENSE and
   NOTICE), deterministic CW synthesis/decoder, ITA2/AFSK RTTY synthesis, and
   the GPL-compatible fldigi-derived RTTY demodulator.
-- Excluded components: Tauri/Qt desktop UI, desktop audio backends, Hamlib,
-  provider credentials, and the Fortran/C++ WSJT-X modem build.
+- Android WSJT-family implementation: `mfsk-core 0.9.1` from
+  https://github.com/jl1nie/mfsk-core (GPL-3.0-or-later, used under GPLv3),
+  selected in place of Nexus's desktop-only Fortran/FFTW `libtempo` build.
+  Local `src/digi/wsjt.rs` adapts Nexus's mode inventory and operating model
+  to RigWeave's existing Android audio ownership, CAT and transmit interlocks.
+  Current native modes are FT8, FT4, FST4-15/30/60/120/300, Q65-30A,
+  MSK144-15, JT65A and WSPR. Public Nexus FT8/FT4 WAV fixtures are exercised
+  by the local acceptance tests through the same C ABI used by Android.
+- Excluded components remain: Tauri/React desktop UI, desktop audio backends,
+  Hamlib, provider credentials, and the Fortran/C++ WSJT-X modem build itself.

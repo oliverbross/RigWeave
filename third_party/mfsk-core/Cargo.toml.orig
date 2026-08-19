@@ -1,0 +1,219 @@
+[package]
+name        = "mfsk-core"
+version.workspace = true
+edition     = "2024"
+license     = "GPL-3.0-or-later"
+description = "Pure-Rust WSJT-family decoders + synthesisers (FT8 FT4 FST4 WSPR JT9 JT65 Q65) behind a zero-cost Protocol trait. Host (rustfft) or no_std embedded (ESP32-S3, RP2350, Cortex-M) via a pluggable FFT backend; fixed-point hot path for FPU-less MCUs. Ships with embedded-poc/m5stack-s3-app, a working M5StickS3 FT8 controller (LCD UI, BLE CI-V to IC-705, acoustic mic, QSO FSM) decoding real on-air signals in ~1.2 s post-SlotEnd on Xtensa LX7."
+repository  = "https://github.com/jl1nie/mfsk-core"
+readme      = "../README.md"
+keywords    = ["wsjtx", "ft8", "wspr", "q65", "amateur-radio"]
+categories  = ["science", "encoding", "multimedia::audio", "embedded", "no-std"]
+
+[features]
+default      = ["std", "ft8", "ft4", "parallel", "fft-rustfft"]
+
+# Standard-library availability. Pulls in `rustfft` (std-only) and
+# enables the rayon-based parallel iterators; required for every
+# protocol's wide-band decode path because `rustfft::FftPlanner` is
+# the default FFT backend. `no_std + alloc` builds turn this off and
+# pick a no_std FFT implementation via the `fft-*` features below.
+std          = ["alloc"]
+
+# `no_std + alloc` baseline. All protocol modules that allocate
+# (`Vec`, `Box`, `String`) need this; only purely-stack code can
+# avoid it. The crate top-level enables `extern crate alloc` whenever
+# this feature is on.
+alloc        = []
+
+# Aggregate features.
+full         = ["std", "fft-rustfft", "ft8", "ft4", "fst4", "wspr", "jt9", "jt65", "q65", "msk144", "packet-bytes", "uvpacket", "parallel", "serde"]
+
+# Optional derive of `serde::{Serialize, Deserialize}` on the host-facing
+# `msg::decoded::Decoded` UI row and `engine::protocol::ProtocolId`. Off by
+# default; purely additive (no behavioural change to any decode path). Folded
+# into `full` so the published docs show the impls and CI exercises the
+# round-trip.
+serde        = ["dep:serde"]
+
+# FFT backend selection. `mfsk-core::core::fft::FftPlanner` is the
+# trait every decode-side caller talks to; one of these features must
+# be on whenever decode-side code is compiled (host gets rustfft;
+# embedded targets bring their own backend through the extern Rust
+# factory `mfsk_core_make_default_fft_planner` — see core::fft docs).
+fft-rustfft  = ["std", "dep:rustfft"]
+fft-extern   = ["alloc"]
+
+# Embedded integer pipeline: u16 spectrogram + i16 internal DFT +
+# Q11i16 LLR + integer NMS BP. Off by default — host stays
+# bit-identical to the existing f32 path. Embedded targets turn this
+# on for halved PSRAM bandwidth and ~12 KB BP scratch (vs the f32
+# default).
+#
+# LLR-format history: 0.5.x used Q3i8 (i8, ±16, ~1/8 LSB, ~6 KB BP
+# scratch). A brief 2026-05-04 cleanup read host sweeps as Q3i8 ≈
+# Q11i16 equivalent, but the wider LX7 sweep in 0.6.3
+# (`mfsk-core/src/ft8/decode_block/process_candidates.rs` doc comment)
+# showed Q3i8's quantization step was the recall ceiling on Xtensa:
+# host fixed-point + rustfft hit 16/18 on `qso3_busy.wav` with f32
+# but only 9/18 with Q3i8. The active hot-loop type has been Q11i16
+# (i16, ±16, ~1/2048 LSB, ~12 KB BP scratch) since the LlrScalar
+# trait unification in `a6425ee` (2026-05-02, shipped 0.6.2). Q3i8
+# stays in `core::scalar` for the comparison path.
+#
+# **`fixed-point` implies `nstep-half`** (Phase 1.7.7b, 2026-05-17).
+# The two were independent features for historical reasons but are
+# always co-enabled on every embedded target — and host fixed-point
+# builds *must* use the same NSTEP if they want to simulate embedded
+# faithfully. Decoupling them silently gave host fixed-point a
+# different time-grid (NSTEP=NSPS/4 vs embedded NSPS/2) and made
+# `decode_block_into` produce a completely different spec /
+# coarse_sync ranking / pass1 candidates from S3 wav_sim (e.g. 4 vs 7
+# decodes on qso3_busy single-pass). Coupling them removes the trap.
+fixed-point  = ["nstep-half"]
+
+# Halve coarse_sync time-axis resolution (NSTEP = NSPS/2 instead of
+# NSPS/4 = WSJT-X reference). Embedded targets enable this — at NSPS/4
+# the spec memory and stage-1 FFT count both double, which exceeds
+# the LX7 post-SlotEnd budget. NSPS/2 was the embedded baseline up
+# through 0.5.4 and is what `embedded-shared/stage1_inc` already
+# emits. Host f32 path stays on the WSJT-faithful NSPS/4 default;
+# host fixed-point inherits this via the `fixed-point` -> `nstep-half`
+# dep so it can simulate embedded byte-for-byte.
+nstep-half   = []
+
+# Always-on coarse_sync sub-stage profiling. Emits `[coarse_sync prof]`
+# breakdown (allsum / score / dedupe+sort / total μs) to stderr after
+# every `coarse_sync` call. Only useful when investigating stage-2
+# wall-clock — adds 4 timestamp reads per call, negligible cost. Off by
+# default; automatically disabled on `wasm32-unknown-unknown` at compile
+# time to prevent runtime panics (`Instant::now` is unimplemented).
+profile-coarse = ["std"]
+
+# Lightweight modes — embedded-port-clean. `fft-rustfft` (host) or
+# `fft-extern` (embedded) is required at the crate level for the
+# decode pipeline; the protocol features themselves only enable the
+# protocol-specific glue.
+ft8          = []
+ft4          = []
+wspr         = []
+packet-bytes = []
+
+# MSK144 (issue #25) — full port landed: LDPC(128,90) + MSK/OQPSK DSP
+# (Phase 1-2), burst-scan sync search (Phase 3, needs `fft-rustfft` /
+# `fft-extern` for the sub-modules that use it), per-frame decode
+# (Phase 4), and the top-level sliding-window driver
+# (`msk144::decode::decode_slot`, Phase 5). Golden-WAV regression
+# against both WSJT-X `samples/MSK144/*.wav` recordings passes 3/3
+# (`tests/msk144_wsjtx_samples.rs`). No `Protocol`-trait ZST is wired
+# (MSK144 isn't FSK — its own top-level driver bypasses
+# `core::pipeline` entirely by design), so it doesn't appear in
+# `PROTOCOLS`/`protocol_invariants.rs`; that's an intentional
+# architectural difference from the other WSJT-family modes, not a
+# gap.
+msk144       = []
+
+# Heavy modes — these still call `rustfft` directly (out of scope of
+# the embedded port). Pulling them implies the host build via
+# `fft-rustfft` (which transitively requires `std`).
+fst4         = ["fft-rustfft"]
+# `dep:realfft`: JT9's `softsym::AudioFft::build` runs one
+# 653,184-point FFT per scan on real-valued audio — a plain
+# `rustfft` complex-to-complex transform wastes ~2x the work a
+# real-input FFT (Hermitian symmetry) needs, and that FFT is ~57% of
+# `decode_scan`'s wall time (measured, `jt9::tests::phase_breakdown_diag`).
+# `realfft` wraps `rustfft` itself (same numerics, exact same
+# resolved version via Cargo's unifier) so this is a performance-only
+# swap, not a new algorithm — JT9 is already host-only/`fft-rustfft`-
+# gated (see comment above), so no embedded/no_std impact.
+jt9          = ["fft-rustfft", "dep:realfft"]
+jt65         = ["fft-rustfft"]
+q65          = ["fft-rustfft"]
+
+# uvpacket pulls in fst4 because it reuses the Ldpc240_101 codec
+# whose `Wsjt77Message::verify_info` length-dispatch logic (CRC-24
+# vs CRC-14) is wired through fst4's path.
+uvpacket     = ["fst4"]
+parallel     = ["std", "dep:rayon"]
+
+# Test-only visibility escape hatch (issue #203). `core::pipeline`'s
+# pre-#191 raw engine functions (`decode_frame`, `process_candidate_basic`,
+# `osd_escalation_gates`, the `GenericPipelineProtocol` trait) are
+# `pub(crate)` by default so downstream consumers can't bypass
+# `DecodeRequest`/`SniperRequest` (#191) — but `mfsk-core/tests/*.rs`
+# integration tests (`fst4_sweep.rs`, `ft4_sweep.rs`,
+# `fst4_wsjtx_samples.rs`) are compiled as separate crates and need real
+# `pub` visibility to call these diagnostics directly. Deliberately NOT
+# part of `full` — enabling `full` is a normal downstream choice and must
+# not silently reopen this surface. CI passes this alongside `full` only
+# for `cargo test`/`cargo clippy --all-targets`; the `cargo doc`/
+# `cargo publish` steps omit it so the public docs and crates.io tarball
+# stay on the `pub(crate)` shape.
+internal-testing = []
+
+[dependencies]
+# `num-complex` carries the `Float` trait via num-traits; under no_std
+# we need `libm` to provide sin/cos/sqrt/etc. The std build pulls
+# them via num-traits/std (transitively from rustfft) and ignores libm.
+num-complex = { version = "0.4", default-features = false, features = ["libm"] }
+# Direct dep so call sites can `use num_traits::Float` to get
+# `.atanh()` / `.tanh()` / `.sqrt()` / etc. under no_std. The `libm`
+# feature provides the actual math impls; under std these become
+# no-op forwards to the f32 inherent methods.
+num-traits  = { version = "0.2", default-features = false, features = ["libm"] }
+rustfft     = { version = "6", optional = true }
+crc         = { version = "3", default-features = false }
+rayon       = { version = "1", optional = true }
+# Optional `Serialize`/`Deserialize` for the host-facing `msg::decoded::Decoded`
+# UI row (and `ProtocolId`). `default-features = false` + `alloc` keeps it
+# no_std-clean (Decoded carries a `String`); host consumers wanting JSON for
+# spotting / websocket / IPC turn on `--features serde`.
+serde       = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
+# Real-input FFT for `jt9::softsym::AudioFft::build` — see the `jt9`
+# feature's doc comment above. `default-features = false`: this crate
+# only needs the portable scalar path, not the `avx`/`neon`/`sse`
+# rustfft-passthrough features (those are auto-detected by rustfft at
+# compile time on their native targets via our plain
+# `rustfft = { version = "6" }` dependency above, no feature flag
+# needed — but see the wasm32-only override below: `wasm_simd` is NOT
+# implied the same way and needs an explicit opt-in).
+realfft     = { version = "3.5.0", default-features = false, optional = true }
+
+# rustfft's `wasm_simd` feature is a real, separate opt-in — unlike
+# avx/sse/neon on their native targets, it is NOT enabled by the plain
+# dependency above. Verified 2026-08-09 (A/B via Cargo feature
+# unification in bench/wasm/, `node --prof` under wasm32-unknown-unknown):
+# forcing it on measurably speeds up FT8 decode — ~15-17% on the
+# default single-pass strategy, ~23-30% on `.sic_early()` (the
+# FFT-heavier multipass strategy, per a `node --prof` breakdown showing
+# ~66% of its wall-clock in FFT/subtract), on `qso3_busy.wav`. Recall
+# unchanged (14/22 stations either way). This override reaches
+# mfsk-core's own `rustfft` dependency for any wasm32 build via Cargo
+# feature unification — no caller action needed.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rustfft     = { version = "6", optional = true, features = ["wasm_simd"] }
+
+[dev-dependencies]
+# Only for tests/ft8_decode_block_streaming.rs, which exercises the
+# true no_std decode_block_multipass arm (needs `fft-extern`, not the
+# host-default `fft-rustfft`) — that arm still needs *some* FftPlanner,
+# and `fft-extern`'s contract is that the final binary supplies
+# `mfsk_core_make_default_fft_planner` itself (see
+# `engine::fft::default_planner`'s doc comment: "tests / unusual
+# targets can return any Box<dyn FftPlanner> impl"). This dev-only
+# rustfft lets that one test provide it without touching the main
+# `fft-rustfft` feature/dependency.
+rustfft = "6"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("std","alloc","ft8","ft4","fst4","wspr","jt9","jt65","q65","msk144","packet-bytes","uvpacket","parallel","full","fft-rustfft","fft-extern","fixed-point","profile-coarse","nstep-half"))',
+] }
+
+# Build docs.rs with every protocol feature enabled so users browsing
+# the online docs see the complete API. The `--cfg docsrs` flag lets
+# us expose feature-gated items with visible "available on crate
+# feature …" badges (this build passes it; gate any such annotation
+# on `#[cfg(docsrs)]` if we ever add one).
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

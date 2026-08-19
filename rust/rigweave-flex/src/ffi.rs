@@ -86,7 +86,7 @@ fn input(value: *const c_char) -> Option<String> {
     (!value.is_null()).then(|| unsafe { CStr::from_ptr(value).to_string_lossy().into_owned() })
 }
 
-fn json_string(value: &str) -> String {
+pub(crate) fn json_string(value: &str) -> String {
     format!(
         "\"{}\"",
         value
@@ -349,6 +349,67 @@ pub unsafe extern "C" fn rw_digi_feed_sstv(
         output,
         capacity,
     )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rw_digi_decode_slot(
+    mode: i32,
+    samples: *const f32,
+    count: usize,
+    sample_rate: u32,
+    output: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    if samples.is_null() {
+        return -1;
+    }
+    copy_text(
+        &digi::wsjt::decode(mode, std::slice::from_raw_parts(samples, count), sample_rate),
+        output,
+        capacity,
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rw_digi_encode_slot(
+    mode: i32,
+    text: *const c_char,
+    base_hz: f32,
+    output: *mut f32,
+    capacity: usize,
+) -> i32 {
+    input(text)
+        .and_then(|text| digi::wsjt::encode(mode, &text, base_hz))
+        .map(|samples| copy_samples(&samples, output, capacity))
+        .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rw_digi_decode_psk31(
+    samples: *const f32,
+    count: usize,
+    output: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    if samples.is_null() { return -1; }
+    let (text, carrier) = digi::psk31::decode(std::slice::from_raw_parts(samples, count));
+    copy_text(
+        &format!("{{\"text\":{},\"carrierHz\":{carrier:.1}}}", json_string(&text)),
+        output,
+        capacity,
+    )
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rw_digi_encode_psk31(
+    text: *const c_char,
+    carrier_hz: f32,
+    output: *mut f32,
+    capacity: usize,
+) -> i32 {
+    input(text)
+        .map(|text| copy_samples(&digi::psk31::encode(&text, carrier_hz), output, capacity))
+        .unwrap_or(-1)
 }
 
 #[no_mangle]

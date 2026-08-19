@@ -6,6 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.maplibre.android.geometry.LatLng
+import java.time.Instant
 
 class NeuralDxRulesTest {
     @Test fun maidenheadUsesCellCentreAndRejectsInvalidInput() {
@@ -86,5 +87,30 @@ class NeuralDxRulesTest {
         assertTrue(segments.all { segment ->
             segment.zipWithNext().all { (a, b) -> kotlin.math.abs(a.longitude - b.longitude) <= 180.0 }
         })
+    }
+
+    @Test fun homeMapUsesOnlyMatchingEnrichedSpots() {
+        fun spot(id: String, latitude: Double = 0.0, longitude: Double = 0.0) = AndroidDXSpot(
+            id, "K1ABC", "W1AW", 14_074_000, 1, "20m", "FT8", "", "",
+            0, 0, latitude, longitude, "", 0, 0, 0, false,
+            false, false, false, false, false, false, 0, 0, "", "",
+        )
+        val live = listOf(spot("current").copy(comment = "fresh", watchlisted = true, score = 99), spot("new"))
+        val merged = mergeEnrichedSpots(live, listOf(spot("current", 41.0, -72.0).copy(comment = "stale"), spot("stale", 5.0, 6.0)))
+        assertEquals(listOf("current", "new"), merged.map(AndroidDXSpot::id))
+        assertEquals(41.0, merged.first().latitude, 0.0)
+        assertEquals(0.0, merged.last().latitude, 0.0)
+        assertEquals("fresh", merged.first().comment)
+        assertTrue(merged.first().watchlisted)
+        assertEquals(99, merged.first().score)
+    }
+
+    @Test fun greylineRemainsDrawableAtEquinox() {
+        val points = terminatorPoints(Instant.parse("2026-03-20T14:46:00Z"))
+        assertEquals(182, points.size)
+        assertTrue(points.all { it.latitude in -90.0..90.0 && it.longitude in -180.0..180.0 })
+        assertEquals(2, points.map { it.longitude }.distinct().size)
+        assertEquals(-90.0, points.minOf { it.latitude }, 0.0)
+        assertEquals(90.0, points.maxOf { it.latitude }, 0.0)
     }
 }

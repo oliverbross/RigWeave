@@ -123,6 +123,29 @@ Java_app_rigweave_mobile_NativeCore_digiFeedSstv(JNIEnv *env, jobject, jlong han
     return digi_feed(env, handle, data, rw_digi_feed_sstv);
 }
 
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeCore_digiDecodeSlot(JNIEnv *env, jobject, jint mode, jfloatArray data, jint sampleRate) {
+    if (!data) return env->NewStringUTF("{\"error\":\"No audio\",\"decodes\":[]}");
+    const jsize length = env->GetArrayLength(data);
+    jfloat *samples = env->GetFloatArrayElements(data, nullptr);
+    std::string output(262144, '\0');
+    const int size = rw_digi_decode_slot(mode, samples, static_cast<size_t>(length),
+                                         static_cast<uint32_t>(sampleRate), output.data(), output.size());
+    env->ReleaseFloatArrayElements(data, samples, JNI_ABORT);
+    return env->NewStringUTF(size >= 0 ? output.c_str() : "{\"error\":\"Decode failed\",\"decodes\":[]}");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeCore_digiDecodePsk31(JNIEnv *env, jobject, jfloatArray data) {
+    if (!data) return env->NewStringUTF("{}");
+    const jsize length = env->GetArrayLength(data);
+    jfloat *samples = env->GetFloatArrayElements(data, nullptr);
+    std::string output(65536, '\0');
+    const int size = rw_digi_decode_psk31(samples, static_cast<size_t>(length), output.data(), output.size());
+    env->ReleaseFloatArrayElements(data, samples, JNI_ABORT);
+    return env->NewStringUTF(size >= 0 ? output.c_str() : "{}");
+}
+
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_app_rigweave_mobile_NativeCore_digiSstvImage(JNIEnv *env, jobject, jlong handle) {
     const int size = rw_digi_copy_sstv_image(digi(handle), nullptr, 0);
@@ -159,6 +182,22 @@ Java_app_rigweave_mobile_NativeCore_digiEncodeRtty(JNIEnv *env, jobject, jstring
     return digi_samples(env, [&](float *out, size_t count) {
         return rw_digi_encode_rtty(value.c_str(), static_cast<uint32_t>(sampleRate),
                                    reverse == JNI_TRUE, out, count);
+    });
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_app_rigweave_mobile_NativeCore_digiEncodeSlot(JNIEnv *env, jobject, jint mode, jstring text, jfloat baseHz) {
+    const auto value = utf(env, text);
+    return digi_samples(env, [&](float *out, size_t count) {
+        return rw_digi_encode_slot(mode, value.c_str(), baseHz, out, count);
+    });
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_app_rigweave_mobile_NativeCore_digiEncodePsk31(JNIEnv *env, jobject, jstring text, jfloat carrierHz) {
+    const auto value = utf(env, text);
+    return digi_samples(env, [&](float *out, size_t count) {
+        return rw_digi_encode_psk31(value.c_str(), carrierHz, out, count);
     });
 }
 

@@ -1,0 +1,162 @@
+//! # `ft8` — FT8 decoder and synthesiser
+//!
+//! FT8 is the most widely-used WSJT-family mode: 15-second slots,
+//! 8-GFSK modulation at 6.25 baud (= 160 ms / symbol), LDPC(174, 91)
+//! with CRC-14 inside a 77-bit WSJT message, and three Costas-7 sync
+//! blocks at positions 0 / 36 / 72.
+//!
+//! ## Sample rate
+//!
+//! The internal decode pipeline assumes **12 000 Hz** PCM input.
+//! For other sample rates (e.g. 44 100, 48 000 Hz), use
+//! [`resample::resample_to_12k`] to convert before decoding via
+//! [`crate::msg::decode_request::DecodeRequest`].
+//!
+//! The WASM wrapper (`ft8-web`) accepts a `sample_rate` parameter
+//! on each decode function and handles this conversion automatically.
+//!
+//! ## Protocol trait
+//!
+//! The zero-sized [`Ft8`] type implements the generic
+//! [`crate::engine::Protocol`] trait so downstream pipeline code (shared with
+//! FT4, FT2, FST4) can dispatch on `P: Protocol` at compile time.
+//!
+//! ## Quick example
+//!
+//! Decode the top-scoring message in a 15-second slot:
+//!
+//! ```no_run
+//! use mfsk_core::ft8::Ft8;
+//! use mfsk_core::msg::decode_request::DecodeRequest;
+//! use mfsk_core::msg::wsjt77::unpack77;
+//!
+//! # let audio: Vec<i16> = vec![];
+//! // `audio` is 180_000 i16 samples at 12 kHz (15 s, slot-aligned).
+//! let results = DecodeRequest::<Ft8>::new(
+//!     &audio,
+//!     /* freq_min */ 100.0,
+//!     /* freq_max */ 3_000.0,
+//!     /* sync_min */ 1.0,
+//!     /* max_cand */ 200,
+//! )
+//! .decode()
+//! .results;
+//! for r in &results {
+//!     if let Some(text) = unpack77(r.message77()) {
+//!         println!("{:7.1} Hz  dt={:+.2} s  SNR={:+.0} dB  {}",
+//!                  r.freq_hz, r.dt_sec, r.snr_db, text);
+//!     }
+//! }
+//! ```
+
+// Decode-side modules go through `engine::fft` (FFT trait) and the
+// shared `engine::pipeline`; gated on the FFT meta-feature so embedded
+// builds with `fft-microfft` or `fft-extern` get them. `wave_gen`,
+// `message`, `ldpc`, `params`, `hash_table` stay available for TX-only
+// / FEC-only use cases without any FFT backend.
+#[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
+pub mod baseline;
+#[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
+pub mod decode;
+#[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
+pub mod decode_block;
+#[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
+pub mod downsample;
+#[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
+pub mod equalizer;
+pub mod hash_table;
+pub mod ldpc;
+#[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
+pub mod llr;
+pub mod message;
+pub mod params;
+#[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
+pub mod refine_fine;
+#[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
+pub mod resample;
+// `subtract` consumes `super::decode::DecodeResult`, which is itself
+// FFT-gated — match the gate so `--features ft8` (TX-only) builds.
+#[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
+pub mod subtract;
+#[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
+pub mod sync;
+pub mod wave_gen;
+
+use crate::engine::{FrameLayout, ModulationParams, Protocol, ProtocolId, SyncBlock, SyncMode};
+use crate::fec::Ldpc174_91;
+use crate::msg::Wsjt77Message;
+
+/// FT8 protocol marker: 8-GFSK, 79 symbols over a 15 s slot, 6.25 Hz tone
+/// spacing, three 7-symbol Costas arrays, LDPC(174,91) FEC, WSJT 77-bit
+/// message payload. Carries no data — used as a type-level switch.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct Ft8;
+
+impl ModulationParams for Ft8 {
+    const NTONES: u32 = params::NTONES as u32;
+    const BITS_PER_SYMBOL: u32 = 3;
+    const NSPS: u32 = params::NSPS as u32;
+    const SYMBOL_DT: f32 = params::SYMBOL_DT;
+    const TONE_SPACING_HZ: f32 = 6.25;
+    const GRAY_MAP: &'static [u8] = &FT8_GRAY_MAP;
+    const GFSK_BT: f32 = 2.0;
+    const GFSK_HMOD: f32 = 1.0;
+    const NFFT_PER_SYMBOL_FACTOR: u32 = 2; // NFFT1 = 2 × NSPS = 3840
+    const NSTEP_PER_SYMBOL: u32 = 4; // quarter-symbol coarse-sync step
+    const NDOWN: u32 = 60; // 12 000 / 60 = 200 Hz baseband
+}
+
+impl FrameLayout for Ft8 {
+    const N_DATA: u32 = params::ND as u32;
+    const N_SYNC: u32 = params::NS as u32;
+    const N_SYMBOLS: u32 = params::NN as u32;
+    const N_RAMP: u32 = 0; // ramp is internal to gfsk::synth
+    const SYNC_MODE: SyncMode = SyncMode::Block(&FT8_SYNC_BLOCKS);
+    const T_SLOT_S: f32 = 15.0;
+    const TX_START_OFFSET_S: f32 = 0.5;
+}
+
+impl Protocol for Ft8 {
+    type Fec = Ldpc174_91;
+    type Msg = Wsjt77Message;
+    const ID: ProtocolId = ProtocolId::Ft8;
+}
+
+// `params::GRAYMAP` / `params::COSTAS` are `[usize; _]` for historical reasons,
+// but `ModulationParams::GRAY_MAP` etc. require `&'static [u8]`. Narrow them
+// here at compile time.
+const FT8_GRAY_MAP: [u8; 8] = {
+    let mut out = [0u8; 8];
+    let mut i = 0;
+    while i < 8 {
+        out[i] = params::GRAYMAP[i] as u8;
+        i += 1;
+    }
+    out
+};
+
+const FT8_COSTAS: [u8; 7] = {
+    let mut out = [0u8; 7];
+    let mut i = 0;
+    while i < 7 {
+        out[i] = params::COSTAS[i] as u8;
+        i += 1;
+    }
+    out
+};
+
+/// FT8 has three identical Costas arrays at symbols 0 / 36 / 72.
+const FT8_SYNC_BLOCKS: [SyncBlock; 3] = [
+    SyncBlock {
+        start_symbol: 0,
+        pattern: &FT8_COSTAS,
+    },
+    SyncBlock {
+        start_symbol: 36,
+        pattern: &FT8_COSTAS,
+    },
+    SyncBlock {
+        start_symbol: 72,
+        pattern: &FT8_COSTAS,
+    },
+];

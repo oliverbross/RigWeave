@@ -1,0 +1,131 @@
+//! # `msg` — message-layer codecs and callsign hash table
+//!
+//! Message-layer codecs for WSJT-family digital modes.
+//!
+//! | Module       | Payload bits | Used by                   |
+//! |--------------|--------------|---------------------------|
+//! | [`wsjt77`]   | 77           | FT8, FT4, FT2, FST4       |
+//! | [`wspr`]     | 50           | WSPR                      |
+//! | [`jt72`]     | 72           | JT65, JT9                 |
+//!
+//! [`hash_table::CallsignHashTable`] tracks hashed callsigns across decodes;
+//! typically a single instance lives in the decoder's side-channel state and
+//! is shared by every message unpack invocation.
+
+pub mod ap;
+/// Unified owned decode row for host UIs — see [`decoded::Decoded`].
+pub mod decoded;
+// `DecodeRequest`/`SniperRequest` builder (issue #191); depends on
+// `pipeline_ap`'s generic AP engine, so declared after it. Also needs
+// at least one `FrameDecodable` implementor (`ft8`/`ft4`/`fst4`) or its
+// generic structs have zero concrete instantiations anywhere in the
+// crate, making every field dead code under `-D warnings` (e.g. a
+// `jt65`-only build: `fft-rustfft` is on via `jt65`'s own feature
+// dependency, but no protocol implements `FrameDecodable`).
+#[cfg(all(
+    any(feature = "fft-rustfft", feature = "fft-extern"),
+    any(feature = "ft8", feature = "ft4", feature = "fst4")
+))]
+pub mod decode_request;
+pub mod hash_table;
+pub mod jt72;
+#[cfg(feature = "packet-bytes")]
+pub mod packet_bytes;
+// Decoder helper that wires `engine::pipeline` (FFT-trait); gated on
+// the FFT meta-feature so embedded-rx (alloc + microfft) gets it.
+#[cfg(any(feature = "fft-rustfft", feature = "fft-extern"))]
+pub mod pipeline_ap;
+#[cfg(feature = "q65")]
+pub mod q65;
+pub mod wsjt77;
+pub mod wspr;
+
+pub use ap::ApHint;
+pub use decoded::Decoded;
+pub use hash_table::CallsignHashTable;
+pub use jt72::{Jt72Codec, Jt72Message};
+#[cfg(feature = "packet-bytes")]
+pub use packet_bytes::PacketBytesMessage;
+#[cfg(feature = "q65")]
+pub use q65::Q65Message;
+pub use wspr::{Wspr50Message, WsprMessage};
+
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use crate::engine::{DecodeContext, MessageCodec, MessageFields};
+
+/// WSJT 77-bit message codec used by FT8, FT4, FT2 and FST4.
+///
+/// Pure wrapper around the free functions in [`wsjt77`], implementing the
+/// generic [`crate::MessageCodec`] trait so pipeline code can
+/// consume messages without knowing which concrete protocol produced them.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct Wsjt77Message;
+
+impl MessageCodec for Wsjt77Message {
+    type Unpacked = String;
+    const PAYLOAD_BITS: u32 = 77;
+    const CRC_BITS: u32 = 14;
+
+    fn pack(&self, fields: &MessageFields) -> Option<Vec<u8>> {
+        // Free text wins if set; otherwise fall back to the standard three-
+        // field call/call/report packing used by the overwhelming majority of
+        // FT8/FT4 QSOs.
+        if let Some(txt) = &fields.free_text {
+            return wsjt77::pack77_free_text(txt).map(|a| a.to_vec());
+        }
+        let call1 = fields.call1.as_deref()?;
+        let call2 = fields.call2.as_deref()?;
+        // Prefer grid; if the caller supplied a numeric report, format it
+        // WSJT-X-style (sign-padded two-digit dB string).
+        let report = if let Some(g) = &fields.grid {
+            g.clone()
+        } else {
+            let r = fields.report?;
+            if r >= 0 {
+                format!("+{:02}", r)
+            } else {
+                format!("{:03}", r)
+            }
+        };
+        wsjt77::pack77(call1, call2, &report).map(|a| a.to_vec())
+    }
+
+    fn unpack(&self, payload: &[u8], ctx: &DecodeContext) -> Option<Self::Unpacked> {
+        if payload.len() != 77 {
+            return None;
+        }
+        let mut buf = [0u8; 77];
+        buf.copy_from_slice(payload);
+
+        // Prefer the hash-aware path when the caller threaded a table through
+        // `DecodeContext`; fall back to the placeholder-emitting variant.
+        if let Some(any) = ctx.callsign_hash_table.as_ref()
+            && let Some(ht) = any.downcast_ref::<CallsignHashTable>()
+        {
+            return wsjt77::unpack77_with_hash(&buf, ht);
+        }
+        wsjt77::unpack77(&buf)
+    }
+
+    /// Wsjt77 reserves the trailing K-77 info bits for a CRC. Two
+    /// flavours coexist in the WSJT-X family: FT8 / FT4 / FT2 use
+    /// LDPC(174, 91) with a 14-bit CRC at bits 77..91, while FST4
+    /// uses LDPC(240, 101) with a 24-bit CRC at bits 77..101.
+    /// Both share the same Wsjt77 77-bit message field; only the
+    /// CRC width differs by FEC pairing. We length-dispatch on the
+    /// `info` slice the FEC layer passes through here:
+    ///
+    /// - 91 → [`crate::fec::ldpc::check_crc14`]
+    /// - 101 → [`crate::fec::ldpc240_101::check_crc24`]
+    /// - other → reject (no Wsjt77-compatible CRC for that K)
+    fn verify_info(info: &[u8]) -> bool {
+        match info.len() {
+            91 => crate::fec::ldpc::check_crc14(info),
+            101 => crate::fec::ldpc240_101::check_crc24(info),
+            _ => false,
+        }
+    }
+}

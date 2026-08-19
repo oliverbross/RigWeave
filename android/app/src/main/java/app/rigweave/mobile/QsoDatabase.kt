@@ -190,6 +190,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     fun markSynced(id: String) { findById(id)?.let { update(it.copy(syncState = "synced")) } }
     fun changeToken(): Long = changeRevision.get()
     fun list(): List<Qso> = query(" LIMIT 100")
+    fun recent(limit: Int = 120): List<Qso> = query(" LIMIT ${limit.coerceIn(1, 500)}")
     fun all(): List<Qso> = query("")
     fun page(page: Int, pageSize: Int, filter: LogbookFilter = LogbookFilter(), stationId: String? = null): QsoPage {
         val size = normalizedLogbookPageSize(pageSize)
