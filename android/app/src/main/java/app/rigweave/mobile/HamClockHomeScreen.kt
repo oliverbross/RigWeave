@@ -48,6 +48,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Hiking
+import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Refresh
@@ -151,10 +152,13 @@ internal fun HamClockHomeScreen(
     database: QsoDatabase,
     wavelog: WavelogController,
     cty: CtyController,
+    publicProviders: HamClockPublicProviders,
+    operations: OperationsController,
     send: (String) -> Unit,
     openDx: () -> Unit,
     openPortable: () -> Unit,
     openProgress: () -> Unit,
+    openOperations: () -> Unit,
 ) {
     val context = LocalContext.current
     val stationId = wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }
@@ -164,7 +168,6 @@ internal fun HamClockHomeScreen(
     val hamClockPrefs = remember(context) { context.getSharedPreferences("rigweave-hamclock-layout", Context.MODE_PRIVATE) }
     val settingsStore = remember(context) { HamClockSettingsStore(context) }
     var settingsDocument by remember { mutableStateOf(settingsStore.snapshot()) }
-    val publicProviders = remember(context) { HamClockPublicProviders(File(context.filesDir, "hamclock-public")) }
     var contestFeed by remember { mutableStateOf<HamClockFeed<List<HamClockContest>>?>(null) }
     var dxpeditionFeed by remember { mutableStateOf<HamClockFeed<List<HamClockDxpedition>>?>(null) }
     var celestialFeed by remember { mutableStateOf<HamClockFeed<HamClockSolarCelestialSnapshot>?>(null) }
@@ -353,6 +356,7 @@ internal fun HamClockHomeScreen(
                     neuralDx.refresh(stationCall, stationGrid, stationId, features.liveSpots, true)
                     features.refreshSolar(); portable.refreshAll()
                 }) { configureDashboard = true }
+                OperationsHomeSummary(operations, openOperations)
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     LazyColumn(Modifier.widthIn(min = 208.dp, max = 250.dp).weight(.22f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(leftPanels, key = HamClockPanelPreference::id) { panel ->
@@ -384,6 +388,7 @@ internal fun HamClockHomeScreen(
                     neuralDx.refresh(stationCall, stationGrid, stationId, features.liveSpots, true)
                     features.refreshSolar(); portable.refreshAll()
                 }) { configureDashboard = true } }
+                item { OperationsHomeSummary(operations, openOperations) }
                 item { MapPanel(visibleMapSpots, stationGrid, cty, neuralDx.mySignal.reports, portableMapSpots,
                     recentQsos, neuralDx.lightning.strikes,
                     neuralDx.satellites, showPaths, { updateMapFlag("map_paths", "dx_paths", it) { showPaths = it } },
@@ -424,6 +429,24 @@ internal fun HamClockHomeScreen(
             SpotFilterOverlay(dimension, spotFilters,
                 (spotModeOptions + mapSpots.map { canonicalSpotMode(it.mode) }).distinct().sorted(),
                 { activeSpotFilter = null }, { updateSpotFilters(it); activeSpotFilter = null }, Modifier.fillMaxSize())
+        }
+    }
+}
+
+@Composable
+private fun OperationsHomeSummary(operations: OperationsController, open: () -> Unit) {
+    val now = Instant.now().epochSecond
+    val activeDx = operations.dxItems.count { it.startEpoch != null && it.endEpoch != null && now in it.startEpoch..it.endEpoch }
+    val activeContests = operations.contestItems.count { now in it.startEpoch..it.endEpoch }
+    Surface(color = HcPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth().clickable(onClick = open)) {
+        Row(Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Icon(Icons.Outlined.EventNote, null, tint = HcAmber)
+            Column(Modifier.weight(1f)) {
+                Text("OPERATIONS", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 11.sp)
+                Text("$activeDx active DX · $activeContests active contests · ${operations.nextPlan?.title ?: "no upcoming plan"}", color = HcInk)
+            }
+            Text("OPEN", color = HcAmber, fontWeight = FontWeight.Bold)
         }
     }
 }

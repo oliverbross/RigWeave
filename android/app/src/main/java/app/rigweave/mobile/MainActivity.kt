@@ -91,6 +91,7 @@ import java.time.format.DateTimeFormatter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.InputStream
 import java.util.Locale
 import kotlin.math.abs
@@ -119,7 +120,7 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), DIGI("Digi"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Progress"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), DIGI("Digi"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Progress"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), OPERATIONS("Operations"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
@@ -134,6 +135,8 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val database = remember { QsoDatabase(context) }
     val mutations = remember { QsoMutationCoordinator(database) }
     val progress = remember { ProgressController(context, database) }
+    val publicProviders = remember { app.rigweave.mobile.hamclock.HamClockPublicProviders(File(context.filesDir, "hamclock-public")) }
+    val operations = remember { OperationsController(context, database, publicProviders) }
     val portable = remember { PortableController(context, database) }
     val activation = remember { PotaActivationController(context, database) }
     val features = remember { FeatureController(context) }
@@ -282,7 +285,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     DisposableEffect(Unit) { onDispose {
         app.disarmAll(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close()
         scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelogNative.close(); wavelog.close(); callbook.close(); cty.close()
-        portable.close(); progress.close(); syncHub.close(); NativeCore.destroy(core); database.close()
+        portable.close(); progress.close(); operations.close(); syncHub.close(); NativeCore.destroy(core); database.close()
     } }
     pendingRisk?.let { command ->
         val cwMacro = command.startsWith("KY ")
@@ -329,22 +332,22 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
-            Screen(destination, radio, usbDetail, database, mutations, progress, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
+            Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
                 voiceStore, voiceAudio, voiceTx, eqStudio, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI })
+                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.OPERATIONS })
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
-            Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
+            Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.OPERATIONS }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
-            Screen(destination, radio, usbDetail, database, mutations, progress, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
+            Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
                 voiceStore, voiceAudio, voiceTx, eqStudio, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI })
+                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.OPERATIONS })
         } }
     }
 }
@@ -361,11 +364,13 @@ private fun navIcon(item: Destination) = when (item) {
     Destination.PRESETS -> Icons.Outlined.Bookmarks
     Destination.DX -> Icons.Outlined.Public
     Destination.PORTABLE -> Icons.Outlined.Hiking
+    Destination.OPERATIONS -> Icons.Outlined.EventNote
     Destination.SETTINGS -> Icons.Outlined.Settings
 }
 
 @Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase,
-    mutations: QsoMutationCoordinator, progress: ProgressController,
+    mutations: QsoMutationCoordinator, progress: ProgressController, operations: OperationsController,
+    publicProviders: app.rigweave.mobile.hamclock.HamClockPublicProviders,
     features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, wavelogNative: WavelogNativeController,
     syncHub: SyncHubController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
     portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
@@ -373,7 +378,8 @@ private fun navIcon(item: Destination) = when (item) {
     eqStudio: EqStudioController, compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
     tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openDx: () -> Unit, openPortable: () -> Unit,
-    openActivation: () -> Unit, openLogbook: () -> Unit, openSync: () -> Unit, openProgress: () -> Unit, openDigi: () -> Unit) {
+    openActivation: () -> Unit, openLogbook: () -> Unit, openSync: () -> Unit, openProgress: () -> Unit, openDigi: () -> Unit,
+    openOperations: () -> Unit) {
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     val intelligencePortableSpots = portable.pota.spots.map(PotaSpot::toPortable) + portable.sotaSpots + portable.wwffSpots
     val deliveredStates = setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED)
@@ -383,8 +389,8 @@ private fun navIcon(item: Destination) = when (item) {
         progress.refresh(progress.filters, features.liveSpots, intelligencePortableSpots, intelligenceAttention, cty, portable.sotaCatalogue)
     }
     when (destination) {
-        Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, send,
-            openDx, openPortable, openProgress)
+        Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, publicProviders,
+            operations, send, openDx, openPortable, openProgress, openOperations)
         Destination.RADIO -> Column(Modifier.fillMaxSize()) {
             if (compact) SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                 SegmentedButton(true, {}, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Radio") }
@@ -424,10 +430,14 @@ private fun navIcon(item: Destination) = when (item) {
             openLogbook = openLogbook, openLogbookFilter = { filter -> progress.requestLogbook(filter); openLogbook() }, openSync = openSync)
         Destination.SYNC -> SyncHubScreen(database, mutations, syncHub, wavelog, wavelogNative, openLogbook)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
-        Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app, progress.snapshot.needs, send)
+        Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app, progress.snapshot.needs,
+            operations, openOperations, send)
         Destination.PORTABLE -> PortableWorkspaceScreen(portable, activation, radio, app.stationGrid, foreground, compact,
             app, database, mutations, wavelog, callbook, cty, tunePortable, tuneLogPortable,
-            progress.snapshot.needs.mapNotNull { need -> need.portableSpot?.id?.let { it to need.reasons } }.toMap(), openLogbook)
+            progress.snapshot.needs.mapNotNull { need -> need.portableSpot?.id?.let { it to need.reasons } }.toMap(), openLogbook,
+            operations.nextPlan, openOperations)
+        Destination.OPERATIONS -> OperationsScreen(operations, portable, activation, features, progress, mutations, wavelog, callbook, cty,
+            app, compact, openDx, openPortable, openLogbook)
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
             transport, flex, voiceStore, voiceAudio, voiceTx, openEq, openSync, connect, direct)
     }
@@ -2900,11 +2910,24 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
 
 @Composable private fun DXScreen(neuralDx: NeuralDxController, features: FeatureController, database: QsoDatabase,
     wavelog: WavelogController, callbook: CallbookController, cty: CtyController, app: AppController,
-    needs: List<ProgressNeed>, send: (String) -> Unit) {
+    needs: List<ProgressNeed>, operations: OperationsController, openOperations: () -> Unit, send: (String) -> Unit) {
     var previousQsoRecord by remember { mutableStateOf<AndroidCallbookRecord?>(null) }
-    val dxNeeds = needs.mapNotNull { need -> need.dxSpot?.id?.let { it to need.reasons } }.toMap()
-    NeuralDxScreen(neuralDx, features, database, wavelog, callbook, cty, app, send, dxNeeds) { spot ->
-        previousQsoRecord = spot.previousQsoRecord(cty)
+    val calendarByCall = operations.dxItems.associateBy { it.callsign.uppercase(Locale.US) }
+    val calendarNeeds = features.liveSpots.mapNotNull { spot -> calendarByCall[spot.callsign.uppercase(Locale.US)]?.let { row ->
+        spot.id to listOf("DX CALENDAR · ${row.status.replace('_', ' ')}") } }.toMap()
+    val dxNeeds = needs.mapNotNull { need -> need.dxSpot?.id?.let { it to need.reasons } }.toMap() + calendarNeeds
+    Column(Modifier.fillMaxSize()) {
+        Surface(color = Panel, modifier = Modifier.fillMaxWidth().clickable(onClick = openOperations)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("DX CALENDAR · ${calendarNeeds.size} live matches", color = Amber, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                TextButton(openOperations) { Text("OPEN CALENDAR") }
+            }
+        }
+        Box(Modifier.weight(1f)) {
+            NeuralDxScreen(neuralDx, features, database, wavelog, callbook, cty, app, send, dxNeeds) { spot ->
+                previousQsoRecord = spot.previousQsoRecord(cty)
+            }
+        }
     }
     previousQsoRecord?.let { record ->
         PreviousQsosDialog(record, database, wavelog, callbook) { previousQsoRecord = null }

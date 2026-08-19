@@ -105,21 +105,23 @@ internal fun PotaActivateScreen(controller: PotaActivationController, pota: Pota
 
 @Composable
 private fun PotaSetup(controller: PotaActivationController, pota: PotaController, radio: RadioState, app: AppController) {
-    var station by rememberSaveable { mutableStateOf(app.stationCallsign) }
-    var operator by rememberSaveable { mutableStateOf(app.stationCallsign) }
-    var refsText by rememberSaveable { mutableStateOf("") }
-    var primary by rememberSaveable { mutableStateOf("") }
-    var grid by rememberSaveable { mutableStateOf(app.stationGrid) }
-    var location by rememberSaveable { mutableStateOf(app.stationName) }
-    var state by rememberSaveable { mutableStateOf("") }
-    var profile by rememberSaveable { mutableStateOf("") }
-    var power by rememberSaveable { mutableStateOf(radio.powerW.takeIf { it > 0 }?.toString().orEmpty()) }
-    var antenna by rememberSaveable { mutableStateOf("") }
-    var notes by rememberSaveable { mutableStateOf("") }
-    var startUtc by rememberSaveable { mutableStateOf(DateTimeFormatter.ISO_INSTANT.format(Instant.now())) }
+    val prepared = controller.pendingPlan
+    var station by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.stationCallsign ?: app.stationCallsign) }
+    var operator by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.operatorCallsign ?: app.stationCallsign) }
+    var refsText by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.references?.joinToString(", ").orEmpty()) }
+    var primary by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.primaryReference.orEmpty()) }
+    var grid by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.stationGrid ?: app.stationGrid) }
+    var location by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.location ?: app.stationName) }
+    var state by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.state.orEmpty()) }
+    var profile by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.stationProfileId.orEmpty()) }
+    var power by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.txPowerW?.takeIf { it > 0 }?.toString() ?: radio.powerW.takeIf { it > 0 }?.toString().orEmpty()) }
+    var antenna by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.antenna.orEmpty()) }
+    var notes by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.notes.orEmpty()) }
+    var startUtc by rememberSaveable(prepared?.startAt) { mutableStateOf(DateTimeFormatter.ISO_INSTANT.format(Instant.ofEpochSecond(prepared?.startAt ?: Instant.now().epochSecond))) }
     var acknowledged by rememberSaveable { mutableStateOf(false) }
     var search by rememberSaveable { mutableStateOf("") }
     val refs = normalizePotaReferences(refsText.split(',', ' ', '\n'))
+    LaunchedEffect(prepared?.startAt) { if (prepared != null) controller.consumePlan() }
     LaunchedEffect(search) { if (search.length >= 2) { delay(250); pota.searchParks(search) } }
     LaunchedEffect(refsText) { if (primary !in refs) primary = refs.firstOrNull().orEmpty() }
 

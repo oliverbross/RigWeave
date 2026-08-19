@@ -181,6 +181,7 @@ fun logbookFilterForDimension(key: String, value: String, base: LogbookFilter = 
         "sota" -> base.copy(sota = value)
         "wwff" -> base.copy(wwff = value)
         "iota" -> base.copy(iota = value)
+        "contest", "contestid" -> base.copy(contest = value)
         else -> base
     }
 

@@ -21,9 +21,10 @@ fun FastEntryDialog(
     callbook: CallbookController,
     operatorCallsign: String,
     onImported: (Int, Int) -> Unit,
+    initialDraft: String = "",
     dismiss: () -> Unit,
 ) {
-    var draft by rememberSaveable { mutableStateOf("") }
+    var draft by rememberSaveable(initialDraft) { mutableStateOf(initialDraft) }
     var selectedLines by rememberSaveable { mutableStateOf(listOf<Int>()) }
     var importSelected by rememberSaveable { mutableStateOf(false) }
     var showHelp by rememberSaveable { mutableStateOf(false) }
