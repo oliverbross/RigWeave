@@ -1,0 +1,32 @@
+name: OpenHamClock upstream watch
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit stable and preview pins
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          python3 scripts/check_openhamclock_upstream.py
+          --update-issue
+          --issue-repository "$GITHUB_REPOSITORY"
+      - name: Upload bounded audit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openhamclock-upstream-audit
+          path: build/reports/openhamclock-upstream.*
+          if-no-files-found: error
+          retention-days: 30
