@@ -50,6 +50,7 @@ data class CallsignHistory(val rows: List<Qso>, val total: Int)
 data class DxccCell(val worked: Boolean = false, val confirmed: Boolean = false)
 data class DxccSummary(val dxcc: String, val country: String, val cells: Map<String, DxccCell>)
 data class StationInsight(val record: AndroidCallbookRecord, val history: CallsignHistory, val dxcc: DxccSummary)
+data class QsoCatchUpCandidate(val id:String,val stationCallsign:String)
 data class NeuralLogSummary(
     val qsos: Int = 0, val calls: Int = 0, val dxccs: Int = 0, val confirmedDxccs: Int = 0,
     val bands: Map<String, Int> = emptyMap(), val modes: Map<String, Int> = emptyMap(),
@@ -635,6 +636,8 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     fun stationProfileIds(): List<String> = readableDatabase.rawQuery(
         "SELECT DISTINCT station_profile_id FROM qso_projection WHERE station_profile_id<>'' ORDER BY station_profile_id", null
     ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+    fun activationQsos(sessionId:String):List<Qso>{val ids=readableDatabase.rawQuery("SELECT qso_id FROM qso_projection WHERE activation_session_id=? ORDER BY created_at,qso_id",arrayOf(sessionId)).use{c->buildList{while(c.moveToNext())add(c.getString(0))}};return qsos(ids)}
+    fun catchUpCandidates(fromEpoch:Long,toEpochExclusive:Long,station:String=""):List<QsoCatchUpCandidate>{val args=mutableListOf(fromEpoch.toString(),toEpochExclusive.toString());val stationClause=if(station.isBlank())"" else " AND station_callsign_norm=?".also{args+=station.trim().uppercase()};return readableDatabase.rawQuery("SELECT qso_id,station_callsign_norm FROM qso_projection WHERE created_at>=? AND created_at<?$stationClause ORDER BY created_at,qso_id",args.toTypedArray()).use{c->buildList{while(c.moveToNext())add(QsoCatchUpCandidate(c.getString(0),c.getString(1)))}}}
 
     fun naturalCandidates(qso: Qso): List<Qso> = queryWhere(
         "UPPER(callsign)=? AND frequency_hz=? AND UPPER(mode)=? AND created_at BETWEEN ? AND ? ORDER BY created_at",

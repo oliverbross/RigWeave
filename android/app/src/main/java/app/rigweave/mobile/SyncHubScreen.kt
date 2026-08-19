@@ -51,6 +51,8 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneOffset
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -418,10 +420,8 @@ private fun CatchUpDialog(database: QsoDatabase, controller: SyncHubController, 
     var confirm by remember { mutableStateOf(false) }
     val fromDate = runCatching { LocalDate.parse(from) }.getOrNull()
     val toDate = runCatching { LocalDate.parse(to) }.getOrNull()
-    val candidates = if (fromDate == null || toDate == null || fromDate > toDate) emptyList() else database.all().filter { qso ->
-        val day = Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC).toLocalDate()
-        day >= fromDate && day <= toDate && (station.isBlank() || qso.stationCallsign.equals(station.trim(), true))
-    }
+    var candidates by remember { mutableStateOf<List<QsoCatchUpCandidate>>(emptyList()) }
+    LaunchedEffect(fromDate,toDate,station){candidates=if(fromDate==null||toDate==null||fromDate>toDate)emptyList()else withContext(Dispatchers.IO){database.catchUpCandidates(fromDate.atStartOfDay().toEpochSecond(ZoneOffset.UTC),toDate.plusDays(1).atStartOfDay().toEpochSecond(ZoneOffset.UTC),station)}}
     val callsigns = candidates.map { it.stationCallsign.ifBlank { "station not set" } }.distinct().sorted()
     AlertDialog(onDismissRequest = dismiss,
         title = { Text("QUEUE EXISTING QSOS") },
@@ -449,7 +449,7 @@ private fun CatchUpDialog(database: QsoDatabase, controller: SyncHubController, 
             }
         },
         confirmButton = {
-            Button({ controller.queueExisting(candidates, providers); dismiss() },
+            Button({ controller.queueExisting(candidates.map(QsoCatchUpCandidate::id), providers); dismiss() },
                 enabled = confirm && candidates.isNotEmpty() && providers.isNotEmpty()) { Text("QUEUE ${candidates.size} QSOS") }
         },
         dismissButton = { TextButton(dismiss) { Text("CANCEL") } })

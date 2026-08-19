@@ -249,7 +249,7 @@ private fun portableProgress(rows: List<Qso>, sotaSummits: Map<String, SotaSummi
         rover,sessions,portableRows.groupingBy(::qsoBand).eachCount().filterKeys(String::isNotBlank),
         portableRows.groupingBy(::qsoMode).eachCount())
 }
-private fun metricValue(metric: ProgressGoalMetric, s: ProgressSnapshot) = when (metric) {
+internal fun metricValue(metric: ProgressGoalMetric, s: ProgressSnapshot) = when (metric) {
     ProgressGoalMetric.TOTAL_QSOS -> s.totalQsos; ProgressGoalMetric.DXCC_WORKED -> s.dxcc.worked
     ProgressGoalMetric.DXCC_CONFIRMED -> s.dxcc.confirmed; ProgressGoalMetric.QRP_DXCC -> s.qrpDxcc
     ProgressGoalMetric.POTA_HUNTED -> s.portable.potaHunted.size; ProgressGoalMetric.POTA_ACTIVATED -> s.portable.potaActivated.size

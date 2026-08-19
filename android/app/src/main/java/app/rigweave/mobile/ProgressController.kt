@@ -58,16 +58,14 @@ internal fun decodeProgressGoals(raw: String): List<ProgressGoal> {
 }
 
 internal class ProgressController(context: Context, private val database: QsoDatabase) {
+    private val repository = LogIntelligenceRepository(database)
     val goalStore = ProgressGoalStore(context.applicationContext)
     private val preferences = context.applicationContext.getSharedPreferences("rigweave-log-intelligence", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var refreshJob: Job? = null
     private var pendingRefresh: (() -> Unit)? = null
     private var lastKey: Any? = null
-    private var cachedChangeToken = Long.MIN_VALUE
-    private var cachedQsos: List<Qso> = emptyList()
     var snapshot by mutableStateOf(ProgressSnapshot()); private set
-    var qsoSnapshot by mutableStateOf<List<Qso>>(emptyList()); private set
     var busy by mutableStateOf(false); private set
     var stationProfiles by mutableStateOf<List<String>>(emptyList()); private set
     var stationCallsigns by mutableStateOf<List<String>>(emptyList()); private set
@@ -122,8 +120,8 @@ internal class ProgressController(context: Context, private val database: QsoDat
         sotaCatalogue: SotaCatalogue,
     ) {
         val key = listOf(database.changeToken(), filters, goalStore.goals, syncAttention, cty.dataRevision,
-            dxSpots.map { listOf(it.id, it.callsign, it.band, it.mode, it.receivedEpoch) }.hashCode(),
-            portableSpots.map { listOf(it.id, it.band, it.mode, it.references.map(PortableReference::code), it.spottedAt) }.hashCode())
+            dxSpots.size, dxSpots.maxOfOrNull(AndroidDXSpot::receivedEpoch),
+            portableSpots.size, portableSpots.maxOfOrNull(PortableSpot::spottedAt))
         if (key == lastKey) return
         if (refreshJob?.isActive == true) {
             pendingRefresh = { refresh(filters, dxSpots, portableSpots, syncAttention, cty, sotaCatalogue) }
@@ -133,25 +131,12 @@ internal class ProgressController(context: Context, private val database: QsoDat
         refreshJob = scope.launch {
             busy = true
             try {
-                val (rows, summits) = withContext(Dispatchers.IO) {
-                    val changeToken = database.changeToken()
-                    val qsos = if (changeToken == cachedChangeToken) cachedQsos else database.allForProgress().also {
-                        cachedQsos = it
-                        cachedChangeToken = changeToken
-                    }
-                    val references = qsos.map { normalizeSotaReference(it.sotaRef) }.filter(String::isNotBlank).toSet()
-                    qsos to sotaCatalogue.lookup(references)
+                val result=withContext(Dispatchers.IO){
+                    val built=repository.snapshot(filters,goalStore.goals,dxSpots,portableSpots,syncAttention,cty::lookup)
+                    listOf(repository.stationProfiles(),repository.stationCallsigns(),repository.operators(),repository.submodes()) to built
                 }
-                qsoSnapshot = rows
-                val built = withContext(Dispatchers.Default) {
-                    buildProgressSnapshot(rows, filters, goalStore.goals, dxSpots, portableSpots, summits, syncAttention,
-                        ctyLookup = cty::lookup)
-                }
-                stationProfiles = rows.map(Qso::stationProfileId).filter(String::isNotBlank).distinct().sorted()
-                stationCallsigns = rows.map(Qso::stationCallsign).filter(String::isNotBlank).distinctBy(String::uppercase).sorted()
-                operators = rows.map(Qso::operatorCallsign).filter(String::isNotBlank).distinctBy(String::uppercase).sorted()
-                submodes = rows.map { it.submode.ifBlank { it.mode }.uppercase() }.filter(String::isNotBlank).distinct().sorted()
-                snapshot = built
+                stationProfiles=result.first[0];stationCallsigns=result.first[1];operators=result.first[2];submodes=result.first[3]
+                snapshot=result.second
             } finally {
                 busy = false
                 refreshJob = null

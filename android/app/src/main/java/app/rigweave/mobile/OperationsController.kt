@@ -20,7 +20,9 @@ import java.time.Instant
 internal class OperationsController(
     context: Context,
     private val providers: HamClockPublicProviders,
+    database: QsoDatabase,
 ) {
+    private val logRepository=OperationsLogRepository(database)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val plansFile = AtomicFile(File(context.filesDir, "operations-plans.json"))
     var dxItems by mutableStateOf(dxCalendarItems(providers.dxpeditions.cached())); private set
@@ -31,6 +33,8 @@ internal class OperationsController(
     var refreshing by mutableStateOf(false); private set
     var focusDxCall by mutableStateOf(""); private set
     var section by mutableStateOf("DX CALENDAR"); private set
+    var dxLocal by mutableStateOf<Map<String,DxLocalSummary>>(emptyMap());private set
+    var contestLocal by mutableStateOf<Map<String,Int>>(emptyMap());private set
 
     val nextPlan: ActivationPlan? get() = plans.filter { it.startEpoch + it.durationMinutes * 60L >= Instant.now().epochSecond }.minByOrNull(ActivationPlan::startEpoch)
 
@@ -67,6 +71,7 @@ internal class OperationsController(
         contests: HamClockFeed<List<app.rigweave.mobile.hamclock.HamClockContest>>) {
         dxItems = dxCalendarItems(dx); contestItems = contestCalendarItems(contests)
         dxMetadata = operationsMetadata(dx); contestMetadata = operationsMetadata(contests)
+        scope.launch{val local=withContext(Dispatchers.IO){logRepository.callsigns(dxItems.map(DxCalendarItem::callsign)) to logRepository.contests(contestItems.map(ContestCalendarItem::contestId))};dxLocal=local.first;contestLocal=local.second}
     }
 
     private fun loadPlans(): List<ActivationPlan> = runCatching {

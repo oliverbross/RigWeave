@@ -124,16 +124,16 @@ internal fun OperationsScreen(
         if (rows.isEmpty()) item { EmptyOperations("No DX calendar entries match. Provider state is shown above.") }
         items(rows, key = DxCalendarItem::id) { item ->
             val entity = cty.lookup(item.callsign)
-            val exact = progress.qsoSnapshot.filter { it.callsign.equals(item.callsign, true) }
+            val exact = controller.dxLocal[item.callsign.uppercase()] ?: DxLocalSummary(0,0,null)
             val dxcc = entity?.dxcc.orEmpty()
-            val entityRows = progress.qsoSnapshot.filter { dxcc.isNotBlank() && it.dxcc == dxcc }
+            val entityCount = progress.snapshot.geography.firstOrNull { it.code==dxcc }?.count?.worked ?: 0
             val live = features.liveSpots.firstOrNull { it.callsign.equals(item.callsign, true) }
             val needs = progress.snapshot.needs.firstOrNull { it.dxSpot?.callsign.equals(item.callsign, true) }?.reasons.orEmpty()
             Surface(color = OpsPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth().border(1.dp, OpsAmber.copy(.25f), RoundedCornerShape(8.dp))) {
                 Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Row { Text(item.callsign, color = OpsAmber, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f)); Text(dxGroup(item, now), color = OpsInk) }
                     Text(listOf(item.entity.ifBlank { entity?.country.orEmpty() }, item.dateText, item.modes.joinToString(), item.bands.joinToString()).filter(String::isNotBlank).joinToString(" · "), color = OpsInk)
-                    Text("LOCAL HISTORY · exact ${exact.size} · entity ${entityRows.size} · DXCC ${dxcc.ifBlank { "unresolved" }}", color = OpsMuted)
+                    Text("LOCAL HISTORY · exact ${exact.qsos} · confirmed ${exact.confirmed} · entity $entityCount · DXCC ${dxcc.ifBlank { "unresolved" }}", color = OpsMuted)
                     if (needs.isNotEmpty()) Text("NEEDS · ${needs.joinToString()}", color = OpsAmber)
                     Text("${item.provider} · ${item.status}${item.qsl.takeIf(String::isNotBlank)?.let { " · QSL $it" }.orEmpty()}", color = OpsMuted)
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -179,7 +179,7 @@ private fun dxGroup(item: DxCalendarItem, now: Long): String = when {
         } }
         if (rows.isEmpty()) item { EmptyOperations("No contests match. Malformed and expired provider rows are skipped.") }
         items(rows, key = ContestCalendarItem::id) { item ->
-            val qsoCount = item.contestId.takeIf(String::isNotBlank)?.let { id -> progress.qsoSnapshot.count { it.contestId.equals(id, true) } }
+            val qsoCount = item.contestId.takeIf(String::isNotBlank)?.let { controller.contestLocal[it.uppercase()] }
             Surface(color = OpsPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Row { Text(item.name, color = OpsAmber, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f)); Text(contestGroup(item, now), color = OpsInk) }
                 Text("${formatContestTime(item.startEpoch, utc)} → ${formatContestTime(item.endEpoch, utc)} · ${item.mode}", color = OpsInk)

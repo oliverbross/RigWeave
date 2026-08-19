@@ -49,11 +49,11 @@ internal data class PotaParkMetadata(
     val stale: Boolean get() = ready && importedAt > 0 && Instant.now().epochSecond - importedAt > 14 * 86_400L
 }
 
-internal class PotaController(context: Context, private val qsoDatabase: QsoDatabase,
-    private val sharedQsoSnapshot: (() -> List<Qso>)? = null) {
+internal class PotaController(context: Context, private val qsoDatabase: QsoDatabase) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("rigweave-pota", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val logRepository=PortableLogRepository(qsoDatabase)
     private val spotMutex = Mutex()
     private val parkMutex = Mutex()
     private val cacheFile = File(appContext.filesDir, "pota-spots.json")
@@ -70,6 +70,7 @@ internal class PotaController(context: Context, private val qsoDatabase: QsoData
     var parkBusy by mutableStateOf(false); private set
     var parkResults by mutableStateOf<List<PotaPark>>(emptyList()); private set
     var lastQsoRevision by mutableLongStateOf(qsoDatabase.changeToken()); private set
+    private var workedStates by mutableStateOf<Map<String,PotaWorkedState>>(emptyMap())
     private var cancelParkImport = false
 
     init {
@@ -89,7 +90,7 @@ internal class PotaController(context: Context, private val qsoDatabase: QsoData
         val result = withContext(Dispatchers.IO) { fetchText(POTA_SPOT_URL, 2) }
         result.fold(onSuccess = { response ->
             runCatching { parsePotaSpots(response.body, now).also { require(it.isNotEmpty()) { "POTA returned no usable spot records" } } }.fold(onSuccess = { normalized ->
-                spots = normalized; fetchedAt = now; feedKind = PotaFeedKind.LIVE
+                spots = normalized; fetchedAt = now; feedKind = PotaFeedKind.LIVE;refreshWorkedStates(now)
                 prefs.edit().putLong("spots_fetched_at", now).putString("spots_etag", response.etag).putString("spots_modified", response.lastModified).apply()
                 runCatching {
                     val temp = File(cacheFile.parentFile, cacheFile.name + ".part")
@@ -102,16 +103,17 @@ internal class PotaController(context: Context, private val qsoDatabase: QsoData
 
     fun markForegroundAge(now: Long = Instant.now().epochSecond) {
         if (feedKind == PotaFeedKind.LIVE && fetchedAt > 0 && now - fetchedAt > 90) feedKind = PotaFeedKind.CACHED
-        if (qsoDatabase.changeToken() != lastQsoRevision) lastQsoRevision = qsoDatabase.changeToken()
+        if (qsoDatabase.changeToken() != lastQsoRevision) notifyQsoChanged()
     }
 
-    fun notifyQsoChanged() { lastQsoRevision = qsoDatabase.changeToken() }
+    fun notifyQsoChanged() { lastQsoRevision = qsoDatabase.changeToken();refreshWorkedStates() }
 
     fun opportunities(now: Long, radioFrequencyHz: Long, stationGrid: String): List<PotaOpportunity> {
         val station = maidenheadCenter(stationGrid)
-        val qsos = sharedQsoSnapshot?.invoke() ?: qsoDatabase.all()
-        return spots.map { spot -> rankPotaSpot(spot, workedStateFor(spot, qsos, now), now, radioFrequencyHz, station) }
+        return spots.map { spot -> rankPotaSpot(spot, workedStates[spot.id]?:PotaWorkedState(), now, radioFrequencyHz, station) }
     }
+
+    private fun refreshWorkedStates(now:Long=Instant.now().epochSecond){val rows=spots;scope.launch{workedStates=withContext(Dispatchers.IO){logRepository.potaStates(rows,now)}}}
 
     fun searchParks(query: String, location: String = "", stationGrid: String = "", nearby: Boolean = false) {
         scope.launch {

@@ -176,8 +176,7 @@ private fun potaAdifRecord(qso: Qso, setup: PotaActivationSetup, own: String, ot
     }.trim()
 }
 
-internal class PotaActivationController(context: Context, private val database: QsoDatabase,
-    private val sharedQsoSnapshot: (() -> List<Qso>)? = null) {
+internal class PotaActivationController(context: Context, private val database: QsoDatabase) {
     private val activeFile = AtomicFile(File(context.filesDir, "pota-activation-active.json"))
     private val finishedFile = AtomicFile(File(context.filesDir, "pota-activation-finished.json"))
     var message by mutableStateOf(""); private set
@@ -236,8 +235,8 @@ internal class PotaActivationController(context: Context, private val database: 
 
     fun abandon() { activeFile.delete(); session = null; recovered = false; message = "Session state removed; saved QSOs were preserved" }
     fun dismissReview() { if (session?.state == PotaActivationState.FINISHED) { finishedFile.delete(); session = null } }
-    fun qsos(): List<Qso> = session?.let { current -> (sharedQsoSnapshot?.invoke() ?: database.all()).filter { it.activationSessionId == current.id } }.orEmpty()
-    fun progress(now: Long = Instant.now().epochSecond) = session?.let { activationProgress(it, sharedQsoSnapshot?.invoke() ?: database.all(), now) }
+    fun qsos(): List<Qso> = session?.let { database.activationQsos(it.id) }.orEmpty()
+    fun progress(now: Long = Instant.now().epochSecond) = session?.let { activationProgress(it, database.activationQsos(it.id), now) }
 
     private fun load(file: AtomicFile): PotaActivationSession? = runCatching {
         if (!file.baseFile.exists()) null else decodePotaSession(file.openRead().bufferedReader().use { it.readText() })

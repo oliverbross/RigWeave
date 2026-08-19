@@ -249,6 +249,15 @@ internal fun rankPortableSpot(spot: PortableSpot, qsos: List<Qso>, now: Long, ra
     return PortableOpportunity(spot, worked, score, reasons.distinct().ifEmpty { listOf("active portable spot") }, distance, bearing)
 }
 
+internal fun rankPortableSpot(spot:PortableSpot,worked:Map<PortableProgram,PortableWorkedState>,now:Long,radioFrequencyHz:Long=0,station:GeoPoint?=null):PortableOpportunity{
+    val reasons=mutableListOf<String>();var score=0
+    worked.forEach{(program,state)->when{!state.referenceWorked->{score+=45;reasons+="new ${when(program){PortableProgram.POTA->"park";PortableProgram.SOTA->"summit";PortableProgram.WWFF->"reference"}}"};!state.bandWorked->{score+=28;reasons+="new on ${spot.band}"};!state.modeWorked->{score+=18;reasons+="new ${modeFamily(spot.mode)} mode"}};if(!state.workedToday)score+=10 else score-=45}
+    val age=(now-spot.spottedAt).coerceAtLeast(0);if(age<=300){score+=15;reasons+="fresh spot"}else if(age<=900)score+=7
+    if(radioFrequencyHz>0&&bandForFrequency(radioFrequencyHz)==spot.band){score+=8;reasons+="current radio band"};if(spot.programs.size>1){score+=12;reasons+="multi-program activation"};if(!spot.activeAt(now))score-=150
+    val point=if(spot.latitude!=null&&spot.longitude!=null)GeoPoint(spot.latitude,spot.longitude)else null
+    return PortableOpportunity(spot,worked,score,reasons.distinct().ifEmpty{listOf("active portable spot")},if(station!=null&&point!=null)distanceKm(station,point)else null,if(station!=null&&point!=null)initialBearingDegrees(station,point)else null)
+}
+
 internal fun sortedPortable(rows: List<PortableOpportunity>, sort: PortableSort): List<PortableOpportunity> = when (sort) {
     PortableSort.RECOMMENDED -> rows.sortedWith(compareByDescending<PortableOpportunity> { it.score }.thenByDescending { it.spot.spottedAt }.thenBy { it.spot.id })
     PortableSort.NEWEST -> rows.sortedWith(compareByDescending<PortableOpportunity> { it.spot.spottedAt }.thenBy { it.spot.id })

@@ -139,9 +139,9 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val mutations = remember { QsoMutationCoordinator(database) }
     val progress = remember { ProgressController(context, database) }
     val publicProviders = remember { app.rigweave.mobile.hamclock.HamClockPublicProviders(File(context.filesDir, "hamclock-public")) }
-    val operations = remember { OperationsController(context, publicProviders) }
-    val portable = remember { PortableController(context, database) { progress.qsoSnapshot } }
-    val activation = remember { PotaActivationController(context, database) { progress.qsoSnapshot } }
+    val operations = remember { OperationsController(context, publicProviders, database) }
+    val portable = remember { PortableController(context, database) }
+    val activation = remember { PotaActivationController(context, database) }
     val features = remember { FeatureController(context) }
     val neuralDx = remember { NeuralDxController(context, database) }
     val wavelog = remember { WavelogController(context, database) }
@@ -391,7 +391,6 @@ private fun navIcon(item: Destination) = when (item) {
         intelligenceAttention, cty.dataRevision, progress.goalStore.goals) {
         progress.refresh(progress.filters, features.liveSpots, intelligencePortableSpots, intelligenceAttention, cty, portable.sotaCatalogue)
     }
-    LaunchedEffect(progress.qsoSnapshot) { portable.notifyQsoChanged() }
     when (destination) {
         Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, publicProviders,
             operations, send, openDx, openPortable, openProgress, openOperations)
