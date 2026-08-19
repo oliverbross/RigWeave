@@ -1,0 +1,40 @@
+# Scale and stability
+
+## Delivered architecture
+
+The old interactive paths repeatedly decoded the canonical `qso.details_json` record, materialised the complete log, sorted it in memory, and recalculated analytics or calendar history for each consumer. That made memory and latency grow with the log and made Android lifecycle churn a plausible crash trigger.
+
+Database version 12 keeps `qso` as the compatibility authority and adds `qso_projection`, `qso_reference`, and `qso_projection_meta`. The projection contains normalized query dimensions, confirmation flags, Wavelog relation state, station/operator identity, portable references, satellite fields, and a deterministic `(created_at, qso_id)` cursor. Targeted indexes cover time, callsign, frequency, band/mode, station, geography, contest, satellite, activation, sync relation, confirmation, and references.
+
+Projection creation is resumable and batched. Progress and state are committed in metadata, malformed canonical rows are skipped without deleting the source, and normal writes dual-write canonical and projection rows in one transaction. Verification detects missing and orphan rows; repair fills missing rows and removes orphans; rebuild is an explicit recovery action. WAL, `synchronous=NORMAL`, a bounded busy timeout, and the private diagnostic journal reduce lock and crash ambiguity.
+
+Logbook queries now run off-main, debounce changes, cancel the previous coroutine and SQLite `CancellationSignal`, use keyset paging, and cap UI pages at 250. Log Intelligence, Operations, Home, DX/contest history, spot status, and station summaries query compact projection aggregates. Normal interactive paths no longer load a complete `List<Qso>`. Legacy JSON helpers remain only for compatibility/migration or explicit bounded canonical retrieval, not normal filtering or sorting.
+
+ADIF import reads records incrementally, applies bounded mutation batches, reports progress, and permits cancellation between batches. Export streams projection-selected canonical rows to the destination instead of building one giant string. The small string helpers remain for tiny inputs and focused tests.
+
+## Representative host profile
+
+Measured 2026-08-20 with SQLite on a deterministic temporary 100,000-row projection. The database was not committed. Times are wall-clock observations, not tablet guarantees.
+
+| Query category | Elapsed | Peak process RSS | Selected plan/index |
+|---|---:|---:|---|
+| Default first page, 250 rows | 0.00 s | 3.1 MB | `qso_projection_time_idx` |
+| Exact callsign | 0.01 s | 3.2 MB | `qso_projection_call_idx` |
+| DXCC | 0.00 s | 3.1 MB | DXCC/time index family |
+| Band and mode | 0.01 s | 3.2 MB | band/mode index family |
+| Confirmation | 0.00 s | 3.2 MB | confirmation/time index |
+| Contest | 0.01 s | 3.4 MB | contest/time index |
+| Satellite name and mode | 0.00 s | 3.7 MB | `qso_projection_satellite_idx` |
+| Wavelog relation | 0.01 s | 4.3 MB | `qso_projection_sync_idx`; bounded temporary ordering |
+| Keyset next page | 0.00 s | 3.1 MB | time cursor index |
+| Overview aggregates | 0.05 s | 6.0 MB | bounded aggregate scan |
+| Awards aggregates | 0.07 s | 5.5 MB | bounded grouped aggregate |
+| Needs compact sets | 0.00 s | 3.1 MB | compact distinct set |
+| DX Calendar local history | 0.01 s | 5.2 MB | contest index/aggregate |
+| Filtered satellite export stream | 0.01 s | 5.9 MB | satellite index |
+
+Several subsequent keyset pages were also exercised. All measured categories remained below the one-second host guidance and no crash or unbounded memory growth occurred.
+
+## Private diagnostics
+
+The journal stores at most three sanitized crash summaries and twelve slow-query records in app-private storage. It excludes QSO payloads, credentials, URLs, tokens, callsigns, comments, and provider response bodies. Settings can show, copy a sanitized report, or clear the journal. Diagnostic failure never blocks database recovery or logging.
