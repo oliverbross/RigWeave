@@ -17,7 +17,7 @@ private enum class PortableMode { CHASE, ACTIVATE }
 @Composable
 internal fun PortableWorkspaceScreen(portable: PortableController, activation: PotaActivationController, radio: RadioState,
     stationGrid: String, foreground: Boolean, compact: Boolean, app: AppController, database: QsoDatabase,
-    wavelog: WavelogController, callbook: CallbookController, cty: CtyController, onTune: (PortableSpot) -> Unit,
+    mutations: QsoMutationCoordinator, wavelog: WavelogController, callbook: CallbookController, cty: CtyController, onTune: (PortableSpot) -> Unit,
     onTuneAndLog: (PortableSpot) -> Unit, onOpenLogbook: () -> Unit) {
     var mode by rememberSaveable { mutableStateOf(if (activation.pendingP2p != null) PortableMode.ACTIVATE else PortableMode.CHASE) }
     LaunchedEffect(activation.pendingP2p?.token) { if (activation.pendingP2p != null) mode = PortableMode.ACTIVATE }
@@ -34,7 +34,8 @@ internal fun PortableWorkspaceScreen(portable: PortableController, activation: P
         when (mode) {
             PortableMode.CHASE -> PortableChaseScreen(portable, radio, stationGrid, foreground, compact, onTune, onTuneAndLog,
                 activation.session?.state == PotaActivationState.ACTIVE) { spot -> activation.prepareP2p(spot); mode = PortableMode.ACTIVATE }
-            PortableMode.ACTIVATE -> PotaActivateScreen(activation, portable.pota, radio, app, database, wavelog, callbook, cty, compact, onOpenLogbook)
+            PortableMode.ACTIVATE -> PotaActivateScreen(activation, portable.pota, radio, app, database, mutations,
+                wavelog, callbook, cty, compact, onOpenLogbook)
         }
     }
 }

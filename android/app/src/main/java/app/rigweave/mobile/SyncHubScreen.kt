@@ -67,6 +67,7 @@ private enum class OutboxFilter { ALL, QUEUED, ATTENTION, DELIVERED }
 @Composable
 fun SyncHubScreen(
     database: QsoDatabase,
+    mutations: QsoMutationCoordinator,
     controller: SyncHubController,
     wavelog: WavelogController,
     nativeWavelog: WavelogNativeController,
@@ -131,7 +132,7 @@ fun SyncHubScreen(
     }
 
     configure?.let { ProviderConfigDialog(it, controller) { configure = null } }
-    selected?.let { DeliveryDialog(database, controller, it) { selected = null } }
+    selected?.let { DeliveryDialog(database, mutations, controller, it) { selected = null } }
     if (catchUp) CatchUpDialog(database, controller) { catchUp = false }
     if (nativeOpen) WavelogNativeDialog(nativeWavelog, wavelog) { nativeOpen = false }
 }
@@ -308,13 +309,14 @@ private fun ProviderConfigDialog(provider: SyncProvider, controller: SyncHubCont
 }
 
 @Composable
-private fun DeliveryDialog(database: QsoDatabase, controller: SyncHubController, record: DeliveryRecord, dismiss: () -> Unit) {
+private fun DeliveryDialog(database: QsoDatabase, mutations: QsoMutationCoordinator,
+    controller: SyncHubController, record: DeliveryRecord, dismiss: () -> Unit) {
     val qso = database.qso(record.qsoId)
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var editing by remember { mutableStateOf(false) }
     if (editing && qso != null) {
-        QsoCorrectionDialog(qso, database, controller) { editing = false }
+        QsoCorrectionDialog(qso, mutations, controller) { editing = false }
         return
     }
     AlertDialog(onDismissRequest = dismiss,
@@ -360,7 +362,8 @@ private fun DeliveryDialog(database: QsoDatabase, controller: SyncHubController,
 }
 
 @Composable
-private fun QsoCorrectionDialog(qso: Qso, database: QsoDatabase, controller: SyncHubController, dismiss: () -> Unit) {
+private fun QsoCorrectionDialog(qso: Qso, mutations: QsoMutationCoordinator,
+    controller: SyncHubController, dismiss: () -> Unit) {
     val initial = Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC)
     var callsign by remember { mutableStateOf(qso.callsign) }
     var station by remember { mutableStateOf(qso.stationCallsign) }
@@ -396,7 +399,7 @@ private fun QsoCorrectionDialog(qso: Qso, database: QsoDatabase, controller: Syn
         },
         confirmButton = {
             Button({
-                database.updateLocal(qso.copy(callsign = callsign.trim(), stationCallsign = station.trim(),
+                mutations.update(qso.copy(callsign = callsign.trim(), stationCallsign = station.trim(),
                     frequencyHz = hz!!, band = bandForFrequency(hz), mode = mode.trim(), createdAt = epoch!!,
                     myGrid = grid.trim(), notes = notes))
                 controller.refreshNow()

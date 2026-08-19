@@ -2,6 +2,8 @@ package app.rigweave.mobile
 
 import android.Manifest
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
 import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.util.LruCache
@@ -130,13 +132,14 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val core = remember { NativeCore.create() }
     val transport = remember { UsbRadioTransport(context) }
     val database = remember { QsoDatabase(context) }
+    val mutations = remember { QsoMutationCoordinator(database) }
     val progress = remember { ProgressController(context, database) }
     val portable = remember { PortableController(context, database) }
     val activation = remember { PotaActivationController(context, database) }
     val features = remember { FeatureController(context) }
     val neuralDx = remember { NeuralDxController(context, database) }
     val wavelog = remember { WavelogController(context, database) }
-    val wavelogNative = remember { WavelogNativeController(database, wavelog) }
+    val wavelogNative = remember { WavelogNativeController(database, wavelog, mutations) }
     val app = remember { AppController(context) }
     val flex = remember { FlexRadioController(context, { app.preferredFlexStation }, app::savePreferredFlexStation) { app.manualFlexIp } }
     val syncHub = remember { SyncHubController(context, database, { wavelog.logMode }, { app.stationGrid }) }
@@ -252,7 +255,9 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event -> when (event) {
-            Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> { foreground = true; syncHub.setForeground(true) }
+            Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> {
+                foreground = true; syncHub.setForeground(true); wavelogNative.onForeground()
+            }
             Lifecycle.Event.ON_STOP, Lifecycle.Event.ON_DESTROY -> {
                 foreground = false; syncHub.setForeground(false); app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
                 digi.stopRx("App left foreground · RX stopped")
@@ -264,6 +269,14 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         } }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val connectivity = remember { context.getSystemService(ConnectivityManager::class.java) }
+    DisposableEffect(connectivity) {
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) { wavelogNative.onConnectivityAvailable() }
+        }
+        connectivity.registerDefaultNetworkCallback(callback)
+        onDispose { runCatching { connectivity.unregisterNetworkCallback(callback) } }
     }
     LaunchedEffect(voiceAudio) { voiceAudio.onFailure = { app.updateVoiceMacrosArmed(false) } }
     DisposableEffect(Unit) { onDispose {
@@ -316,7 +329,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
-            Screen(destination, radio, usbDetail, database, progress, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
+            Screen(destination, radio, usbDetail, database, mutations, progress, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
                 voiceStore, voiceAudio, voiceTx, eqStudio, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
@@ -326,7 +339,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
             Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
-            Screen(destination, radio, usbDetail, database, progress, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
+            Screen(destination, radio, usbDetail, database, mutations, progress, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
                 voiceStore, voiceAudio, voiceTx, eqStudio, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
@@ -351,7 +364,8 @@ private fun navIcon(item: Destination) = when (item) {
     Destination.SETTINGS -> Icons.Outlined.Settings
 }
 
-@Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase, progress: ProgressController,
+@Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase,
+    mutations: QsoMutationCoordinator, progress: ProgressController,
     features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, wavelogNative: WavelogNativeController,
     syncHub: SyncHubController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
     portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
@@ -372,7 +386,7 @@ private fun navIcon(item: Destination) = when (item) {
             PotaActivationStrip(activation, radio, openActivation)
             Box(Modifier.weight(1f)) {
                 if (app.radioFamily == RadioFamily.FLEXRADIO) FlexRadioScreen(flex, openLogbook)
-                else if (!compact || !app.panadapterEnabled) RadioScreen(radio, detail, app, database, wavelog, callbook, cty,
+                else if (!compact || !app.panadapterEnabled) RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty,
                     features, voiceStore, voiceTx, connect, send, direct, requestVoice, clearCwDecode,
                     portableDraft, consumePortableDraft, portable::notifyQsoChanged)
                 else Column(Modifier.fillMaxSize()) {
@@ -381,7 +395,7 @@ private fun navIcon(item: Destination) = when (item) {
                         SegmentedButton(compactPanadapter, { compactPanadapter = true }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("Panadapter") }
                     }
                     if (compactPanadapter) PanadapterScreen(panadapter, radio, features.liveSpots, true) { compactPanadapter = false }
-                    else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx,
+                    else RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty, features, voiceStore, voiceTx,
                         connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
                 }
             }
@@ -389,23 +403,23 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.DIGI -> DigiScreen(digi, radio, compact)
         Destination.PANADAPTER -> if (app.panadapterEnabled && app.radioFamily.isElecraft)
             PanadapterScreen(panadapter, radio, features.liveSpots, compact)
-        else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx,
+        else RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty, features, voiceStore, voiceTx,
             connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
         Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
         Destination.LOGBOOK -> Column(Modifier.fillMaxSize()) {
             PotaActivationStrip(activation, radio, openActivation)
-            Box(Modifier.weight(1f)) { LogbookScreen(radio, database, wavelog, syncHub, callbook, app, openSync, openProgress) }
+            Box(Modifier.weight(1f)) { LogbookScreen(radio, database, mutations, wavelog, syncHub, callbook, app, openSync, openProgress) }
         }
         Destination.PROGRESS -> ProgressScreen(progress, features, portable, syncHub, cty,
             wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }.orEmpty(), app.stationCallsign, compact,
             openDx = openDx, openPortable = openPortable,
             openLogbook = openLogbook, openSync = openSync)
-        Destination.SYNC -> SyncHubScreen(database, syncHub, wavelog, wavelogNative, openLogbook)
+        Destination.SYNC -> SyncHubScreen(database, mutations, syncHub, wavelog, wavelogNative, openLogbook)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app, send)
         Destination.PORTABLE -> PortableWorkspaceScreen(portable, activation, radio, app.stationGrid, foreground, compact,
-            app, database, wavelog, callbook, cty, tunePortable, tuneLogPortable, openLogbook)
-        Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
+            app, database, mutations, wavelog, callbook, cty, tunePortable, tuneLogPortable, openLogbook)
+        Destination.SETTINGS -> SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
             transport, flex, voiceStore, voiceAudio, voiceTx, openEq, openSync, connect, direct)
     }
 }
@@ -456,6 +470,7 @@ private fun navIcon(item: Destination) = when (item) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable private fun RadioScreen(state: RadioState, detail: String, app: AppController, database: QsoDatabase,
+    mutations: QsoMutationCoordinator,
     wavelog: WavelogController, callbook: CallbookController, cty: CtyController, features: FeatureController,
     voiceStore: VoiceMacroStore, voiceTx: VoiceMacroTransmitController, connect: () -> Unit, send: (String) -> Unit,
     direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
@@ -512,7 +527,7 @@ private fun navIcon(item: Destination) = when (item) {
                         isVoiceMacroMode(state.mode) -> VoiceMacroStrip(state, voiceStore, voiceTx, requestVoice,
                             Modifier.fillMaxWidth().heightIn(min = 54.dp))
                     }
-                CompactLogger(state, database, wavelog, callbook, cty, app, send, portableDraft, consumePortableDraft, onQsoSaved,
+            CompactLogger(state, database, mutations, wavelog, callbook, cty, app, send, portableDraft, consumePortableDraft, onQsoSaved,
                         onInsight = { stationInsight = it; identityVisible = true },
                         onInsightCleared = { stationInsight = null; identityVisible = false },
                         modifier = Modifier.weight(1f).fillMaxWidth())
@@ -2290,7 +2305,8 @@ private fun spotStatusColor(status: String?): Color = when (status) {
     }
 }
 
-@Composable private fun CompactLogger(state: RadioState, database: QsoDatabase, wavelog: WavelogController,
+@Composable private fun CompactLogger(state: RadioState, database: QsoDatabase, mutations: QsoMutationCoordinator,
+    wavelog: WavelogController,
     callbook: CallbookController, cty: CtyController, app: AppController, send: (String) -> Unit,
     portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, onQsoSaved: () -> Unit,
     onInsight: (StationInsight) -> Unit, onInsightCleared: () -> Unit, modifier: Modifier = Modifier) {
@@ -2480,9 +2496,10 @@ private fun spotStatusColor(status: String?): Color = when (status) {
                         qslSent = qslSent, qslMethod = qslMethod, qslVia = qslVia, qslMessage = qslMessage,
                         syncState = if (wavelog.logMode == LogMode.WAVELOG) "pending" else "local")
                     if (call.isBlank() || !state.connected || qsoFrequency <= 0 || qsoMode.isBlank()) status = "CALL / FREQUENCY / MODE / LIVE CAT REQUIRED"
-                    else if (!database.save(qso)) status = "DUPLICATE NOT SAVED"
+                    else if (!mutations.save(qso)) status = "DUPLICATE NOT SAVED"
                     else {
-                        if (wavelog.logMode == LogMode.WAVELOG) { wavelog.enqueue(id, database.toADIF(qso)); status = "SAVED · TWO-WAY SYNC QUEUED" }
+                        if (mutations.isMapped(qso)) status = "SAVED · NATIVE WAVELOG OUTBOX QUEUED"
+                        else if (wavelog.logMode == LogMode.WAVELOG) { wavelog.enqueue(id, database.toADIF(qso)); status = "SAVED · LEGACY WAVELOG QUEUED" }
                         else status = "SAVED · LOCAL ADIF"
                         onQsoSaved(); clear()
                     }
@@ -2888,7 +2905,8 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
         trailingContent = { Text(trailing, color = if (alert) Hold else Muted) }, colors = ListItemDefaults.colors(containerColor = Color.Transparent))
 }
 
-@Composable private fun LogbookScreen(state: RadioState, database: QsoDatabase, wavelog: WavelogController,
+@Composable private fun LogbookScreen(state: RadioState, database: QsoDatabase, mutations: QsoMutationCoordinator,
+    wavelog: WavelogController,
     syncHub: SyncHubController, callbook: CallbookController, app: AppController, openSync: () -> Unit, openProgress: () -> Unit) {
     var showFilters by remember { mutableStateOf(false) }
     var showFastEntry by remember { mutableStateOf(false) }
@@ -2994,7 +3012,7 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                     val cleared = LogbookFilter(limit = applied.limit)
                     draft = cleared; applied = cleared; page = 0; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
                 }, onDismiss = { showFilters = false })
-        if (showFastEntry) FastEntryDialog(database, wavelog, app.stationCallsign, { _, _ -> refreshGeneration++ }) {
+        if (showFastEntry) FastEntryDialog(mutations, wavelog, app.stationCallsign, { _, _ -> refreshGeneration++ }) {
             showFastEntry = false
         }
     }
@@ -3316,7 +3334,8 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
 @Composable private fun FilterChoice(label: String, value: String, choices: List<Pair<String, String>>, change: (String) -> Unit) =
     ChoiceField(label, choices.firstOrNull { it.first == value }?.second ?: value, choices, value, change, Modifier.fillMaxWidth())
 
-@Composable private fun SettingsScreen(state: RadioState, detail: String, database: QsoDatabase, features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController,
+@Composable private fun SettingsScreen(state: RadioState, detail: String, database: QsoDatabase,
+    mutations: QsoMutationCoordinator, features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController,
     callbook: CallbookController, cty: CtyController,
     audio: AudioMonitorController, panadapter: PanadapterController, app: AppController, transport: UsbRadioTransport,
     flex: FlexRadioController, voiceStore: VoiceMacroStore,
@@ -3387,7 +3406,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             .onSuccess { systemMessage = "ADIF exported from tablet database" }.onFailure { error -> systemMessage = "ADIF export failed: ${error.message}" } }
     }
     val importAdif = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { runCatching { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader -> database.importADIF(reader.readText()) } ?: (0 to 0) }
+        uri?.let { runCatching { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader -> mutations.importADIF(reader.readText()) } ?: (0 to 0) }
             .onSuccess { result -> systemMessage = "ADIF import · ${result.first} added · ${result.second} skipped" }
             .onFailure { error -> systemMessage = "ADIF import failed: ${error.message}" } }
     }

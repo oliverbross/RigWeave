@@ -12,7 +12,7 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 
 @Composable
-fun FastEntryDialog(database: QsoDatabase, wavelog: WavelogController, operatorCallsign: String,
+fun FastEntryDialog(mutations: QsoMutationCoordinator, wavelog: WavelogController, operatorCallsign: String,
     onImported: (Int, Int) -> Unit, dismiss: () -> Unit) {
     var text by remember { mutableStateOf("") }; var result by remember { mutableStateOf(FastEntryResult(emptyList(), emptyList())) }
     var validOnly by remember { mutableStateOf(false) }; var status by remember { mutableStateOf("") }
@@ -29,6 +29,7 @@ fun FastEntryDialog(database: QsoDatabase, wavelog: WavelogController, operatorC
                 items(result.rows, key = { it.qso.id }) { row -> Text("${row.line} · ${java.time.Instant.ofEpochSecond(row.qso.createdAt)} · ${row.qso.callsign} · ${row.qso.band} ${row.qso.mode} · ${row.qso.rstSent}/${row.qso.rstReceived}${row.inherited.takeIf(Set<String>::isNotEmpty)?.joinToString(prefix = " · inherited ").orEmpty()}") } }
         }
     }, confirmButton = { Button({ parse(); if (result.errors.isNotEmpty() && !validOnly) { status = "Nothing imported · fix errors or explicitly choose valid lines only"; return@Button }
-        var added = 0; var skipped = 0; database.transaction { result.rows.forEach { if (database.save(it.qso, QsoOrigin.IMPORT)) added++ else skipped++ } }; onImported(added, skipped); dismiss()
+        val imported = mutations.saveBatch(result.rows.map { it.qso }, QsoOrigin.IMPORT)
+        onImported(imported.first, imported.second); dismiss()
     }, enabled = result.rows.isNotEmpty()) { Text("IMPORT") } }, dismissButton = { TextButton(dismiss) { Text("CANCEL") } })
 }
