@@ -132,7 +132,9 @@ internal class ProgressController(context: Context, private val database: QsoDat
             busy = true
             try {
                 val result=withContext(Dispatchers.IO){
-                    val built=repository.snapshot(filters,goalStore.goals,dxSpots,portableSpots,syncAttention,cty::lookup)
+                val built=StabilityDiagnostics.timedQuery("LOG_INTELLIGENCE", filters.hashCode().toUInt().toString(16), "PROJECTION_AGGREGATES", { it.totalQsos }) {
+                    repository.snapshot(filters,goalStore.goals,dxSpots,portableSpots,syncAttention,cty::lookup)
+                }
                     listOf(repository.stationProfiles(),repository.stationCallsigns(),repository.operators(),repository.submodes()) to built
                 }
                 stationProfiles=result.first[0];stationCallsigns=result.first[1];operators=result.first[2];submodes=result.first[3]

@@ -26,14 +26,19 @@ class LogbookRepository(private val database: QsoDatabase) {
         val offset = if (keyset) 0 else offsetPage.coerceAtLeast(0) * size
         val sql = "SELECT p.qso_id,p.created_at FROM qso_projection p WHERE $where ORDER BY ${query.order} LIMIT ?" +
             if (offset > 0) " OFFSET $offset" else ""
-        val ids = database.readableDatabase.rawQuery(sql, args.toTypedArray(), signal).use { c ->
-            buildList { while (c.moveToNext()) add(c.getString(0) to c.getLong(1)) }
+        val filterHash = (31 * filter.hashCode() + stationId.hashCode()).toUInt().toString(16)
+        val ids = StabilityDiagnostics.timedQuery("LOGBOOK_PAGE", filterHash, query.planLabel, { rows: List<Pair<String, Long>> -> rows.size }) {
+            database.readableDatabase.rawQuery(sql, args.toTypedArray(), signal).use { c ->
+                buildList { while (c.moveToNext()) add(c.getString(0) to c.getLong(1)) }
+            }
         }
         val visible = ids.take(size); val rows = database.qsos(visible.map(Pair<String,Long>::first))
         val total = if (!exactCount) null else synchronized(countCache) {
             val key = CountKey(filter,stationId,database.changeToken())
-            countCache[key] ?: database.readableDatabase.rawQuery("SELECT COUNT(*) FROM qso_projection p WHERE ${query.where}",query.args.toTypedArray(),signal)
-                .use { if (it.moveToFirst()) it.getInt(0) else 0 }.also { countCache[key]=it }
+            countCache[key] ?: StabilityDiagnostics.timedQuery("LOGBOOK_COUNT", filterHash, query.planLabel, { 1 }) {
+                database.readableDatabase.rawQuery("SELECT COUNT(*) FROM qso_projection p WHERE ${query.where}",query.args.toTypedArray(),signal)
+                    .use { if (it.moveToFirst()) it.getInt(0) else 0 }
+            }.also { countCache[key]=it }
         }
         val last = visible.lastOrNull()
         return LogbookQueryPage(rows,total,ids.size>size,last?.let { LogbookCursor(it.second,it.first) },query.planLabel)

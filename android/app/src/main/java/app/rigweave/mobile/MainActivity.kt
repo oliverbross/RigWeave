@@ -99,6 +99,7 @@ import kotlin.math.abs
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        StabilityDiagnostics.install(this)
         setContent { RigWeaveTheme { RigWeaveApp() } }
     }
 }
@@ -134,7 +135,12 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val transport = remember { UsbRadioTransport(context) }
     val database = remember { QsoDatabase(context) }
     LaunchedEffect(database) {
-        while (withContext(Dispatchers.IO) { database.backfillProjectionBatch() }) delay(25)
+        StabilityDiagnostics.refreshDatabaseFacts(database)
+        while (withContext(Dispatchers.IO) { database.backfillProjectionBatch() }) {
+            StabilityDiagnostics.refreshDatabaseFacts(database)
+            delay(25)
+        }
+        StabilityDiagnostics.refreshDatabaseFacts(database)
     }
     val mutations = remember { QsoMutationCoordinator(database) }
     val progress = remember { ProgressController(context, database) }
@@ -3578,6 +3584,10 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         if (!catSelectionDirty) pendingCatKey = transport.selected?.sessionKey
     }
     var restorePayload by remember { mutableStateOf<String?>(null) }; val context = LocalContext.current
+    var stability by remember { mutableStateOf<StabilitySnapshot?>(null) }
+    var confirmProjectionRebuild by remember { mutableStateOf(false) }
+    fun refreshStability() { settingsScope.launch { stability = withContext(Dispatchers.IO) { StabilityDiagnostics.snapshot(context, database) } } }
+    LaunchedEffect(section) { if (section == SettingsSection.DIAG) refreshStability() }
     val exportRecovery = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         uri?.let { runCatching { context.contentResolver.openOutputStream(it)?.bufferedWriter()?.use { writer -> writer.write(app.recoveryText()) } }
             .onSuccess { systemMessage = "Recovery file exported" }.onFailure { error -> systemMessage = "Export failed: ${error.message}" } }
@@ -3607,6 +3617,20 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         pendingRecordSlot = null
         if (granted && slot != null) voiceAudio.startRecording(slot) else if (!granted) systemMessage = "Microphone permission was not granted"
     }
+    if (confirmProjectionRebuild) AlertDialog(
+        onDismissRequest = { confirmProjectionRebuild = false },
+        title = { Text("Rebuild QSO projection?") },
+        text = { Text("Canonical QSOs are preserved. The indexed projection will be reset and rebuilt in resumable batches.") },
+        confirmButton = { Button({
+            confirmProjectionRebuild = false
+            settingsScope.launch {
+                withContext(Dispatchers.IO) { database.rebuildProjection() }
+                systemMessage = "Projection rebuild queued; canonical QSOs preserved"
+                refreshStability()
+            }
+        }) { Text("REBUILD") } },
+        dismissButton = { TextButton({ confirmProjectionRebuild = false }) { Text("CANCEL") } },
+    )
     SettingsPage {
         Header("Complete station settings", state)
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -4085,6 +4109,34 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             Column(Modifier.testTag("settings-default-cty"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 CtyUpdatePanel(cty)
             }
+        }
+        if (section == SettingsSection.DIAG) SettingsCard("DATABASE & STABILITY") {
+            val snapshot = stability
+            if (snapshot == null) LinearProgressIndicator(Modifier.fillMaxWidth()) else {
+                val health = snapshot.projection
+                Text("DB · ${"%.1f".format(snapshot.databaseBytes / 1_048_576.0)} MiB", color = Muted)
+                Text("QSO · ${health.canonicalRows} canonical · ${health.projectionRows} projected · ${health.referenceRows} references", color = Muted)
+                Text("PROJECTION · ${health.state} · ${health.processedRows}/${health.canonicalRows}", color = if (health.state == ProjectionState.READY) Healthy else Hold)
+                if (health.lastError.isNotBlank()) Text("LAST PROJECTION ERROR · ${health.lastError.take(160)}", color = Danger)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton({ settingsScope.launch { withContext(Dispatchers.IO) { database.verifyProjection() }; systemMessage = "Projection verified"; refreshStability() } }) { Text("VERIFY") }
+                    OutlinedButton({ settingsScope.launch { val repaired = withContext(Dispatchers.IO) { database.repairMissingProjectionRows() }; systemMessage = "Projection repair wrote $repaired rows"; refreshStability() } }) { Text("REPAIR MISSING") }
+                    OutlinedButton({ confirmProjectionRebuild = true }) { Text("REBUILD") }
+                    OutlinedButton({ StabilityDiagnostics.clear(context); systemMessage = "Diagnostic history cleared"; refreshStability() }) { Text("CLEAR HISTORY") }
+                }
+                Text("SLOW QUERIES · category/hash/timing only", color = Amber, fontWeight = FontWeight.Bold)
+                if (snapshot.slowQueries.isEmpty()) Text("No slow queries recorded", color = Muted)
+                snapshot.slowQueries.takeLast(6).asReversed().forEach { row ->
+                    Text("${row.category} · ${row.elapsedMs} ms · ${row.rowCount} rows · ${row.planLabel}${if (row.cancelled) " · CANCELLED" else ""}", color = Muted, fontFamily = FontFamily.Monospace)
+                }
+                Text("LAST CRASH · sanitised local summary", color = Amber, fontWeight = FontWeight.Bold)
+                snapshot.crashes.lastOrNull()?.let { crash ->
+                    Text("${crash.exceptionClass} · ${crash.projectionState.ifBlank { "state unavailable" }} · memory ${crash.freeMemoryCategory}", color = Muted, fontFamily = FontFamily.Monospace)
+                    crash.frames.take(3).forEach { Text(it, color = Muted, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                } ?: Text("No crash summary recorded", color = Muted)
+                Text("Private bounded journal: no credentials, notes, comments, QSL messages, raw ADIF, SQL text, or provider payloads.", color = Muted)
+            }
+            Text(systemMessage, color = Muted)
         }
         if (section == SettingsSection.DIAG) SettingsCard("CAT DIAGNOSTICS") {
             Text("CAT · ${transport.selected?.label ?: "not selected"}", color = Muted)
