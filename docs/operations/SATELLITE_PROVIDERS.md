@@ -12,7 +12,7 @@ The orbital engine is dnwrnr/sgp4 at exact commit `661e057a5d369d5ee424676cf1d69
 |---|---|---:|---|
 | CelesTrak GP | `GROUP=AMATEUR&FORMAT=CSV` elements | 6 h | no refresh more often than 2 h; conditional requests and last-good cache |
 | SatNOGS DB | Amateur, alive transmitter catalogue | 24 h | bounded response; CC-BY-SA-4.0 attribution shown in product |
-| AMSAT Status | 24-hour community status summary | 15 min | reports are community observations, never operational/RF authority |
+| AMSAT Status | bounded 24-hour v1 reports, grouped locally into counts/timeline/latest reporters | 15 min | reports are community observations, never operational/RF authority |
 | DF2ET/TEVEL | optional timer adapter | 15 min | only structurally valid, functional, bounded-time rows are shown active |
 
 CelesTrak's documented query form and usage policy are followed: https://celestrak.org/NORAD/documentation/gp-data-formats.php and https://celestrak.org/usage-policy.php. SatNOGS filters and fields follow its API schema and its attribution/licensing statement: https://db.satnogs.org/api/schema/docs/ and https://db.satnogs.org/about/. AMSAT status behaviour follows https://www.amsat.org/status/api/.

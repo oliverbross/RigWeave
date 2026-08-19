@@ -100,6 +100,11 @@ internal data class PortableLogDraft(
     val wwffRef: String = "",
     val referenceNames: String = "",
     val comment: String = "",
+    val propagationMode: String = "",
+    val satelliteName: String = "",
+    val satelliteMode: String = "",
+    val frequencyRxHz: Long = 0,
+    val observerGrid: String = "",
 )
 
 internal data class SotaSummit(

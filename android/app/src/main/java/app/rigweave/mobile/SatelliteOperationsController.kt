@@ -161,7 +161,14 @@ internal class SatelliteOperationsController(
         activationGrid?.takeIf(String::isNotBlank)?.let { add(SatelliteObserverProfile("ACTIVATION", "Activation plan · $it", it)) }
     }.distinctBy { it.id + it.grid }
 
-    fun prepareDraft(row: SatellitePassRow): String = satelliteFastEntryDraft(row)
+    fun prepareDraft(row: SatellitePassRow): String = satelliteFastEntryDraft(row, observerGrid)
+    fun normalLoggerDraft(row: SatellitePassRow): PortableLogDraft = PortableLogDraft(
+        token = System.nanoTime(), callsign = "", frequencyHz = row.transponder?.downlinkLowHz ?: 0,
+        mode = satelliteQsoMode(row.transponder?.mode.orEmpty()).orEmpty(),
+        comment = "${row.satellite.name} pass · AOS ${row.pass.aos} · TCA ${row.pass.tca} · LOS ${row.pass.los}",
+        propagationMode = "SAT", satelliteName = row.satellite.name, satelliteMode = row.transponder?.mode.orEmpty(),
+        frequencyRxHz = row.transponder?.uplinkLowHz ?: 0, observerGrid = observerGrid,
+    )
 
     fun saveManualElements(id: Long, name: String, one: String, two: String): Boolean {
         val candidate = SatelliteElements("TLE", name.trim(), one.trim(), two.trim(), Instant.now().epochSecond, "MANUAL")
@@ -179,21 +186,24 @@ internal class SatelliteOperationsController(
     fun close() = scope.cancel()
 }
 
-internal fun satelliteFastEntryDraft(row: SatellitePassRow): String {
+internal fun satelliteQsoMode(label: String): String? = label.uppercase(Locale.US).let {
+    when {
+        "FM" in it -> "FM"
+        "CW" in it -> "CW"
+        "SSB" in it || "USB" in it || "LSB" in it -> "SSB"
+        else -> null
+    }
+}
+
+internal fun satelliteFastEntryDraft(row: SatellitePassRow, observerGrid: String = ""): String {
     val transponder = row.transponder
     val downlink = transponder?.downlinkLowHz
     val uplink = transponder?.uplinkLowHz
     val band = downlink?.let(::bandForFrequency).orEmpty()
-    val qsoMode = transponder?.mode?.uppercase(Locale.US)?.let { label ->
-        when {
-            "FM" in label -> "FM"
-            "CW" in label -> "CW"
-            "SSB" in label || "USB" in label || "LSB" in label -> "SSB"
-            else -> null
-        }
-    }
+    val qsoMode = satelliteQsoMode(transponder?.mode.orEmpty())
     return buildString {
         append("<PROP_MODE:SAT>\n<SAT_NAME:${row.satellite.name}>\n")
+        observerGrid.takeIf(String::isNotBlank)?.let { append("<MY_GRIDSQUARE:${it.uppercase(Locale.US)}>\n") }
         transponder?.mode?.takeIf(String::isNotBlank)?.let { append("<SAT_MODE:$it>\n") }
         qsoMode?.let { append("<MODE:$it>\n") }
         band.takeIf(String::isNotBlank)?.let { append("<BAND:$it>\n") }

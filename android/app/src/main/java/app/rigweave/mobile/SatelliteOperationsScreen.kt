@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -71,6 +72,7 @@ internal fun SatelliteOperationsScreen(
     progress: ProgressController,
     openLogbook: () -> Unit,
     tuneReceive: (Long, String?) -> Unit,
+    normalLogger: (SatellitePassRow) -> Unit,
 ) {
     val context = LocalContext.current
     var section by rememberSaveable { mutableStateOf("NEXT PASSES") }
@@ -104,7 +106,7 @@ internal fun SatelliteOperationsScreen(
                 requestGps = { if (ContextCompat.checkSelfPermission(context,Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED) satelliteLastKnownPoint(context)?.let { gpsPoint=it;manualGrid=maidenheadGrid(it.latitude,it.longitude) } else gps.launch(Manifest.permission.ACCESS_FINE_LOCATION) },
                 apply = { controller.updatePreferences(manualGrid,hours,minimum.toDoubleOrNull()?:10.0,favouritesOnly,utc,mode);controller.predict() },
                 openTrack = { controller.select(it); section="LIVE TRACK" }, openSky = { controller.select(it);section="SKY PLOT" },
-                prepare = { fastDraft=controller.prepareDraft(it) }, tune = { tunePreview=it },
+                prepare = { fastDraft=controller.prepareDraft(it) }, normalLogger = normalLogger, tune = { tunePreview=it },
                 logbook = { progress.requestLogbook(LogbookFilter(propagation="SAT",satellite=it.satellite.name));openLogbook() })
             "LIVE TRACK" -> LiveTrack(controller, stationGrid, now)
             "SKY PLOT" -> SkyPlotPanel(controller, minimum.toDoubleOrNull() ?: controller.minimumElevation)
@@ -131,7 +133,7 @@ internal fun SatelliteOperationsScreen(
     controller:SatelliteOperationsController,stationGrid:String,activationGrid:String?,manualGrid:String,changeGrid:(String)->Unit,
     hours:Int,changeHours:(Int)->Unit,minimum:String,changeMinimum:(String)->Unit,mode:String,changeMode:(String)->Unit,
     favouritesOnly:Boolean,changeFavourites:(Boolean)->Unit,utc:Boolean,changeUtc:(Boolean)->Unit,now:Long,requestGps:()->Unit,apply:()->Unit,
-    openTrack:(SatellitePassRow)->Unit,openSky:(SatellitePassRow)->Unit,prepare:(SatellitePassRow)->Unit,tune:(SatellitePassRow)->Unit,logbook:(SatellitePassRow)->Unit,
+    openTrack:(SatellitePassRow)->Unit,openSky:(SatellitePassRow)->Unit,prepare:(SatellitePassRow)->Unit,normalLogger:(SatellitePassRow)->Unit,tune:(SatellitePassRow)->Unit,logbook:(SatellitePassRow)->Unit,
 ) {
     val context=LocalContext.current
     LazyColumn(Modifier.fillMaxSize(),verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -159,7 +161,7 @@ internal fun SatelliteOperationsScreen(
                 row.transponder?.let{Text("${it.mode} · ↓ ${it.downlinkLowHz?.let(::formatSatelliteFrequency)?:"—"} · ↑ ${it.uplinkLowHz?.let(::formatSatelliteFrequency)?:"—"} · ${if(it.manual)"LOCAL OVERRIDE" else "SatNOGS catalogue, not operational proof"}",color=SatMuted)}
                 val ageDays=(now-row.satellite.elementEpoch)/86400.0;if(ageDays>7)Text("ELEMENT AGE ${"%.1f".format(Locale.US,ageDays)} DAYS · verify before use",color=SatBad)
                 Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(4.dp)){
-                    TextButton({openTrack(row)}){Text("FLIGHTPATH")};TextButton({openSky(row)}){Text("SKY PLOT")};TextButton({shareSatelliteIcs(context,row)}){Text("CALENDAR / SHARE")};TextButton({prepare(row)}){Text("PREPARE QSO")};TextButton({tune(row)},enabled=row.transponder?.downlinkLowHz!=null){Text("TUNE PREVIEW")};TextButton({logbook(row)}){Text("HISTORY")}
+                    TextButton({openTrack(row)}){Text("FLIGHTPATH")};TextButton({openSky(row)}){Text("SKY PLOT")};TextButton({shareSatelliteIcs(context,row)}){Text("CALENDAR / SHARE")};TextButton({prepare(row)}){Text("FAST ENTRY")};TextButton({normalLogger(row)}){Text("NORMAL LOGGER")};TextButton({tune(row)},enabled=row.transponder?.downlinkLowHz!=null){Text("TUNE PREVIEW")};TextButton({logbook(row)}){Text("HISTORY")}
                 }
             }}
         }
@@ -172,9 +174,9 @@ internal fun SatelliteOperationsScreen(
 
 @Composable private fun SkyPlotPanel(controller:SatelliteOperationsController,minimum:Double){val row=controller.selectedPass;if(row==null){Text("Choose SKY PLOT on a pass first.",color=SatMuted);return};Column(Modifier.fillMaxSize(),verticalArrangement=Arrangement.spacedBy(7.dp)){Text("${row.satellite.name} · north-up observer sky",color=SatInk,fontWeight=FontWeight.Bold);SatelliteSkyPlot(controller.skyTrack,controller.livePoint,minimum,Modifier.fillMaxWidth().weight(1f));Text("AOS ${satelliteTime(row.pass.aos,controller.utc)} · TCA ${satelliteTime(row.pass.tca,controller.utc)} · LOS ${satelliteTime(row.pass.los,controller.utc)}",color=SatMuted)}}
 
-@Composable private fun SatelliteSkyPlot(samples:List<OrbitalPoint>,current:OrbitalPoint?,minimum:Double,modifier:Modifier){Canvas(modifier.background(SatPanel)){val center=Offset(size.width/2,size.height/2);val radius=minOf(size.width,size.height)*.43f;listOf(0,30,60).forEach{el->drawCircle(SatMuted.copy(alpha=.45f),radius*((90-el)/90f),center,style=Stroke(1.5f))};drawCircle(SatAmber.copy(alpha=.55f),radius*((90-minimum.coerceIn(0.0,90.0))/90.0).toFloat(),center,style=Stroke(2f));drawLine(SatMuted,Offset(center.x,center.y-radius),Offset(center.x,center.y+radius));drawLine(SatMuted,Offset(center.x-radius,center.y),Offset(center.x+radius,center.y));fun pos(p:OrbitalPoint):Offset{val r=radius*((90-p.elevationDeg.coerceIn(0.0,90.0))/90.0).toFloat();val angle=Math.toRadians(p.azimuthDeg-90);return Offset(center.x+(cos(angle)*r).toFloat(),center.y+(sin(angle)*r).toFloat())};samples.zipWithNext().forEach{(a,b)->if(a.elevationDeg>=0||b.elevationDeg>=0)drawLine(SatAmber,pos(a),pos(b),3f)};samples.firstOrNull()?.let{drawCircle(SatGood,7f,pos(it))};samples.lastOrNull()?.let{drawCircle(SatBad,7f,pos(it))};current?.takeIf{it.elevationDeg>=0}?.let{drawCircle(Color.White,9f,pos(it))}}}
+@Composable private fun SatelliteSkyPlot(samples:List<OrbitalPoint>,current:OrbitalPoint?,minimum:Double,modifier:Modifier){Canvas(modifier.background(SatPanel)){val center=Offset(size.width/2,size.height/2);val radius=minOf(size.width,size.height)*.43f;listOf(0,30,60).forEach{el->drawCircle(SatMuted.copy(alpha=.45f),radius*((90-el)/90f),center,style=Stroke(1.5f))};drawCircle(SatAmber.copy(alpha=.55f),radius*((90-minimum.coerceIn(0.0,90.0))/90.0).toFloat(),center,style=Stroke(2f));drawLine(SatMuted,Offset(center.x,center.y-radius),Offset(center.x,center.y+radius));drawLine(SatMuted,Offset(center.x-radius,center.y),Offset(center.x+radius,center.y));fun pos(p:OrbitalPoint):Offset{val r=radius*((90-p.elevationDeg.coerceIn(0.0,90.0))/90.0).toFloat();val angle=Math.toRadians(p.azimuthDeg-90);return Offset(center.x+(cos(angle)*r).toFloat(),center.y+(sin(angle)*r).toFloat())};samples.zipWithNext().forEach{(a,b)->if(a.elevationDeg>=0||b.elevationDeg>=0)drawLine(SatAmber,pos(a),pos(b),3f)};samples.firstOrNull()?.let{drawCircle(SatGood,7f,pos(it))};samples.maxByOrNull(OrbitalPoint::elevationDeg)?.let{drawCircle(SatAmber,8f,pos(it))};samples.lastOrNull()?.let{drawCircle(SatBad,7f,pos(it))};current?.takeIf{it.elevationDeg>=0}?.let{drawCircle(Color.White,9f,pos(it))}}}
 
-@Composable private fun SatelliteStatusPanel(controller:SatelliteOperationsController,history:(AmsatStatusSummary)->Unit){var search by rememberSaveable{mutableStateOf("")};Column(Modifier.fillMaxSize(),verticalArrangement=Arrangement.spacedBy(7.dp)){SatelliteProviderStrip(controller.status.metadata);OutlinedTextField(search,{search=it},label={Text("Search status/favourites")},singleLine=true,modifier=Modifier.fillMaxWidth());LazyColumn(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(6.dp)){items(controller.status.rows.filter{it.displayName.contains(search,true)}.take(250),key={it.name}){row->ElevatedCard(colors=CardDefaults.elevatedCardColors(containerColor=SatPanel)){Column(Modifier.padding(10.dp)){Text(row.displayName,color=SatInk,fontWeight=FontWeight.Bold);Text(listOf("Heard","Crew Active","Telemetry Only","Not Heard").joinToString(" · "){"$it ${row.counts[it]?:0}"},color=SatMuted);Text("Community reports · latest ${row.latestReportEpoch?.let{satelliteTime(it,true)}?:"none"} · not orbital/operational authority",color=SatMuted);val next=controller.passes.firstOrNull{it.satellite.name.substringBefore(' ').let{n->row.name.contains(n,true)}};if(next!=null)Text("Next local prediction ${satelliteTime(next.pass.aos,controller.utc)} · ${"%.0f°".format(next.pass.maximumElevationDeg)}",color=SatAmber);TextButton({history(row)}){Text("SATELLITE LOGBOOK")}}}}}}}
+@Composable private fun SatelliteStatusPanel(controller:SatelliteOperationsController,history:(AmsatStatusSummary)->Unit){var search by rememberSaveable{mutableStateOf("")};var favouritesOnly by rememberSaveable{mutableStateOf(false)};val favouriteNames=controller.elements.rows.filter{it.noradId in controller.favourites}.map{it.name.substringBefore(' ').uppercase(Locale.US)};val rows=controller.status.rows.filter{row->row.displayName.contains(search,true)&&(!favouritesOnly||favouriteNames.any{row.name.uppercase(Locale.US).contains(it)})};Column(Modifier.fillMaxSize(),verticalArrangement=Arrangement.spacedBy(7.dp)){SatelliteProviderStrip(controller.status.metadata);Row(horizontalArrangement=Arrangement.spacedBy(7.dp),verticalAlignment=Alignment.CenterVertically){OutlinedTextField(search,{search=it},label={Text("Search status")},singleLine=true,modifier=Modifier.weight(1f));FilterChip(favouritesOnly,{favouritesOnly=!favouritesOnly},{Text("FAVOURITES")})};LazyColumn(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(6.dp)){items(rows.take(250),key={it.name}){row->ElevatedCard(colors=CardDefaults.elevatedCardColors(containerColor=SatPanel)){Column(Modifier.padding(10.dp)){Text(row.displayName,color=SatInk,fontWeight=FontWeight.Bold);Text(listOf("Heard","Crew Active","Telemetry Only","Not Heard").joinToString(" · "){"$it ${row.counts[it]?:0}"},color=SatMuted);Text("24-hour community timeline · latest ${row.latestReportEpoch?.let{satelliteTime(it,true)}?:"none"} · not orbital/operational authority",color=SatMuted);row.latestReporters.take(3).forEach{Text("Reporter · $it",color=SatMuted)};val next=controller.passes.firstOrNull{it.satellite.name.substringBefore(' ').let{n->row.name.contains(n,true)}};if(next!=null)Text("Next local prediction ${satelliteTime(next.pass.aos,controller.utc)} · ${"%.0f°".format(next.pass.maximumElevationDeg)}",color=SatAmber);TextButton({history(row)}){Text("SATELLITE LOGBOOK")}}}}}}}
 
 @Composable private fun SatelliteTimersPanel(controller:SatelliteOperationsController){Column(Modifier.fillMaxSize(),verticalArrangement=Arrangement.spacedBy(7.dp)){SatelliteProviderStrip(controller.timers.metadata);Text("Optional adapter. Invalid, timed-out, or non-functional rows are never promoted to active timers and do not block pass prediction.",color=SatMuted);LazyColumn(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(6.dp)){items(controller.timers.rows,key={it.id}){row->ElevatedCard(colors=CardDefaults.elevatedCardColors(containerColor=SatPanel)){Column(Modifier.padding(10.dp)){Text(row.satellite.ifBlank{"Satellite timer"},color=SatInk,fontWeight=FontWeight.Bold);Text("${row.label} · ${satelliteTime(row.startEpoch,true)} → ${satelliteTime(row.endEpoch,true)}",color=SatMuted);Text(if(row.functional)"VALIDATED ACTIVE WINDOW" else "INACTIVE",color=if(row.functional)SatGood else SatBad)}}}}}}
 
@@ -183,15 +185,21 @@ private fun SatelliteCataloguePanel(
     controller: SatelliteOperationsController,
     track: (SatelliteCatalogueEntry) -> Unit,
 ) {
+    val context = LocalContext.current
     var search by rememberSaveable { mutableStateOf("") }
     var manual by remember { mutableStateOf(false) }
     var transponderFor by remember { mutableStateOf<SatelliteCatalogueEntry?>(null) }
     var remove by remember { mutableStateOf<SatelliteCatalogueEntry?>(null) }
+    var removeTransponder by remember { mutableStateOf<SatelliteTransponder?>(null) }
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            OutlinedTextField(search, { search = it }, label = { Text("Name / NORAD") }, singleLine = true, modifier = Modifier.weight(1f))
+            OutlinedTextField(search, { search = it }, label = { Text("Name / alias / NORAD") }, singleLine = true, modifier = Modifier.weight(1f))
             OutlinedButton({ controller.refresh(true) }, enabled = !controller.busy) { Text("REFRESH") }
             OutlinedButton({ manual = true }) { Text("ADD MANUAL TLE") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            TextButton({ context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(SatelliteProviderRepository.CELESTRAK_URL))) }) { Text("CELESTRAK SOURCE") }
+            TextButton({ context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(SatelliteProviderRepository.SATNOGS_URL))) }) { Text("SATNOGS SOURCE") }
         }
         Text(SatelliteProviderRepository.SATNOGS_ATTRIBUTION, color = SatMuted, style = MaterialTheme.typography.bodySmall)
         LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -211,12 +219,12 @@ private fun SatelliteCataloguePanel(
                             }
                         }
                         controller.transpondersFor(row.noradId).take(6).forEach { transponder ->
-                            Text(
+                            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text(
                                 "${if (transponder.manual) "LOCAL" else "SatNOGS"} · ${transponder.typeLabel()} · ${transponder.mode} · " +
                                     "↓ ${transponder.downlinkLowHz?.let(::formatSatelliteFrequency) ?: "—"} · " +
                                     "↑ ${transponder.uplinkLowHz?.let(::formatSatelliteFrequency) ?: "—"} · ${transponder.providerStatus.ifBlank { "status unknown" }}",
-                                color = SatMuted,
-                            )
+                                color = SatMuted,modifier=Modifier.weight(1f),
+                            );if(transponder.manual)TextButton({removeTransponder=transponder}){Text("REMOVE LOCAL")}}
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                             TextButton(
@@ -239,6 +247,7 @@ private fun SatelliteCataloguePanel(
     if(manual)ManualElementsDialog({manual=false}){id,name,one,two->controller.saveManualElements(id,name,one,two).also{if(it)manual=false}}
     transponderFor?.let{row->ManualTransponderDialog(row,{transponderFor=null}){controller.saveManualTransponder(it);transponderFor=null}}
     remove?.let{row->AlertDialog(onDismissRequest={remove=null},title={Text("Remove manual elements?")},text={Text("${row.name} will fall back to a validated provider row if one is cached.")},confirmButton={Button({controller.removeManualElements(row.noradId);remove=null}){Text("REMOVE")}},dismissButton={TextButton({remove=null}){Text("CANCEL")}})}
+    removeTransponder?.let{row->AlertDialog(onDismissRequest={removeTransponder=null},title={Text("Remove local transponder?")},text={Text("The local override will be removed; provider rows remain unchanged.")},confirmButton={Button({controller.removeManualTransponder(row.id);removeTransponder=null}){Text("REMOVE")}},dismissButton={TextButton({removeTransponder=null}){Text("CANCEL")}})}
 }
 
 @Composable private fun ManualElementsDialog(dismiss:()->Unit,save:(Long,String,String,String)->Boolean){var id by remember{mutableStateOf("")};var name by remember{mutableStateOf("")};var one by remember{mutableStateOf("")};var two by remember{mutableStateOf("")};var error by remember{mutableStateOf("")};AlertDialog(onDismissRequest=dismiss,title={Text("Manual TLE override")},text={Column(verticalArrangement=Arrangement.spacedBy(6.dp)){OutlinedTextField(id,{id=it.filter(Char::isDigit)},label={Text("NORAD ID")});OutlinedTextField(name,{name=it},label={Text("Satellite name")});OutlinedTextField(one,{one=it},label={Text("TLE line 1")});OutlinedTextField(two,{two=it},label={Text("TLE line 2")});Text("Saved as MANUAL; provider validation is not claimed.",color=SatAmber);if(error.isNotBlank())Text(error,color=SatBad)}},confirmButton={Button({if(!save(id.toLongOrNull()?:0,name,one,two))error="Invalid NORAD ID or TLE lines"}){Text("SAVE MANUAL")}},dismissButton={TextButton(dismiss){Text("CANCEL")}})}

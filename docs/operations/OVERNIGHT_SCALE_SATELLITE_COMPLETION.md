@@ -7,7 +7,7 @@
 - SQL-backed Log Intelligence, Operations, Home, DX/contest history, spot status, and station summaries; interactive full-log materialisation removed.
 - Pinned native SGP4 through shared C API/JNI with passes, ground/sky tracks, observer geometry, Doppler, and explicit errors.
 - Truthful CelesTrak, SatNOGS, AMSAT, and optional timer caches with provenance and last-good fallback.
-- Operations → Satellites workspace: next passes, observer profiles/GPS/manual grid, favourites and filters, live flightpath, sky plot, status, timers, catalogue, manual overrides, ICS, receive-only tune review, and Fast Entry handoff.
+- Operations → Satellites workspace: next passes, observer profiles/GPS/manual grid, favourites and filters, live flightpath, sky plot, status/latest reporters, timers, catalogue, confirmed manual-override removal, source links, ICS, receive-only tune review, and both normal-logger and Fast Entry handoffs.
 - Indexed satellite Logbook filters, Wavelog API v2 field preservation, first-class Satellite Log Intelligence, deterministic drill-through, and Home next-favourite-pass card.
 
 ## Crash and scale paths removed
@@ -20,7 +20,7 @@ Complete-log decode/sort/reaggregate paths were replaced with bounded SQL. Query
 - Native focused suite: pinned Vanguard verification vectors, observer output, pass boundaries, no-pass interval, invalid TLE, and Doppler sign; passed.
 - Deterministic temporary 100,000-row host profile: indexed pages/filters 0.00–0.01 s; aggregate categories 0.00–0.07 s; observed RSS approximately 3.1–6.0 MB.
 - Complete Android JVM suite: 232 tests, zero failures, zero skipped.
-- Android `assembleDebug`: passed. APK `android/app/build/outputs/apk/debug/app-debug.apk`, 124,150,367 bytes, SHA-256 `d25fd8bf792ab52809b166ee94034e88d0713ca55d4195f11a312ceca61f90d0`.
+- Android `assembleDebug`: passed. APK `android/app/build/outputs/apk/debug/app-debug.apk`, 124,150,367 bytes, SHA-256 `b6d518390a40ef14455799d7d5b2a58fbcbc18a6fef8f2c3b7f3ebd1b90d118f`.
 
 ## Exact milestones
 

@@ -47,6 +47,7 @@ internal data class AmsatStatusSummary(
     val displayName: String,
     val counts: Map<String, Int>,
     val latestReportEpoch: Long?,
+    val latestReporters: List<String> = emptyList(),
 )
 internal data class SatelliteTimer(
     val id: String,
@@ -70,7 +71,7 @@ internal class SatelliteProviderRepository(context: Context) {
     companion object {
         const val CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=AMATEUR&FORMAT=CSV"
         const val SATNOGS_URL = "https://db.satnogs.org/api/transmitters/?format=json&service=Amateur&alive=true"
-        const val AMSAT_URL = "https://www.amsat.org/status/api/v1/summary.php?hours=24"
+        const val AMSAT_URL = "https://www.amsat.org/status/api/v1/reports.php?hours=24&limit=500"
         const val TIMER_URL = "https://www.df2et.de/tevel/"
         const val SATNOGS_ATTRIBUTION = "SatNOGS DB data · CC-BY-SA-4.0 · Libre Space Foundation/community contributors"
         private const val CELESTRAK_AUTO_TTL = 6 * 60 * 60L
@@ -257,7 +258,16 @@ internal class SatelliteProviderRepository(context: Context) {
     private fun validFrequency(value:Long)=value in 100_000L..40_000_000_000L
     private fun transponderJson(e:SatelliteTransponder)=JSONObject().put("uuid",e.id).put("norad_cat_id",e.noradId).put("description",e.description).put("uplink_low",e.uplinkLowHz).put("uplink_high",e.uplinkHighHz).put("downlink_low",e.downlinkLowHz).put("downlink_high",e.downlinkHighHz).put("mode",e.mode).put("uplink_mode",e.uplinkMode).put("invert",e.inverted).put("alive",e.alive).put("status",e.providerStatus).put("updated",e.updated)
 
-    private fun parseAmsat(raw:String):List<AmsatStatusSummary> = runCatching { val rows=JSONObject(raw).getJSONArray("data");val grouped=mutableMapOf<String,Triple<String,MutableMap<String,Int>,Long?>>();for(i in 0 until rows.length()){val o=rows.getJSONObject(i);val name=o.getString("name");val prior=grouped[name];val counts=prior?.second?:mutableMapOf();val report=o.getString("report");if(report in setOf("Heard","Crew Active","Telemetry Only","Not Heard"))counts[report]=(counts[report]?:0)+o.optInt("report_count");val latest=parseInstant(o.optString("latest_reported_time"));grouped[name]=Triple(o.optString("satellite_display_name",name),counts,maxOf(prior?.third?:0,latest?:0).takeIf{it>0})};grouped.map{AmsatStatusSummary(it.key,it.value.first,it.value.second,it.value.third)}.sortedBy(AmsatStatusSummary::displayName) }.getOrDefault(emptyList())
+    private fun parseAmsat(raw:String):List<AmsatStatusSummary> = runCatching {
+        data class Aggregate(val display:String,val counts:MutableMap<String,Int>,var latest:Long?=null,val reporters:MutableList<Pair<Long,String>> = mutableListOf())
+        val rows=JSONObject(raw).getJSONArray("data");val grouped=mutableMapOf<String,Aggregate>()
+        for(i in 0 until rows.length()){
+            val o=rows.getJSONObject(i);val name=o.getString("name");val value=grouped.getOrPut(name){Aggregate(o.optString("satellite_display_name",name),mutableMapOf())}
+            val report=o.getString("report");if(report in setOf("Heard","Crew Active","Telemetry Only","Not Heard"))value.counts[report]=(value.counts[report]?:0)+o.optInt("report_count",1).coerceAtLeast(1)
+            val epoch=parseInstant(o.optString("reported_time").ifBlank{o.optString("latest_reported_time")});if(epoch!=null){value.latest=maxOf(value.latest?:0,epoch).takeIf{it>0};val call=o.optString("callsign").trim();val grid=o.optString("grid_square").trim();if(call.isNotBlank())value.reporters+=epoch to listOf(call,grid,report).filter(String::isNotBlank).joinToString(" · ")}
+        }
+        grouped.map{AmsatStatusSummary(it.key,it.value.display,it.value.counts,it.value.latest,it.value.reporters.sortedByDescending(Pair<Long,String>::first).map(Pair<Long,String>::second).distinct().take(5))}.sortedBy(AmsatStatusSummary::displayName)
+    }.getOrDefault(emptyList())
     private fun parseTimers(raw:String,now:Long):List<SatelliteTimer> = runCatching { val root=raw.trim();val rows=if(root.startsWith("["))JSONArray(root)else JSONObject(root).optJSONArray("timers")?:JSONArray();buildList{for(i in 0 until rows.length()){val o=rows.optJSONObject(i)?:continue;val start=o.optLong("start",o.optLong("start_epoch"));val end=o.optLong("end",o.optLong("end_epoch"));val functional=o.optBoolean("functional",o.optString("status").equals("active",true));if(!functional||start<=0||end<=start||end<now-86400||end>now+30*86400)continue;add(SatelliteTimer(o.optString("id","timer-$i"),o.optString("satellite"),o.optString("label"),start,end,true))}} }.getOrDefault(emptyList())
     private fun timerJson(e:SatelliteTimer)=JSONObject().put("id",e.id).put("satellite",e.satellite).put("label",e.label).put("start",e.startEpoch).put("end",e.endEpoch).put("functional",e.functional)
 

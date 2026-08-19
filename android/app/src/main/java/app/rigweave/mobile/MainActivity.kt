@@ -346,7 +346,8 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 voiceStore, voiceAudio, voiceTx, eqStudio, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.OPERATIONS })
+                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.OPERATIONS },
+                { row -> pendingPortableDraft = operations.satellites.normalLoggerDraft(row); destination = Destination.RADIO })
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
             Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.OPERATIONS }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
@@ -356,7 +357,8 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 voiceStore, voiceAudio, voiceTx, eqStudio, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.OPERATIONS })
+                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.OPERATIONS },
+                { row -> pendingPortableDraft = operations.satellites.normalLoggerDraft(row); destination = Destination.RADIO })
         } }
     }
 }
@@ -388,7 +390,7 @@ private fun navIcon(item: Destination) = when (item) {
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
     tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openDx: () -> Unit, openPortable: () -> Unit,
     openActivation: () -> Unit, openLogbook: () -> Unit, openSync: () -> Unit, openProgress: () -> Unit, openDigi: () -> Unit,
-    openOperations: () -> Unit) {
+    openOperations: () -> Unit, prepareSatelliteLogger: (SatellitePassRow) -> Unit) {
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     val intelligencePortableSpots = portable.pota.spots.map(PotaSpot::toPortable) + portable.sotaSpots + portable.wwffSpots
     val deliveredStates = setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED)
@@ -448,7 +450,7 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.OPERATIONS -> OperationsScreen(operations, portable, activation, features, progress, mutations, wavelog, callbook, cty,
             app, compact, openDx, openPortable, openLogbook, { frequency, mode ->
                 send("FA${frequency.toString().padStart(11, '0')};")
-            })
+            }, prepareSatelliteLogger)
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
             transport, flex, voiceStore, voiceAudio, voiceTx, openEq, openSync, connect, direct)
     }
@@ -2349,6 +2351,8 @@ private fun spotStatusColor(status: String?): Color = when (status) {
     var region by remember { mutableStateOf("") }; var cqZone by remember { mutableStateOf("") }; var ituZone by remember { mutableStateOf("") }
     var stateName by remember { mutableStateOf("") }; var email by remember { mutableStateOf("") }
     var propagation by remember { mutableStateOf("") }; var antennaPath by remember { mutableStateOf("") }
+    var satelliteName by remember { mutableStateOf("") }; var satelliteMode by remember { mutableStateOf("") }
+    var draftFrequencyRxHz by remember { mutableLongStateOf(0) }; var draftObserverGrid by remember { mutableStateOf("") }
     var qslSent by remember { mutableStateOf("N") }; var qslMethod by remember { mutableStateOf("") }
     var qslVia by remember { mutableStateOf("") }; var qslMessage by remember { mutableStateOf("") }
     var enrichment by remember { mutableStateOf("Enter a callsign") }; var status by remember { mutableStateOf("LOCAL FIRST") }
@@ -2356,6 +2360,7 @@ private fun spotStatusColor(status: String?): Color = when (status) {
     var logFrequencyMHz by remember { mutableStateOf(if (state.frequencyHz > 0) "%.6f".format(Locale.US, state.frequencyHz / 1_000_000.0) else "") }
     var logMode by remember { mutableStateOf(state.mode.takeUnless { it == "--" }.orEmpty()) }
     var portableChaseDraft by remember { mutableStateOf(false) }
+    var satelliteDraft by remember { mutableStateOf(false) }
     val lookupScope = rememberCoroutineScope()
     val selectedStation = wavelog.selectedStation
     val utc = wavelog.synchronizedNow().atZone(ZoneOffset.UTC)
@@ -2363,13 +2368,13 @@ private fun spotStatusColor(status: String?): Color = when (status) {
         lookupGeneration++
         call = ""; sent = "59"; received = "59"; name = ""; qth = ""; grid = ""; iota = ""; sota = ""; wwff = ""; pota = ""
         comment = ""; notes = ""; country = ""; dxcc = ""; continent = ""; region = ""; cqZone = ""; ituZone = ""
-        stateName = ""; email = ""; propagation = ""; antennaPath = ""; qslSent = "N"; qslMethod = ""; qslVia = ""; qslMessage = ""
-        logFrequencyMHz = if (state.frequencyHz > 0) "%.6f".format(Locale.US, state.frequencyHz / 1_000_000.0) else ""; logMode = state.mode.takeUnless { it == "--" }.orEmpty(); portableChaseDraft = false
+        stateName = ""; email = ""; propagation = ""; antennaPath = ""; satelliteName = ""; satelliteMode = ""; draftFrequencyRxHz = 0; draftObserverGrid = ""; qslSent = "N"; qslMethod = ""; qslVia = ""; qslMessage = ""
+        logFrequencyMHz = if (state.frequencyHz > 0) "%.6f".format(Locale.US, state.frequencyHz / 1_000_000.0) else ""; logMode = state.mode.takeUnless { it == "--" }.orEmpty(); portableChaseDraft = false; satelliteDraft = false
         enrichment = "Enter a callsign"; tab = QsoEditorTab.QSO
         onInsightCleared()
     }
-    LaunchedEffect(state.frequencyHz, state.mode, portableChaseDraft) {
-        if (!portableChaseDraft) {
+    LaunchedEffect(state.frequencyHz, state.mode, portableChaseDraft, satelliteDraft) {
+        if (!portableChaseDraft && !satelliteDraft) {
             if (state.frequencyHz > 0) logFrequencyMHz = "%.6f".format(Locale.US, state.frequencyHz / 1_000_000.0)
             if (state.mode.isNotBlank() && state.mode != "--") logMode = state.mode
         }
@@ -2377,8 +2382,11 @@ private fun spotStatusColor(status: String?): Color = when (status) {
     LaunchedEffect(portableDraft?.token) {
         val draft = portableDraft ?: return@LaunchedEffect
         call = draft.callsign; pota = draft.potaRef; sota = draft.sotaRef; wwff = draft.wwffRef; qth = draft.referenceNames
-        comment = draft.comment; logFrequencyMHz = "%.6f".format(Locale.US, draft.frequencyHz / 1_000_000.0); logMode = draft.mode
-        portableChaseDraft = true; status = "PORTABLE CHASE DRAFT · REVIEW BEFORE SAVE"; tab = QsoEditorTab.QSO
+        comment = draft.comment; logFrequencyMHz = draft.frequencyHz.takeIf { it > 0 }?.let { "%.6f".format(Locale.US, it / 1_000_000.0) }.orEmpty(); logMode = draft.mode
+        propagation = draft.propagationMode; satelliteName = draft.satelliteName; satelliteMode = draft.satelliteMode
+        draftFrequencyRxHz = draft.frequencyRxHz; draftObserverGrid = draft.observerGrid
+        satelliteDraft = draft.satelliteName.isNotBlank(); portableChaseDraft = !satelliteDraft
+        status = if (satelliteDraft) "SATELLITE DRAFT · REVIEW BEFORE SAVE" else "PORTABLE CHASE DRAFT · REVIEW BEFORE SAVE"; tab = QsoEditorTab.QSO
         consumePortableDraft()
     }
     fun applyCty(): Boolean {
@@ -2494,6 +2502,10 @@ private fun spotStatusColor(status: String?): Color = when (status) {
                             ChoiceField("Antenna path", antennaPathLabel(antennaPath), antennaPathChoices, antennaPath, { antennaPath = it }, Modifier.weight(1f))
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            LogField("Satellite name", satelliteName, { satelliteName = it.uppercase() }, Modifier.weight(1f))
+                            LogField("Satellite mode", satelliteMode, { satelliteMode = it.uppercase() }, Modifier.weight(1f))
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             LogField("State", stateName, { stateName = it.uppercase() }, Modifier.weight(1f)); LogField("E-mail", email, { email = it }, Modifier.weight(1f))
                         }
                         LogField("Country", country, { country = it }, Modifier.fillMaxWidth())
@@ -2515,16 +2527,18 @@ private fun spotStatusColor(status: String?): Color = when (status) {
                     applyCty(); val station = wavelog.selectedStation
                     val qso = Qso(id, call, qsoFrequency, qsoMode, sent, received, now.epochSecond, name, qth, notes, country,
                         band = bandForFrequency(qsoFrequency), grid = grid, iota = iota, sotaRef = sota, wwffRef = wwff, potaRef = pota,
-                        comment = comment, frequencyRxHz = qsoFrequency, bandRx = bandForFrequency(qsoFrequency), txPowerW = state.powerW,
+                        comment = comment, frequencyRxHz = draftFrequencyRxHz.takeIf { it > 0 } ?: qsoFrequency,
+                        bandRx = bandForFrequency(draftFrequencyRxHz.takeIf { it > 0 } ?: qsoFrequency), txPowerW = state.powerW,
                         operatorCallsign = app.stationCallsign.ifBlank { station?.callsign.orEmpty() }, stationCallsign = station?.callsign ?: app.stationCallsign,
                         stationProfileId = if (wavelog.logMode == LogMode.WAVELOG) wavelog.stationId else "", stationLocation = station?.name ?: app.stationName,
-                        myGrid = station?.grid ?: app.stationGrid, myCountry = station?.country.orEmpty(), myDxcc = station?.dxcc.orEmpty(),
+                        myGrid = draftObserverGrid.ifBlank { station?.grid ?: app.stationGrid }, myCountry = station?.country.orEmpty(), myDxcc = station?.dxcc.orEmpty(),
                         myCqZone = station?.cqZone.orEmpty(), myItuZone = station?.ituZone.orEmpty(), myState = station?.state.orEmpty(),
                         myIota = station?.iota.orEmpty(), mySotaRef = if (portableChaseDraft) "" else station?.sotaRef.orEmpty(), myWwffRef = if (portableChaseDraft) "" else station?.wwffRef.orEmpty(), myPotaRef = if (portableChaseDraft) "" else station?.potaRef.orEmpty(),
                         radioModel = app.radioFamily.displayName, dxcc = dxcc, continent = continent, region = region, cqZone = cqZone,
                         ituZone = ituZone, state = stateName, email = email, propagationMode = propagation, antennaPath = antennaPath,
                         qslSent = qslSent, qslMethod = qslMethod, qslVia = qslVia, qslMessage = qslMessage,
-                        syncState = if (wavelog.logMode == LogMode.WAVELOG) "pending" else "local")
+                        syncState = if (wavelog.logMode == LogMode.WAVELOG) "pending" else "local",
+                        extraAdifFields = buildMap { if (satelliteName.isNotBlank()) put("SAT_NAME", satelliteName); if (satelliteMode.isNotBlank()) put("SAT_MODE", satelliteMode) })
                     if (call.isBlank() || !state.connected || qsoFrequency <= 0 || qsoMode.isBlank()) status = "CALL / FREQUENCY / MODE / LIVE CAT REQUIRED"
                     else if (!mutations.save(qso)) status = "DUPLICATE NOT SAVED"
                     else {

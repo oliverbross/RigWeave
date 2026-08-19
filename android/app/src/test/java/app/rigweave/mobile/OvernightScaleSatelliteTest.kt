@@ -23,9 +23,9 @@ class OvernightScaleSatelliteTest {
     }
 
     @Test fun satelliteDraftCarriesReviewableAdifAndPassContext() {
-        val draft = satelliteFastEntryDraft(SatellitePassRow(satellite, pass, transponder))
+        val draft = satelliteFastEntryDraft(SatellitePassRow(satellite, pass, transponder), "JN88TQ")
         listOf("<PROP_MODE:SAT>", "<SAT_NAME:AO-91>", "<SAT_MODE:FM>", "<MODE:FM>",
-            "<BAND:2m>", "<FREQ:145.960000>", "<FREQ_RX:435.250000>",
+            "<MY_GRIDSQUARE:JN88TQ>", "<BAND:2m>", "<FREQ:145.960000>", "<FREQ_RX:435.250000>",
             "AOS 1700000100", "TCA 1700000300", "LOS 1700000500").forEach { assertTrue(it, it in draft) }
     }
 

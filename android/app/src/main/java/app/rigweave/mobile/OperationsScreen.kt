@@ -67,6 +67,7 @@ internal fun OperationsScreen(
     openPortable: () -> Unit,
     openLogbook: () -> Unit,
     tuneReceive: (Long, String?) -> Unit,
+    normalSatelliteLogger: (SatellitePassRow) -> Unit,
 ) {
     var selected by rememberSaveable { mutableStateOf(controller.section) }
     LaunchedEffect(controller.section) { selected = controller.section }
@@ -88,7 +89,7 @@ internal fun OperationsScreen(
             "CONTESTS" -> ContestOperations(controller, progress, mutations, wavelog, callbook, app, openLogbook)
             "ACTIVATION PLANNER" -> ActivationPlanner(controller, portable, activation, app, openPortable)
             "SATELLITES" -> SatelliteOperationsScreen(controller.satellites, app.stationCallsign, app.stationGrid, controller.nextPlan?.grid,
-                mutations, wavelog, callbook, progress, openLogbook, tuneReceive)
+                mutations, wavelog, callbook, progress, openLogbook, tuneReceive, normalSatelliteLogger)
             else -> DxOperations(controller, features, progress, cty, openDx, openLogbook)
         }
     }
