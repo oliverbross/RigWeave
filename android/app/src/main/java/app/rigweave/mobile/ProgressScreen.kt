@@ -164,7 +164,7 @@ internal fun ProgressScreen(
                     controller.submodes.forEach { value -> FilterChip(filters.submode.equals(value, true),
                         { controller.updateFilters(filters.copy(submode = value)) }, { Text(value) }) }
                     listOf("" to "All confirmations", "PAPER" to "Paper QSL", "LOTW" to "LoTW", "EQSL" to "eQSL",
-                        "QRZ" to "QRZ", "CLUBLOG" to "Club Log").forEach { (value, label) ->
+                        "QRZ" to "QRZ", "CLUBLOG" to "Club Log", "DCL" to "DCL").forEach { (value, label) ->
                         FilterChip(filters.confirmationSource == value, { controller.updateFilters(filters.copy(confirmationSource = value)) }, { Text(label) })
                     }
                 }
@@ -178,8 +178,8 @@ internal fun ProgressScreen(
                     listOf("", "POTA", "SOTA", "WWFF").forEach { value -> FilterChip(filters.portableProgram == value,
                         { controller.updateFilters(filters.copy(portableProgram = value)) }, { Text(value.ifBlank { "All programmes" }) }) }
                     FilterChip(filters.includeConflicted, { controller.updateFilters(filters.copy(includeConflicted = !filters.includeConflicted)) }, { Text("Conflicts") })
-                    FilterChip(filters.includeDeleted, { controller.updateFilters(filters.copy(includeDeleted = !filters.includeDeleted)) }, { Text("Deleted") })
                 }
+                Text("Deleted sync tombstones are not live QSOs and are excluded from Log Intelligence.", color = ProgressMuted, style = MaterialTheme.typography.bodySmall)
             }
             item {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

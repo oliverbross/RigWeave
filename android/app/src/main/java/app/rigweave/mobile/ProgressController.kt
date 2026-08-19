@@ -81,14 +81,15 @@ internal class ProgressController(context: Context, private val database: QsoDat
     fun consumeLogbookRequest() { logbookRequest = null }
 
     fun updateFilters(value: ProgressFilters) {
-        filters = value
+        val applied = value.copy(includeDeleted = false)
+        filters = applied
         preferences.edit()
-            .putBoolean("all_stations", value.allStations).putString("station_profile", value.stationProfileId)
-            .putString("station_callsign", value.stationCallsign).putString("period", value.period.name)
-            .putString("band", value.band).putString("mode", value.mode.name).putString("submode", value.submode)
-            .putString("operator", value.operator).putString("confirmation", value.confirmationSource)
-            .putString("portable_program", value.portableProgram).putBoolean("include_conflicted", value.includeConflicted)
-            .putBoolean("include_deleted", value.includeDeleted).apply()
+            .putBoolean("all_stations", applied.allStations).putString("station_profile", applied.stationProfileId)
+            .putString("station_callsign", applied.stationCallsign).putString("period", applied.period.name)
+            .putString("band", applied.band).putString("mode", applied.mode.name).putString("submode", applied.submode)
+            .putString("operator", applied.operator).putString("confirmation", applied.confirmationSource)
+            .putString("portable_program", applied.portableProgram).putBoolean("include_conflicted", applied.includeConflicted)
+            .putBoolean("include_deleted", false).apply()
         lastKey = null
     }
 
@@ -108,7 +109,7 @@ internal class ProgressController(context: Context, private val database: QsoDat
         confirmationSource = preferences.getString("confirmation", "").orEmpty(),
         portableProgram = preferences.getString("portable_program", "").orEmpty(),
         includeConflicted = preferences.getBoolean("include_conflicted", false),
-        includeDeleted = preferences.getBoolean("include_deleted", false),
+        includeDeleted = false,
     )
 
     fun refresh(
