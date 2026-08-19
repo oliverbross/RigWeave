@@ -75,7 +75,10 @@ fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
     in 10_100_000L..10_150_000L -> "30m"; in 14_000_000L..14_350_000L -> "20m"
     in 18_068_000L..18_168_000L -> "17m"; in 21_000_000L..21_450_000L -> "15m"
     in 24_890_000L..24_990_000L -> "12m"; in 28_000_000L..29_700_000L -> "10m"
-    in 50_000_000L..54_000_000L -> "6m"; else -> ""
+    in 50_000_000L..54_000_000L -> "6m"; in 70_000_000L..70_500_000L -> "4m"
+    in 144_000_000L..148_000_000L -> "2m"; in 219_000_000L..225_000_000L -> "1.25m"
+    in 420_000_000L..450_000_000L -> "70cm"; in 902_000_000L..928_000_000L -> "33cm"
+    in 1_240_000_000L..1_300_000_000L -> "23cm"; else -> ""
 }
 
 class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 12) {
@@ -308,10 +311,9 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
 
     fun spotStatuses(spots: List<SpotLogIdentity>, stationId: String? = null): Map<String, SpotLogStatus> {
         if (spots.isEmpty()) return emptyMap()
-        val calls = dimensions("UPPER(callsign)", spots.map { it.callsign }, stationId)
-        val countries = dimensions("UPPER(country)", spots.map { it.country }, stationId)
-        val dxccs = dimensions("UPPER(COALESCE(json_extract(details_json,'$.dxcc'),''))",
-            spots.map { it.dxcc }, stationId)
+        val calls = projectionDimensions("callsign_norm", spots.map { it.callsign }, stationId)
+        val countries = projectionDimensions("country_norm", spots.map { it.country }, stationId)
+        val dxccs = projectionDimensions("dxcc", spots.map { it.dxcc }, stationId)
         return spots.associate { spot ->
             val call = calls[spot.callsign.normalizedStatusKey()] ?: WorkedDimensions()
             val dxcc = spot.dxcc.normalizedStatusKey()
@@ -322,14 +324,18 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     }
 
     fun stationInsight(record: AndroidCallbookRecord, stationId: String?): StationInsight {
-        val scope = stationScope(stationId)
+        val scope = projectionStationScope(stationId = stationId)
         val call = record.callsign.trim().uppercase(java.util.Locale.US)
-        val callWhere = "UPPER(callsign)=? AND ${scope.first}"
+        val callWhere = "p.callsign_norm=? AND ${scope.first}"
         val callArgs = (listOf(call) + scope.second).toTypedArray()
-        val total = readableDatabase.rawQuery("SELECT COUNT(*) FROM qso WHERE $callWhere", callArgs).use {
+        val total = readableDatabase.rawQuery("SELECT COUNT(*) FROM qso_projection p WHERE $callWhere", callArgs).use {
             if (it.moveToFirst()) it.getInt(0) else 0
         }
-        val history = queryWhere("$callWhere ORDER BY created_at DESC LIMIT 20", callArgs)
+        val historyIds = readableDatabase.rawQuery("SELECT p.qso_id FROM qso_projection p WHERE $callWhere ORDER BY p.created_at DESC,p.qso_id LIMIT 20", callArgs).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
+        }
+        val history = if (historyIds.isEmpty()) emptyList() else queryWhere(
+            "id IN (${historyIds.joinToString(",") { "?" }}) ORDER BY created_at DESC,id", historyIds.toTypedArray())
         val resolvedRecord = history.firstOrNull()?.let { latest ->
             record.copy(
                 callsign = call,
@@ -344,18 +350,13 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
 
         val numericDxcc = resolvedRecord.dxcc.trim().uppercase(java.util.Locale.US)
         val country = resolvedRecord.country.trim().uppercase(java.util.Locale.US)
-        val entityExpression = if (numericDxcc.isNotBlank())
-            "UPPER(COALESCE(json_extract(details_json,'$.dxcc'),''))=?"
-        else "UPPER(country)=?"
+        val entityExpression = if (numericDxcc.isNotBlank()) "p.dxcc=?" else "p.country_norm=?"
         val entityValue = numericDxcc.ifBlank { country }
         val cells = mutableMapOf<String, DxccCell>()
         if (entityValue.isNotBlank()) {
-            val confirmed = "(UPPER(COALESCE(json_extract(details_json,'$.qslReceived'),'')) IN ('Y','V') OR " +
-                "UPPER(COALESCE(json_extract(details_json,'$.lotwReceived'),'')) IN ('Y','V'))"
-            val sql = """SELECT UPPER(COALESCE(json_extract(details_json,'$.band'),'')),
-                UPPER(COALESCE(json_extract(details_json,'$.submode'),'')), UPPER(mode),
-                MAX(CASE WHEN $confirmed THEN 1 ELSE 0 END)
-                FROM qso WHERE $entityExpression AND ${scope.first}
+            val sql = """SELECT p.band_norm,p.submode_norm,p.mode_norm,
+                MAX(CASE WHEN p.paper_received=1 OR p.lotw_received=1 THEN 1 ELSE 0 END)
+                FROM qso_projection p WHERE $entityExpression AND ${scope.first}
                 GROUP BY 1,2,3""".trimIndent()
             val args = (listOf(entityValue) + scope.second).toTypedArray()
             readableDatabase.rawQuery(sql, args).use { cursor ->
@@ -375,53 +376,43 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     }
 
     fun neuralLogSummary(stationId: String?): NeuralLogSummary {
-        val scope = stationScope(stationId)
+        val scope = projectionStationScope(stationId = stationId)
         val args = scope.second.toTypedArray()
-        val confirmed = "(UPPER(COALESCE(json_extract(details_json,'$.qslReceived'),'')) IN ('Y','V') OR " +
-            "UPPER(COALESCE(json_extract(details_json,'$.lotwReceived'),'')) IN ('Y','V'))"
         fun scalar(expression: String): Int = readableDatabase.rawQuery(
-            "SELECT $expression FROM qso WHERE ${scope.first}", args).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+            "SELECT $expression FROM qso_projection p WHERE ${scope.first}", args).use { if (it.moveToFirst()) it.getInt(0) else 0 }
         fun grouped(expression: String, limit: Int = 32): Map<String, Int> {
             val output = linkedMapOf<String, Int>()
-            readableDatabase.rawQuery("SELECT $expression AS value, COUNT(*) AS total FROM qso " +
+            readableDatabase.rawQuery("SELECT $expression AS value, COUNT(*) AS total FROM qso_projection p " +
                 "WHERE ${scope.first} AND TRIM($expression)<>'' GROUP BY value ORDER BY total DESC LIMIT $limit", args).use { cursor ->
                 while (cursor.moveToNext()) output[cursor.getString(0).orEmpty()] = cursor.getInt(1)
             }
             return output
         }
         return NeuralLogSummary(
-            qsos = scalar("COUNT(*)"), calls = scalar("COUNT(DISTINCT UPPER(callsign))"),
-            dxccs = scalar("COUNT(DISTINCT NULLIF(UPPER(COALESCE(json_extract(details_json,'$.dxcc'),'')),''))"),
-            confirmedDxccs = scalar("COUNT(DISTINCT CASE WHEN $confirmed THEN NULLIF(UPPER(COALESCE(json_extract(details_json,'$.dxcc'),'')),'') END)"),
-            bands = grouped("LOWER(COALESCE(json_extract(details_json,'$.band'),''))"),
-            modes = grouped("UPPER(CASE WHEN COALESCE(json_extract(details_json,'$.submode'),'')<>'' " +
-                "THEN json_extract(details_json,'$.submode') ELSE mode END)"),
-            continents = grouped("UPPER(COALESCE(json_extract(details_json,'$.continent'),''))"),
-            countries = grouped("country", 12),
+            qsos = scalar("COUNT(*)"), calls = scalar("COUNT(DISTINCT NULLIF(p.callsign_norm,''))"),
+            dxccs = scalar("COUNT(DISTINCT NULLIF(p.dxcc,''))"),
+            confirmedDxccs = scalar("COUNT(DISTINCT CASE WHEN p.paper_received=1 OR p.lotw_received=1 THEN NULLIF(p.dxcc,'') END)"),
+            bands = grouped("p.band_norm"), modes = grouped("COALESCE(NULLIF(p.submode_norm,''),p.mode_norm)"),
+            continents = grouped("p.continent"), countries = grouped("p.country_norm", 12),
         )
     }
 
-    private fun stationScope(stationId: String?): Pair<String, List<String>> = if (stationId == null)
-        "COALESCE(json_extract(details_json,'$.stationProfileId'),'')=''" to emptyList()
-    else "COALESCE(json_extract(details_json,'$.stationProfileId'),'')=?" to listOf(stationId)
+    private fun projectionStationScope(alias: String = "p", stationId: String? = null): Pair<String, List<String>> = if (stationId == null)
+        "$alias.station_profile_id=''" to emptyList()
+    else "$alias.station_profile_id=?" to listOf(stationId)
 
-    private fun dimensions(keyExpression: String, rawKeys: List<String>, stationId: String?): Map<String, WorkedDimensions> {
+    private fun projectionDimensions(column: String, rawKeys: List<String>, stationId: String?): Map<String, WorkedDimensions> {
+        require(column in setOf("callsign_norm", "country_norm", "dxcc"))
         val keys = rawKeys.map { it.normalizedStatusKey() }.filter(String::isNotBlank).distinct()
         if (keys.isEmpty()) return emptyMap()
         val placeholders = keys.joinToString(",") { "?" }
-        val stationClause = if (stationId == null)
-            " AND COALESCE(json_extract(details_json,'$.stationProfileId'),'') = ''"
-        else " AND COALESCE(json_extract(details_json,'$.stationProfileId'),'') = ?"
-        val bandExpression = "UPPER(COALESCE(json_extract(details_json,'$.band'),''))"
-        val submodeExpression = "UPPER(COALESCE(json_extract(details_json,'$.submode'),''))"
-        val confirmedExpression = listOf("qslReceived", "lotwReceived")
-            .joinToString(" OR ") { "UPPER(COALESCE(json_extract(details_json,'$.$it'),'')) IN ('Y','V')" }
-        val sql = """SELECT $keyExpression, $bandExpression, $submodeExpression, UPPER(mode),
-            MAX(CASE WHEN $confirmedExpression THEN 1 ELSE 0 END)
-            FROM qso WHERE $keyExpression IN ($placeholders)$stationClause
-            GROUP BY $keyExpression, $bandExpression, $submodeExpression, UPPER(mode)""".trimIndent()
+        val scope = projectionStationScope(stationId = stationId)
+        val sql = """SELECT p.$column,p.band_norm,p.submode_norm,p.mode_norm,
+            MAX(CASE WHEN p.paper_received=1 OR p.lotw_received=1 THEN 1 ELSE 0 END)
+            FROM qso_projection p WHERE p.$column IN ($placeholders) AND ${scope.first}
+            GROUP BY p.$column,p.band_norm,p.submode_norm,p.mode_norm""".trimIndent()
         val mutable = mutableMapOf<String, MutableWorkedDimensions>()
-        val args = (keys + listOfNotNull(stationId)).toTypedArray()
+        val args = (keys + scope.second).toTypedArray()
         readableDatabase.rawQuery(sql, args).use { cursor ->
             while (cursor.moveToNext()) {
                 val key = cursor.getString(0).orEmpty().normalizedStatusKey()

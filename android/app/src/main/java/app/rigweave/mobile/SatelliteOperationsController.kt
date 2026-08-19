@@ -161,20 +161,7 @@ internal class SatelliteOperationsController(
         activationGrid?.takeIf(String::isNotBlank)?.let { add(SatelliteObserverProfile("ACTIVATION", "Activation plan · $it", it)) }
     }.distinctBy { it.id + it.grid }
 
-    fun prepareDraft(row: SatellitePassRow): String {
-        val transponder = row.transponder
-        val downlink = transponder?.downlinkLowHz
-        val uplink = transponder?.uplinkLowHz
-        val band = downlink?.let(::bandForFrequency).orEmpty()
-        return buildString {
-            append("<PROP_MODE:SAT>\n<SAT_NAME:${row.satellite.name}>\n")
-            transponder?.mode?.takeIf(String::isNotBlank)?.let { append("<SAT_MODE:$it>\n") }
-            band.takeIf(String::isNotBlank)?.let { append("<BAND:$it>\n") }
-            downlink?.let { append("<FREQ:${"%.6f".format(Locale.US, it / 1_000_000.0)}>\n") }
-            uplink?.let { append("<FREQ_RX:${"%.6f".format(Locale.US, it / 1_000_000.0)}>\n") }
-            append("# Review before save · AOS ${row.pass.aos} · TCA ${row.pass.tca} · LOS ${row.pass.los}\n")
-        }
-    }
+    fun prepareDraft(row: SatellitePassRow): String = satelliteFastEntryDraft(row)
 
     fun saveManualElements(id: Long, name: String, one: String, two: String): Boolean {
         val candidate = SatelliteElements("TLE", name.trim(), one.trim(), two.trim(), Instant.now().epochSecond, "MANUAL")
@@ -190,4 +177,30 @@ internal class SatelliteOperationsController(
         ?: transponders.rows.rowsFor(noradId).firstOrNull { it.downlinkLowHz != null }
     private fun List<SatelliteTransponder>.rowsFor(id: Long) = filter { it.noradId == id }
     fun close() = scope.cancel()
+}
+
+internal fun satelliteFastEntryDraft(row: SatellitePassRow): String {
+    val transponder = row.transponder
+    val downlink = transponder?.downlinkLowHz
+    val uplink = transponder?.uplinkLowHz
+    val band = downlink?.let(::bandForFrequency).orEmpty()
+    val qsoMode = transponder?.mode?.uppercase(Locale.US)?.let { label ->
+        when {
+            "FM" in label -> "FM"
+            "CW" in label -> "CW"
+            "SSB" in label || "USB" in label || "LSB" in label -> "SSB"
+            else -> null
+        }
+    }
+    return buildString {
+        append("<PROP_MODE:SAT>\n<SAT_NAME:${row.satellite.name}>\n")
+        transponder?.mode?.takeIf(String::isNotBlank)?.let { append("<SAT_MODE:$it>\n") }
+        qsoMode?.let { append("<MODE:$it>\n") }
+        band.takeIf(String::isNotBlank)?.let { append("<BAND:$it>\n") }
+        downlink?.let { append("<FREQ:${"%.6f".format(Locale.US, it / 1_000_000.0)}>\n") }
+        uplink?.let { append("<FREQ_RX:${"%.6f".format(Locale.US, it / 1_000_000.0)}>\n") }
+        if (downlink != null && qsoMode != null) append("${"%.6f".format(Locale.US, downlink / 1_000_000.0)} $qsoMode\n")
+        else if (band.isNotBlank() && qsoMode != null) append("$band $qsoMode\n")
+        append("# Review before save · AOS ${row.pass.aos} · TCA ${row.pass.tca} · LOS ${row.pass.los}\n")
+    }
 }

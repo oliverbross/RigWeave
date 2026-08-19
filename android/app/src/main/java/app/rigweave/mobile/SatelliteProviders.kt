@@ -58,6 +58,14 @@ internal data class SatelliteTimer(
 )
 internal data class SatelliteProviderData<T>(val rows: List<T>, val metadata: SatelliteProviderMetadata)
 
+internal fun satelliteCacheState(count: Int, error: String, now: Long, fetched: Long, ttl: Long): SatelliteCacheState = when {
+    count == 0 && error.isNotBlank() -> SatelliteCacheState.ERROR
+    count == 0 -> SatelliteCacheState.EMPTY
+    error.isNotBlank() -> SatelliteCacheState.OFFLINE_CACHE
+    now - fetched > ttl -> SatelliteCacheState.STALE
+    else -> SatelliteCacheState.CURRENT
+}
+
 internal class SatelliteProviderRepository(context: Context) {
     companion object {
         const val CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=AMATEUR&FORMAT=CSV"
@@ -253,7 +261,7 @@ internal class SatelliteProviderRepository(context: Context) {
     private fun parseTimers(raw:String,now:Long):List<SatelliteTimer> = runCatching { val root=raw.trim();val rows=if(root.startsWith("["))JSONArray(root)else JSONObject(root).optJSONArray("timers")?:JSONArray();buildList{for(i in 0 until rows.length()){val o=rows.optJSONObject(i)?:continue;val start=o.optLong("start",o.optLong("start_epoch"));val end=o.optLong("end",o.optLong("end_epoch"));val functional=o.optBoolean("functional",o.optString("status").equals("active",true));if(!functional||start<=0||end<=start||end<now-86400||end>now+30*86400)continue;add(SatelliteTimer(o.optString("id","timer-$i"),o.optString("satellite"),o.optString("label"),start,end,true))}} }.getOrDefault(emptyList())
     private fun timerJson(e:SatelliteTimer)=JSONObject().put("id",e.id).put("satellite",e.satellite).put("label",e.label).put("start",e.startEpoch).put("end",e.endEpoch).put("functional",e.functional)
 
-    private fun metadata(key:String,source:String,ttl:Long,count:Int,now:Long,dataEpoch:Long?=null,manualOverride:Boolean=false):SatelliteProviderMetadata{val fetched=prefs.getLong("${key}_fetched",0);val error=prefs.getString("${key}_error","").orEmpty();val state=when{count==0&&error.isNotBlank()->SatelliteCacheState.ERROR;count==0->SatelliteCacheState.EMPTY;error.isNotBlank()->SatelliteCacheState.OFFLINE_CACHE;now-fetched>ttl->SatelliteCacheState.STALE;else->SatelliteCacheState.CURRENT};return SatelliteProviderMetadata(source,fetched,dataEpoch,state,error,manualOverride)}
+    private fun metadata(key:String,source:String,ttl:Long,count:Int,now:Long,dataEpoch:Long?=null,manualOverride:Boolean=false):SatelliteProviderMetadata{val fetched=prefs.getLong("${key}_fetched",0);val error=prefs.getString("${key}_error","").orEmpty();return SatelliteProviderMetadata(source,fetched,dataEpoch,satelliteCacheState(count,error,now,fetched,ttl),error,manualOverride)}
     private fun markSuccess(key:String,now:Long,response:HttpResult){prefs.edit().putLong("${key}_fetched",now).putString("${key}_error","").apply{if(response.etag.isNotBlank())putString("${key}_etag",response.etag);if(response.modified.isNotBlank())putString("${key}_modified",response.modified)}.apply()}
     private fun markError(key:String,error:String){prefs.edit().putString("${key}_error",error.take(100)).apply()}
     private fun cache(name:String)=runCatching{File(directory,name).takeIf(File::isFile)?.readText().orEmpty()}.getOrDefault("")

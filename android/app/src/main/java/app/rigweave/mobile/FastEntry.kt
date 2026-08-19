@@ -183,7 +183,9 @@ object FastEntryParser {
                 iota = allReferences.firstOrNull { it.matches(Regex("(?i)^[A-Z]*[FNSUACA]-\\d{3}$")) }.orEmpty(),
                 wwffRef = allReferences.firstOrNull { it.contains("FF-") }.orEmpty(), potaRef = pota.firstOrNull().orEmpty(),
                 potaRefs = pota, myPotaRefs = retainedReferences(retained, "MY_POTA_REF"),
-                contestId = allFields["CONTEST_ID"].orEmpty(),
+                contestId = allFields["CONTEST_ID"].orEmpty(), propagationMode = allFields["PROP_MODE"].orEmpty(),
+                frequencyRxHz = allFields["FREQ_RX"]?.replace(',', '.')?.toDoubleOrNull()?.times(1_000_000)?.toLong() ?: 0,
+                bandRx = allFields["BAND_RX"].orEmpty(),
                 extraAdifFields = (allFields + mapOf("FAST_ENTRY_REFS" to allReferences.joinToString(",")))
                     .filterKeys { it !in WavelogCanonicalizer.rigWeaveFields },
             )

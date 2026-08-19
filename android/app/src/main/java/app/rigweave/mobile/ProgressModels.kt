@@ -426,7 +426,7 @@ internal fun buildProgressSnapshot(
         bySatellite = satelliteRows.map { it.extraAdifFields["SAT_NAME"].orEmpty().uppercase(Locale.US).ifBlank { "UNKNOWN" } }.groupingBy { it }.eachCount(),
         byMode = satelliteRows.map { it.extraAdifFields["SAT_MODE"].orEmpty().uppercase(Locale.US).ifBlank { it.submode.ifBlank { it.mode } } }.groupingBy { it }.eachCount(),
         uniqueCalls = satelliteRows.map(Qso::callsign).filter(String::isNotBlank).distinctBy { it.uppercase(Locale.US) }.size,
-        ownGrids = satelliteRows.map { it.extraAdifFields["MY_GRIDSQUARE"].orEmpty() }.filter(String::isNotBlank).distinctBy { it.uppercase(Locale.US) }.size,
+        ownGrids = satelliteRows.map(Qso::myGrid).filter(String::isNotBlank).distinctBy { it.uppercase(Locale.US) }.size,
         byBand = satelliteRows.map(::qsoBand).filter(String::isNotBlank).groupingBy { it }.eachCount(),
         workedConfirmed = satelliteRows.groupBy { it.extraAdifFields["SAT_NAME"].orEmpty().uppercase(Locale.US).ifBlank { "UNKNOWN" } }
             .mapValues { (_, values) -> ProgressCount(values.size, values.filter(::isAwardConfirmed).map(Qso::grid).filter(String::isNotBlank).distinct().size) },
