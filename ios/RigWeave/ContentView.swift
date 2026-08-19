@@ -277,6 +277,7 @@ struct LogView: View {
     @State private var search = ""
     @State private var exportURL: URL?
     @State private var importingADIF = false
+    @State private var fastEntry = false
 
     var body: some View {
         ScrollView { LazyVStack(alignment: .leading, spacing: 18) {
@@ -288,6 +289,7 @@ struct LogView: View {
             .fileImporter(isPresented: $importingADIF, allowedContentTypes: [.data, .plainText]) { result in
                 if case .success(let url) = result { _ = logbook.importADIF(from: url) }
             }
+            .fullScreenCover(isPresented: $fastEntry) { FastEntryView().environmentObject(radio).environmentObject(logbook).environmentObject(features) }
     }
 
     private var localLog: some View {
@@ -314,6 +316,7 @@ struct LogView: View {
             HStack {
                 Text("Local log · \(logbook.records.count) recent").font(.headline)
                 Spacer()
+                Button("Fast Entry") { fastEntry = true }.buttonStyle(.borderedProminent)
                 Button("Build ADIF export") { exportURL = logbook.exportADIF(using: radio.adif) }
                 Button("Import ADIF") { importingADIF = true }
                 if let exportURL { ShareLink(item: exportURL) { Label("Share ADIF", systemImage: "square.and.arrow.up") } }

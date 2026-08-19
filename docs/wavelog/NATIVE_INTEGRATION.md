@@ -9,7 +9,7 @@
 
 ## Placement
 
-RigWeave remains local-first. `QsoDatabase` is the one Android QSO store and existing ADIF import/export remains the serialization boundary. Schema v10 extends only synchronization metadata: durable error classes, conflict-resolution intent, and explicit deletion intent. `WavelogSyncStore`, `WavelogApiV2Client`, `WavelogSyncEngine`, and `QsoMutationCoordinator` are separate from downstream QRZ/Club Log/eQSL delivery.
+RigWeave remains local-first. `QsoDatabase` is the one Android QSO store and existing ADIF import/export remains the serialization boundary. Schema v11 adds only Advanced Logbook query indexes after schema v10's synchronization metadata. `WavelogSyncStore`, `WavelogApiV2Client`, `WavelogSyncEngine`, and `QsoMutationCoordinator` are separate from downstream QRZ/Club Log/eQSL delivery.
 
 One enabled writable Wavelog binding is enforced by a partial unique index. A binding stores a credential alias, never a token. Existing Android Wavelog secrets remain AES-GCM encrypted with an Android Keystore key; existing iOS Wavelog secrets remain in Keychain. A `wl2_` token is never reinterpreted as a legacy API key, and the existing legacy adapter remains available for older installations.
 
@@ -28,6 +28,14 @@ The Apple client negotiates token metadata/scopes, discovers stations, performs 
 - Keep Remote conflict resolution completes after its durable local/baseline update. Keep Local and Merged persist their intent and remain open across restart or network failure until their CREATE/PATCH/DELETE is accepted or later reconciliation proves convergence.
 - A paused binding remains configured and receives durable `PAUSED` outbox work. Resume moves only paused work back to the safe pending queue; blocked ambiguous CREATE/DELETE operations remain blocked. The native dialog exposes lifecycle controls, destructive confirmations, operational error classes, remote/local identities, conflicts, tombstones, and the outbox state machine.
 - API v2 requires HTTPS and platform certificate validation. Bearer tokens and QSO comments are absent from normal diagnostic messages.
+
+## Phase 2 native logbook and Fast Entry
+
+The Android Advanced Logbook uses SQLite `COUNT`, `WHERE`, stable `ORDER BY`, `LIMIT`, and `OFFSET` for normal browsing. It does not materialize `QsoDatabase.all()`. The native filter model covers station/provenance, worked identity and geography, TX/RX radio fields, portable and satellite references, contest/operator, QSL/service state, free text, validity, duplicate candidates, and the native Wavelog relationship state. The compact phone list and wide tablet table are two views over the same page result. Filters, sorting, dates, page size, and current page survive configuration and navigation recreation.
+
+Selected-row actions remain explicit and bounded: edit through the existing local correction workflow, enrich through the configured callbook, export a selected row or the complete filtered result, retry the selected row's safe outbox entry, or start full reconciliation. Deletion remains a single-QSO confirmation with its existing local-only versus guarded remote consequence; no bulk remote delete was added.
+
+Android and Apple Fast Entry are native workspaces, not embedded Wavelog pages. Both use `fixtures/wavelog/fast_entry_golden.json` for the canonical behavior contract. They preserve inherited date/time/timezone/band/mode/submode/frequency/operator/power/own references, normalize UTC, accept broad ADIF bands and modes, retain arbitrary UTF-8 ADIF fields, expose every line error/warning, preview inherited fields and duplicate candidates, allow per-row edits/callbook enrichment, and import either all valid or selected rows. Android commits local QSO and native Wavelog outbox state through `QsoMutationCoordinator`; Apple commits its SQLite batch and then durably appends the Apple queue before reporting success. Undo is accepted only before a later local mutation and removes only provably unsent creates.
 
 ## API 3.1.0 contract reviewed
 

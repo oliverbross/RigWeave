@@ -5,6 +5,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
 import java.time.ZoneOffset
+import java.time.Instant
+import org.json.JSONObject
 
 class FastEntryTest {
     private val defaults = FastEntryDefaults(LocalDate.parse("2026-08-19"), "OM0RX", "OM0RX", "7", "JN88TQ")
@@ -24,5 +26,30 @@ class FastEntryTest {
     @Test fun reportsLineSpecificMissingContextWithoutCreatingHiddenRows() {
         val result = FastEntryParser.parse("2134 OM0RX", defaults); assertEquals(0, result.rows.size)
         assertEquals(setOf("Band or frequency is required", "Mode is required"), result.errors.map { it.message }.toSet())
+    }
+
+    @Test fun sharedGoldenCorpusMatchesCanonicalRowsOnAndroid() {
+        val root = JSONObject(checkNotNull(javaClass.classLoader?.getResourceAsStream("wavelog/fast_entry_golden.json"))
+            .bufferedReader().use { it.readText() })
+        val cases = root.getJSONArray("cases")
+        repeat(cases.length()) { index ->
+            val fixture = cases.getJSONObject(index)
+            val parsed = FastEntryParser.parse(fixture.getString("input"), defaults.copy(date = LocalDate.parse(fixture.getString("date"))))
+            val expectedErrors = fixture.getJSONArray("errors")
+            assertEquals(fixture.getString("name"), expectedErrors.length(), parsed.errors.size)
+            val expectedRows = fixture.getJSONArray("rows")
+            assertEquals(fixture.getString("name"), expectedRows.length(), parsed.rows.size)
+            repeat(expectedRows.length()) { rowIndex ->
+                val expected = expectedRows.getJSONObject(rowIndex); val actual = parsed.rows[rowIndex].qso
+                assertEquals(expected.getString("call"), actual.callsign); assertEquals(expected.getString("band"), actual.band)
+                assertEquals(expected.getString("mode"), actual.mode); assertEquals(expected.getString("submode"), actual.submode)
+                assertEquals(expected.getString("rst_sent"), actual.rstSent); assertEquals(expected.getString("utc"), Instant.ofEpochSecond(actual.createdAt).toString())
+                if (expected.has("pota")) assertEquals(expected.getString("pota"), actual.potaRef)
+                if (expected.has("wwff")) assertEquals(expected.getString("wwff"), actual.wwffRef)
+                if (expected.has("contest")) assertEquals(expected.getString("contest"), actual.contestId)
+                if (expected.has("satellite")) assertEquals(expected.getString("satellite"), actual.extraAdifFields["SAT_NAME"])
+                if (expected.has("comment")) assertEquals(expected.getString("comment"), actual.comment)
+            }
+        }
     }
 }

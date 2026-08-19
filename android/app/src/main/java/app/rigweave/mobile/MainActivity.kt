@@ -408,7 +408,7 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
         Destination.LOGBOOK -> Column(Modifier.fillMaxSize()) {
             PotaActivationStrip(activation, radio, openActivation)
-            Box(Modifier.weight(1f)) { LogbookScreen(radio, database, mutations, wavelog, syncHub, callbook, app, openSync, openProgress) }
+            Box(Modifier.weight(1f)) { LogbookScreen(radio, database, mutations, wavelog, wavelogNative, syncHub, callbook, app, openSync, openProgress) }
         }
         Destination.PROGRESS -> ProgressScreen(progress, features, portable, syncHub, cty,
             wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }.orEmpty(), app.stationCallsign, compact,
@@ -2906,19 +2906,30 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
 }
 
 @Composable private fun LogbookScreen(state: RadioState, database: QsoDatabase, mutations: QsoMutationCoordinator,
-    wavelog: WavelogController,
+    wavelog: WavelogController, wavelogNative: WavelogNativeController,
     syncHub: SyncHubController, callbook: CallbookController, app: AppController, openSync: () -> Unit, openProgress: () -> Unit) {
     var showFilters by remember { mutableStateOf(false) }
     var showFastEntry by remember { mutableStateOf(false) }
-    var draft by remember { mutableStateOf(LogbookFilter()) }
-    var applied by remember { mutableStateOf(LogbookFilter()) }
-    var fromDate by remember { mutableStateOf("") }; var toDate by remember { mutableStateOf("") }
-    var filterError by remember { mutableStateOf("") }; var selectedId by remember { mutableStateOf<String?>(null) }
+    var draft by rememberSaveable { mutableStateOf(LogbookFilter()) }
+    var applied by rememberSaveable { mutableStateOf(LogbookFilter()) }
+    var fromDate by rememberSaveable { mutableStateOf("") }; var toDate by rememberSaveable { mutableStateOf("") }
+    var filterError by rememberSaveable { mutableStateOf("") }; var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     var deleteQso by remember { mutableStateOf<Qso?>(null) }
-    var page by remember { mutableIntStateOf(0) }
+    var editingQso by remember { mutableStateOf<Qso?>(null) }
+    var exportText by remember { mutableStateOf("") }
+    var actionStatus by remember { mutableStateOf("") }
+    var page by rememberSaveable { mutableIntStateOf(0) }
     var pageData by remember { mutableStateOf(QsoPage(emptyList(), 0, 0, applied.limit)) }
+    var pageLoading by remember { mutableStateOf(true) }
+    var pageError by remember { mutableStateOf("") }
     var refreshGeneration by remember { mutableIntStateOf(0) }
     var previousQsoRecord by remember { mutableStateOf<AndroidCallbookRecord?>(null) }
+    val context = LocalContext.current
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-adif")) { uri ->
+        uri?.let { target -> runCatching { context.contentResolver.openOutputStream(target)?.bufferedWriter()?.use { it.write(exportText) } }
+            .onSuccess { actionStatus = "ADIF export saved." }.onFailure { actionStatus = "ADIF export failed: ${it.message}" } }
+        exportText = ""
+    }
 
     LaunchedEffect(wavelog.logMode, wavelog.stationId) {
         if (wavelog.logMode == LogMode.WAVELOG) {
@@ -2931,10 +2942,11 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
         if (wavelog.status.startsWith("Two-way sync complete")) refreshGeneration++
     }
     LaunchedEffect(applied, page, wavelog.logMode, wavelog.stationId, refreshGeneration) {
-        pageData = withContext(Dispatchers.IO) {
-            database.page(page, applied.limit, applied,
-                wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG })
-        }
+        pageLoading = true; pageError = ""
+        runCatching { withContext(Dispatchers.IO) { database.page(page, applied.limit, applied,
+            wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }) } }
+            .onSuccess { pageData = it }.onFailure { pageError = it.message ?: "Logbook query failed" }
+        pageLoading = false
         if (page != pageData.page) page = pageData.page
     }
     val selected = pageData.rows.firstOrNull { it.id == selectedId }
@@ -2966,6 +2978,28 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
             }
             OutlinedButton({ selected?.let { deleteQso = it } }, enabled = selected != null,
                 modifier = Modifier.heightIn(min = 48.dp)) { Text("DELETE QSO") }
+            OutlinedButton({ selected?.let { editingQso = it } }, enabled = selected != null,
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("EDIT QSO") }
+            OutlinedButton({ selected?.let { qso -> exportText = database.exportSelectedADIF(listOf(qso.id)); exportLauncher.launch("rigweave-${qso.callsign}.adi") } },
+                enabled = selected != null, modifier = Modifier.heightIn(min = 48.dp)) { Text("EXPORT SELECTED") }
+            OutlinedButton({
+                exportText = database.exportFilteredADIF(applied, wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG })
+                exportLauncher.launch("rigweave-filtered-${LocalDate.now(ZoneOffset.UTC)}.adi")
+            }, enabled = pageData.total > 0, modifier = Modifier.heightIn(min = 48.dp)) { Text("EXPORT FILTERED") }
+            OutlinedButton({ selected?.let { qso -> callbook.lookup(qso.callsign) { record ->
+                if (record == null) actionStatus = "No callbook record found for ${qso.callsign}." else {
+                    mutations.update(qso.copy(name = record.name, qth = record.qth, country = record.country, grid = record.grid,
+                        dxcc = record.dxcc, continent = record.continent, cqZone = record.cqZone, ituZone = record.ituZone,
+                        state = record.state, email = record.email))
+                    actionStatus = "Callbook fields updated locally; eligible Wavelog update queued."
+                    refreshGeneration++
+                }
+            } } }, enabled = selected != null, modifier = Modifier.heightIn(min = 48.dp)) { Text("UPDATE CALLBOOK") }
+            val selectedOutbox = selected?.let { qso -> wavelogNative.outbox.firstOrNull { it.entry.localQsoId == qso.id && it.entry.state != WavelogOutboxState.ACCEPTED } }
+            OutlinedButton({ selectedOutbox?.let(wavelogNative::retryOutbox) }, enabled = selectedOutbox != null && !wavelogNative.busy,
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("RETRY WAVELOG") }
+            OutlinedButton(wavelogNative::fullReconcile, enabled = wavelogNative.binding != null && !wavelogNative.busy,
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("RECONCILE") }
             LogbookColumnMenu(app)
             if (activeLogbookFilterCount(applied) > 0) OutlinedButton({
                 val cleared = LogbookFilter(limit = applied.limit)
@@ -2986,14 +3020,23 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
             }, { page = (page - 1).coerceAtLeast(0); selectedId = null },
                 { page = (page + 1).coerceAtMost(pageData.pageCount - 1); selectedId = null })
         }
+        if (actionStatus.isNotBlank()) Text(actionStatus, color = Hold, style = MaterialTheme.typography.bodySmall)
         val deliveryStates = syncHub.records.filter { record -> pageData.rows.any { it.id == record.qsoId } }
             .groupBy { it.qsoId }.mapValues { entry -> entry.value.associate { it.provider to it.state } }
-        LogbookTable(pageData.rows, deliveryStates, selectedId, { selectedId = it }, applied, app.visibleLogbookColumns,
-            { previousQsoRecord = it.previousQsoRecord() }, Modifier.weight(1f)) { sort ->
-            val direction = if (applied.sort == sort && applied.direction == LogbookSortDirection.DESCENDING)
-                LogbookSortDirection.ASCENDING else LogbookSortDirection.DESCENDING
-            draft = draft.copy(sort = sort, direction = direction)
-            applied = applied.copy(sort = sort, direction = direction); page = 0; selectedId = null
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            if (pageLoading) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            else if (pageError.isNotBlank()) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(pageError, color = Danger); TextButton({ refreshGeneration++ }) { Text("RETRY") }
+            }
+            else if (maxWidth < 720.dp) CompactLogbookList(pageData.rows, deliveryStates, selectedId, { selectedId = it },
+                { previousQsoRecord = it.previousQsoRecord() }, Modifier.fillMaxSize())
+            else LogbookTable(pageData.rows, deliveryStates, selectedId, { selectedId = it }, applied, app.visibleLogbookColumns,
+                { previousQsoRecord = it.previousQsoRecord() }, Modifier.fillMaxSize()) { sort ->
+                val direction = if (applied.sort == sort && applied.direction == LogbookSortDirection.DESCENDING)
+                    LogbookSortDirection.ASCENDING else LogbookSortDirection.DESCENDING
+                draft = draft.copy(sort = sort, direction = direction)
+                applied = applied.copy(sort = sort, direction = direction); page = 0; selectedId = null
+            }
         }
         if (showFilters) LogbookFilterDialog(draft, { draft = it }, fromDate, { fromDate = it }, toDate, { toDate = it },
             filterError, onPreset = { preset ->
@@ -3015,12 +3058,15 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                     val cleared = LogbookFilter(limit = applied.limit)
                     draft = cleared; applied = cleared; page = 0; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
                 }, onDismiss = { showFilters = false })
-        if (showFastEntry) FastEntryDialog(mutations, wavelog, app.stationCallsign, { _, _ -> refreshGeneration++ }) {
+    if (showFastEntry) FastEntryDialog(mutations, wavelog, callbook, app.stationCallsign, { _, _ -> refreshGeneration++ }) {
             showFastEntry = false
         }
         deleteQso?.let { qso -> DeleteQsoDialog(qso, mutations, onDeleted = {
             deleteQso = null; selectedId = null; refreshGeneration++
         }, onDismiss = { deleteQso = null }) }
+        editingQso?.let { qso -> QsoCorrectionDialog(qso, mutations, syncHub) {
+            editingQso = null; selectedId = null; refreshGeneration++
+        } }
     }
     previousQsoRecord?.let { record ->
         PreviousQsosDialog(record, database, wavelog, callbook) { previousQsoRecord = null }
@@ -3137,10 +3183,8 @@ private fun quickFilter(base: LogbookFilter, qso: Qso, key: String): LogbookFilt
         base.copy(fromEpochSeconds = day.atStartOfDay().toEpochSecond(ZoneOffset.UTC),
             toEpochSecondsExclusive = day.plusDays(1).atStartOfDay().toEpochSecond(ZoneOffset.UTC))
     }
-    "callsign" -> base.copy(callsign = qso.callsign); "dxcc" -> base.copy(dxcc = qso.dxcc)
-    "state" -> base.copy(state = qso.state); "grid" -> base.copy(grid = qso.grid); "mode" -> base.copy(mode = qso.mode)
-    "band" -> base.copy(band = qso.band); "iota" -> base.copy(iota = qso.iota); "sota" -> base.copy(sota = qso.sotaRef)
-    "pota" -> base.copy(pota = qso.potaRef); "wwff" -> base.copy(wwff = qso.wwffRef)
+    "callsign", "dxcc", "state", "grid", "mode", "band", "iota", "sota", "pota", "wwff" ->
+        logbookFilterForDimension(key, quickFilterValue(qso, key), base)
     "operator" -> base.copy(operator = qso.operatorCallsign); else -> base
 }
 
@@ -3152,6 +3196,30 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
     "This Year" -> today.withDayOfYear(1) to today
     "Last Year" -> today.minusYears(1).withDayOfYear(1) to today.withDayOfYear(1).minusDays(1)
     else -> today to today
+}
+
+@Composable private fun CompactLogbookList(records: List<Qso>, deliveries: Map<String, Map<SyncProvider, DeliveryState>>,
+    selectedId: String?, select: (String) -> Unit, previousQsos: (Qso) -> Unit, modifier: Modifier = Modifier) {
+    if (records.isEmpty()) Box(modifier, contentAlignment = Alignment.Center) {
+        Text("No QSOs match the current station and filters.", color = Muted)
+    } else LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        items(records, key = Qso::id) { qso ->
+            ElevatedCard(Modifier.fillMaxWidth().combinedClickable(onClick = { select(qso.id) }, onDoubleClick = { previousQsos(qso) }),
+                colors = CardDefaults.elevatedCardColors(containerColor = if (qso.id == selectedId) Raised else Panel)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(qso.callsign, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                        Text("${qso.band} ${qso.submode.ifBlank { qso.mode }}", color = Hold, fontWeight = FontWeight.Bold)
+                    }
+                    Text("${Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))} UTC · ${"%.6f".format(Locale.US, qso.frequencyHz / 1_000_000.0)} MHz")
+                    Text(listOf(qso.name, qso.qth, qso.grid, qso.country).filter(String::isNotBlank).joinToString(" · ").ifBlank { "No station detail" },
+                        color = Muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    val sync = deliveries[qso.id].orEmpty().entries.joinToString(" · ") { "${it.key.name}: ${it.value.name}" }
+                    Text(listOf(qso.syncState, sync).filter(String::isNotBlank).joinToString(" · "), style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    }
 }
 
 @Composable private fun LogbookTable(records: List<Qso>, deliveries: Map<String, Map<SyncProvider, DeliveryState>>,
@@ -3257,6 +3325,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
     draft: LogbookFilter, update: (LogbookFilter) -> Unit, fromDate: String, updateFrom: (String) -> Unit,
     toDate: String, updateTo: (String) -> Unit, error: String, onPreset: (String) -> Unit,
     onApply: () -> Unit, onClear: () -> Unit, onDismiss: () -> Unit) {
+    var compactTab by rememberSaveable { mutableIntStateOf(0) }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxWidth(.94f).fillMaxHeight(.9f), color = Panel, shape = RoundedCornerShape(14.dp),
             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF4A555D))) {
@@ -3266,15 +3335,24 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                         Text("General and QSL criteria apply together", color = Muted, fontSize = 15.sp) }
                     Spacer(Modifier.weight(1f)); IconButton(onDismiss) { Icon(Icons.Outlined.Close, "Close filters") }
                 }
-                Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Column(Modifier.weight(1.55f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("GENERAL", color = Hold, fontWeight = FontWeight.Black, fontSize = 17.sp)
-                        GeneralLogbookFilters(draft, update, fromDate, updateFrom, toDate, updateTo, onPreset, Modifier.weight(1f))
-                    }
-                    VerticalDivider(color = Color(0xFF465159))
-                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("QSL & SERVICES", color = Hold, fontWeight = FontWeight.Black, fontSize = 17.sp)
-                        QslLogbookFilters(draft, update, Modifier.weight(1f))
+                BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+                    if (maxWidth >= 850.dp) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Column(Modifier.weight(1.55f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("GENERAL", color = Hold, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                            GeneralLogbookFilters(draft, update, fromDate, updateFrom, toDate, updateTo, onPreset, Modifier.weight(1f))
+                        }
+                        VerticalDivider(color = Color(0xFF465159))
+                        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("QSL & SERVICES", color = Hold, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                            QslLogbookFilters(draft, update, Modifier.weight(1f))
+                        }
+                    } else Column(Modifier.fillMaxSize()) {
+                        PrimaryTabRow(compactTab) {
+                            Tab(compactTab == 0, { compactTab = 0 }, text = { Text("GENERAL") })
+                            Tab(compactTab == 1, { compactTab = 1 }, text = { Text("QSL & SYNC") })
+                        }
+                        if (compactTab == 0) GeneralLogbookFilters(draft, update, fromDate, updateFrom, toDate, updateTo, onPreset, Modifier.weight(1f))
+                        else QslLogbookFilters(draft, update, Modifier.weight(1f))
                     }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -3291,9 +3369,9 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
 @Composable private fun GeneralLogbookFilters(filter: LogbookFilter, update: (LogbookFilter) -> Unit,
     fromDate: String, updateFrom: (String) -> Unit, toDate: String, updateTo: (String) -> Unit,
     preset: (String) -> Unit, modifier: Modifier = Modifier) {
-    val modes = listOf("" to "All") + listOf("CW", "SSB", "USB", "LSB", "AM", "FM", "RTTY", "DATA", "FT8", "FT4", "PSK31")
+    val modes = listOf("" to "All") + listOf("CW", "SSB", "USB", "LSB", "AM", "FM", "RTTY", "DATA", "FT8", "FT4", "JS8", "JT65", "MFSK", "PSK", "PSK31", "PSK63", "DSTAR", "FREEDV", "SSTV")
         .map { it to it }
-    val bands = listOf("" to "All") + listOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m")
+    val bands = listOf("" to "All") + listOf("2190m", "630m", "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m", "1.25m", "70cm", "33cm", "23cm", "13cm", "sat")
         .map { it to it }
     LazyVerticalGrid(GridCells.Adaptive(210.dp), modifier, horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 4.dp)) {
@@ -3308,11 +3386,24 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         }
         item { FilterText("From · YYYY-MM-DD", fromDate, updateFrom) }; item { FilterText("To · YYYY-MM-DD", toDate, updateTo) }
         item { FilterText("Dx / callsign", filter.callsign) { update(filter.copy(callsign = it.uppercase())) } }
+        item { FilterText("Station profile", filter.stationProfile) { update(filter.copy(stationProfile = it)) } }
+        item { FilterText("Station callsign", filter.stationCallsign) { update(filter.copy(stationCallsign = it.uppercase())) } }
+        item { FilterChoice("Provenance", filter.provenance, listOf("" to "All", "LOCAL" to "Local", "REMOTE" to "Remote / linked")) { update(filter.copy(provenance = it)) } }
+        item { FilterText("Name", filter.name) { update(filter.copy(name = it)) } }
+        item { FilterText("QTH", filter.qth) { update(filter.copy(qth = it)) } }
+        item { FilterText("Email", filter.email) { update(filter.copy(email = it)) } }
         item { FilterText("DXCC", filter.dxcc) { update(filter.copy(dxcc = it)) } }
+        item { FilterText("Country", filter.country) { update(filter.copy(country = it)) } }
         item { FilterText("State", filter.state) { update(filter.copy(state = it.uppercase())) } }
         item { FilterText("Gridsquare", filter.grid) { update(filter.copy(grid = it.uppercase())) } }
+        item { FilterText("CQ zone", filter.cqZone) { update(filter.copy(cqZone = it)) } }
+        item { FilterText("ITU zone", filter.ituZone) { update(filter.copy(ituZone = it)) } }
         item { FilterChoice("Mode", filter.mode, modes) { update(filter.copy(mode = it)) } }
+        item { FilterText("Submode", filter.submode) { update(filter.copy(submode = it.uppercase())) } }
         item { FilterChoice("Band", filter.band, bands) { update(filter.copy(band = it)) } }
+        item { FilterText("Frequency · MHz", filter.frequency) { update(filter.copy(frequency = it)) } }
+        item { FilterText("RX frequency · MHz", filter.frequencyRx) { update(filter.copy(frequencyRx = it)) } }
+        item { FilterChoice("RX band", filter.bandRx, bands) { update(filter.copy(bandRx = it)) } }
         item { FilterChoice("Propagation", filter.propagation, listOf("" to "All") + propagationChoices.drop(1)) { update(filter.copy(propagation = it)) } }
         item { FilterText("County", filter.county) { update(filter.copy(county = it)) } }
         item { FilterText("DOK", filter.dok) { update(filter.copy(dok = it.uppercase())) } }
@@ -3323,7 +3414,11 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         item { FilterText("Operator", filter.operator) { update(filter.copy(operator = it.uppercase())) } }
         item { FilterText("Contest", filter.contest) { update(filter.copy(contest = it.uppercase())) } }
         item { FilterChoice("Continent", filter.continent, listOf("" to "All") + continentChoices) { update(filter.copy(continent = it)) } }
+        item { FilterText("Satellite", filter.satellite) { update(filter.copy(satellite = it)) } }
+        item { FilterText("Satellite mode", filter.satelliteMode) { update(filter.copy(satelliteMode = it)) } }
+        item { FilterText("Orbit", filter.orbit) { update(filter.copy(orbit = it)) } }
         item { FilterText("Comment", filter.comment) { update(filter.copy(comment = it)) } }
+        item { FilterText("Notes", filter.notes) { update(filter.copy(notes = it)) } }
         item { FilterText("Distance · km", filter.distance) { update(filter.copy(distance = it)) } }
         item { FilterText("Duration · minutes", filter.duration) { update(filter.copy(duration = it)) } }
         item { FilterChoice("Sort column", filter.sort.name, LogbookSort.entries.map { it.name to it.name.lowercase().replaceFirstChar { char -> char.uppercase() } }) {
@@ -3356,6 +3451,14 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         item { FilterText("QSL via", filter.qslVia) { update(filter.copy(qslVia = it)) } }
         item { FilterChoice("QSL images", filter.qslImages, listOf("" to "All", "Y" to "Has images", "N" to "No images")) {
             update(filter.copy(qslImages = it)) } }
+        item { FilterText("QSL message", filter.qslMessage) { update(filter.copy(qslMessage = it)) } }
+        item { FilterChoice("Record validity", filter.recordState, listOf("" to "All", "VALID" to "Valid", "INCOMPLETE" to "Incomplete / invalid")) {
+            update(filter.copy(recordState = it)) } }
+        item { FilterChoice("Duplicate candidates", filter.duplicateState, listOf("" to "All", "CANDIDATE" to "Same call/frequency/mode within 15s")) {
+            update(filter.copy(duplicateState = it)) } }
+        item { FilterChoice("Wavelog relation", filter.syncRelation, listOf("" to "All", "LOCAL_ONLY" to "Local only", "LINKED" to "Remote linked",
+            "OUTBOX" to "Queued / retry", "CONFLICT" to "Conflict", "TOMBSTONE" to "Delete pending", "REMOTE_DELETED" to "Remote-deleted acknowledged")) {
+            update(filter.copy(syncRelation = it)) } }
     }
 }
 

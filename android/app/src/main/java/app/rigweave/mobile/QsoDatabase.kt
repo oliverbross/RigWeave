@@ -77,7 +77,7 @@ fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
     in 50_000_000L..54_000_000L -> "6m"; else -> ""
 }
 
-class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 10) {
+class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 11) {
     private val changeRevision = AtomicLong(0)
     var operatorSaveHandler: ((Qso) -> Unit)? = null
     override fun onConfigure(db: SQLiteDatabase) {
@@ -105,13 +105,24 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         if (oldVersion < 8) createWavelogSyncTables(db)
         if (oldVersion < 9) migrateWavelogSyncV9(db)
         if (oldVersion < 10) migrateWavelogSyncV10(db)
+        if (oldVersion < 11) createAdvancedLogbookIndexes(db)
     }
 
     private fun createPagingIndexes(db: SQLiteDatabase) {
         db.execSQL("CREATE INDEX IF NOT EXISTS qso_created_at_idx ON qso(created_at DESC)")
         db.execSQL("CREATE INDEX IF NOT EXISTS qso_station_idx ON qso(json_extract(details_json,'$.stationProfileId'))")
         db.execSQL("CREATE INDEX IF NOT EXISTS qso_sync_state_idx ON qso(json_extract(details_json,'$.syncState'))")
+        createAdvancedLogbookIndexes(db)
         createSpotStatusIndexes(db)
+    }
+
+    private fun createAdvancedLogbookIndexes(db: SQLiteDatabase) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_frequency_idx ON qso(frequency_hz)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_mode_time_idx ON qso(UPPER(mode),created_at DESC)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_name_upper_idx ON qso(UPPER(name))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_qth_upper_idx ON qso(UPPER(qth))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_station_call_idx ON qso(UPPER(COALESCE(json_extract(details_json,'$.stationCallsign'),'')))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_remote_id_idx ON qso(COALESCE(json_extract(details_json,'$.remoteId'),''))")
     }
 
     private fun createSpotStatusIndexes(db: SQLiteDatabase) {
@@ -374,6 +385,17 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     }
     fun exportADIF(): String = all().asReversed().joinToString("") { toADIF(it) }
 
+    fun exportFilteredADIF(filter: LogbookFilter, stationId: String? = null): String {
+        val spec = pageQuery(filter, stationId)
+        return queryWhere("${spec.where} ORDER BY created_at ASC,id ASC", spec.args.toTypedArray()).joinToString("") { toADIF(it) }
+    }
+
+    fun exportSelectedADIF(ids: Collection<String>): String {
+        if (ids.isEmpty()) return ""
+        val placeholders = ids.joinToString(",") { "?" }
+        return queryWhere("id IN ($placeholders) ORDER BY created_at ASC,id ASC", ids.toTypedArray()).joinToString("") { toADIF(it) }
+    }
+
     fun toADIF(qso: Qso): String {
         val at = java.time.Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC)
         var adif = NativeCore.adif(qso.id, qso.callsign, at.format(DateTimeFormatter.ofPattern("yyyyMMdd")),
@@ -597,6 +619,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     private fun pageQuery(filter: LogbookFilter, stationId: String?): PageQuery {
         val clauses = mutableListOf<String>(); val args = mutableListOf<String>()
         fun json(key: String) = "COALESCE(json_extract(details_json,'$.${key}'),'')"
+        fun extra(key: String) = "COALESCE(json_extract(details_json,'$.extraAdifFields.${key}'),'')"
         fun text(expression: String, value: String) {
             if (value.isBlank()) return
             clauses += "$expression LIKE ? ESCAPE '\\' COLLATE NOCASE"
@@ -633,13 +656,20 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         }
         filter.fromEpochSeconds?.let { clauses += "created_at >= ?"; args += it.toString() }
         filter.toEpochSecondsExclusive?.let { clauses += "created_at < ?"; args += it.toString() }
-        text("callsign", filter.callsign); text(json("dxcc"), filter.dxcc); text(json("state"), filter.state)
-        text(json("grid"), filter.grid); choice("mode", filter.mode); choice(json("band"), filter.band)
+        text("callsign", filter.callsign); text(json("stationProfileId"), filter.stationProfile)
+        text(json("stationCallsign"), filter.stationCallsign); text("name", filter.name); text("qth", filter.qth)
+        text(json("email"), filter.email); text(json("dxcc"), filter.dxcc); text("country", filter.country)
+        text(json("state"), filter.state); text(json("grid"), filter.grid); text(json("cqZone"), filter.cqZone)
+        text(json("ituZone"), filter.ituZone); choice("mode", filter.mode); choice(json("submode"), filter.submode)
+        choice(json("band"), filter.band); numeric("(frequency_hz / 1000000.0)", filter.frequency)
+        numeric("(${json("frequencyRxHz")} / 1000000.0)", filter.frequencyRx); choice(json("bandRx"), filter.bandRx)
         choice(json("propagationMode"), filter.propagation); text(json("county"), filter.county)
         text(json("dok"), filter.dok); text(json("sotaRef"), filter.sota); text(json("potaRef"), filter.pota)
         text(json("iota"), filter.iota); text(json("wwffRef"), filter.wwff); text(json("operatorCallsign"), filter.operator)
         text(json("contestId"), filter.contest); choice(json("continent"), filter.continent)
-        text("(COALESCE(json_extract(details_json,'$.comment'),'') || ' ' || notes)", filter.comment)
+        text(extra("SAT_NAME"), filter.satellite); text(extra("SAT_MODE"), filter.satelliteMode)
+        text(extra("ORBIT"), filter.orbit); text("(${json("comment")} || ' ' || notes)", filter.comment)
+        text(json("qslMessage"), filter.qslMessage); text("notes", filter.notes)
         numeric(json("distanceKm"), filter.distance); numeric("(${json("durationSeconds")} / 60.0)", filter.duration)
         status(json("qslSent"), filter.qslSent); status(json("qslReceived"), filter.qslReceived)
         choice(json("qslMethod"), filter.qslSentMethod); choice(json("qslReceivedMethod"), filter.qslReceivedMethod)
@@ -651,11 +681,35 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         text(json("qslVia"), filter.qslVia)
         if (filter.qslImages.equals("Y", true)) clauses += "${json("qslImages")} <> '' AND UPPER(${json("qslImages")}) NOT IN ('N','NO','0','FALSE')"
         if (filter.qslImages.equals("N", true)) clauses += "(${json("qslImages")} = '' OR UPPER(${json("qslImages")}) IN ('N','NO','0','FALSE'))"
+        when (filter.provenance.uppercase()) {
+            "LOCAL" -> clauses += "${json("remoteId")} = ''"
+            "REMOTE", "LINKED" -> clauses += "${json("remoteId")} <> ''"
+        }
+        val invalid = "(TRIM(callsign)='' OR frequency_hz<=0 OR TRIM(mode)='' OR created_at<=0)"
+        when (filter.recordState.uppercase()) {
+            "INCOMPLETE", "INVALID" -> clauses += invalid
+            "VALID" -> clauses += "NOT $invalid"
+        }
+        if (filter.duplicateState.equals("CANDIDATE", true)) clauses += """EXISTS(
+            SELECT 1 FROM qso duplicate WHERE duplicate.id<>qso.id
+            AND UPPER(duplicate.callsign)=UPPER(qso.callsign) AND duplicate.frequency_hz=qso.frequency_hz
+            AND UPPER(duplicate.mode)=UPPER(qso.mode) AND ABS(duplicate.created_at-qso.created_at)<=15)""".trimIndent()
+        when (filter.syncRelation.uppercase()) {
+            "LOCAL_ONLY" -> clauses += "${json("remoteId")}='' AND NOT EXISTS(SELECT 1 FROM wavelog_remote_link l WHERE l.local_qso_id=qso.id)"
+            "LINKED" -> clauses += "EXISTS(SELECT 1 FROM wavelog_remote_link l WHERE l.local_qso_id=qso.id)"
+            "OUTBOX" -> clauses += "EXISTS(SELECT 1 FROM wavelog_outbox o WHERE o.local_qso_id=qso.id AND o.state<>'ACCEPTED')"
+            "CONFLICT" -> clauses += "EXISTS(SELECT 1 FROM wavelog_conflict c WHERE c.local_qso_id=qso.id AND c.state='OPEN')"
+            "TOMBSTONE" -> clauses += "EXISTS(SELECT 1 FROM wavelog_tombstone t WHERE t.local_qso_id=qso.id AND t.acknowledged_at IS NULL)"
+            "REMOTE_DELETED" -> clauses += "(${json("syncState")}='remote_deleted' OR EXISTS(SELECT 1 FROM wavelog_tombstone t WHERE t.local_qso_id=qso.id AND t.acknowledged_at IS NOT NULL))"
+        }
 
         val sortExpression = when (filter.sort) {
             LogbookSort.TIME -> "created_at"; LogbookSort.CALLSIGN -> "callsign COLLATE NOCASE"
+            LogbookSort.NAME -> "name COLLATE NOCASE"; LogbookSort.COUNTRY -> "country COLLATE NOCASE"
             LogbookSort.DXCC -> "${json("dxcc")} COLLATE NOCASE"; LogbookSort.MODE -> "mode COLLATE NOCASE"
+            LogbookSort.SUBMODE -> "${json("submode")} COLLATE NOCASE"
             LogbookSort.BAND -> "frequency_hz"; LogbookSort.FREQUENCY -> "frequency_hz"
+            LogbookSort.GRID -> "${json("grid")} COLLATE NOCASE"
             LogbookSort.DISTANCE -> "CAST(${json("distanceKm")} AS REAL)"
             LogbookSort.DURATION -> "CAST(${json("durationSeconds")} AS INTEGER)"
         }

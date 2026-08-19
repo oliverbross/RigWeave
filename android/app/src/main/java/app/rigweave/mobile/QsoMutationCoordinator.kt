@@ -1,6 +1,7 @@
 package app.rigweave.mobile
 
 const val DEFAULT_LOCAL_STATION = "LOCAL_DEFAULT"
+data class FastEntryImportReceipt(val qsoIds: List<String>, val skipped: Int, val revision: Long)
 
 class QsoMutationCoordinator(
     private val database: QsoDatabase,
@@ -13,6 +14,32 @@ class QsoMutationCoordinator(
         rows.forEach { if (saveInTransaction(it, origin)) added++ else skipped++ }
         added to skipped
     }
+
+    fun importFastEntry(rows: List<Qso>): FastEntryImportReceipt = database.transaction {
+        val inserted = mutableListOf<String>(); var skipped = 0
+        rows.forEach { qso -> if (saveInTransaction(qso, QsoOrigin.IMPORT)) inserted += qso.id else skipped++ }
+        FastEntryImportReceipt(inserted, skipped, database.changeToken())
+    }
+
+    /** Undo is deliberately bounded: any later local mutation invalidates the receipt. */
+    fun undoFastEntry(receipt: FastEntryImportReceipt): Boolean = database.transaction {
+            if (database.changeToken() != receipt.revision) return@transaction false
+            val binding = store.configuredBinding()
+            if (binding != null) {
+                val queued = store.outboxEntries(binding.id).groupBy { it.localQsoId }
+                val unsafe = receipt.qsoIds.any { id ->
+                    val qso = database.qso(id) ?: return@any true
+                    if (!applies(binding, qso)) false else store.link(binding.id, id) != null ||
+                        queued[id].orEmpty().any { it.operation != WavelogOperation.CREATE || it.attemptCount != 0 || it.state == WavelogOutboxState.ACCEPTED }
+                }
+                if (unsafe) return@transaction false
+            }
+            receipt.qsoIds.forEach { id ->
+                binding?.let { store.cancelUnattemptedCreate(it.id, id) }
+                database.deleteLocal(id)
+            }
+            true
+        }
 
     private fun saveInTransaction(qso: Qso, origin: QsoOrigin): Boolean {
         val inserted = database.save(qso, origin)

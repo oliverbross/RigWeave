@@ -362,7 +362,7 @@ private fun DeliveryDialog(database: QsoDatabase, mutations: QsoMutationCoordina
 }
 
 @Composable
-private fun QsoCorrectionDialog(qso: Qso, mutations: QsoMutationCoordinator,
+internal fun QsoCorrectionDialog(qso: Qso, mutations: QsoMutationCoordinator,
     controller: SyncHubController, dismiss: () -> Unit) {
     val initial = Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC)
     var callsign by remember { mutableStateOf(qso.callsign) }

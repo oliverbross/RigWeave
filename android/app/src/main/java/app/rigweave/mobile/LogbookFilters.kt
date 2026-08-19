@@ -1,6 +1,6 @@
 package app.rigweave.mobile
 
-enum class LogbookSort { TIME, CALLSIGN, DXCC, MODE, BAND, FREQUENCY, DISTANCE, DURATION }
+enum class LogbookSort { TIME, CALLSIGN, NAME, COUNTRY, DXCC, MODE, SUBMODE, BAND, FREQUENCY, GRID, DISTANCE, DURATION }
 enum class LogbookSortDirection { DESCENDING, ASCENDING }
 
 val LOGBOOK_PAGE_SIZES = listOf(25, 50, 100, 200, 500, 1_000)
@@ -14,11 +14,24 @@ data class LogbookFilter(
     val fromEpochSeconds: Long? = null,
     val toEpochSecondsExclusive: Long? = null,
     val callsign: String = "",
+    val stationProfile: String = "",
+    val stationCallsign: String = "",
+    val provenance: String = "",
+    val name: String = "",
+    val qth: String = "",
+    val email: String = "",
     val dxcc: String = "",
+    val country: String = "",
     val state: String = "",
     val grid: String = "",
+    val cqZone: String = "",
+    val ituZone: String = "",
     val mode: String = "",
+    val submode: String = "",
     val band: String = "",
+    val frequency: String = "",
+    val frequencyRx: String = "",
+    val bandRx: String = "",
     val propagation: String = "",
     val county: String = "",
     val dok: String = "",
@@ -29,7 +42,12 @@ data class LogbookFilter(
     val operator: String = "",
     val contest: String = "",
     val continent: String = "",
+    val satellite: String = "",
+    val satelliteMode: String = "",
+    val orbit: String = "",
     val comment: String = "",
+    val qslMessage: String = "",
+    val notes: String = "",
     val distance: String = "",
     val duration: String = "",
     val qslSent: String = "",
@@ -48,24 +66,37 @@ data class LogbookFilter(
     val qrzReceived: String = "",
     val qslVia: String = "",
     val qslImages: String = "",
+    val recordState: String = "",
+    val duplicateState: String = "",
+    val syncRelation: String = "",
     val sort: LogbookSort = LogbookSort.TIME,
     val direction: LogbookSortDirection = LogbookSortDirection.DESCENDING,
     val limit: Int = 50,
-)
+) : java.io.Serializable
 
 fun filterLogbook(records: List<Qso>, filter: LogbookFilter): List<Qso> {
     val matching = records.asSequence().filter { qso ->
         (filter.fromEpochSeconds == null || qso.createdAt >= filter.fromEpochSeconds) &&
             (filter.toEpochSecondsExclusive == null || qso.createdAt < filter.toEpochSecondsExclusive) &&
-            textMatches(qso.callsign, filter.callsign) && textMatches(qso.dxcc, filter.dxcc) &&
+            textMatches(qso.callsign, filter.callsign) && textMatches(qso.stationProfileId, filter.stationProfile) &&
+            textMatches(qso.stationCallsign, filter.stationCallsign) && provenanceMatches(qso, filter.provenance) &&
+            textMatches(qso.name, filter.name) && textMatches(qso.qth, filter.qth) && textMatches(qso.email, filter.email) &&
+            textMatches(qso.dxcc, filter.dxcc) && textMatches(qso.country, filter.country) &&
             textMatches(qso.state, filter.state) && textMatches(qso.grid, filter.grid) &&
-            choiceMatches(qso.mode, filter.mode) && choiceMatches(qso.band, filter.band) &&
+            textMatches(qso.cqZone, filter.cqZone) && textMatches(qso.ituZone, filter.ituZone) &&
+            choiceMatches(qso.mode, filter.mode) && choiceMatches(qso.submode, filter.submode) &&
+            choiceMatches(qso.band, filter.band) && numericMatches(qso.frequencyHz / 1_000_000.0, filter.frequency) &&
+            numericMatches(qso.frequencyRxHz / 1_000_000.0, filter.frequencyRx) && choiceMatches(qso.bandRx, filter.bandRx) &&
             choiceMatches(qso.propagationMode, filter.propagation) && textMatches(qso.county, filter.county) &&
             textMatches(qso.dok, filter.dok) && textMatches(qso.sotaRef, filter.sota) &&
             textMatches(qso.potaRef, filter.pota) && textMatches(qso.iota, filter.iota) &&
             textMatches(qso.wwffRef, filter.wwff) && textMatches(qso.operatorCallsign, filter.operator) &&
             textMatches(qso.contestId, filter.contest) && choiceMatches(qso.continent, filter.continent) &&
-            textMatches(qso.comment + " " + qso.notes, filter.comment) &&
+            textMatches(qso.extraAdifFields["SAT_NAME"].orEmpty(), filter.satellite) &&
+            textMatches(qso.extraAdifFields["SAT_MODE"].orEmpty(), filter.satelliteMode) &&
+            textMatches(qso.extraAdifFields["ORBIT"].orEmpty(), filter.orbit) &&
+            textMatches(qso.comment + " " + qso.notes, filter.comment) && textMatches(qso.qslMessage, filter.qslMessage) &&
+            textMatches(qso.notes, filter.notes) &&
             numericMatches(qso.distanceKm, filter.distance) && numericMatches(qso.durationSeconds / 60.0, filter.duration) &&
             statusMatches(qso.qslSent, filter.qslSent) && statusMatches(qso.qslReceived, filter.qslReceived) &&
             choiceMatches(qso.qslMethod, filter.qslSentMethod) && choiceMatches(qso.qslReceivedMethod, filter.qslReceivedMethod) &&
@@ -74,16 +105,25 @@ fun filterLogbook(records: List<Qso>, filter: LogbookFilter): List<Qso> {
             statusMatches(qso.eqslSent, filter.eqslSent) && statusMatches(qso.eqslReceived, filter.eqslReceived) &&
             statusMatches(qso.dclSent, filter.dclSent) && statusMatches(qso.dclReceived, filter.dclReceived) &&
             statusMatches(qso.qrzSent, filter.qrzSent) && statusMatches(qso.qrzReceived, filter.qrzReceived) &&
-            textMatches(qso.qslVia, filter.qslVia) && presenceMatches(qso.qslImages, filter.qslImages)
+            textMatches(qso.qslVia, filter.qslVia) && presenceMatches(qso.qslImages, filter.qslImages) &&
+            recordStateMatches(qso, filter.recordState) && syncRelationMatches(qso, filter.syncRelation) &&
+            (filter.duplicateState.isBlank() || filter.duplicateState.equals("CANDIDATE", true) && records.any { other ->
+                other.id != qso.id && other.callsign.equals(qso.callsign, true) && other.frequencyHz == qso.frequencyHz &&
+                    other.mode.equals(qso.mode, true) && kotlin.math.abs(other.createdAt - qso.createdAt) <= 15
+            })
     }.toList()
 
     val comparator = when (filter.sort) {
         LogbookSort.TIME -> compareBy<Qso> { it.createdAt }
         LogbookSort.CALLSIGN -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.callsign }
+        LogbookSort.NAME -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.name }
+        LogbookSort.COUNTRY -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.country }
         LogbookSort.DXCC -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.dxcc }
         LogbookSort.MODE -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.mode }
+        LogbookSort.SUBMODE -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.submode }
         LogbookSort.BAND -> compareBy<Qso> { bandRank(it.band) }.thenBy { it.frequencyHz }
         LogbookSort.FREQUENCY -> compareBy<Qso> { it.frequencyHz }
+        LogbookSort.GRID -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.grid }
         LogbookSort.DISTANCE -> compareBy<Qso> { it.distanceKm }
         LogbookSort.DURATION -> compareBy<Qso> { it.durationSeconds }
     }
@@ -92,16 +132,56 @@ fun filterLogbook(records: List<Qso>, filter: LogbookFilter): List<Qso> {
 }
 
 fun activeLogbookFilterCount(filter: LogbookFilter): Int = listOf(
-    filter.fromEpochSeconds, filter.toEpochSecondsExclusive, filter.callsign, filter.dxcc, filter.state, filter.grid,
-    filter.mode, filter.band, filter.propagation, filter.county, filter.dok, filter.sota, filter.pota, filter.iota,
-    filter.wwff, filter.operator, filter.contest, filter.continent, filter.comment, filter.distance, filter.duration,
+    filter.fromEpochSeconds, filter.toEpochSecondsExclusive, filter.callsign, filter.stationProfile, filter.stationCallsign,
+    filter.provenance, filter.name, filter.qth, filter.email, filter.dxcc, filter.country, filter.state, filter.grid,
+    filter.cqZone, filter.ituZone, filter.mode, filter.submode, filter.band, filter.frequency, filter.frequencyRx,
+    filter.bandRx, filter.propagation, filter.county, filter.dok, filter.sota, filter.pota, filter.iota,
+    filter.wwff, filter.operator, filter.contest, filter.continent, filter.satellite, filter.satelliteMode, filter.orbit,
+    filter.comment, filter.qslMessage, filter.notes, filter.distance, filter.duration,
     filter.qslSent, filter.qslReceived, filter.qslSentMethod, filter.qslReceivedMethod, filter.lotwSent,
     filter.lotwReceived, filter.clublogSent, filter.clublogReceived, filter.eqslSent, filter.eqslReceived,
     filter.dclSent, filter.dclReceived, filter.qrzSent, filter.qrzReceived, filter.qslVia, filter.qslImages,
+    filter.recordState, filter.duplicateState, filter.syncRelation,
 ).count { value -> value != null && value.toString().isNotBlank() }
+
+/** Shared contract for Progress/Analytics deep links into Advanced Logbook. */
+fun logbookFilterForDimension(key: String, value: String, base: LogbookFilter = LogbookFilter()): LogbookFilter =
+    when (key.trim().lowercase()) {
+        "callsign", "call" -> base.copy(callsign = value)
+        "dxcc" -> base.copy(dxcc = value)
+        "country" -> base.copy(country = value)
+        "continent" -> base.copy(continent = value)
+        "band" -> base.copy(band = value)
+        "mode" -> base.copy(mode = value)
+        "submode" -> base.copy(submode = value)
+        "grid" -> base.copy(grid = value)
+        "state" -> base.copy(state = value)
+        "pota" -> base.copy(pota = value)
+        "sota" -> base.copy(sota = value)
+        "wwff" -> base.copy(wwff = value)
+        "iota" -> base.copy(iota = value)
+        else -> base
+    }
 
 private fun textMatches(actual: String, expected: String) = expected.isBlank() || actual.contains(expected.trim(), ignoreCase = true)
 private fun choiceMatches(actual: String, expected: String) = expected.isBlank() || actual.equals(expected, ignoreCase = true)
+private fun provenanceMatches(qso: Qso, expected: String) = when (expected.uppercase()) {
+    "LOCAL" -> qso.remoteId.isBlank()
+    "REMOTE", "LINKED" -> qso.remoteId.isNotBlank()
+    else -> true
+}
+private fun recordStateMatches(qso: Qso, expected: String): Boolean {
+    val invalid = qso.callsign.isBlank() || qso.frequencyHz <= 0 || qso.mode.isBlank() || qso.createdAt <= 0
+    return when (expected.uppercase()) { "INCOMPLETE", "INVALID" -> invalid; "VALID" -> !invalid; else -> true }
+}
+private fun syncRelationMatches(qso: Qso, expected: String) = when (expected.uppercase()) {
+    "LOCAL_ONLY" -> qso.remoteId.isBlank() && qso.syncState.equals("local", true)
+    "LINKED" -> qso.remoteId.isNotBlank()
+    "OUTBOX" -> qso.syncState.lowercase() in setOf("pending", "queued", "retry", "failed")
+    "CONFLICT" -> qso.syncState.equals("conflict", true)
+    "TOMBSTONE", "REMOTE_DELETED" -> qso.syncState.lowercase() in setOf("tombstone", "remote_deleted")
+    else -> true
+}
 
 private fun statusMatches(actual: String, expected: String): Boolean {
     if (expected.isBlank()) return true

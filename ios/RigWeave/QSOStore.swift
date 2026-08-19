@@ -13,21 +13,25 @@ struct QSO: Identifiable, Equatable {
     let qth: String
     let country: String
     let notes: String
+    let fields: [String: String]
 
     init(id: String, callsign: String, frequencyHz: UInt64, mode: String,
          rstSent: String, rstReceived: String, createdAt: Date, name: String = "",
-         qth: String = "", country: String = "", notes: String = "") {
+         qth: String = "", country: String = "", notes: String = "", fields: [String: String] = [:]) {
         self.id = id; self.callsign = callsign; self.frequencyHz = frequencyHz; self.mode = mode
         self.rstSent = rstSent; self.rstReceived = rstReceived; self.createdAt = createdAt
-        self.name = name; self.qth = qth; self.country = country; self.notes = notes
+        self.name = name; self.qth = qth; self.country = country; self.notes = notes; self.fields = fields
     }
 }
+
+struct AppleFastEntryImportReceipt { let qsoIDs: [String]; let skipped: Int; let revision: Int }
 
 @MainActor
 final class QSOStore: ObservableObject {
     @Published private(set) var records: [QSO] = []
     @Published private(set) var message = ""
     private var database: OpaquePointer?
+    private var revision = 0
 
     init() {
         let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -41,27 +45,31 @@ final class QSOStore: ObservableObject {
         sqlite3_exec(database, "ALTER TABLE qso ADD COLUMN qth TEXT NOT NULL DEFAULT ''", nil, nil, nil)
         sqlite3_exec(database, "ALTER TABLE qso ADD COLUMN country TEXT NOT NULL DEFAULT ''", nil, nil, nil)
         sqlite3_exec(database, "ALTER TABLE qso ADD COLUMN notes TEXT NOT NULL DEFAULT ''", nil, nil, nil)
+        sqlite3_exec(database, "ALTER TABLE qso ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'", nil, nil, nil)
+        sqlite3_exec(database, "CREATE INDEX IF NOT EXISTS apple_qso_time_idx ON qso(created_at DESC)", nil, nil, nil)
+        sqlite3_exec(database, "CREATE INDEX IF NOT EXISTS apple_qso_identity_idx ON qso(UPPER(callsign),frequency_hz,UPPER(mode),created_at)", nil, nil, nil)
         reload()
     }
 
     deinit { sqlite3_close(database) }
 
     @discardableResult
-    func save(_ qso: QSO) -> Bool {
+    func save(_ qso: QSO, reload shouldReload: Bool = true) -> Bool {
         guard database != nil else { message = "Log database unavailable"; return false }
-        let duplicateSQL = "SELECT 1 FROM qso WHERE callsign=? AND frequency_hz=? AND mode=? AND created_at>=? LIMIT 1"
+        let duplicateSQL = "SELECT 1 FROM qso WHERE UPPER(callsign)=UPPER(?) AND frequency_hz=? AND UPPER(mode)=UPPER(?) AND created_at BETWEEN ? AND ? LIMIT 1"
         var duplicate: OpaquePointer?
         sqlite3_prepare_v2(database, duplicateSQL, -1, &duplicate, nil)
         bind(qso.callsign, to: duplicate, at: 1)
         sqlite3_bind_int64(duplicate, 2, sqlite3_int64(qso.frequencyHz))
         bind(qso.mode, to: duplicate, at: 3)
         sqlite3_bind_int64(duplicate, 4, sqlite3_int64(qso.createdAt.timeIntervalSince1970) - 15)
+        sqlite3_bind_int64(duplicate, 5, sqlite3_int64(qso.createdAt.timeIntervalSince1970) + 15)
         if sqlite3_step(duplicate) == SQLITE_ROW {
             sqlite3_finalize(duplicate); message = "Immediate duplicate not saved"; return false
         }
         sqlite3_finalize(duplicate)
 
-        let sql = "INSERT INTO qso(id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at,name,qth,country,notes) VALUES(?,?,?,?,?,?,?,?,?,?,?)"
+        let sql = "INSERT INTO qso(id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at,name,qth,country,notes,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
         var statement: OpaquePointer?
         sqlite3_prepare_v2(database, sql, -1, &statement, nil)
         bind(qso.id, to: statement, at: 1); bind(qso.callsign, to: statement, at: 2)
@@ -70,24 +78,53 @@ final class QSOStore: ObservableObject {
         sqlite3_bind_int64(statement, 7, sqlite3_int64(qso.createdAt.timeIntervalSince1970))
         bind(qso.name, to: statement, at: 8); bind(qso.qth, to: statement, at: 9)
         bind(qso.country, to: statement, at: 10); bind(qso.notes, to: statement, at: 11)
+        bind(json(qso.fields), to: statement, at: 12)
         let saved = sqlite3_step(statement) == SQLITE_DONE
         sqlite3_finalize(statement)
         message = saved ? "QSO saved locally" : "QSO save failed"
-        if saved { reload() }
+        if saved { revision += 1; if shouldReload { reload() } }
         return saved
+    }
+
+    func importFastEntry(_ rows: [FastEntryCanonical], wavelog: WavelogSync, serialize: (QSO) -> String) -> AppleFastEntryImportReceipt {
+        guard database != nil else { return .init(qsoIDs: [], skipped: rows.count, revision: revision) }
+        sqlite3_exec(database, "BEGIN IMMEDIATE", nil, nil, nil)
+        var inserted: [QSO] = []; var skipped = 0
+        for row in rows {
+            let qso = QSO(id: row.id, callsign: row.callsign, frequencyHz: row.frequencyHz, mode: row.mode,
+                rstSent: row.rstSent, rstReceived: row.rstReceived, createdAt: row.createdAt,
+                name: row.name, qth: row.qth, country: row.country, notes: row.notes,
+                fields: row.fields.merging(["BAND": row.band, "SUBMODE": row.submode, "GRIDSQUARE": row.grid]) { current, _ in current })
+            if save(qso, reload: false) { inserted.append(qso) } else { skipped += 1 }
+        }
+        sqlite3_exec(database, "COMMIT", nil, nil, nil)
+        wavelog.enqueueBatch(inserted.map { ($0.id, serialize($0)) })
+        reload(); message = "Fast Entry imported \(inserted.count) · skipped \(skipped)"
+        return .init(qsoIDs: inserted.map(\.id), skipped: skipped, revision: revision)
+    }
+
+    func undoFastEntry(_ receipt: AppleFastEntryImportReceipt, wavelog: WavelogSync) -> Bool {
+        guard revision == receipt.revision, database != nil else { message = "Undo expired after a later log mutation"; return false }
+        guard wavelog.canCancelUnsent(ids: Set(receipt.qsoIDs)) else { message = "Undo expired because Wavelog delivery was attempted"; return false }
+        sqlite3_exec(database, "BEGIN IMMEDIATE", nil, nil, nil)
+        var statement: OpaquePointer?; sqlite3_prepare_v2(database, "DELETE FROM qso WHERE id=?", -1, &statement, nil)
+        for id in receipt.qsoIDs { sqlite3_reset(statement); bind(id, to: statement, at: 1); sqlite3_step(statement) }
+        sqlite3_finalize(statement); sqlite3_exec(database, "COMMIT", nil, nil, nil)
+        wavelog.cancelUnsent(ids: Set(receipt.qsoIDs)); revision += 1; reload(); message = "Fast Entry import undone"
+        return true
     }
 
     func reload() {
         guard database != nil else { return }
         var statement: OpaquePointer?
-        sqlite3_prepare_v2(database, "SELECT id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at,name,qth,country,notes FROM qso ORDER BY created_at DESC LIMIT 100", -1, &statement, nil)
+        sqlite3_prepare_v2(database, "SELECT id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at,name,qth,country,notes,details_json FROM qso ORDER BY created_at DESC LIMIT 100", -1, &statement, nil)
         var loaded: [QSO] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             loaded.append(QSO(id: text(statement, 0), callsign: text(statement, 1),
                 frequencyHz: UInt64(sqlite3_column_int64(statement, 2)), mode: text(statement, 3),
                 rstSent: text(statement, 4), rstReceived: text(statement, 5),
                 createdAt: Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(statement, 6))),
-                name: text(statement, 7), qth: text(statement, 8), country: text(statement, 9), notes: text(statement, 10)))
+                name: text(statement, 7), qth: text(statement, 8), country: text(statement, 9), notes: text(statement, 10), fields: fields(text(statement, 11))))
         }
         sqlite3_finalize(statement); records = loaded
     }
@@ -148,14 +185,14 @@ final class QSOStore: ObservableObject {
     private func allRecords() -> [QSO] {
         guard database != nil else { return [] }
         var statement: OpaquePointer?
-        sqlite3_prepare_v2(database, "SELECT id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at,name,qth,country,notes FROM qso ORDER BY created_at DESC", -1, &statement, nil)
+        sqlite3_prepare_v2(database, "SELECT id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at,name,qth,country,notes,details_json FROM qso ORDER BY created_at DESC", -1, &statement, nil)
         var loaded: [QSO] = []
         while sqlite3_step(statement) == SQLITE_ROW {
             loaded.append(QSO(id: text(statement, 0), callsign: text(statement, 1),
                 frequencyHz: UInt64(sqlite3_column_int64(statement, 2)), mode: text(statement, 3),
                 rstSent: text(statement, 4), rstReceived: text(statement, 5),
                 createdAt: Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(statement, 6))),
-                name: text(statement, 7), qth: text(statement, 8), country: text(statement, 9), notes: text(statement, 10)))
+                name: text(statement, 7), qth: text(statement, 8), country: text(statement, 9), notes: text(statement, 10), fields: fields(text(statement, 11))))
         }
         sqlite3_finalize(statement); return loaded
     }
@@ -166,5 +203,13 @@ final class QSOStore: ObservableObject {
     private func text(_ statement: OpaquePointer?, _ index: Int32) -> String {
         guard let value = sqlite3_column_text(statement, index) else { return "" }
         return String(cString: value)
+    }
+    private func json(_ fields: [String: String]) -> String {
+        guard JSONSerialization.isValidJSONObject(fields), let data = try? JSONSerialization.data(withJSONObject: fields) else { return "{}" }
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+    private func fields(_ json: String) -> [String: String] {
+        guard let data = json.data(using: .utf8), let result = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return [:] }
+        return result
     }
 }

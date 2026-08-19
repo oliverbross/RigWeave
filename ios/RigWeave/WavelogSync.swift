@@ -111,6 +111,23 @@ final class WavelogSync: ObservableObject {
         persist(); Task { await syncNow() }
     }
 
+    func enqueueBatch(_ records: [(id: String, adif: String)]) {
+        for record in records where !queue.contains(where: { $0.id == record.id }) {
+            queue.append(WavelogQueueItem(id: record.id, adif: record.adif, attempts: 0, nextAttempt: Date(), state: "pending", lastError: ""))
+        }
+        persist()
+        status = records.isEmpty ? status : "Fast Entry saved locally · \(records.count) Wavelog creates queued"
+    }
+
+    func canCancelUnsent(ids: Set<String>) -> Bool {
+        ids.allSatisfy { id in queue.contains { $0.id == id && $0.state == "pending" && $0.attempts == 0 } }
+    }
+
+    func cancelUnsent(ids: Set<String>) {
+        queue.removeAll { ids.contains($0.id) && $0.state == "pending" && $0.attempts == 0 }
+        persist()
+    }
+
     func syncNow() async {
         guard !syncing else { return }
         guard let core, !baseURL.isEmpty, !stationProfile.isEmpty, !apiKey.isEmpty else {
@@ -289,7 +306,7 @@ final class WavelogSync: ObservableObject {
             for index in queue.indices where ["pending", "retry"].contains(queue[index].state) && queue[index].nextAttempt <= Date() {
                 queue[index].attempts += 1
                 do {
-                    try await client.create(stationID: stationProfile, adif: queue[index].adif, idempotencyKey: queue[index].id)
+                try await client.create(stationID: stationProfile, adif: queue[index].adif)
                     queue[index].state = "acknowledged"; queue[index].lastError = ""
                 } catch WavelogV2ClientError.network(let message) {
                     queue[index].state = "inspect"; queue[index].lastError = "Ambiguous write: \(message)"

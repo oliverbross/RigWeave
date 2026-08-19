@@ -77,23 +77,21 @@ struct WavelogNativeV2Client {
             page: (meta["page"] as? NSNumber)?.intValue ?? page, hasMore: Self.flag(meta["has_more"]))
     }
 
-    func create(stationID: String, adif: String, idempotencyKey: String) async throws {
+    func create(stationID: String, adif: String) async throws {
         guard let numericID = Int64(stationID) else { throw WavelogV2ClientError.response(0, "invalid station id", nil) }
         let body = try JSONSerialization.data(withJSONObject: ["station_profile_id": numericID, "import_type": "adif", "adif": adif])
-        _ = try await request(url: root.appendingPathComponent("qso"), method: "POST", body: body,
-                              idempotencyKey: idempotencyKey)
+        _ = try await request(url: root.appendingPathComponent("qso"), method: "POST", body: body)
     }
 
     private func request(_ resource: String) async throws -> [String: Any] {
         try await request(url: root.appendingPathComponent(resource), method: "GET")
     }
 
-    private func request(url: URL, method: String, body: Data? = nil, idempotencyKey: String? = nil) async throws -> [String: Any] {
+    private func request(url: URL, method: String, body: Data? = nil) async throws -> [String: Any] {
         var request = URLRequest(url: url); request.httpMethod = method; request.timeoutInterval = 30; request.httpBody = body
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-        if let idempotencyKey { request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key") }
         let data: Data; let response: URLResponse
         do { (data, response) = try await URLSession.shared.data(for: request) }
         catch { throw WavelogV2ClientError.network(error.localizedDescription) }

@@ -35,6 +35,30 @@ Evidence is repository-local unless explicitly marked external. “Implemented�
 - Authenticated Wavelog 3.1.0 create/update/delete: not performed; no live token was supplied and no fake remote proof is claimed.
 - Physical tablet acceptance: not performed in this phase.
 
+## Phase 2 — Advanced Logbook and Fast Entry
+
+| Required outcome | Status | Repository evidence | Validation boundary |
+|---|---|---|---|
+| Pinned Wavelog Advanced Logbook and SimpleFLE provenance | Implemented | `upstream.json` pins 3.1.0 commit `af325614…` and the reviewed controller/model/view/JavaScript paths; native behavior only, no copied PHP/HTML/JS | Source comparison only |
+| SQL-backed Advanced Logbook browsing | Implemented | Schema v11 indexes; `pageQuery` supplies SQL count/filter/order/limit/offset and never calls `all()` for normal browsing | Host and JVM evidence; connected Android runner unavailable |
+| Complete advanced filter/query contract | Implemented | `LogbookFilter`, adaptive filter workspace, duplicate/sync-relation SQL, shared analytics deep-link contract | Compose interaction not physically exercised |
+| Adaptive logbook and selected-row actions | Implemented | Compact list and wide table; edit, selected/filtered ADIF, callbook update, safe Wavelog retry/reconcile, explicit single delete | File-provider/callbook/live Wavelog interaction unverified |
+| Shared Android/Apple Fast Entry semantics | Implemented | `fixtures/wavelog/fast_entry_golden.json`; Android JUnit and Swift executable test both pass all three cases | Corpus is representative, not every possible ADIF extension |
+| Transactional import, durable queue, bounded undo | Implemented | Android coordinator receipt/revision and SQLite outbox transaction; Apple SQLite batch, queue batch, and unsent-only undo | Crash injection and live remote writes not performed |
+| Native first-class workspaces and draft preservation | Implemented | Full-screen Compose dialog with saveable draft; adaptive SwiftUI full-screen cover with `SceneStorage` | Physical rotation/navigation not exercised |
+| Deterministic 100k fixture benchmark | Implemented | Android instrumentation benchmark source; equivalent indexed host SQLite query returned the unique row in 0.01 s | Android benchmark execution blocked by no attached device/emulator |
+| Android tests/build | PASS | 218 JVM tests; instrumentation sources compile; debug APK assembles with stable Rust toolchain | No connected instrumentation |
+| Apple source parity | Deferred by operator | Shared Swift golden corpus and a generic iOS device build passed before the test scope was narrowed | No further Apple build or simulator acceptance is part of the current Android-only test scope |
+
+## Phase 2 validation record
+
+- Android JVM unit suite: PASS — 218 tests, 0 failures, 0 skipped.
+- Android instrumentation source compilation: PASS, including the deterministic 100,000-row paging benchmark.
+- Android debug APK assembly: PASS with stable `cargo` and `rustc` selected explicitly.
+- Apple source is retained for parity, but further Apple build and simulator validation is deferred by operator direction; current acceptance is Android-only.
+- Connected Android benchmark and physical mobile acceptance: not performed; `adb devices` reported no attached target.
+- Authenticated Wavelog mutation: not performed; no credential or fake remote proof was used.
+
 ## Later phases
 
-Phases 2–5 remain governed by their prompt-pack gates and are not marked complete by Phase 1 work.
+Phases 3–5 remain governed by their prompt-pack gates and are not marked complete by Phase 2 work.

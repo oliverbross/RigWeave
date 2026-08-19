@@ -113,6 +113,12 @@ final class RadioCore {
             guard let end = adif.range(of: "<EOR>", options: .caseInsensitive) else { continue }
             adif.insert(contentsOf: "<\(name):\(value.utf8.count)>\(value)", at: end.lowerBound)
         }
+        var reserved = Set(["APP_KX3TOUCH_UUID", "CALL", "QSO_DATE", "TIME_ON", "FREQ", "MODE", "RST_SENT", "RST_RCVD", "NAME", "QTH", "COUNTRY"])
+        if !qso.notes.isEmpty { reserved.insert("COMMENT") }
+        for (name, value) in qso.fields.sorted(by: { $0.key < $1.key }) where !value.isEmpty && !reserved.contains(name.uppercased()) {
+            guard let end = adif.range(of: "<EOR>", options: .caseInsensitive) else { continue }
+            adif.insert(contentsOf: "<\(name.uppercased()):\(value.utf8.count)>\(value)", at: end.lowerBound)
+        }
         return adif
     }
 

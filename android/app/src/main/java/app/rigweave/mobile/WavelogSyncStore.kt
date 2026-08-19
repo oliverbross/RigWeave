@@ -231,6 +231,10 @@ class WavelogSyncStore(private val database: QsoDatabase) {
         "wavelog_outbox", "binding_id=? AND local_qso_id=? AND operation='CREATE' AND state<>'ACCEPTED'",
         arrayOf(bindingId, localQsoId)) > 0
 
+    fun cancelUnattemptedCreate(bindingId: String, localQsoId: String): Boolean = database.writableDatabase.delete(
+        "wavelog_outbox", "binding_id=? AND local_qso_id=? AND operation='CREATE' AND attempt_count=0 AND state<>'ACCEPTED'",
+        arrayOf(bindingId, localQsoId)) > 0
+
     fun cancelWrites(bindingId: String, localQsoId: String, reason: String) {
         database.writableDatabase.execSQL(
             "UPDATE wavelog_outbox SET state='ACCEPTED',next_attempt_at=NULL,last_error=?,error_class='NONE',updated_at=? " +
