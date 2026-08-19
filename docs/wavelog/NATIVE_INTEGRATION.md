@@ -13,6 +13,13 @@ RigWeave remains local-first. `QsoDatabase` is the one Android QSO store and exi
 
 One enabled writable Wavelog binding is enforced by a partial unique index. A binding stores a credential alias, never a token. Existing Android Wavelog secrets remain AES-GCM encrypted with an Android Keystore key; existing iOS Wavelog secrets remain in Keychain. A `wl2_` token is never reinterpreted as a legacy API key, and the existing legacy adapter remains available for older installations.
 
+The Apple client now negotiates token metadata/scopes, discovers stations,
+performs bounded paginated QSO reads, and drains its existing durable queue with
+idempotency keys. A network failure after an Apple write is marked ambiguous for
+inspection rather than retried. Android remains the more complete reconciliation
+implementation: Apple field-level three-way conflict resolution is still a
+documented parity gap.
+
 ## Canonical and synchronization rules
 
 - Canonical ADIF keys are uppercase and stably sorted. Callsigns, modes, bands, grids, station callsigns, propagation/satellite values, and confirmation flags are normalized. UTC date/time is normalized without changing the instant.
@@ -41,3 +48,7 @@ A read-only token creates a useful local replica. The UI and engine must not imp
 ## Evidence boundary
 
 Automated tests and builds prove source/domain behaviour and migration compatibility only. They do not prove a live token, a particular Wavelog installation, network reliability, remote QSO mutation, physical device behaviour, or radio operation. No credential, remote write, merge, deployment, release, or store submission is part of this branch.
+
+Validated on the programme branch: 213 Android JVM tests, Android multi-ABI
+debug assembly, the generic iOS Simulator build, shared-core Debug CTest, the
+SGP4 candidate's 168 tests, and a live no-change upstream-watch comparison.

@@ -1,0 +1,30 @@
+name: Wavelog upstream watch
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare reviewed pin with latest stable release
+        id: compare
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/check_wavelog_upstream.py --verify-pinned-paths --output wavelog-upstream-report.md
+      - name: Publish comparison report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wavelog-upstream-report
+          path: wavelog-upstream-report.md
+      - name: Require human review for a changed or failed comparison
+        if: steps.compare.outcome != 'success'
+        run: exit 1
