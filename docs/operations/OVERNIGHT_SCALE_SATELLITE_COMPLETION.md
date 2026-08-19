@@ -19,8 +19,8 @@ Complete-log decode/sort/reaggregate paths were replaced with bounded SQL. Query
 - Focused Android test file: five cases covering cache truth, logging draft fields, review-before-save semantics, deterministic satellite Logbook filters, and Satellite Intelligence aggregates.
 - Native focused suite: pinned Vanguard verification vectors, observer output, pass boundaries, no-pass interval, invalid TLE, and Doppler sign; passed.
 - Deterministic temporary 100,000-row host profile: indexed pages/filters 0.00–0.01 s; aggregate categories 0.00–0.07 s; observed RSS approximately 3.1–6.0 MB.
-- Android Kotlin compilation passed during implementation.
-- The complete Android JVM suite and final `assembleDebug` are recorded at handoff after this document is committed.
+- Complete Android JVM suite: 232 tests, zero failures, zero skipped.
+- Android `assembleDebug`: passed. APK `android/app/build/outputs/apk/debug/app-debug.apk`, 124,150,367 bytes, SHA-256 `d25fd8bf792ab52809b166ee94034e88d0713ca55d4195f11a312ceca61f90d0`.
 
 ## Exact milestones
 

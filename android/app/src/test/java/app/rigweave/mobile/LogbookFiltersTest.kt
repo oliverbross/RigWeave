@@ -68,8 +68,8 @@ class LogbookFiltersTest {
         assertFalse(numericMatches(500.0, "invalid"))
     }
 
-    @Test fun pagingUsesOnlySupportedSizesAndNeverExceedsOneThousand() {
-        assertEquals(listOf(25, 50, 100, 200, 500, 1_000), LOGBOOK_PAGE_SIZES)
+    @Test fun interactivePagingUsesOnlySupportedSizesAndNeverExceedsTwoHundredFifty() {
+        assertEquals(listOf(25, 50, 100, 200, 250), LOGBOOK_PAGE_SIZES)
         assertEquals(50, normalizedLogbookPageSize(65_000))
         assertEquals(50, normalizedLogbookPageSize(50))
         assertEquals(3, logbookPageCount(101, 50))
