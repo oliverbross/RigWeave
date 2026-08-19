@@ -35,6 +35,13 @@ internal data class ProgressCount(val worked: Int, val confirmed: Int)
 internal data class ProgressBucket(val label: String, val count: Int)
 internal data class ProgressHeatCell(val day: Int, val hour: Int, val count: Int)
 internal data class ProgressContactPoint(val grid: String, val latitude: Double, val longitude: Double)
+internal data class SatelliteAnalytics(
+    val qsos: Int = 0, val satellites: Int = 0, val grids: Int = 0, val confirmed: Int = 0,
+    val bySatellite: Map<String, Int> = emptyMap(), val byMode: Map<String, Int> = emptyMap(),
+)
+internal data class AntennaAnalytics(
+    val path: String, val qsos: Int, val confirmed: Int, val averageDistanceKm: Double?, val bestDistanceKm: Double?,
+)
 internal enum class NeedTarget { DX, PORTABLE, LOGBOOK }
 internal data class ProgressNeed(
     val id: String, val title: String, val detail: String, val reasons: List<String>, val priority: Int,
@@ -67,6 +74,9 @@ internal data class ProgressSnapshot(
     val states: ProgressCount = ProgressCount(0, 0), val zones: ProgressCount = ProgressCount(0, 0),
     val dxccByMode: Map<String, ProgressCount> = emptyMap(), val dxccByBand: Map<String, ProgressCount> = emptyMap(),
     val qrpDxcc: Int = 0, val portable: PortableProgress = PortableProgress(), val goals: List<GoalProgress> = emptyList(),
+    val operators: Map<String, Int> = emptyMap(), val years: Map<String, Int> = emptyMap(),
+    val months: Map<String, Int> = emptyMap(), val confirmations: Map<String, Int> = emptyMap(),
+    val satellite: SatelliteAnalytics = SatelliteAnalytics(), val antennas: List<AntennaAnalytics> = emptyList(),
 )
 
 internal val canonicalUsStates = setOf(
@@ -244,5 +254,31 @@ internal fun buildProgressSnapshot(
             .map { it.key to it.value.map { entry -> entry.key } }.sortedBy { it.first },
         ProgressCount(states.size,confirmedStates.size),ProgressCount(zones.size,confirmedZones.size),byMode,byBand,
         rows.filter { it.txPowerW in 1..5 }.map { dxccByQso.getValue(it) }.filter(String::isNotBlank).distinct().size,portable)
-    return base.copy(goals=goals.take(4).map { GoalProgress(it,metricValue(it.metric,base)) })
+    fun received(value: String) = value.trim().uppercase(Locale.US) in setOf("Y", "V")
+    val satelliteRows = rows.filter { qso -> qso.band.equals("SAT", true) || qso.propagationMode.equals("SAT", true) ||
+        qso.extraAdifFields["SAT_NAME"].orEmpty().isNotBlank() }
+    val satellite = SatelliteAnalytics(
+        qsos = satelliteRows.size,
+        satellites = satelliteRows.map { it.extraAdifFields["SAT_NAME"].orEmpty().uppercase(Locale.US) }.filter(String::isNotBlank).distinct().size,
+        grids = satelliteRows.map(Qso::grid).filter(String::isNotBlank).distinctBy { it.uppercase(Locale.US) }.size,
+        confirmed = satelliteRows.count(::isAwardConfirmed),
+        bySatellite = satelliteRows.map { it.extraAdifFields["SAT_NAME"].orEmpty().uppercase(Locale.US).ifBlank { "UNKNOWN" } }.groupingBy { it }.eachCount(),
+        byMode = satelliteRows.map { it.extraAdifFields["SAT_MODE"].orEmpty().uppercase(Locale.US).ifBlank { it.submode.ifBlank { it.mode } } }.groupingBy { it }.eachCount(),
+    )
+    val antennas = rows.filter { it.antennaPath.isNotBlank() }.groupBy { it.antennaPath.trim().uppercase(Locale.US) }.map { (path, values) ->
+        val distances = values.map(Qso::distanceKm).filter { it > 0 }
+        AntennaAnalytics(path, values.size, values.count(::isAwardConfirmed), distances.average().takeUnless(Double::isNaN), distances.maxOrNull())
+    }.sortedByDescending(AntennaAnalytics::qsos)
+    return base.copy(
+        goals = goals.take(4).map { GoalProgress(it,metricValue(it.metric,base)) },
+        operators = rows.map { it.operatorCallsign.trim().uppercase(Locale.US).ifBlank { "UNKNOWN" } }.groupingBy { it }.eachCount(),
+        years = rows.groupingBy { Instant.ofEpochSecond(it.createdAt).atZone(ZoneOffset.UTC).year.toString() }.eachCount().toSortedMap(),
+        months = rows.groupingBy { Instant.ofEpochSecond(it.createdAt).atZone(ZoneOffset.UTC).toLocalDate().toString().take(7) }.eachCount().toSortedMap(),
+        confirmations = linkedMapOf(
+            "LoTW" to rows.count { received(it.lotwReceived) }, "Paper QSL" to rows.count { received(it.qslReceived) },
+            "eQSL" to rows.count { received(it.eqslReceived) }, "QRZ" to rows.count { received(it.qrzReceived) },
+            "Club Log" to rows.count { received(it.clublogReceived) }, "DCL" to rows.count { received(it.dclReceived) },
+        ),
+        satellite = satellite, antennas = antennas,
+    )
 }

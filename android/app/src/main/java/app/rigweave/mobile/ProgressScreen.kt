@@ -210,6 +210,30 @@ private fun androidx.compose.foundation.lazy.LazyListScope.overviewItems(
     }
     item {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val operatorRows = snapshot.operators.map { ProgressBucket(it.key, it.value) }
+            val confirmationRows = snapshot.confirmations.map { ProgressBucket(it.key, it.value) }
+            if (!compact && maxWidth > 800.dp) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ChartCard("OPERATORS", operatorRows, Modifier.weight(1f))
+                ChartCard("CONFIRMATION SOURCES", confirmationRows, Modifier.weight(1f), "Award confirmation remains LoTW or paper QSL only")
+            } else Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ChartCard("OPERATORS", operatorRows, Modifier.fillMaxWidth())
+                ChartCard("CONFIRMATION SOURCES", confirmationRows, Modifier.fillMaxWidth(), "Award confirmation remains LoTW or paper QSL only")
+            }
+        }
+    }
+    if (snapshot.satellite.qsos > 0 || snapshot.antennas.isNotEmpty()) item {
+        ProgressCard("SATELLITE & ANTENNA ANALYTICS") {
+            if (snapshot.satellite.qsos > 0) {
+                Text("SATELLITE · ${snapshot.satellite.qsos} QSOs · ${snapshot.satellite.satellites} birds · ${snapshot.satellite.grids} grids · ${snapshot.satellite.confirmed} confirmed")
+                Text(snapshot.satellite.bySatellite.entries.sortedByDescending { it.value }.joinToString(" · ") { "${it.key} ${it.value}" }, color = ProgressMuted)
+            }
+            snapshot.antennas.take(8).forEach { antenna ->
+                Text("${antenna.path} · ${antenna.qsos} QSOs · ${antenna.confirmed} confirmed · best ${antenna.bestDistanceKm?.let { "%,.0f km".format(it) } ?: "unknown"}")
+            }
+        }
+    }
+    item {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
             if (!compact && maxWidth > 800.dp) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 HeatmapCard(snapshot.heatmap, Modifier.weight(1f))
                 ChartCard("DISTANCE DISTRIBUTION", snapshot.distance, Modifier.weight(1f),

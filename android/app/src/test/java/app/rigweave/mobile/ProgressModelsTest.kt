@@ -6,6 +6,21 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 
 class ProgressModelsTest {
+    @Test fun generalSatelliteAndAntennaAnalyticsShareTheFilteredDataset() {
+        val now = 1_700_000_000L
+        val sat = qso("sat", now, dxcc = "291").copy(operatorCallsign = "OM0RX", band = "SAT", grid = "JN88TQ",
+            antennaPath = "SAT-YAGI", distanceKm = 1_200.0, lotwReceived = "Y",
+            extraAdifFields = mapOf("SAT_NAME" to "QO-100", "SAT_MODE" to "S"))
+        val hf = qso("hf", now + 86_400, dxcc = "504").copy(operatorCallsign = "OM0RX", antennaPath = "DIPOLE",
+            distanceKm = 500.0, eqslReceived = "Y")
+        val result = buildProgressSnapshot(listOf(sat, hf), ProgressFilters(allStations = true), now = now + 90_000)
+        assertEquals(2, result.operators["OM0RX"])
+        assertEquals(1, result.confirmations["LoTW"])
+        assertEquals(1, result.confirmations["eQSL"])
+        assertEquals(1, result.satellite.qsos)
+        assertEquals(mapOf("QO-100" to 1), result.satellite.bySatellite)
+        assertEquals(setOf("SAT-YAGI", "DIPOLE"), result.antennas.map { it.path }.toSet())
+    }
     private val now = LocalDate.of(2026, 8, 18).atTime(12, 0).toEpochSecond(ZoneOffset.UTC)
 
     @Test fun stationTimeBandAndModeFiltersAreAppliedTogether() {
