@@ -276,7 +276,7 @@ class QsoDatabaseInstrumentedTest {
             rstSent = "599", rstReceived = "599", createdAt = 1_700_000_300,
             extraAdifFields = mapOf("APP_VENDOR_PRIVATE" to "preserved"))
 
-        assertTrue(store.saveWithOutbox(qso, binding))
+        assertTrue(QsoMutationCoordinator(database, store).save(qso))
         assertEquals(binding.id, store.activeBinding()?.id)
         assertEquals(WavelogOperation.CREATE, store.pending(binding.id).single().operation)
         assertTrue(database.exportADIF().contains("<APP_VENDOR_PRIVATE:9>preserved"))

@@ -34,6 +34,10 @@ internal fun createWavelogSyncTables(db: SQLiteDatabase) {
         high_water TEXT NOT NULL DEFAULT '', overlap_hash TEXT NOT NULL DEFAULT '', completed INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL, PRIMARY KEY(binding_id,kind),
         FOREIGN KEY(binding_id) REFERENCES wavelog_binding(id) ON DELETE CASCADE)""".trimIndent())
+    db.execSQL("""CREATE TABLE IF NOT EXISTS wavelog_scan_seen(
+        binding_id TEXT NOT NULL, kind TEXT NOT NULL, remote_qso_id TEXT NOT NULL,
+        PRIMARY KEY(binding_id,kind,remote_qso_id),
+        FOREIGN KEY(binding_id) REFERENCES wavelog_binding(id) ON DELETE CASCADE)""".trimIndent())
     db.execSQL("""CREATE TABLE IF NOT EXISTS wavelog_conflict(
         id TEXT PRIMARY KEY, binding_id TEXT NOT NULL, local_qso_id TEXT NOT NULL, remote_qso_id TEXT NOT NULL,
         baseline_canonical TEXT NOT NULL, local_canonical TEXT NOT NULL, remote_canonical TEXT NOT NULL,
@@ -42,8 +46,20 @@ internal fun createWavelogSyncTables(db: SQLiteDatabase) {
     db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS wavelog_open_conflict ON wavelog_conflict(binding_id,local_qso_id) WHERE state='OPEN'")
     db.execSQL("""CREATE TABLE IF NOT EXISTS wavelog_tombstone(
         binding_id TEXT NOT NULL, local_qso_id TEXT NOT NULL, remote_qso_id TEXT NOT NULL DEFAULT '',
-        canonical_hash TEXT NOT NULL DEFAULT '', deleted_at INTEGER NOT NULL, acknowledged_at INTEGER,
+        canonical_hash TEXT NOT NULL DEFAULT '', baseline_canonical TEXT NOT NULL DEFAULT '',
+        deleted_at INTEGER NOT NULL, acknowledged_at INTEGER,
         PRIMARY KEY(binding_id,local_qso_id), FOREIGN KEY(binding_id) REFERENCES wavelog_binding(id) ON DELETE CASCADE)""".trimIndent())
+}
+
+internal fun migrateWavelogSyncV9(db: SQLiteDatabase) {
+    createWavelogSyncTables(db)
+    val columns = mutableSetOf<String>()
+    db.rawQuery("PRAGMA table_info(wavelog_tombstone)", null).use { cursor ->
+        while (cursor.moveToNext()) columns += cursor.getString(1)
+    }
+    if ("baseline_canonical" !in columns) {
+        db.execSQL("ALTER TABLE wavelog_tombstone ADD COLUMN baseline_canonical TEXT NOT NULL DEFAULT ''")
+    }
 }
 
 class WavelogSyncStore(private val database: QsoDatabase) {
@@ -80,25 +96,25 @@ class WavelogSyncStore(private val database: QsoDatabase) {
         )
     }
 
-    fun saveWithOutbox(qso: Qso, binding: WavelogBinding, origin: QsoOrigin = QsoOrigin.OPERATOR): Boolean =
-        database.transaction {
-            val inserted = database.save(qso, origin)
-            if (inserted && origin != QsoOrigin.REMOTE_SYNC && binding.state == WavelogBindingState.ENABLED) {
-                enqueue(binding.id, qso.id, WavelogOperation.CREATE, WavelogCanonicalizer.fromAdif(database.toADIF(qso)))
-            }
-            inserted
-        }
-
-    fun enqueue(bindingId: String, localQsoId: String, operation: WavelogOperation, canonical: CanonicalQso): String {
+    fun enqueue(bindingId: String, localQsoId: String, operation: WavelogOperation, canonical: CanonicalQso,
+        state: WavelogOutboxState = WavelogOutboxState.PENDING, error: String = ""): String {
         val now = System.currentTimeMillis() / 1_000
-        val existing = if (operation == WavelogOperation.UPDATE) pendingFor(bindingId, localQsoId) else null
+        val candidates = activeFor(bindingId, localQsoId)
+        val existing = when (operation) {
+            WavelogOperation.CREATE -> candidates.firstOrNull { it.operation == WavelogOperation.CREATE }
+            WavelogOperation.UPDATE -> candidates.firstOrNull { it.operation == WavelogOperation.CREATE }
+                ?: candidates.firstOrNull { it.operation == WavelogOperation.UPDATE }
+            WavelogOperation.DELETE -> candidates.firstOrNull { it.operation == WavelogOperation.DELETE }
+        }
+        val effectiveOperation = if (existing?.operation == WavelogOperation.CREATE && operation == WavelogOperation.UPDATE)
+            WavelogOperation.CREATE else operation
         val id = existing?.id ?: UUID.randomUUID().toString()
-        val key = existing?.idempotencyKey ?: "$bindingId:$localQsoId:${operation.name}:${UUID.randomUUID()}"
+        val key = existing?.operationKey ?: "$bindingId:$localQsoId:${effectiveOperation.name}:${UUID.randomUUID()}"
         val values = ContentValues().apply {
-            put("id", id); put("binding_id", bindingId); put("local_qso_id", localQsoId); put("operation", operation.name)
+            put("id", id); put("binding_id", bindingId); put("local_qso_id", localQsoId); put("operation", effectiveOperation.name)
             put("idempotency_key", key); put("payload_hash", canonical.hash); put("canonical_payload", canonical.encoded)
-            put("state", WavelogOutboxState.PENDING.name); put("attempt_count", existing?.attemptCount ?: 0)
-            put("last_error", ""); put("created_at", existing?.createdAt ?: now); put("updated_at", now)
+            put("state", state.name); put("attempt_count", existing?.attemptCount ?: 0)
+            put("last_error", error.take(500)); put("created_at", existing?.createdAt ?: now); put("updated_at", now)
         }
         database.writableDatabase.insertWithOnConflict("wavelog_outbox", null, values, SQLiteDatabase.CONFLICT_REPLACE)
         return id
@@ -109,6 +125,17 @@ class WavelogSyncStore(private val database: QsoDatabase) {
 
     fun pendingFor(bindingId: String, localQsoId: String): WavelogOutboxEntry? =
         outbox("binding_id=? AND local_qso_id=? AND state IN ('PENDING','RETRY_WAIT') ORDER BY created_at DESC LIMIT 1", arrayOf(bindingId, localQsoId)).firstOrNull()
+
+    fun blockedCreates(bindingId: String): List<WavelogOutboxEntry> =
+        outbox("binding_id=? AND operation='CREATE' AND state='BLOCKED' ORDER BY created_at", arrayOf(bindingId))
+
+    fun blockedCreate(bindingId: String, localQsoId: String): WavelogOutboxEntry? =
+        outbox("binding_id=? AND local_qso_id=? AND operation='CREATE' AND state='BLOCKED' ORDER BY created_at DESC LIMIT 1",
+            arrayOf(bindingId, localQsoId)).firstOrNull()
+
+    fun cancelUnsentCreate(bindingId: String, localQsoId: String): Boolean = database.writableDatabase.delete(
+        "wavelog_outbox", "binding_id=? AND local_qso_id=? AND operation='CREATE' AND state<>'ACCEPTED'",
+        arrayOf(bindingId, localQsoId)) > 0
 
     fun updateOutbox(entry: WavelogOutboxEntry) {
         database.writableDatabase.execSQL("UPDATE wavelog_outbox SET state=?,attempt_count=?,next_attempt_at=?,last_error=?,updated_at=? WHERE id=?",
@@ -131,9 +158,38 @@ class WavelogSyncStore(private val database: QsoDatabase) {
         arrayOf(bindingId, remoteQsoId)).use { cursor -> if (!cursor.moveToFirst()) null else WavelogRemoteLink(
             bindingId, cursor.getString(0), remoteQsoId, cursor.getString(1), cursor.getString(2), cursor.getString(3)) }
 
+    fun deleteLink(bindingId: String, localQsoId: String) {
+        database.writableDatabase.delete("wavelog_remote_link", "binding_id=? AND local_qso_id=?", arrayOf(bindingId, localQsoId))
+    }
+
     fun saveCheckpoint(checkpoint: WavelogSyncCheckpoint) {
         database.writableDatabase.execSQL("INSERT OR REPLACE INTO wavelog_checkpoint(binding_id,kind,page,high_water,overlap_hash,completed,updated_at) VALUES(?,?,?,?,?,?,?)",
             arrayOf(checkpoint.bindingId, checkpoint.kind, checkpoint.page, checkpoint.highWater, checkpoint.overlapHash, if (checkpoint.completed) 1 else 0, checkpoint.updatedAt))
+    }
+
+    fun checkpoint(bindingId: String, kind: String): WavelogSyncCheckpoint? = database.readableDatabase.rawQuery(
+        "SELECT page,high_water,overlap_hash,completed,updated_at FROM wavelog_checkpoint WHERE binding_id=? AND kind=?",
+        arrayOf(bindingId, kind)).use { cursor -> if (!cursor.moveToFirst()) null else WavelogSyncCheckpoint(
+            bindingId, kind, cursor.getInt(0), cursor.getString(1), cursor.getString(2), cursor.getInt(3) == 1, cursor.getLong(4)) }
+
+    fun deleteCheckpoint(bindingId: String, kind: String) {
+        database.writableDatabase.delete("wavelog_checkpoint", "binding_id=? AND kind=?", arrayOf(bindingId, kind))
+    }
+
+    fun clearSeen(bindingId: String, kind: String) {
+        database.writableDatabase.delete("wavelog_scan_seen", "binding_id=? AND kind=?", arrayOf(bindingId, kind))
+    }
+
+    fun markSeen(bindingId: String, kind: String, remoteIds: Collection<String>) {
+        remoteIds.filter(String::isNotBlank).forEach { remoteId ->
+            database.writableDatabase.execSQL("INSERT OR IGNORE INTO wavelog_scan_seen(binding_id,kind,remote_qso_id) VALUES(?,?,?)",
+                arrayOf(bindingId, kind, remoteId))
+        }
+    }
+
+    fun seenIds(bindingId: String, kind: String): Set<String> = buildSet {
+        database.readableDatabase.rawQuery("SELECT remote_qso_id FROM wavelog_scan_seen WHERE binding_id=? AND kind=?",
+            arrayOf(bindingId, kind)).use { cursor -> while (cursor.moveToNext()) add(cursor.getString(0)) }
     }
 
     fun saveConflict(conflict: WavelogConflict) {
@@ -146,6 +202,77 @@ class WavelogSyncStore(private val database: QsoDatabase) {
     fun openConflicts(bindingId: String): Int = database.readableDatabase.rawQuery(
         "SELECT COUNT(*) FROM wavelog_conflict WHERE binding_id=? AND state='OPEN'", arrayOf(bindingId)
     ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+
+    fun conflicts(bindingId: String): List<WavelogConflict> = buildList {
+        database.readableDatabase.rawQuery("SELECT id,local_qso_id,remote_qso_id,baseline_canonical,local_canonical,remote_canonical,conflicting_fields_json,state,created_at,resolved_at FROM wavelog_conflict WHERE binding_id=? ORDER BY created_at",
+            arrayOf(bindingId)).use { cursor -> while (cursor.moveToNext()) add(WavelogConflict(
+                cursor.getString(0), bindingId, cursor.getString(1), cursor.getString(2), cursor.getString(3), cursor.getString(4),
+                cursor.getString(5), JSONArray(cursor.getString(6)).jsonStringList().toSet(), WavelogConflictState.valueOf(cursor.getString(7)),
+                cursor.getLong(8), cursor.getLong(9).takeUnless { cursor.isNull(9) })) }
+    }
+
+    fun resolveConflict(id: String, state: WavelogConflictState) {
+        require(state != WavelogConflictState.OPEN)
+        database.writableDatabase.execSQL("UPDATE wavelog_conflict SET state=?,resolved_at=? WHERE id=? AND state='OPEN'",
+            arrayOf(state.name, System.currentTimeMillis() / 1_000, id))
+    }
+
+    fun saveTombstone(tombstone: WavelogTombstone, baselineCanonical: String) {
+        database.writableDatabase.execSQL("INSERT OR REPLACE INTO wavelog_tombstone(binding_id,local_qso_id,remote_qso_id,canonical_hash,baseline_canonical,deleted_at,acknowledged_at) VALUES(?,?,?,?,?,?,?)",
+            arrayOf(tombstone.bindingId, tombstone.localQsoId, tombstone.remoteQsoId, tombstone.canonicalHash,
+                baselineCanonical, tombstone.deletedAt, tombstone.acknowledgedAt))
+    }
+
+    fun tombstone(bindingId: String, localQsoId: String): Pair<WavelogTombstone, String>? = database.readableDatabase.rawQuery(
+        "SELECT remote_qso_id,canonical_hash,baseline_canonical,deleted_at,acknowledged_at FROM wavelog_tombstone WHERE binding_id=? AND local_qso_id=?",
+        arrayOf(bindingId, localQsoId)).use { cursor -> if (!cursor.moveToFirst()) null else
+            WavelogTombstone(bindingId, localQsoId, cursor.getString(0), cursor.getString(1), cursor.getLong(3),
+                cursor.getLong(4).takeUnless { cursor.isNull(4) }) to cursor.getString(2) }
+
+    fun acknowledgeTombstone(bindingId: String, localQsoId: String) {
+        database.writableDatabase.execSQL("UPDATE wavelog_tombstone SET acknowledged_at=? WHERE binding_id=? AND local_qso_id=?",
+            arrayOf(System.currentTimeMillis() / 1_000, bindingId, localQsoId))
+    }
+
+    fun removeTombstone(bindingId: String, localQsoId: String) {
+        database.writableDatabase.delete("wavelog_tombstone", "binding_id=? AND local_qso_id=?", arrayOf(bindingId, localQsoId))
+    }
+
+    fun deleteDecision(bindingId: String, localQsoId: String): WavelogOutboxEntry? =
+        outbox("binding_id=? AND local_qso_id=? AND operation='DELETE' AND state<>'ACCEPTED' ORDER BY created_at DESC LIMIT 1",
+            arrayOf(bindingId, localQsoId)).firstOrNull()
+
+    fun resumeDelete(bindingId: String, localQsoId: String) {
+        deleteDecision(bindingId, localQsoId)?.let { updateOutbox(it.copy(state = WavelogOutboxState.PENDING,
+            nextAttemptAt = null, lastError = "", updatedAt = System.currentTimeMillis() / 1_000)) }
+    }
+
+    fun cancelDelete(bindingId: String, localQsoId: String) {
+        deleteDecision(bindingId, localQsoId)?.let { updateOutbox(it.copy(state = WavelogOutboxState.ACCEPTED,
+            nextAttemptAt = null, lastError = "Delete cancelled by conflict resolution",
+            updatedAt = System.currentTimeMillis() / 1_000)) }
+    }
+
+    fun remoteLinks(bindingId: String): List<WavelogRemoteLink> = buildList {
+        database.readableDatabase.rawQuery("SELECT local_qso_id,remote_qso_id,baseline_hash,baseline_canonical,remote_updated_at FROM wavelog_remote_link WHERE binding_id=?",
+            arrayOf(bindingId)).use { cursor -> while (cursor.moveToNext()) add(WavelogRemoteLink(
+                bindingId, cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getString(3), cursor.getString(4))) }
+    }
+
+    fun acceptWithLink(entry: WavelogOutboxEntry, link: WavelogRemoteLink) = database.transaction {
+        saveLink(link)
+        updateOutbox(entry.copy(state = WavelogOutboxState.ACCEPTED, attemptCount = entry.attemptCount + 1,
+            nextAttemptAt = null, lastError = "", updatedAt = System.currentTimeMillis() / 1_000))
+    }
+
+    fun acceptDelete(entry: WavelogOutboxEntry) = database.transaction {
+        acknowledgeTombstone(entry.bindingId, entry.localQsoId)
+        updateOutbox(entry.copy(state = WavelogOutboxState.ACCEPTED, attemptCount = entry.attemptCount + 1,
+            nextAttemptAt = null, lastError = "", updatedAt = System.currentTimeMillis() / 1_000))
+    }
+
+    private fun activeFor(bindingId: String, localQsoId: String): List<WavelogOutboxEntry> =
+        outbox("binding_id=? AND local_qso_id=? AND state<>'ACCEPTED' ORDER BY created_at", arrayOf(bindingId, localQsoId))
 
     private fun outbox(where: String, args: Array<String>): List<WavelogOutboxEntry> = buildList {
         database.readableDatabase.rawQuery("SELECT id,binding_id,local_qso_id,operation,idempotency_key,payload_hash,canonical_payload,state,attempt_count,next_attempt_at,last_error,created_at,updated_at FROM wavelog_outbox WHERE $where", args).use { cursor ->

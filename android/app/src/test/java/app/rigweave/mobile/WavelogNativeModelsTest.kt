@@ -25,6 +25,25 @@ class WavelogNativeModelsTest {
         assertEquals(setOf("NOTES"), base.changedFields(changed))
     }
 
+    @Test fun canonicalRoundTripPreservesUnicodeMultilineColonsEmptyAndUnknownFields() {
+        val notes = "  first: line\nžluťoučký 🛰️\n"
+        val adif = "<CALL:5>om0rx<NOTES:${notes.toByteArray(Charsets.UTF_8).size}>$notes" +
+            "<COMMENT:0><APP_VENDOR_UNKNOWN:5>a:b:c<EOR>"
+        val canonical = WavelogCanonicalizer.fromAdif(adif)
+        assertEquals(notes, canonical.fields["NOTES"])
+        assertEquals("", canonical.fields["COMMENT"])
+        assertEquals("a:b:c", canonical.fields["APP_VENDOR_UNKNOWN"])
+        assertEquals(canonical, CanonicalQso.decode(canonical.encoded))
+        assertEquals(canonical, WavelogCanonicalizer.fromAdif(canonical.asAdif()))
+    }
+
+    @Test fun decodesLegacyLengthPrefixedCanonicalPayloadByUtf8Bytes() {
+        val legacy = "NOTES:6:žluť\nCALL:5:OM0RX\n"
+        val decoded = CanonicalQso.decode(legacy)
+        assertEquals("žluť", decoded.fields["NOTES"])
+        assertEquals("OM0RX", decoded.fields["CALL"])
+    }
+
     @Test fun threeWayMergeHandlesEveryConflictMatrixBranch() {
         fun q(vararg values: Pair<String, String>) = CanonicalQso(mapOf(*values))
         val base = q("CALL" to "OM0RX", "NOTES" to "base", "QTH" to "Darwin")

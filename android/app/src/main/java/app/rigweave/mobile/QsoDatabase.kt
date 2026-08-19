@@ -77,7 +77,7 @@ fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
     in 50_000_000L..54_000_000L -> "6m"; else -> ""
 }
 
-class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 8) {
+class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 9) {
     private val changeRevision = AtomicLong(0)
     var operatorSaveHandler: ((Qso) -> Unit)? = null
     override fun onConfigure(db: SQLiteDatabase) {
@@ -103,6 +103,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         if (oldVersion < 6) createSpotStatusIndexes(db)
         if (oldVersion < 7) createDeliveryTable(db)
         if (oldVersion < 8) createWavelogSyncTables(db)
+        if (oldVersion < 9) migrateWavelogSyncV9(db)
     }
 
     private fun createPagingIndexes(db: SQLiteDatabase) {
@@ -411,16 +412,22 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         return adif
     }
 
-    fun importADIF(text: String): Pair<Int, Int> {
-        var added = 0; var skipped = 0
+    fun parseADIF(text: String): Pair<List<Qso>, Int> {
+        val rows = mutableListOf<Qso>(); var skipped = 0
         Regex("(?is)(.*?<EOR>)").findAll(text.substringAfter("<EOH>", text)).forEach { match ->
             val record = match.value
             val parsed = WavelogCanonicalizer.fromAdif(record).fields
             fun field(name: String) = parsed[name.uppercase(java.util.Locale.US)].orEmpty()
             val extras = parsed.filterKeys { it !in WavelogCanonicalizer.rigWeaveFields && it !in WavelogCanonicalizer.excludedFields }
             val qso = qsoFromFields(::field, "", "", extras)
-            if (qso == null) skipped++ else if (save(qso, QsoOrigin.IMPORT)) added++ else skipped++
+            if (qso == null) skipped++ else rows += qso
         }
+        return rows to skipped
+    }
+
+    fun importADIF(text: String): Pair<Int, Int> {
+        val (rows, invalid) = parseADIF(text); var added = 0; var skipped = invalid
+        rows.forEach { if (save(it, QsoOrigin.IMPORT)) added++ else skipped++ }
         return added to skipped
     }
 

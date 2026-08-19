@@ -3,6 +3,7 @@ package app.rigweave.mobile
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
+import org.json.JSONObject
 
 enum class WavelogApiGeneration { LEGACY, V2 }
 enum class WavelogBindingState { ENABLED, PAUSED, READ_ONLY }
@@ -58,7 +59,7 @@ data class WavelogOutboxEntry(
     val bindingId: String,
     val localQsoId: String,
     val operation: WavelogOperation,
-    val idempotencyKey: String,
+    val operationKey: String,
     val payloadHash: String,
     val canonicalPayload: String,
     val state: WavelogOutboxState,
@@ -93,9 +94,18 @@ data class WavelogConflict(
     val resolvedAt: Long? = null,
 )
 
+data class WavelogTombstone(
+    val bindingId: String,
+    val localQsoId: String,
+    val remoteQsoId: String,
+    val canonicalHash: String,
+    val deletedAt: Long,
+    val acknowledgedAt: Long? = null,
+)
+
 data class CanonicalQso(val fields: Map<String, String>) {
-    val encoded: String = fields.toSortedMap().entries.joinToString("\n") { (key, value) ->
-        "$key:${value.toByteArray(Charsets.UTF_8).size}:$value"
+    val encoded: String = fields.toSortedMap().entries.joinToString(",", "{", "}") { (key, value) ->
+        "${JSONObject.quote(key)}:${JSONObject.quote(value)}"
     }
     val hash: String = MessageDigest.getInstance("SHA-256").digest(encoded.toByteArray())
         .joinToString("") { "%02x".format(it) }
@@ -109,12 +119,36 @@ data class CanonicalQso(val fields: Map<String, String>) {
 
     companion object {
         fun decode(value: String): CanonicalQso {
+            if (value.trimStart().startsWith('{')) {
+                val json = JSONObject(value)
+                return CanonicalQso(buildMap {
+                    json.keys().forEach { key -> put(key, json.optString(key)) }
+                }.toSortedMap())
+            }
             val fields = linkedMapOf<String, String>()
-            value.lineSequence().filter(String::isNotBlank).forEach { line ->
-                val first = line.indexOf(':'); val second = line.indexOf(':', first + 1)
-                if (first > 0 && second > first) fields[line.substring(0, first)] = line.substring(second + 1)
+            var cursor = 0
+            while (cursor < value.length) {
+                while (cursor < value.length && (value[cursor] == '\n' || value[cursor] == '\r')) cursor++
+                val first = value.indexOf(':', cursor); val second = value.indexOf(':', first + 1)
+                if (first <= cursor || second <= first) break
+                val length = value.substring(first + 1, second).toIntOrNull() ?: break
+                val extracted = takeUtf8(value, second + 1, length) ?: break
+                fields[value.substring(cursor, first)] = extracted.first
+                cursor = extracted.second
             }
             return CanonicalQso(fields.toSortedMap())
+        }
+
+        private fun takeUtf8(text: String, start: Int, byteLength: Int): Pair<String, Int>? {
+            var index = start; var bytes = 0
+            while (index < text.length && bytes < byteLength) {
+                val codePoint = Character.codePointAt(text, index)
+                val chars = Character.charCount(codePoint)
+                val size = String(Character.toChars(codePoint)).toByteArray(Charsets.UTF_8).size
+                if (bytes + size > byteLength) return null
+                bytes += size; index += chars
+            }
+            return if (bytes == byteLength) text.substring(start, index) to index else null
         }
     }
 }
@@ -127,7 +161,7 @@ data class ThreeWayMergeResult(
 
 object WavelogCanonicalizer {
     val excludedFields = setOf(
-        "APP_RIGWEAVE_SYNC_STATE", "APP_RIGWEAVE_REMOTE_ID", "APP_RIGWEAVE_OUTBOX_ID",
+        "APP_KX3TOUCH_UUID", "APP_RIGWEAVE_SYNC_STATE", "APP_RIGWEAVE_REMOTE_ID", "APP_RIGWEAVE_OUTBOX_ID",
         "APP_RIGWEAVE_LAST_SYNC", "APP_RIGWEAVE_CREDENTIAL_ALIAS",
     )
 
@@ -153,12 +187,19 @@ object WavelogCanonicalizer {
 
     fun fromAdif(adif: String): CanonicalQso {
         val fields = linkedMapOf<String, String>()
-        val pattern = Regex("(?i)<([A-Z0-9_]+):(\\d+)(?::[^>]*)?>")
-        pattern.findAll(adif.substringBefore("<EOR>", adif)).forEach { match ->
-            val name = match.groupValues[1].uppercase(Locale.US)
-            val length = match.groupValues[2].toIntOrNull() ?: return@forEach
-            val value = adif.substring(match.range.last + 1).take(length).trim()
-            if (name !in excludedFields) fields[name] = normalize(name, value)
+        var cursor = 0
+        while (cursor < adif.length) {
+            val open = adif.indexOf('<', cursor); if (open < 0) break
+            val close = adif.indexOf('>', open + 1); if (close < 0) break
+            val header = adif.substring(open + 1, close)
+            if (header.equals("EOR", true)) break
+            val parts = header.split(':', limit = 3)
+            val length = parts.getOrNull(1)?.toIntOrNull()
+            if (parts.isEmpty() || length == null) { cursor = close + 1; continue }
+            val extracted = takeUtf8(adif, close + 1, length) ?: break
+            val name = parts[0].uppercase(Locale.US)
+            if (name !in excludedFields) fields[name] = normalize(name, extracted.first)
+            cursor = extracted.second
         }
         return CanonicalQso(fields.toSortedMap())
     }
@@ -179,10 +220,25 @@ object WavelogCanonicalizer {
         return ThreeWayMergeResult(CanonicalQso(merged.toSortedMap()), emptySet(), "SAFE_MERGE")
     }
 
-    private fun normalize(name: String, value: String): String = when {
-        name in upperValueFields -> value.uppercase(Locale.US)
-        name in setOf("QSO_DATE", "QSO_DATE_OFF") -> value.filter(Char::isDigit).take(8)
-        name in setOf("TIME_ON", "TIME_OFF") -> value.filter(Char::isDigit).padEnd(6, '0').take(6)
-        else -> value.replace("\r\n", "\n").replace('\r', '\n')
+    private fun normalize(name: String, value: String): String {
+        val lineSafe = value.replace("\r\n", "\n").replace('\r', '\n')
+        return when {
+            name in upperValueFields -> lineSafe.trim().uppercase(Locale.US)
+            name in setOf("QSO_DATE", "QSO_DATE_OFF") -> lineSafe.filter(Char::isDigit).take(8)
+            name in setOf("TIME_ON", "TIME_OFF") -> lineSafe.filter(Char::isDigit).padEnd(6, '0').take(6)
+            else -> lineSafe
+        }
+    }
+
+    private fun takeUtf8(text: String, start: Int, byteLength: Int): Pair<String, Int>? {
+        var index = start; var bytes = 0
+        while (index < text.length && bytes < byteLength) {
+            val codePoint = Character.codePointAt(text, index)
+            val chars = Character.charCount(codePoint)
+            val size = String(Character.toChars(codePoint)).toByteArray(Charsets.UTF_8).size
+            if (bytes + size > byteLength) return null
+            bytes += size; index += chars
+        }
+        return if (bytes == byteLength) text.substring(start, index) to index else null
     }
 }

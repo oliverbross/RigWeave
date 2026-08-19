@@ -11,7 +11,6 @@ data class WavelogV2Request(
     val url: String,
     val bearerToken: String,
     val body: String? = null,
-    val idempotencyKey: String? = null,
 )
 
 data class WavelogV2Response(val status: Int, val body: String, val retryAfter: String? = null)
@@ -26,7 +25,6 @@ class DefaultWavelogV2Transport : WavelogV2Transport {
         connection.readTimeout = 30_000
         connection.setRequestProperty("Accept", "application/json")
         connection.setRequestProperty("Authorization", "Bearer ${request.bearerToken}")
-        request.idempotencyKey?.let { connection.setRequestProperty("Idempotency-Key", it) }
         request.body?.let { body ->
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/json")
@@ -127,21 +125,21 @@ class WavelogApiV2Client(
         )
     }
 
-    fun createAdif(stationId: String, adif: String, idempotencyKey: String): JSONObject = request(
-        "POST", "qso", JSONObject().put("station_profile_id", stationId.toLong())
-            .put("import_type", "adif").put("adif", adif).toString(), idempotencyKey,
-    )
+    fun qso(remoteId: String): JSONObject = request("GET", "qso/${encode(remoteId)}").getJSONObject("data")
 
-    fun patchQso(remoteId: String, fields: Map<String, String>, idempotencyKey: String): JSONObject =
-        request("PATCH", "qso/${encode(remoteId)}", JSONObject(fields).toString(), idempotencyKey)
+    fun createQso(stationId: String, canonical: CanonicalQso): JSONObject =
+        request("POST", "qso", jsonCreateBody(stationId, canonical).toString()).getJSONObject("data")
+
+    fun patchQso(remoteId: String, baseline: CanonicalQso, canonical: CanonicalQso): JSONObject =
+        request("PATCH", "qso/${encode(remoteId)}", jsonPatchBody(baseline, canonical).toString()).getJSONObject("data")
 
     fun deleteQso(remoteId: String) {
-        request("DELETE", "qso/${encode(remoteId)}", idempotencyKey = null)
+        request("DELETE", "qso/${encode(remoteId)}")
     }
 
-    private fun request(method: String, resource: String, body: String? = null, idempotencyKey: String? = null): JSONObject {
+    private fun request(method: String, resource: String, body: String? = null): JSONObject {
         val response = try {
-            transport.execute(WavelogV2Request(method, "$apiRoot/$resource", token, body, idempotencyKey))
+            transport.execute(WavelogV2Request(method, "$apiRoot/$resource", token, body))
         } catch (error: Exception) {
             throw WavelogApiException(WavelogErrorClass.TEMPORARY, 0, "network_error", null,
                 error.message?.take(300) ?: "Network request failed")
@@ -178,6 +176,70 @@ class WavelogApiV2Client(
     private fun truth(value: Any?) = when (value) { is Boolean -> value; is Number -> value.toInt() != 0; else -> value.toString() in setOf("1", "true") }
     private fun encode(value: String) = java.net.URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
     private fun parseRetryAfter(value: String?) = value?.trim()?.toLongOrNull()?.coerceAtLeast(0)
+}
+
+internal val wavelogJsonFields = mapOf(
+    "CALL" to "call", "BAND" to "band", "BAND_RX" to "band_rx", "RST_SENT" to "rst_sent",
+    "RST_RCVD" to "rst_rcvd", "GRIDSQUARE" to "gridsquare", "NAME" to "name", "COMMENT" to "comment",
+    "NOTES" to "notes", "QTH" to "qth", "TX_PWR" to "tx_pwr", "PROP_MODE" to "prop_mode",
+    "SAT_NAME" to "sat_name", "SAT_MODE" to "sat_mode", "SOTA_REF" to "sota_ref", "POTA_REF" to "pota_ref",
+    "WWFF_REF" to "wwff_ref", "IOTA" to "iota", "SIG" to "sig", "SIG_INFO" to "sig_info",
+    "DARC_DOK" to "darc_dok", "STATE" to "state", "CNTY" to "cnty", "CQZ" to "cqz", "ITUZ" to "ituz",
+    "QSL_VIA" to "qsl_via", "SRX" to "srx", "STX" to "stx", "SRX_STRING" to "srx_string",
+    "STX_STRING" to "stx_string",
+)
+
+internal val wavelogCreateOnlyFields = mapOf(
+    "OPERATOR" to "operator", "STATION_CALLSIGN" to "station_callsign", "MY_GRIDSQUARE" to "my_gridsquare",
+    "MY_COUNTRY" to "my_country", "MY_DXCC" to "my_dxcc", "MY_CQ_ZONE" to "my_cq_zone",
+    "MY_ITU_ZONE" to "my_itu_zone", "MY_STATE" to "my_state", "MY_IOTA" to "my_iota",
+    "MY_SOTA_REF" to "my_sota_ref", "MY_WWFF_REF" to "my_wwff_ref", "MY_POTA_REF" to "my_pota_ref",
+    "RIG" to "rig", "DXCC" to "dxcc", "CONT" to "cont", "CONTEST_ID" to "contest_id",
+    "QSL_SENT" to "qsl_sent", "QSL_RCVD" to "qsl_rcvd", "QSL_SENT_VIA" to "qsl_sent_via",
+    "QSL_RCVD_VIA" to "qsl_rcvd_via", "QSLMSG" to "qslmsg", "LOTW_QSL_SENT" to "lotw_qsl_sent",
+    "LOTW_QSL_RCVD" to "lotw_qsl_rcvd", "EQSL_QSL_SENT" to "eqsl_qsl_sent", "EQSL_QSL_RCVD" to "eqsl_qsl_rcvd",
+)
+
+internal fun jsonCreateBody(stationId: String, canonical: CanonicalQso): JSONObject {
+    val body = JSONObject().put("station_profile_id", stationId.toLong()).put("import_type", "json")
+    (wavelogJsonFields + wavelogCreateOnlyFields).forEach { (adif, json) ->
+        canonical.fields[adif]?.let { body.put(json, it) }
+    }
+    canonical.fields["QSO_DATE"]?.let { body.put("qso_date", isoDate(it)) }
+    canonical.fields["TIME_ON"]?.let { body.put("time_on", it) }
+    canonical.fields["TIME_OFF"]?.let { body.put("time_off", it) }
+    canonical.fields["FREQ"]?.let { body.put("freq", mhzToHz(it)) }
+    canonical.fields["FREQ_RX"]?.let { body.put("freq_rx", mhzToHz(it)) }
+    canonical.fields["SUBMODE"].orEmpty().ifBlank { canonical.fields["MODE"].orEmpty() }
+        .takeIf(String::isNotBlank)?.let { body.put("mode", it) }
+    return body
+}
+
+internal fun jsonPatchBody(baseline: CanonicalQso, canonical: CanonicalQso): JSONObject {
+    val changed = baseline.changedFields(canonical)
+    val body = JSONObject()
+    wavelogJsonFields.forEach { (adif, json) -> if (adif in changed) body.put(json, canonical.fields[adif].orEmpty()) }
+    if (changed.any { it == "QSO_DATE" || it == "TIME_ON" || it == "TIME_OFF" }) {
+        body.put("qso_date", isoDate(canonical.fields["QSO_DATE"].orEmpty()))
+        body.put("time_on", canonical.fields["TIME_ON"].orEmpty())
+        canonical.fields["TIME_OFF"]?.let { body.put("time_off", it) }
+    }
+    if ("FREQ" in changed) body.put("freq", mhzToHz(canonical.fields["FREQ"].orEmpty()))
+    if ("FREQ_RX" in changed) body.put("freq_rx", mhzToHz(canonical.fields["FREQ_RX"].orEmpty()))
+    if (changed.any { it == "MODE" || it == "SUBMODE" }) {
+        body.put("mode", canonical.fields["SUBMODE"].orEmpty().ifBlank { canonical.fields["MODE"].orEmpty() })
+    }
+    require(body.length() > 0) { "No Wavelog-editable fields changed" }
+    return body
+}
+
+private fun isoDate(value: String): String = value.filter(Char::isDigit).let {
+    require(it.length == 8) { "Invalid QSO date" }; "${it.substring(0, 4)}-${it.substring(4, 6)}-${it.substring(6, 8)}"
+}
+
+private fun mhzToHz(value: String): Long {
+    val mhz = value.toBigDecimalOrNull() ?: throw IllegalArgumentException("Invalid frequency")
+    return mhz.movePointRight(6).longValueExact()
 }
 
 fun normalizeWavelogV2Root(raw: String): String {
