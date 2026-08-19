@@ -19,7 +19,6 @@ import java.time.Instant
 
 internal class OperationsController(
     context: Context,
-    private val database: QsoDatabase,
     private val providers: HamClockPublicProviders,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -28,7 +27,6 @@ internal class OperationsController(
     var contestItems by mutableStateOf(contestCalendarItems(providers.contests.cached())); private set
     var dxMetadata by mutableStateOf(operationsMetadata(providers.dxpeditions.cached())); private set
     var contestMetadata by mutableStateOf(operationsMetadata(providers.contests.cached())); private set
-    var localQsos by mutableStateOf<List<Qso>>(emptyList()); private set
     var plans by mutableStateOf(loadPlans()); private set
     var refreshing by mutableStateOf(false); private set
     var focusDxCall by mutableStateOf(""); private set
@@ -43,9 +41,9 @@ internal class OperationsController(
         refreshing = true
         scope.launch {
             val snapshot = withContext(Dispatchers.IO) {
-                Triple(providers.dxpeditions.refresh(force), providers.contests.refresh(force), database.all())
+                providers.dxpeditions.refresh(force) to providers.contests.refresh(force)
             }
-            apply(snapshot.first, snapshot.second, snapshot.third)
+            apply(snapshot.first, snapshot.second)
             refreshing = false
         }
     }
@@ -66,9 +64,9 @@ internal class OperationsController(
     fun close() = scope.cancel()
 
     private fun apply(dx: HamClockFeed<List<app.rigweave.mobile.hamclock.HamClockDxpedition>>,
-        contests: HamClockFeed<List<app.rigweave.mobile.hamclock.HamClockContest>>, qsos: List<Qso>) {
+        contests: HamClockFeed<List<app.rigweave.mobile.hamclock.HamClockContest>>) {
         dxItems = dxCalendarItems(dx); contestItems = contestCalendarItems(contests)
-        dxMetadata = operationsMetadata(dx); contestMetadata = operationsMetadata(contests); localQsos = qsos
+        dxMetadata = operationsMetadata(dx); contestMetadata = operationsMetadata(contests)
     }
 
     private fun loadPlans(): List<ActivationPlan> = runCatching {

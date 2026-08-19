@@ -3,7 +3,7 @@ package app.rigweave.mobile
 enum class LogbookSort { TIME, CALLSIGN, NAME, COUNTRY, DXCC, MODE, SUBMODE, BAND, FREQUENCY, GRID, DISTANCE, DURATION }
 enum class LogbookSortDirection { DESCENDING, ASCENDING }
 
-val LOGBOOK_PAGE_SIZES = listOf(25, 50, 100, 200, 500, 1_000)
+val LOGBOOK_PAGE_SIZES = listOf(25, 50, 100, 200, 250)
 
 fun normalizedLogbookPageSize(value: Int): Int = value.takeIf { it in LOGBOOK_PAGE_SIZES } ?: 50
 
@@ -139,7 +139,7 @@ fun filterLogbook(records: List<Qso>, filter: LogbookFilter): List<Qso> {
         LogbookSort.DURATION -> compareBy<Qso> { it.durationSeconds }
     }
     val ordered = matching.sortedWith(if (filter.direction == LogbookSortDirection.DESCENDING) comparator.reversed() else comparator)
-    return ordered.take(filter.limit.coerceIn(1, 1_000))
+    return ordered.take(filter.limit.coerceIn(1, 250))
 }
 
 fun activeLogbookFilterCount(filter: LogbookFilter): Int = listOf(

@@ -85,8 +85,18 @@ class QsoMutationCoordinator(
         return result.first to result.second + invalid
     }
 
-    fun localStationIds(): List<String> = listOf(DEFAULT_LOCAL_STATION) + database.all().map(Qso::stationProfileId)
-        .filter(String::isNotBlank).distinct().sorted()
+    fun importADIF(input:java.io.InputStream,batchSize:Int=250,cancelled:()->Boolean={false},progress:(AdifImportProgress)->Unit={}):AdifImportProgress {
+        val pending=ArrayList<Qso>(batchSize.coerceIn(50,500));var parsed=0;var inserted=0;var duplicates=0;var invalid=0
+        fun commit(){if(pending.isEmpty())return;val result=saveBatch(pending,QsoOrigin.IMPORT);inserted+=result.first;duplicates+=result.second;pending.clear();progress(AdifImportProgress(parsed,inserted,duplicates,invalid))}
+        val stream=streamAdifRecords(input,cancelled){record->
+            val result=database.parseADIF(record);parsed++;invalid+=result.second
+            result.first.forEach { pending+=it;if(pending.size>=batchSize.coerceIn(50,500))commit() }
+        }
+        invalid+=stream.second;commit()
+        return AdifImportProgress(parsed,inserted,duplicates,invalid).also(progress)
+    }
+
+    fun localStationIds(): List<String> = listOf(DEFAULT_LOCAL_STATION) + database.stationProfileIds()
 
     fun isMapped(qso: Qso): Boolean = store.configuredBinding()?.let { applies(it, qso) } == true
 

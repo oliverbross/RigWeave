@@ -124,9 +124,9 @@ internal fun OperationsScreen(
         if (rows.isEmpty()) item { EmptyOperations("No DX calendar entries match. Provider state is shown above.") }
         items(rows, key = DxCalendarItem::id) { item ->
             val entity = cty.lookup(item.callsign)
-            val exact = controller.localQsos.filter { it.callsign.equals(item.callsign, true) }
+            val exact = progress.qsoSnapshot.filter { it.callsign.equals(item.callsign, true) }
             val dxcc = entity?.dxcc.orEmpty()
-            val entityRows = controller.localQsos.filter { dxcc.isNotBlank() && it.dxcc == dxcc }
+            val entityRows = progress.qsoSnapshot.filter { dxcc.isNotBlank() && it.dxcc == dxcc }
             val live = features.liveSpots.firstOrNull { it.callsign.equals(item.callsign, true) }
             val needs = progress.snapshot.needs.firstOrNull { it.dxSpot?.callsign.equals(item.callsign, true) }?.reasons.orEmpty()
             Surface(color = OpsPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth().border(1.dp, OpsAmber.copy(.25f), RoundedCornerShape(8.dp))) {
@@ -179,7 +179,7 @@ private fun dxGroup(item: DxCalendarItem, now: Long): String = when {
         } }
         if (rows.isEmpty()) item { EmptyOperations("No contests match. Malformed and expired provider rows are skipped.") }
         items(rows, key = ContestCalendarItem::id) { item ->
-            val qsoCount = item.contestId.takeIf(String::isNotBlank)?.let { id -> controller.localQsos.count { it.contestId.equals(id, true) } }
+            val qsoCount = item.contestId.takeIf(String::isNotBlank)?.let { id -> progress.qsoSnapshot.count { it.contestId.equals(id, true) } }
             Surface(color = OpsPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Row { Text(item.name, color = OpsAmber, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f)); Text(contestGroup(item, now), color = OpsInk) }
                 Text("${formatContestTime(item.startEpoch, utc)} → ${formatContestTime(item.endEpoch, utc)} · ${item.mode}", color = OpsInk)

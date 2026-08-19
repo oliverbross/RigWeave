@@ -52,14 +52,15 @@ internal data class SotaCatalogueMetadata(
     val failure: String = "",
 ) { val stale get() = ready && importedAt > 0 && Instant.now().epochSecond - importedAt > 14 * 86_400L }
 
-internal class PortableController(context: Context, private val qsoDatabase: QsoDatabase) {
+internal class PortableController(context: Context, private val qsoDatabase: QsoDatabase,
+    private val sharedQsoSnapshot: (() -> List<Qso>)? = null) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("rigweave-portable", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val wwffMutex = Mutex()
     private val wwffCache = File(appContext.filesDir, "wwff-spots.json")
     private val wwffAgendaCache = File(appContext.filesDir, "wwff-agendas.json")
-    val pota = PotaController(appContext, qsoDatabase)
+    val pota = PotaController(appContext, qsoDatabase) { qsoSnapshot }
     val sotaCatalogue = SotaCatalogue(appContext)
 
     var sotaSpots by mutableStateOf<List<PortableSpot>>(emptyList()); private set
@@ -73,7 +74,7 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
     private var opportunityJob: Job? = null
     private var opportunityKey: Any? = null
 
-    init { refreshQsoSnapshot(); loadWwffCache() }
+    init { if (sharedQsoSnapshot == null) refreshQsoSnapshot(); loadWwffCache() }
 
     fun close() { scope.cancel(); pota.close(); sotaCatalogue.close() }
     fun refreshAll() { pota.refreshSpots(); refreshWwff() }
@@ -120,6 +121,12 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
     }
 
     private fun refreshQsoSnapshot() {
+        sharedQsoSnapshot?.let { source ->
+            qsoSnapshot = source()
+            lastQsoRevision = qsoDatabase.changeToken()
+            opportunityKey = null
+            return
+        }
         qsoRefreshJob?.cancel()
         qsoRefreshJob = scope.launch {
             val revision = qsoDatabase.changeToken()

@@ -133,12 +133,15 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val core = remember { NativeCore.create() }
     val transport = remember { UsbRadioTransport(context) }
     val database = remember { QsoDatabase(context) }
+    LaunchedEffect(database) {
+        while (withContext(Dispatchers.IO) { database.backfillProjectionBatch() }) delay(25)
+    }
     val mutations = remember { QsoMutationCoordinator(database) }
     val progress = remember { ProgressController(context, database) }
     val publicProviders = remember { app.rigweave.mobile.hamclock.HamClockPublicProviders(File(context.filesDir, "hamclock-public")) }
-    val operations = remember { OperationsController(context, database, publicProviders) }
-    val portable = remember { PortableController(context, database) }
-    val activation = remember { PotaActivationController(context, database) }
+    val operations = remember { OperationsController(context, publicProviders) }
+    val portable = remember { PortableController(context, database) { progress.qsoSnapshot } }
+    val activation = remember { PotaActivationController(context, database) { progress.qsoSnapshot } }
     val features = remember { FeatureController(context) }
     val neuralDx = remember { NeuralDxController(context, database) }
     val wavelog = remember { WavelogController(context, database) }
@@ -388,6 +391,7 @@ private fun navIcon(item: Destination) = when (item) {
         intelligenceAttention, cty.dataRevision, progress.goalStore.goals) {
         progress.refresh(progress.filters, features.liveSpots, intelligencePortableSpots, intelligenceAttention, cty, portable.sotaCatalogue)
     }
+    LaunchedEffect(progress.qsoSnapshot) { portable.notifyQsoChanged() }
     when (destination) {
         Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, publicProviders,
             operations, send, openDx, openPortable, openProgress, openOperations)
@@ -2951,24 +2955,31 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
     var filterError by rememberSaveable { mutableStateOf("") }; var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     var deleteQso by remember { mutableStateOf<Qso?>(null) }
     var editingQso by remember { mutableStateOf<Qso?>(null) }
-    var exportText by remember { mutableStateOf("") }
+    var exportRequest by remember { mutableStateOf<Pair<LogbookFilter?,List<String>?>?>(null) }
     var actionStatus by remember { mutableStateOf("") }
-    var page by rememberSaveable { mutableIntStateOf(0) }
-    var pageData by remember { mutableStateOf(QsoPage(emptyList(), 0, 0, applied.limit)) }
-    var pageLoading by remember { mutableStateOf(true) }
-    var pageError by remember { mutableStateOf("") }
     var refreshGeneration by remember { mutableIntStateOf(0) }
     var previousQsoRecord by remember { mutableStateOf<AndroidCallbookRecord?>(null) }
     val context = LocalContext.current
+    val logbookScope = rememberCoroutineScope()
+    val logbookController=remember(database){LogbookController(LogbookRepository(database))}
+    DisposableEffect(logbookController){onDispose(logbookController::close)}
+    val queryState=logbookController.state
+    val ready=queryState as? LogbookQueryState.Ready
+    val pageRows=ready?.rows.orEmpty()
+    val pageData=QsoPage(pageRows,ready?.exactTotal?:pageRows.size,logbookController.pageIndex,applied.limit)
+    val pageLoading=queryState is LogbookQueryState.LoadingFirstPage||queryState is LogbookQueryState.LoadingAnotherPage
+    val pageError=(queryState as? LogbookQueryState.RecoverableError)?.message.orEmpty()
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-adif")) { uri ->
-        uri?.let { target -> runCatching { context.contentResolver.openOutputStream(target)?.bufferedWriter()?.use { it.write(exportText) } }
-            .onSuccess { actionStatus = "ADIF export saved." }.onFailure { actionStatus = "ADIF export failed: ${it.message}" } }
-        exportText = ""
+        val request=exportRequest;exportRequest=null
+        if(uri!=null&&request!=null)logbookScope.launch { runCatching { withContext(Dispatchers.IO) {
+            context.contentResolver.openOutputStream(uri)?.use { output -> database.streamExportADIF(output,request.first?:LogbookFilter(),
+                wavelog.stationId.takeIf { wavelog.logMode==LogMode.WAVELOG },request.second) } ?: error("Export destination could not be opened")
+        } }.onSuccess { actionStatus="ADIF export saved." }.onFailure { actionStatus="ADIF export failed: ${it.message}" } }
     }
 
     LaunchedEffect(initialFilter) {
         initialFilter?.let { requested ->
-            draft = requested; applied = requested; page = 0; selectedId = null
+            draft = requested; applied = requested; selectedId = null
             fromDate = requested.fromEpochSeconds?.let { Instant.ofEpochSecond(it).atZone(ZoneOffset.UTC).toLocalDate().toString() }.orEmpty()
             toDate = requested.toEpochSecondsExclusive?.let { Instant.ofEpochSecond(it - 1).atZone(ZoneOffset.UTC).toLocalDate().toString() }.orEmpty()
             consumeInitialFilter()
@@ -2980,18 +2991,13 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
             if (wavelog.configured && wavelog.stations.isEmpty()) wavelog.loadStations()
             wavelog.syncTwoWay()
         }
-        page = 0; refreshGeneration++
+        refreshGeneration++
     }
     LaunchedEffect(wavelog.status) {
         if (wavelog.status.startsWith("Two-way sync complete")) refreshGeneration++
     }
-    LaunchedEffect(applied, page, wavelog.logMode, wavelog.stationId, refreshGeneration) {
-        pageLoading = true; pageError = ""
-        runCatching { withContext(Dispatchers.IO) { database.page(page, applied.limit, applied,
-            wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }) } }
-            .onSuccess { pageData = it }.onFailure { pageError = it.message ?: "Logbook query failed" }
-        pageLoading = false
-        if (page != pageData.page) page = pageData.page
+    LaunchedEffect(applied, wavelog.logMode, wavelog.stationId, refreshGeneration) {
+        logbookController.apply(applied,wavelog.stationId.takeIf { wavelog.logMode==LogMode.WAVELOG })
     }
     val selected = pageData.rows.firstOrNull { it.id == selectedId }
     val stationLabel = wavelog.selectedStation?.label?.ifBlank { null }
@@ -3018,16 +3024,16 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                     val date = Instant.ofEpochSecond(selected.createdAt).atZone(ZoneOffset.UTC).toLocalDate().toString()
                     fromDate = date; toDate = date
                 }
-                draft = updated; applied = updated; page = 0; selectedId = null
+                draft = updated; applied = updated; selectedId = null
             }
             OutlinedButton({ selected?.let { deleteQso = it } }, enabled = selected != null,
                 modifier = Modifier.heightIn(min = 48.dp)) { Text("DELETE QSO") }
             OutlinedButton({ selected?.let { editingQso = it } }, enabled = selected != null,
                 modifier = Modifier.heightIn(min = 48.dp)) { Text("EDIT QSO") }
-            OutlinedButton({ selected?.let { qso -> exportText = database.exportSelectedADIF(listOf(qso.id)); exportLauncher.launch("rigweave-${qso.callsign}.adi") } },
+            OutlinedButton({ selected?.let { qso -> exportRequest=null to listOf(qso.id); exportLauncher.launch("rigweave-${qso.callsign}.adi") } },
                 enabled = selected != null, modifier = Modifier.heightIn(min = 48.dp)) { Text("EXPORT SELECTED") }
             OutlinedButton({
-                exportText = database.exportFilteredADIF(applied, wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG })
+                exportRequest = applied to null
                 exportLauncher.launch("rigweave-filtered-${LocalDate.now(ZoneOffset.UTC)}.adi")
             }, enabled = pageData.total > 0, modifier = Modifier.heightIn(min = 48.dp)) { Text("EXPORT FILTERED") }
             OutlinedButton({ selected?.let { qso -> callbook.lookup(qso.callsign) { record ->
@@ -3047,7 +3053,7 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
             LogbookColumnMenu(app)
             if (activeLogbookFilterCount(applied) > 0) OutlinedButton({
                 val cleared = LogbookFilter(limit = applied.limit)
-                draft = cleared; applied = cleared; page = 0; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
+                draft = cleared; applied = cleared; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
             }, modifier = Modifier.heightIn(min = 48.dp)) { Icon(Icons.Outlined.Clear, null); Spacer(Modifier.width(5.dp)); Text("CLEAR FILTERS") }
             OutlinedButton({ if (wavelog.logMode == LogMode.WAVELOG) wavelog.syncTwoWay(); refreshGeneration++ }, modifier = Modifier.heightIn(min = 48.dp)) {
                 Icon(Icons.Outlined.Refresh, null); Spacer(Modifier.width(6.dp)); Text(if (wavelog.logMode == LogMode.WAVELOG) "SYNC" else "REFRESH")
@@ -3060,9 +3066,9 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
             }
             Text("${pageData.rows.size} / ${pageData.total} RESULTS", color = Ink, fontWeight = FontWeight.Black, fontSize = 16.sp)
             CompactPager(pageData, applied.limit, { limit ->
-                draft = draft.copy(limit = limit); applied = applied.copy(limit = limit); page = 0; selectedId = null
-            }, { page = (page - 1).coerceAtLeast(0); selectedId = null },
-                { page = (page + 1).coerceAtMost(pageData.pageCount - 1); selectedId = null })
+                draft = draft.copy(limit = limit); applied = applied.copy(limit = limit); selectedId = null
+            }, { logbookController.loadPrevious(); selectedId = null },
+                { logbookController.loadNext(); selectedId = null })
         }
         if (actionStatus.isNotBlank()) Text(actionStatus, color = Hold, style = MaterialTheme.typography.bodySmall)
         val deliveryStates = syncHub.records.filter { record -> pageData.rows.any { it.id == record.qsoId } }
@@ -3070,7 +3076,10 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             if (pageLoading) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             else if (pageError.isNotBlank()) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(pageError, color = Danger); TextButton({ refreshGeneration++ }) { Text("RETRY") }
+                Text(pageError, color = Danger); TextButton(logbookController::retry) { Text("RETRY") }
+            }
+            else if(queryState is LogbookQueryState.ProjectionOptimising) Column(Modifier.align(Alignment.Center),horizontalAlignment=Alignment.CenterHorizontally){
+                CircularProgressIndicator(progress={queryState.progress});Text("Optimising local log index · ${(queryState.progress*100).toInt()}%",color=Muted)
             }
             else if (maxWidth < 720.dp) CompactLogbookList(pageData.rows, deliveryStates, selectedId, { selectedId = it },
                 { previousQsoRecord = it.previousQsoRecord() }, Modifier.fillMaxSize())
@@ -3079,7 +3088,7 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                 val direction = if (applied.sort == sort && applied.direction == LogbookSortDirection.DESCENDING)
                     LogbookSortDirection.ASCENDING else LogbookSortDirection.DESCENDING
                 draft = draft.copy(sort = sort, direction = direction)
-                applied = applied.copy(sort = sort, direction = direction); page = 0; selectedId = null
+                applied = applied.copy(sort = sort, direction = direction); selectedId = null
             }
         }
         if (showFilters) LogbookFilterDialog(draft, { draft = it }, fromDate, { fromDate = it }, toDate, { toDate = it },
@@ -3096,11 +3105,11 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                         filterError = ""
                         applied = draft.copy(fromEpochSeconds = from?.atStartOfDay()?.toEpochSecond(ZoneOffset.UTC),
                             toEpochSecondsExclusive = to?.plusDays(1)?.atStartOfDay()?.toEpochSecond(ZoneOffset.UTC))
-                        draft = applied; page = 0; selectedId = null; showFilters = false
+                        draft = applied; selectedId = null; showFilters = false
                     }
                 }, onClear = {
                     val cleared = LogbookFilter(limit = applied.limit)
-                    draft = cleared; applied = cleared; page = 0; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
+                    draft = cleared; applied = cleared; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
                 }, onDismiss = { showFilters = false })
     if (showFastEntry) FastEntryDialog(mutations, wavelog, callbook, app.stationCallsign, { _, _ -> refreshGeneration++ }) {
             showFastEntry = false
@@ -3580,13 +3589,13 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             .onFailure { error -> systemMessage = "Restore review failed: ${error.message}" } }
     }
     val exportAdif = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-adif")) { uri ->
-        uri?.let { runCatching { context.contentResolver.openOutputStream(it)?.bufferedWriter()?.use { writer -> writer.write(database.exportADIF()) } }
-            .onSuccess { systemMessage = "ADIF exported from tablet database" }.onFailure { error -> systemMessage = "ADIF export failed: ${error.message}" } }
+        uri?.let { target -> settingsScope.launch { runCatching { withContext(Dispatchers.IO) { context.contentResolver.openOutputStream(target)?.use { database.streamExportADIF(it) } ?: error("Export destination could not be opened") } }
+            .onSuccess { systemMessage = "ADIF exported from tablet database" }.onFailure { error -> systemMessage = "ADIF export failed: ${error.message}" } } }
     }
     val importAdif = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { runCatching { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader -> mutations.importADIF(reader.readText()) } ?: (0 to 0) }
-            .onSuccess { result -> systemMessage = "ADIF import · ${result.first} added · ${result.second} skipped" }
-            .onFailure { error -> systemMessage = "ADIF import failed: ${error.message}" } }
+        uri?.let { target -> settingsScope.launch { runCatching { withContext(Dispatchers.IO) { context.contentResolver.openInputStream(target)?.use { mutations.importADIF(it) } ?: AdifImportProgress(0,0,0,1) } }
+            .onSuccess { result -> systemMessage = "ADIF import · ${result.inserted} added · ${result.duplicates+result.invalid} skipped" }
+            .onFailure { error -> systemMessage = "ADIF import failed: ${error.message}" } } }
     }
     val importVoice = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val slot = pendingImportSlot

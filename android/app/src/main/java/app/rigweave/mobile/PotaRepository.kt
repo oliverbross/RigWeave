@@ -49,7 +49,8 @@ internal data class PotaParkMetadata(
     val stale: Boolean get() = ready && importedAt > 0 && Instant.now().epochSecond - importedAt > 14 * 86_400L
 }
 
-internal class PotaController(context: Context, private val qsoDatabase: QsoDatabase) {
+internal class PotaController(context: Context, private val qsoDatabase: QsoDatabase,
+    private val sharedQsoSnapshot: (() -> List<Qso>)? = null) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("rigweave-pota", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -108,7 +109,7 @@ internal class PotaController(context: Context, private val qsoDatabase: QsoData
 
     fun opportunities(now: Long, radioFrequencyHz: Long, stationGrid: String): List<PotaOpportunity> {
         val station = maidenheadCenter(stationGrid)
-        val qsos = qsoDatabase.all()
+        val qsos = sharedQsoSnapshot?.invoke() ?: qsoDatabase.all()
         return spots.map { spot -> rankPotaSpot(spot, workedStateFor(spot, qsos, now), now, radioFrequencyHz, station) }
     }
 
