@@ -89,6 +89,8 @@ class WavelogController(private val context: Context, private val database: QsoD
 
     val selectedStation get() = stations.firstOrNull { it.id == stationId }
     val configured get() = baseURL.isNotBlank() && apiKey.isNotBlank() && stationId.toLongOrNull() != null
+    val apiGeneration get() = if (apiKey.startsWith("wl2_")) WavelogApiGeneration.V2 else WavelogApiGeneration.LEGACY
+    val legacyConfigured get() = configured && apiGeneration == WavelogApiGeneration.LEGACY
     fun synchronizedNow(): Instant = Instant.ofEpochMilli(System.currentTimeMillis() + ntpOffsetMillis)
 
     init {
@@ -96,11 +98,11 @@ class WavelogController(private val context: Context, private val database: QsoD
         runCatching { connectivity.registerDefaultNetworkCallback(networkCallback) }
         scope.launch {
             delay(1_000)
-            if (logMode == LogMode.WAVELOG) runTwoWay()
+            if (logMode == LogMode.WAVELOG && apiGeneration == WavelogApiGeneration.LEGACY) runTwoWay()
             synchronizeTime(force = false)
             while (isActive) {
                 delay(60_000)
-                if (logMode == LogMode.WAVELOG && (pendingCount > 0 || configured)) runTwoWay()
+                if (logMode == LogMode.WAVELOG && apiGeneration == WavelogApiGeneration.LEGACY && (pendingCount > 0 || legacyConfigured)) runTwoWay()
                 synchronizeTime(force = false)
             }
         }
@@ -109,17 +111,25 @@ class WavelogController(private val context: Context, private val database: QsoD
     fun updateBaseURL(value: String) { baseURL = value; prefs.edit().putString("base_url", value).apply() }
     fun setStation(value: String) {
         stationId = value; prefs.edit().putString("station_id", value).apply()
-        if (logMode == LogMode.WAVELOG) syncTwoWay()
+        if (logMode == LogMode.WAVELOG && apiGeneration == WavelogApiGeneration.LEGACY) syncTwoWay()
     }
     fun updateApiKey(value: String) { apiKey = value; prefs.edit().putString("api_key", encrypt(value)).apply() }
     fun updateNtpServer(value: String) { ntpServer = value.trim(); prefs.edit().putString("ntp_server", ntpServer).apply() }
     fun updateLogMode(value: LogMode) {
         logMode = value; prefs.edit().putString("log_mode", value.name).apply()
         status = if (value == LogMode.LOCAL) "Local ADIF logging selected" else "Wavelog two-way logging selected"
-        if (value == LogMode.WAVELOG) syncTwoWay()
+        if (value == LogMode.WAVELOG && apiGeneration == WavelogApiGeneration.LEGACY) syncTwoWay()
     }
 
     fun enqueue(id: String, adif: String) {
+        if (apiGeneration == WavelogApiGeneration.V2) {
+            val binding = WavelogSyncStore(database).activeBinding()
+            val qso = database.qso(id)
+            if (binding != null && qso != null && binding.state == WavelogBindingState.ENABLED)
+                WavelogSyncStore(database).enqueue(binding.id, id, WavelogOperation.CREATE, WavelogCanonicalizer.fromAdif(adif))
+            status = if (binding == null) "API v2 QSO remains local · bind a station in Sync Hub" else "API v2 QSO queued durably"
+            return
+        }
         synchronized(queueLock) {
             val queue = loadQueue()
             if ((0 until queue.length()).any { queue.getJSONObject(it).optString("id") == id }) return
@@ -197,7 +207,7 @@ class WavelogController(private val context: Context, private val database: QsoD
     fun syncTwoWay() { scope.launch { runTwoWay() } }
 
     private suspend fun runTwoWay() = syncMutex.withLock {
-        if (logMode != LogMode.WAVELOG) return@withLock
+        if (logMode != LogMode.WAVELOG || apiGeneration != WavelogApiGeneration.LEGACY) return@withLock
         syncQueueInternal()
         if (configured) pullRemote(reset = false)
     }

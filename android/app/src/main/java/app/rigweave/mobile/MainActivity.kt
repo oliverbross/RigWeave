@@ -136,6 +136,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val features = remember { FeatureController(context) }
     val neuralDx = remember { NeuralDxController(context, database) }
     val wavelog = remember { WavelogController(context, database) }
+    val wavelogNative = remember { WavelogNativeController(database, wavelog) }
     val app = remember { AppController(context) }
     val flex = remember { FlexRadioController(context, { app.preferredFlexStation }, app::savePreferredFlexStation) { app.manualFlexIp } }
     val syncHub = remember { SyncHubController(context, database, { wavelog.logMode }, { app.stationGrid }) }
@@ -267,7 +268,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     LaunchedEffect(voiceAudio) { voiceAudio.onFailure = { app.updateVoiceMacrosArmed(false) } }
     DisposableEffect(Unit) { onDispose {
         app.disarmAll(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close()
-        scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
+        scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelogNative.close(); wavelog.close(); callbook.close(); cty.close()
         portable.close(); progress.close(); syncHub.close(); NativeCore.destroy(core); database.close()
     } }
     pendingRisk?.let { command ->
@@ -315,7 +316,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
-            Screen(destination, radio, usbDetail, database, progress, features, neuralDx, wavelog, syncHub, callbook, cty, audio,
+            Screen(destination, radio, usbDetail, database, progress, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
                 voiceStore, voiceAudio, voiceTx, eqStudio, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
@@ -325,7 +326,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
             Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
-            Screen(destination, radio, usbDetail, database, progress, features, neuralDx, wavelog, syncHub, callbook, cty, audio,
+            Screen(destination, radio, usbDetail, database, progress, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
                 voiceStore, voiceAudio, voiceTx, eqStudio, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
@@ -351,7 +352,8 @@ private fun navIcon(item: Destination) = when (item) {
 }
 
 @Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase, progress: ProgressController,
-    features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, syncHub: SyncHubController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
+    features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, wavelogNative: WavelogNativeController,
+    syncHub: SyncHubController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
     portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
     transport: UsbRadioTransport, flex: FlexRadioController, digi: DigiController, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
     eqStudio: EqStudioController, compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
@@ -398,7 +400,7 @@ private fun navIcon(item: Destination) = when (item) {
             wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }.orEmpty(), app.stationCallsign, compact,
             openDx = openDx, openPortable = openPortable,
             openLogbook = openLogbook, openSync = openSync)
-        Destination.SYNC -> SyncHubScreen(database, syncHub, wavelog, openLogbook)
+        Destination.SYNC -> SyncHubScreen(database, syncHub, wavelog, wavelogNative, openLogbook)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app, send)
         Destination.PORTABLE -> PortableWorkspaceScreen(portable, activation, radio, app.stationGrid, foreground, compact,

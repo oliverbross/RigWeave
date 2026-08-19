@@ -69,12 +69,14 @@ fun SyncHubScreen(
     database: QsoDatabase,
     controller: SyncHubController,
     wavelog: WavelogController,
+    nativeWavelog: WavelogNativeController,
     onBack: () -> Unit,
 ) {
     var filter by remember { mutableStateOf(OutboxFilter.ALL) }
     var configure by remember { mutableStateOf<SyncProvider?>(null) }
     var selected by remember { mutableStateOf<DeliveryRecord?>(null) }
     var catchUp by remember { mutableStateOf(false) }
+    var nativeOpen by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { controller.syncNow() }
 
     val visible = controller.records.filter { record ->
@@ -101,6 +103,8 @@ fun SyncHubScreen(
             }
             AssistChip({ controller.syncNow() }, { Text(if (controller.busy) "SENDING" else "SYNC NOW") },
                 leadingIcon = { Icon(Icons.Outlined.Refresh, null) })
+            AssistChip({ nativeOpen = true }, { Text("WAVELOG LINK") },
+                leadingIcon = { Icon(Icons.Outlined.Settings, null) })
         }
         Surface(color = if (wavelog.logMode == LogMode.LOCAL) SyncRaised else Color(0xFF49371E),
             shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
@@ -129,6 +133,7 @@ fun SyncHubScreen(
     configure?.let { ProviderConfigDialog(it, controller) { configure = null } }
     selected?.let { DeliveryDialog(database, controller, it) { selected = null } }
     if (catchUp) CatchUpDialog(database, controller) { catchUp = false }
+    if (nativeOpen) WavelogNativeDialog(nativeWavelog, wavelog) { nativeOpen = false }
 }
 
 @Composable
