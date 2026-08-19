@@ -97,13 +97,13 @@ fun filterLogbook(records: List<Qso>, filter: LogbookFilter): List<Qso> {
             numericMatches(qso.frequencyRxHz / 1_000_000.0, filter.frequencyRx) && choiceMatches(qso.bandRx, filter.bandRx) &&
             choiceMatches(qso.propagationMode, filter.propagation) && textMatches(qso.county, filter.county) &&
             textMatches(qso.dok, filter.dok) && textMatches(qso.sotaRef, filter.sota) &&
-            textMatches(qso.potaRef, filter.pota) && textMatches(qso.iota, filter.iota) &&
+            (filter.pota.isBlank() || (qso.potaRefs + qso.potaRef).any { textMatches(it, filter.pota) }) && textMatches(qso.iota, filter.iota) &&
             textMatches(qso.wwffRef, filter.wwff) && textMatches(qso.operatorCallsign, filter.operator) && textMatches(qso.radioModel, filter.radioModel) &&
             textMatches(qso.contestId, filter.contest) && choiceMatches(qso.continent, filter.continent) &&
             textMatches(qso.extraAdifFields["SAT_NAME"].orEmpty(), filter.satellite) &&
             textMatches(qso.extraAdifFields["SAT_MODE"].orEmpty(), filter.satelliteMode) &&
             textMatches(qso.extraAdifFields["ORBIT"].orEmpty(), filter.orbit) &&
-            textMatches(qso.comment + " " + qso.notes, filter.comment) && textMatches(qso.qslMessage, filter.qslMessage) &&
+            textMatches(qso.comment, filter.comment) && textMatches(qso.qslMessage, filter.qslMessage) &&
             textMatches(qso.notes, filter.notes) &&
             numericMatches(qso.distanceKm, filter.distance) && numericMatches(qso.durationSeconds / 60.0, filter.duration) &&
             statusMatches(qso.qslSent, filter.qslSent) && statusMatches(qso.qslReceived, filter.qslReceived) &&

@@ -49,7 +49,8 @@ class LogbookController(private val repository: LogbookRepository) {
                 if(debounceMs>0)delay(debounceMs)
                 val health=withContext(Dispatchers.IO){repository.health()}
                 if(health.state!=ProjectionState.READY){if(request==generation.get())state=LogbookQueryState.ProjectionOptimising(health.progress);return@launch}
-                val page=withContext(Dispatchers.IO){repository.page(appliedFilter,stationId,pageSize,if(reset)null else cursor,exactCount=reset,signal=signal)}
+                val page=withContext(Dispatchers.IO){repository.page(appliedFilter,stationId,pageSize,if(reset)null else cursor,
+                    offsetPage=if(reset)0 else pageIndex+1,exactCount=reset,signal=signal)}
                 if(request!=generation.get())return@launch
                 cursor=page.nextCursor
                 if(reset){pages+=page.rows;cursors+=page.nextCursor}else{pageIndex++;if(pages.size>pageIndex)pages[pageIndex]=page.rows else pages+=page.rows;if(cursors.size>pageIndex)cursors[pageIndex]=page.nextCursor else cursors+=page.nextCursor}

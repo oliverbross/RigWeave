@@ -20,7 +20,7 @@ data class ProjectionHealth(
 }
 
 internal object QsoProjectionStore {
-    const val VERSION = 1
+    const val VERSION = 2
     private const val META_VERSION = "version"
     private const val META_STATE = "state"
     private const val META_CURSOR_TIME = "cursor_time"
@@ -41,21 +41,22 @@ internal object QsoProjectionStore {
             station_callsign_norm TEXT NOT NULL DEFAULT '', operator_norm TEXT NOT NULL DEFAULT '', my_grid_norm TEXT NOT NULL DEFAULT '', name_norm TEXT NOT NULL DEFAULT '',
             qth_norm TEXT NOT NULL DEFAULT '', email_norm TEXT NOT NULL DEFAULT '', country_norm TEXT NOT NULL DEFAULT '', grid_norm TEXT NOT NULL DEFAULT '',
             dxcc TEXT NOT NULL DEFAULT '', continent TEXT NOT NULL DEFAULT '', cq_zone TEXT NOT NULL DEFAULT '', itu_zone TEXT NOT NULL DEFAULT '',
-            state_norm TEXT NOT NULL DEFAULT '', county_norm TEXT NOT NULL DEFAULT '', dok_norm TEXT NOT NULL DEFAULT '', iota_norm TEXT NOT NULL DEFAULT '',
+            state_norm TEXT NOT NULL DEFAULT '', region_norm TEXT NOT NULL DEFAULT '', county_norm TEXT NOT NULL DEFAULT '', dok_norm TEXT NOT NULL DEFAULT '', iota_norm TEXT NOT NULL DEFAULT '',
             sota_ref_norm TEXT NOT NULL DEFAULT '', wwff_ref_norm TEXT NOT NULL DEFAULT '', pota_ref_norm TEXT NOT NULL DEFAULT '',
             my_iota_norm TEXT NOT NULL DEFAULT '', my_sota_ref_norm TEXT NOT NULL DEFAULT '', my_wwff_ref_norm TEXT NOT NULL DEFAULT '',
             my_pota_ref_norm TEXT NOT NULL DEFAULT '', contest_id_norm TEXT NOT NULL DEFAULT '', propagation_mode TEXT NOT NULL DEFAULT '',
             satellite_name TEXT NOT NULL DEFAULT '', satellite_mode TEXT NOT NULL DEFAULT '', orbit TEXT NOT NULL DEFAULT '',
-            radio_model_norm TEXT NOT NULL DEFAULT '', antenna_path_norm TEXT NOT NULL DEFAULT '', tx_power_w INTEGER NOT NULL DEFAULT 0,
+            radio_model_norm TEXT NOT NULL DEFAULT '', wpx_prefix TEXT NOT NULL DEFAULT '', antenna_path_norm TEXT NOT NULL DEFAULT '', tx_power_w INTEGER NOT NULL DEFAULT 0,
             distance_km REAL NOT NULL DEFAULT 0, duration_seconds INTEGER NOT NULL DEFAULT 0,
             paper_received INTEGER NOT NULL DEFAULT 0, lotw_received INTEGER NOT NULL DEFAULT 0, eqsl_received INTEGER NOT NULL DEFAULT 0,
             qrz_received INTEGER NOT NULL DEFAULT 0, clublog_received INTEGER NOT NULL DEFAULT 0, dcl_received INTEGER NOT NULL DEFAULT 0,
-            qsl_sent INTEGER NOT NULL DEFAULT 0, qsl_method_norm TEXT NOT NULL DEFAULT '', qsl_received_method_norm TEXT NOT NULL DEFAULT '',
+            qsl_sent INTEGER NOT NULL DEFAULT 0, qsl_sent_status TEXT NOT NULL DEFAULT '', qsl_received_status TEXT NOT NULL DEFAULT '',
+            qsl_method_norm TEXT NOT NULL DEFAULT '', qsl_received_method_norm TEXT NOT NULL DEFAULT '',
             qsl_via_norm TEXT NOT NULL DEFAULT '', qsl_message_norm TEXT NOT NULL DEFAULT '', lotw_sent INTEGER NOT NULL DEFAULT 0, eqsl_sent INTEGER NOT NULL DEFAULT 0,
             qrz_sent INTEGER NOT NULL DEFAULT 0, clublog_sent INTEGER NOT NULL DEFAULT 0, dcl_sent INTEGER NOT NULL DEFAULT 0,
             sync_state TEXT NOT NULL DEFAULT 'LOCAL', remote_id TEXT NOT NULL DEFAULT '', activation_session_id TEXT NOT NULL DEFAULT '',
             activation_program TEXT NOT NULL DEFAULT '', has_qsl_images INTEGER NOT NULL DEFAULT 0, is_valid INTEGER NOT NULL DEFAULT 1,
-            searchable_text TEXT NOT NULL DEFAULT '',
+            comment_norm TEXT NOT NULL DEFAULT '', notes_norm TEXT NOT NULL DEFAULT '', searchable_text TEXT NOT NULL DEFAULT '',
             FOREIGN KEY(qso_id) REFERENCES qso(id) ON DELETE CASCADE
         )""".trimIndent())
         db.execSQL("""CREATE TABLE IF NOT EXISTS qso_reference(
@@ -68,6 +69,19 @@ internal object QsoProjectionStore {
         putMeta(db, META_VERSION, VERSION.toString(), onlyIfMissing = true)
         putMeta(db, META_STATE, initialState.name, onlyIfMissing = true)
         putMeta(db, META_PROCESSED, "0", onlyIfMissing = true)
+    }
+
+    fun migrateV2(db: SQLiteDatabase) {
+        fun columns() = buildSet { db.rawQuery("PRAGMA table_info(qso_projection)", null).use { c -> while (c.moveToNext()) add(c.getString(1)) } }
+        val existing = columns()
+        if ("comment_norm" !in existing) db.execSQL("ALTER TABLE qso_projection ADD COLUMN comment_norm TEXT NOT NULL DEFAULT ''")
+        if ("notes_norm" !in existing) db.execSQL("ALTER TABLE qso_projection ADD COLUMN notes_norm TEXT NOT NULL DEFAULT ''")
+        if ("qsl_sent_status" !in existing) db.execSQL("ALTER TABLE qso_projection ADD COLUMN qsl_sent_status TEXT NOT NULL DEFAULT ''")
+        if ("qsl_received_status" !in existing) db.execSQL("ALTER TABLE qso_projection ADD COLUMN qsl_received_status TEXT NOT NULL DEFAULT ''")
+        if ("region_norm" !in existing) db.execSQL("ALTER TABLE qso_projection ADD COLUMN region_norm TEXT NOT NULL DEFAULT ''")
+        if ("wpx_prefix" !in existing) db.execSQL("ALTER TABLE qso_projection ADD COLUMN wpx_prefix TEXT NOT NULL DEFAULT ''")
+        reset(db)
+        putMeta(db, META_VERSION, VERSION.toString())
     }
 
     private fun createIndexes(db: SQLiteDatabase) {
@@ -105,21 +119,23 @@ internal object QsoProjectionStore {
             put("station_profile_id", qso.stationProfileId); put("station_callsign_norm", norm(qso.stationCallsign)); put("operator_norm", norm(qso.operatorCallsign)); put("my_grid_norm", norm(qso.myGrid))
             put("name_norm", norm(qso.name)); put("qth_norm", norm(qso.qth)); put("email_norm", norm(qso.email)); put("country_norm", norm(qso.country)); put("grid_norm", norm(qso.grid))
             put("dxcc", norm(qso.dxcc)); put("continent", norm(qso.continent)); put("cq_zone", qso.cqZone.trim()); put("itu_zone", qso.ituZone.trim())
-            put("state_norm", norm(qso.state)); put("county_norm", norm(qso.county)); put("dok_norm", norm(qso.dok)); put("iota_norm", norm(qso.iota))
+            put("state_norm", norm(qso.state)); put("region_norm", norm(qso.region)); put("county_norm", norm(qso.county)); put("dok_norm", norm(qso.dok)); put("iota_norm", norm(qso.iota))
             put("sota_ref_norm", norm(qso.sotaRef)); put("wwff_ref_norm", norm(qso.wwffRef)); put("pota_ref_norm", norm(qso.potaRef))
             put("my_iota_norm", norm(qso.myIota)); put("my_sota_ref_norm", norm(qso.mySotaRef)); put("my_wwff_ref_norm", norm(qso.myWwffRef)); put("my_pota_ref_norm", norm(qso.myPotaRef))
             put("contest_id_norm", norm(qso.contestId)); put("propagation_mode", norm(qso.propagationMode))
             put("satellite_name", norm(qso.extraAdifFields["SAT_NAME"].orEmpty())); put("satellite_mode", norm(qso.extraAdifFields["SAT_MODE"].orEmpty()))
-            put("orbit", norm(qso.extraAdifFields["ORBIT"].orEmpty())); put("radio_model_norm", norm(qso.radioModel)); put("antenna_path_norm", norm(qso.antennaPath))
+            put("orbit", norm(qso.extraAdifFields["ORBIT"].orEmpty())); put("radio_model_norm", norm(qso.radioModel)); put("wpx_prefix", norm(wpxPrefix(qso.callsign))); put("antenna_path_norm", norm(qso.antennaPath))
             put("tx_power_w", qso.txPowerW); put("distance_km", qso.distanceKm); put("duration_seconds", qso.durationSeconds)
             put("paper_received", flag(qso.qslReceived)); put("lotw_received", flag(qso.lotwReceived)); put("eqsl_received", flag(qso.eqslReceived))
             put("qrz_received", flag(qso.qrzReceived)); put("clublog_received", flag(qso.clublogReceived)); put("dcl_received", flag(qso.dclReceived))
-            put("qsl_sent", flag(qso.qslSent)); put("qsl_method_norm", norm(qso.qslMethod)); put("qsl_received_method_norm", norm(qso.qslReceivedMethod))
+            put("qsl_sent", flag(qso.qslSent)); put("qsl_sent_status", status(qso.qslSent)); put("qsl_received_status", status(qso.qslReceived))
+            put("qsl_method_norm", norm(qso.qslMethod)); put("qsl_received_method_norm", norm(qso.qslReceivedMethod))
             put("qsl_via_norm", norm(qso.qslVia)); put("qsl_message_norm", norm(qso.qslMessage)); put("lotw_sent", flag(qso.lotwSent)); put("eqsl_sent", flag(qso.eqslSent))
             put("qrz_sent", flag(qso.qrzSent)); put("clublog_sent", flag(qso.clublogSent)); put("dcl_sent", flag(qso.dclSent))
             put("sync_state", norm(qso.syncState).ifBlank { "LOCAL" }); put("remote_id", qso.remoteId); put("activation_session_id", qso.activationSessionId)
             put("activation_program", norm(qso.activationProgram)); put("has_qsl_images", if (qso.qslImages.isBlank() || qso.qslImages.equals("N", true)) 0 else 1)
             put("is_valid", if (qso.callsign.isNotBlank() && qso.frequencyHz > 0 && qso.mode.isNotBlank() && qso.createdAt > 0) 1 else 0)
+            put("comment_norm", normMultiline(qso.comment)); put("notes_norm", normMultiline(qso.notes))
             put("searchable_text", listOf(qso.callsign,qso.name,qso.qth,qso.notes,qso.comment,qso.country).joinToString(" ") { norm(it) }.take(4_096))
         }
         db.insertWithOnConflict("qso_projection", null, values, SQLiteDatabase.CONFLICT_REPLACE)
@@ -181,6 +197,12 @@ internal object QsoProjectionStore {
         db.insertWithOnConflict("qso_projection_meta", null, ContentValues().apply { put("key",key); put("value",value) }, conflict)
     }
     private fun norm(value: String) = value.trim().uppercase(Locale.US)
+    private fun normMultiline(value: String) = value.replace("\r\n", "\n").replace('\r', '\n').trim().uppercase(Locale.US).take(4_096)
+    private fun status(value: String) = norm(value).let { when (it) {
+        "YES", "S", "SENT", "UPLOADED", "1", "TRUE" -> "Y"
+        "", "NO", "0", "FALSE" -> "N"
+        else -> it
+    } }
     private fun flag(value: String) = if (norm(value) in setOf("Y","V","YES","S","SENT","UPLOADED","1","TRUE")) 1 else 0
     private fun modeFamily(qso: Qso): String = when (norm(qso.submode.ifBlank { qso.mode })) {
         "CW","CW-R","CWR" -> "CW"; "SSB","USB","LSB","FM","AM" -> "PHONE"; else -> "DIGITAL"

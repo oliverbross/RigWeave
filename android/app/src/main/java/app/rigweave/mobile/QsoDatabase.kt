@@ -81,7 +81,7 @@ fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
     in 1_240_000_000L..1_300_000_000L -> "23cm"; else -> ""
 }
 
-class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 12) {
+class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 13) {
     private val changeRevision = AtomicLong(0)
     var operatorSaveHandler: ((Qso) -> Unit)? = null
     init { setWriteAheadLoggingEnabled(true) }
@@ -115,6 +115,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         if (oldVersion < 10) migrateWavelogSyncV10(db)
         if (oldVersion < 11) createAdvancedLogbookIndexes(db)
         if (oldVersion < 12) QsoProjectionStore.createSchema(db, ProjectionState.OPTIMISING)
+        if (oldVersion < 13) QsoProjectionStore.migrateV2(db)
     }
 
     private fun createPagingIndexes(db: SQLiteDatabase) {
@@ -216,6 +217,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     fun changeToken(): Long = changeRevision.get()
     fun list(): List<Qso> = query(" LIMIT 100")
     fun recent(limit: Int = 120): List<Qso> = query(" LIMIT ${limit.coerceIn(1, 500)}")
+    // Compatibility/export helper only: interactive screens must use bounded projection queries.
     fun all(): List<Qso> = query("")
     fun projectionHealth(): ProjectionHealth {
         val db = readableDatabase
@@ -227,21 +229,27 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     fun backfillProjectionBatch(batchSize: Int = 500): Boolean {
         val db = writableDatabase
         if (QsoProjectionStore.state(db) == ProjectionState.READY) return false
-        val size = batchSize.coerceIn(100, 1_000)
-        val (cursorTime, cursorId) = QsoProjectionStore.cursor(db)
-        val rows = queryWhere("(created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT $size",
-            arrayOf(cursorTime.toString(), cursorTime.toString(), cursorId))
-        if (rows.isEmpty()) {
-            val total = db.rawQuery("SELECT COUNT(*) FROM qso", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
-            transaction { QsoProjectionStore.markReady(db, total) }
-            return false
+        return try {
+            val size = batchSize.coerceIn(100, 1_000)
+            val (cursorTime, cursorId) = QsoProjectionStore.cursor(db)
+            val rows = queryWhere("(created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT $size",
+                arrayOf(cursorTime.toString(), cursorTime.toString(), cursorId))
+            if (rows.isEmpty()) {
+                val total = db.rawQuery("SELECT COUNT(*) FROM qso", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+                transaction { QsoProjectionStore.markReady(db, total) }
+                false
+            } else {
+                transaction {
+                    rows.forEach { QsoProjectionStore.write(db, it) }
+                    val last = rows.last()
+                    QsoProjectionStore.markProgress(db, last.createdAt, last.id, QsoProjectionStore.processed(db) + rows.size)
+                }
+                true
+            }
+        } catch (error: Throwable) {
+            QsoProjectionStore.markRepairRequired(db, "BACKFILL_${error.javaClass.simpleName.uppercase().take(80)}")
+            false
         }
-        transaction {
-            rows.forEach { QsoProjectionStore.write(db, it) }
-            val last = rows.last()
-            QsoProjectionStore.markProgress(db, last.createdAt, last.id, QsoProjectionStore.processed(db) + rows.size)
-        }
-        return true
     }
 
     fun verifyProjection(): ProjectionHealth {
@@ -250,7 +258,9 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             .use { if (it.moveToFirst()) it.getInt(0) else 0 }
         val orphan = db.rawQuery("SELECT COUNT(*) FROM qso_projection p LEFT JOIN qso q ON q.id=p.qso_id WHERE q.id IS NULL", null)
             .use { if (it.moveToFirst()) it.getInt(0) else 0 }
-        if (missing > 0 || orphan > 0) QsoProjectionStore.markRepairRequired(db, "missing=$missing orphan=$orphan")
+        val orphanReferences = db.rawQuery("SELECT COUNT(*) FROM qso_reference r LEFT JOIN qso q ON q.id=r.qso_id WHERE q.id IS NULL", null)
+            .use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        if (missing > 0 || orphan > 0 || orphanReferences > 0) QsoProjectionStore.markRepairRequired(db, "missing=$missing orphan=$orphan refs=$orphanReferences")
         else if (QsoProjectionStore.state(db) != ProjectionState.OPTIMISING) QsoProjectionStore.markReady(db, projectionHealth().canonicalRows)
         return projectionHealth()
     }
@@ -262,6 +272,21 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         val rows = ids.mapNotNull(::findById)
         transaction { rows.forEach { QsoProjectionStore.write(writableDatabase, it) }; QsoProjectionStore.markRepaired(writableDatabase) }
         return rows.size
+    }
+
+    fun repairProjectionFully(batchSize: Int = 500): ProjectionHealth {
+        val db = writableDatabase
+        return try {
+            transaction {
+                db.delete("qso_reference", "qso_id NOT IN (SELECT id FROM qso)", null)
+                db.delete("qso_projection", "qso_id NOT IN (SELECT id FROM qso)", null)
+            }
+            while (repairMissingProjectionRows(batchSize) > 0) Unit
+            verifyProjection()
+        } catch (error: Throwable) {
+            QsoProjectionStore.markRepairRequired(db, "REPAIR_${error.javaClass.simpleName.uppercase().take(80)}")
+            projectionHealth()
+        }
     }
 
     fun rebuildProjection() = transaction { QsoProjectionStore.reset(writableDatabase) }

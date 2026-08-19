@@ -120,8 +120,7 @@ internal class ProgressController(context: Context, private val database: QsoDat
         sotaCatalogue: SotaCatalogue,
     ) {
         val key = listOf(database.changeToken(), filters, goalStore.goals, syncAttention, cty.dataRevision,
-            dxSpots.size, dxSpots.maxOfOrNull(AndroidDXSpot::receivedEpoch),
-            portableSpots.size, portableSpots.maxOfOrNull(PortableSpot::spottedAt))
+            progressSpotIdentity(dxSpots, portableSpots))
         if (key == lastKey) return
         if (refreshJob?.isActive == true) {
             pendingRefresh = { refresh(filters, dxSpots, portableSpots, syncAttention, cty, sotaCatalogue) }
@@ -149,4 +148,12 @@ internal class ProgressController(context: Context, private val database: QsoDat
 
     fun goalsChanged() { lastKey = null }
     fun close() = scope.cancel()
+}
+
+internal fun progressSpotIdentity(dx: List<AndroidDXSpot>, portable: List<PortableSpot>): Long {
+    var hash = -0x340d631b7bdddcdbL
+    fun add(value: Any?) { value.toString().forEach { hash = (hash xor it.code.toLong()) * 0x100000001b3L }; hash = (hash xor 0xff) * 0x100000001b3L }
+    dx.sortedBy(AndroidDXSpot::id).forEach { add(it.id);add(it.callsign);add(it.frequencyHz);add(it.mode);add(it.band);add(it.receivedEpoch);add(it.score) }
+    portable.sortedBy(PortableSpot::id).forEach { row -> add(row.id);add(row.callsign);add(row.frequencyHz);add(row.mode);add(row.spottedAt);add(row.expiresAt);row.references.sortedBy { it.program.name+it.code }.forEach { add(it.program);add(it.code) } }
+    return hash
 }

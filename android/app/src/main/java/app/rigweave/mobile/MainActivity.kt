@@ -2527,8 +2527,8 @@ private fun spotStatusColor(status: String?): Color = when (status) {
                     applyCty(); val station = wavelog.selectedStation
                     val qso = Qso(id, call, qsoFrequency, qsoMode, sent, received, now.epochSecond, name, qth, notes, country,
                         band = bandForFrequency(qsoFrequency), grid = grid, iota = iota, sotaRef = sota, wwffRef = wwff, potaRef = pota,
-                        comment = comment, frequencyRxHz = draftFrequencyRxHz.takeIf { it > 0 } ?: qsoFrequency,
-                        bandRx = bandForFrequency(draftFrequencyRxHz.takeIf { it > 0 } ?: qsoFrequency), txPowerW = state.powerW,
+                        comment = comment, frequencyRxHz = if (satelliteDraft) draftFrequencyRxHz else draftFrequencyRxHz.takeIf { it > 0 } ?: qsoFrequency,
+                        bandRx = if (satelliteDraft) bandForFrequency(draftFrequencyRxHz) else bandForFrequency(draftFrequencyRxHz.takeIf { it > 0 } ?: qsoFrequency), txPowerW = state.powerW,
                         operatorCallsign = app.stationCallsign.ifBlank { station?.callsign.orEmpty() }, stationCallsign = station?.callsign ?: app.stationCallsign,
                         stationProfileId = if (wavelog.logMode == LogMode.WAVELOG) wavelog.stationId else "", stationLocation = station?.name ?: app.stationName,
                         myGrid = draftObserverGrid.ifBlank { station?.grid ?: app.stationGrid }, myCountry = station?.country.orEmpty(), myDxcc = station?.dxcc.orEmpty(),
@@ -3531,7 +3531,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         item { FilterChoice("Duplicate candidates", filter.duplicateState, listOf("" to "All", "CANDIDATE" to "Same call/frequency/mode within 15s")) {
             update(filter.copy(duplicateState = it)) } }
         item { FilterChoice("Wavelog relation", filter.syncRelation, listOf("" to "All", "LOCAL_ONLY" to "Local only", "LINKED" to "Remote linked",
-            "OUTBOX" to "Queued / retry", "CONFLICT" to "Conflict", "TOMBSTONE" to "Delete pending", "REMOTE_DELETED" to "Remote-deleted acknowledged")) {
+            "OUTBOX" to "Queued / retry", "CONFLICT" to "Conflict")) {
             update(filter.copy(syncRelation = it)) } }
     }
 }
@@ -3641,7 +3641,15 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             confirmProjectionRebuild = false
             settingsScope.launch {
                 withContext(Dispatchers.IO) { database.rebuildProjection() }
-                systemMessage = "Projection rebuild queued; canonical QSOs preserved"
+                systemMessage = "Projection rebuild started; canonical QSOs preserved"
+                while (withContext(Dispatchers.IO) { database.backfillProjectionBatch() }) {
+                    val progress = withContext(Dispatchers.IO) { database.projectionHealth() }
+                    systemMessage = "Projection rebuild · ${progress.processedRows}/${progress.canonicalRows}"
+                    delay(25)
+                }
+                val completed = withContext(Dispatchers.IO) { database.verifyProjection() }
+                systemMessage = if (completed.state == ProjectionState.READY) "Projection rebuild complete and verified"
+                    else "Projection rebuild stopped · ${completed.state} · ${completed.lastError}"
                 refreshStability()
             }
         }) { Text("REBUILD") } },
@@ -4136,7 +4144,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                 if (health.lastError.isNotBlank()) Text("LAST PROJECTION ERROR · ${health.lastError.take(160)}", color = Danger)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton({ settingsScope.launch { withContext(Dispatchers.IO) { database.verifyProjection() }; systemMessage = "Projection verified"; refreshStability() } }) { Text("VERIFY") }
-                    OutlinedButton({ settingsScope.launch { val repaired = withContext(Dispatchers.IO) { database.repairMissingProjectionRows() }; systemMessage = "Projection repair wrote $repaired rows"; refreshStability() } }) { Text("REPAIR MISSING") }
+                    OutlinedButton({ settingsScope.launch { systemMessage = "Projection repair running…"; val repaired = withContext(Dispatchers.IO) { database.repairProjectionFully() }; systemMessage = if (repaired.state == ProjectionState.READY) "Projection repair complete and verified" else "Projection repair incomplete · ${repaired.lastError}"; refreshStability() } }) { Text("REPAIR & VERIFY") }
                     OutlinedButton({ confirmProjectionRebuild = true }) { Text("REBUILD") }
                     OutlinedButton({ StabilityDiagnostics.clear(context); systemMessage = "Diagnostic history cleared"; refreshStability() }) { Text("CLEAR HISTORY") }
                 }
