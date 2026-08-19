@@ -9,26 +9,22 @@
 
 ## Placement
 
-RigWeave remains local-first. `QsoDatabase` is the one Android QSO store and existing ADIF import/export remains the serialization boundary. The schema-v8 migration adds only synchronization metadata tables. `WavelogSyncStore`, `WavelogApiV2Client`, and `WavelogSyncEngine` are separate from `MainActivity.kt` and from downstream QRZ/Club Log/eQSL delivery.
+RigWeave remains local-first. `QsoDatabase` is the one Android QSO store and existing ADIF import/export remains the serialization boundary. The schema-v9 migration adds only synchronization metadata tables and the durable deletion baseline required for safe remote deletes. `WavelogSyncStore`, `WavelogApiV2Client`, `WavelogSyncEngine`, and `QsoMutationCoordinator` are separate from downstream QRZ/Club Log/eQSL delivery.
 
 One enabled writable Wavelog binding is enforced by a partial unique index. A binding stores a credential alias, never a token. Existing Android Wavelog secrets remain AES-GCM encrypted with an Android Keystore key; existing iOS Wavelog secrets remain in Keychain. A `wl2_` token is never reinterpreted as a legacy API key, and the existing legacy adapter remains available for older installations.
 
-The Apple client now negotiates token metadata/scopes, discovers stations,
-performs bounded paginated QSO reads, and drains its existing durable queue with
-idempotency keys. A network failure after an Apple write is marked ambiguous for
-inspection rather than retried. Android remains the more complete reconciliation
-implementation: Apple field-level three-way conflict resolution is still a
-documented parity gap.
+The Apple client negotiates token metadata/scopes, discovers stations, performs bounded paginated QSO reads, and retains local operation identities for queue bookkeeping. Wavelog 3.1.0 does not provide server-side idempotency, so neither platform may claim that a custom header makes writes idempotent. A network failure after an Apple write is marked ambiguous for inspection rather than retried. Android remains the complete Phase 1 reconciliation implementation; Apple field-level three-way conflict resolution remains a documented later-platform gap.
 
 ## Canonical and synchronization rules
 
 - Canonical ADIF keys are uppercase and stably sorted. Callsigns, modes, bands, grids, station callsigns, propagation/satellite values, and confirmation flags are normalized. UTC date/time is normalized without changing the instant.
 - Volatile sync state, remote IDs, outbox IDs, last-sync timestamps, and credential aliases are excluded from hashes.
 - Unknown valid ADIF fields are retained in `extraAdifFields`, persisted inside the existing QSO details JSON, and exported again.
-- Local writes and native Wavelog outbox insertion can share one SQLite transaction. Pending updates coalesce; an unacknowledged create is not discarded.
+- Every Android operator save, POTA save, Fast Entry batch, ADIF import, edit, and delete routes through `QsoMutationCoordinator`. Local writes and native Wavelog outbox insertion share one SQLite transaction. Pending updates coalesce; an unacknowledged create remains a create.
 - Reconciliation uses the last common baseline. Same-field divergent edits create a persisted conflict; disjoint field edits merge; timestamp-based last-write-wins is not used.
-- API v2 list pagination uses the server's `page`, `per_page`, `total_pages`, and `has_more` metadata. Initial and full runs checkpoint only after each page transaction commits. Quick sync uses three newest pages as a bounded overlap; it does not claim to find every historic deletion.
-- Failed or lost write responses are treated as ambiguous and blocked for reconciliation instead of blindly retried. Validation, authentication, scope, conflict, and destructive failures are never automatically retried.
+- API v2 list pagination uses the server's `page`, `per_page`, `total_pages`, and `has_more` metadata. Initial and full runs persist the next page and scan membership only after a page is reconciled. A cancelled or interrupted run resumes there. Quick sync uses three newest pages as a bounded overlap and explicitly directs historic edits/deletes to Full.
+- A single JSON create captures the returned remote QSO ID, link, and baseline before the outbox operation is accepted. Failed or lost create responses are blocked and recovered only by a unique natural-key scan; Wavelog 3.1.0 has no server idempotency facility. Only HTTP 429 is retried automatically.
+- Remote deletions are inferred only after a completed Full scan. Local deletes retain a tombstone containing remote identity and the common baseline; a remotely changed QSO becomes an operator-visible delete conflict.
 - API v2 requires HTTPS and platform certificate validation. Bearer tokens and QSO comments are absent from normal diagnostic messages.
 
 ## API 3.1.0 contract reviewed
@@ -38,7 +34,7 @@ The pinned server exposes `/index.php/api/v2`. API v2 accepts only `wl2_` bearer
 - `GET token`: owner, expiry, and scopes.
 - `GET station`: selectable station ID/UUID/identity; `station:read`.
 - `GET qso`: stable page metadata and station scoping; `qso:read`.
-- `POST qso`: ADIF import for the mapped station; `qso:write`.
+- `POST qso`: one JSON QSO for the explicitly mapped station, returning the created row and ID; `qso:write`.
 - `PATCH qso/{id}`: partial update only; `qso:write`.
 - `DELETE qso/{id}`: explicit destructive action; `qso:delete`.
 - `GET statistic`: optional server aggregate, not the authority for local analytics; `statistic:read`.
@@ -49,6 +45,4 @@ A read-only token creates a useful local replica. The UI and engine must not imp
 
 Automated tests and builds prove source/domain behaviour and migration compatibility only. They do not prove a live token, a particular Wavelog installation, network reliability, remote QSO mutation, physical device behaviour, or radio operation. No credential, remote write, merge, deployment, release, or store submission is part of this branch.
 
-Validated on the programme branch: 213 Android JVM tests, Android multi-ABI
-debug assembly, the generic iOS Simulator build, shared-core Debug CTest, the
-SGP4 candidate's 168 tests, and a live no-change upstream-watch comparison.
+Phase 1 validation is recorded in `COMPLETION_LEDGER.md`. Compiled or simulated evidence does not substitute for authenticated Wavelog mutation or physical-tablet acceptance.
