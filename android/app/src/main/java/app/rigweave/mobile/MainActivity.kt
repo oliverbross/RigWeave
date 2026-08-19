@@ -2891,6 +2891,7 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
 @Composable private fun LogbookScreen(state: RadioState, database: QsoDatabase, wavelog: WavelogController,
     syncHub: SyncHubController, callbook: CallbookController, app: AppController, openSync: () -> Unit, openProgress: () -> Unit) {
     var showFilters by remember { mutableStateOf(false) }
+    var showFastEntry by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf(LogbookFilter()) }
     var applied by remember { mutableStateOf(LogbookFilter()) }
     var fromDate by remember { mutableStateOf("") }; var toDate by remember { mutableStateOf("") }
@@ -2935,6 +2936,7 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                 Icon(Icons.Outlined.FilterAlt, null); Spacer(Modifier.width(6.dp))
                 Text("FILTERS${activeLogbookFilterCount(applied).takeIf { it > 0 }?.let { " · $it" }.orEmpty()}", fontWeight = FontWeight.Black)
             }
+            OutlinedButton({ showFastEntry = true }, modifier = Modifier.heightIn(min = 48.dp)) { Text("FAST ENTRY") }
             QuickFilterMenu(selected) { key ->
                 val updated = quickFilter(applied, selected ?: return@QuickFilterMenu, key)
                 if (key == "date") {
@@ -2992,6 +2994,9 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                     val cleared = LogbookFilter(limit = applied.limit)
                     draft = cleared; applied = cleared; page = 0; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
                 }, onDismiss = { showFilters = false })
+        if (showFastEntry) FastEntryDialog(database, wavelog, app.stationCallsign, { _, _ -> refreshGeneration++ }) {
+            showFastEntry = false
+        }
     }
     previousQsoRecord?.let { record ->
         PreviousQsosDialog(record, database, wavelog, callbook) { previousQsoRecord = null }
