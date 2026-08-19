@@ -163,18 +163,30 @@ internal class SatelliteOperationsController(
 
     fun prepareDraft(row: SatellitePassRow): String = satelliteFastEntryDraft(row, observerGrid)
     fun normalLoggerDraft(row: SatellitePassRow): PortableLogDraft = PortableLogDraft(
-        token = System.nanoTime(), callsign = "", frequencyHz = row.transponder?.downlinkLowHz ?: 0,
+        token = System.nanoTime(), callsign = "", frequencyHz = row.transponder?.uplinkLowHz ?: 0,
         mode = satelliteQsoMode(row.transponder?.mode.orEmpty()).orEmpty(),
-        comment = "${row.satellite.name} pass · AOS ${row.pass.aos} · TCA ${row.pass.tca} · LOS ${row.pass.los}",
+        comment = listOf("${row.satellite.name} pass · AOS ${row.pass.aos} · TCA ${row.pass.tca} · LOS ${row.pass.los}",
+            "TX frequency unknown · review required".takeIf { row.transponder?.uplinkLowHz == null },
+            "RX frequency unknown · review required".takeIf { row.transponder?.downlinkLowHz == null }).filterNotNull().joinToString(" · "),
         propagationMode = "SAT", satelliteName = row.satellite.name, satelliteMode = row.transponder?.mode.orEmpty(),
-        frequencyRxHz = row.transponder?.uplinkLowHz ?: 0, observerGrid = observerGrid,
+        frequencyRxHz = row.transponder?.downlinkLowHz ?: 0, observerGrid = observerGrid,
     )
 
     fun saveManualElements(id: Long, name: String, one: String, two: String): Boolean {
-        val candidate = SatelliteElements("TLE", name.trim(), one.trim(), two.trim(), Instant.now().epochSecond, "MANUAL")
-        val valid = NativeSatellite.propagate(candidate, SatelliteObserver(0.0, 0.0), Instant.now().epochSecond, Long.MAX_VALUE) is SatelliteNativeResult.Success
-        if (!valid) { message = "Manual TLE rejected by the pinned SGP4 parser."; return false }
-        return providers.saveManualElements(id,name,one,two).also { elements = providers.elements(); if(it) message="Manual TLE saved and labelled MANUAL" }
+        val now = Instant.now().epochSecond
+        val candidate = SatelliteElements("TLE", name.trim(), one.trim(), two.trim(), now, "MANUAL")
+        val inspection = (NativeSatellite.inspect(candidate) as? SatelliteNativeResult.Success)?.value
+        if (inspection == null || inspection.noradId != id) {
+            message = "Manual TLE rejected by the pinned parser; the previous override is unchanged."
+            return false
+        }
+        val entry = SatelliteCatalogueEntry(id, name.trim().ifBlank { id.toString() }, candidate, inspection.elementEpoch, true)
+        return providers.saveManualElements(entry).also {
+            elements = providers.elements()
+            if (it) message = if (now - inspection.elementEpoch > 14L * 24 * 60 * 60)
+                "Manual TLE saved as MANUAL · STALE · prediction disabled until updated"
+            else "Manual TLE saved and labelled MANUAL"
+        }
     }
     fun removeManualElements(id: Long) { providers.removeManualElements(id); elements=providers.elements(); message="Manual element override removed" }
     fun saveManualTransponder(row: SatelliteTransponder) { providers.saveManualTransponder(row); transponders=providers.transponders(); message="Local transponder override saved" }
@@ -199,18 +211,22 @@ internal fun satelliteFastEntryDraft(row: SatellitePassRow, observerGrid: String
     val transponder = row.transponder
     val downlink = transponder?.downlinkLowHz
     val uplink = transponder?.uplinkLowHz
-    val band = downlink?.let(::bandForFrequency).orEmpty()
+    val uplinkBand = uplink?.let(::bandForFrequency).orEmpty()
+    val downlinkBand = downlink?.let(::bandForFrequency).orEmpty()
     val qsoMode = satelliteQsoMode(transponder?.mode.orEmpty())
     return buildString {
         append("<PROP_MODE:SAT>\n<SAT_NAME:${row.satellite.name}>\n")
         observerGrid.takeIf(String::isNotBlank)?.let { append("<MY_GRIDSQUARE:${it.uppercase(Locale.US)}>\n") }
         transponder?.mode?.takeIf(String::isNotBlank)?.let { append("<SAT_MODE:$it>\n") }
         qsoMode?.let { append("<MODE:$it>\n") }
-        band.takeIf(String::isNotBlank)?.let { append("<BAND:$it>\n") }
-        downlink?.let { append("<FREQ:${"%.6f".format(Locale.US, it / 1_000_000.0)}>\n") }
-        uplink?.let { append("<FREQ_RX:${"%.6f".format(Locale.US, it / 1_000_000.0)}>\n") }
-        if (downlink != null && qsoMode != null) append("${"%.6f".format(Locale.US, downlink / 1_000_000.0)} $qsoMode\n")
-        else if (band.isNotBlank() && qsoMode != null) append("$band $qsoMode\n")
+        uplinkBand.takeIf(String::isNotBlank)?.let { append("<BAND:$it>\n") }
+        uplink?.let { append("<FREQ:${"%.6f".format(Locale.US, it / 1_000_000.0)}>\n") }
+        downlinkBand.takeIf(String::isNotBlank)?.let { append("<BAND_RX:$it>\n") }
+        downlink?.let { append("<FREQ_RX:${"%.6f".format(Locale.US, it / 1_000_000.0)}>\n") }
+        if (uplink != null && qsoMode != null) append("${"%.6f".format(Locale.US, uplink / 1_000_000.0)} $qsoMode\n")
+        downlink?.let { append("# RX PREVIEW ${"%.6f".format(Locale.US, it / 1_000_000.0)} ${qsoMode.orEmpty()} · explicit receive tune only\n") }
+        if (uplink == null) append("# TX frequency unknown · operator review required before save\n")
+        if (downlink == null) append("# RX frequency unknown · operator review required before save\n")
         append("# Review before save · AOS ${row.pass.aos} · TCA ${row.pass.tca} · LOS ${row.pass.los}\n")
     }
 }

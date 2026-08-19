@@ -282,6 +282,17 @@ int main() {
     assert(rw_satellite_propagate_json(satellite_json, sizeof(satellite_json), "TLE", "INVALID",
         "1 invalid", "2 invalid", vanguard_epoch, 0, 0.0, 0.0, 0.0) > 0);
     assert(std::string(satellite_json).find("\"ok\":false") != std::string::npos);
+    const std::string celestrak_csv =
+        "OSCAR 7 (AO-7),1974-089B,2026-08-19T00:23:27.496608,12.53699154,.00123316,101.9919,244.9197,13.2706,15.2415,0,U,123456,999,36839,-.5025725E-5,-.47E-6,0";
+    std::memset(satellite_json, 0, sizeof(satellite_json));
+    assert(rw_satellite_inspect_json(satellite_json, sizeof(satellite_json), "CSV", "AO-7",
+        celestrak_csv.c_str(), "") > 0);
+    assert(std::string(satellite_json).find("\"norad_id\":123456") != std::string::npos);
+    assert(std::string(satellite_json).find("\"element_epoch\":1787099007") != std::string::npos);
+    std::memset(satellite_json, 0, sizeof(satellite_json));
+    assert(rw_satellite_propagate_json(satellite_json, sizeof(satellite_json), "CSV", "AO-7",
+        celestrak_csv.c_str(), "", 1787099007, 0, 48.15, 17.11, 0.2) > 0);
+    assert(std::string(satellite_json).find("\"ok\":true") != std::string::npos);
     assert(rw_satellite_doppler_hz(145800000.0, 1.0) < 145800000.0);
     assert(rw_satellite_doppler_hz(145800000.0, -1.0) > 145800000.0);
 

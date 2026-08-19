@@ -136,6 +136,17 @@ void append_look(std::ostringstream& out, const Look& value, bool geodetic) {
 }
 }  // namespace
 
+extern "C" int rw_satellite_inspect_json(char *output, size_t output_size,
+    const char *format, const char *name, const char *element_one, const char *element_two) {
+    return guarded(output, output_size, [&] {
+        const auto tle = parse_elements(format, name, element_one, element_two);
+        std::ostringstream out;
+        out << "{\"version\":1,\"ok\":true,\"norad_id\":" << tle->NoradNumber()
+            << ",\"element_epoch\":" << unix_time(tle->Epoch()) << '}';
+        return out.str();
+    });
+}
+
 extern "C" int rw_satellite_propagate_json(char *output, size_t output_size,
     const char *format, const char *name, const char *element_one, const char *element_two,
     int64_t epoch_utc, int64_t max_element_age_seconds, double observer_latitude_deg,

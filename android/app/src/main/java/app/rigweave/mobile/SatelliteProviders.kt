@@ -8,6 +8,9 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.Instant
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import java.util.Locale
 
 internal enum class SatelliteCacheState { CURRENT, STALE, OFFLINE_CACHE, EMPTY, ERROR }
@@ -48,7 +51,9 @@ internal data class AmsatStatusSummary(
     val counts: Map<String, Int>,
     val latestReportEpoch: Long?,
     val latestReporters: List<String> = emptyList(),
+    val timeline: List<AmsatStatusReport> = emptyList(),
 )
+internal data class AmsatStatusReport(val status: String, val reportedEpoch: Long, val callsign: String, val grid: String = "")
 internal data class SatelliteTimer(
     val id: String,
     val satellite: String,
@@ -72,13 +77,11 @@ internal class SatelliteProviderRepository(context: Context) {
         const val CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=AMATEUR&FORMAT=CSV"
         const val SATNOGS_URL = "https://db.satnogs.org/api/transmitters/?format=json&service=Amateur&alive=true"
         const val AMSAT_URL = "https://www.amsat.org/status/api/v1/reports.php?hours=24&limit=500"
-        const val TIMER_URL = "https://www.df2et.de/tevel/"
         const val SATNOGS_ATTRIBUTION = "SatNOGS DB data · CC-BY-SA-4.0 · Libre Space Foundation/community contributors"
         private const val CELESTRAK_AUTO_TTL = 6 * 60 * 60L
         private const val CELESTRAK_MANUAL_COOLDOWN = 2 * 60 * 60L
         private const val SATNOGS_TTL = 24 * 60 * 60L
         private const val AMSAT_TTL = 15 * 60L
-        private const val TIMER_TTL = 15 * 60L
         private const val MAX_BODY = 5 * 1024 * 1024
     }
 
@@ -101,7 +104,7 @@ internal class SatelliteProviderRepository(context: Context) {
         if (now - last < minimum) return elements(now)
         val response = get(CELESTRAK_URL, "celestrak")
         if (response.notModified) markSuccess("celestrak", now, response)
-        else if (response.error.isBlank()) runCatching { parseCelesTrakCsv(response.body, now) }
+        else if (response.error.isBlank()) runCatching { parseCelesTrakCsvPayload(response.body, now) }
             .onSuccess { rows ->
                 require(rows.isNotEmpty()) { "zero valid rows" }
                 writeAtomic("celestrak.json", JSONArray(rows.map(::elementJson)).toString())
@@ -111,12 +114,10 @@ internal class SatelliteProviderRepository(context: Context) {
         return elements(now)
     }
 
-    fun saveManualElements(noradId: Long, name: String, lineOne: String, lineTwo: String): Boolean {
-        if (noradId !in 1..999_999_999 || !lineOne.startsWith("1 ") || !lineTwo.startsWith("2 ")) return false
-        val entry = SatelliteCatalogueEntry(noradId, name.trim().ifBlank { noradId.toString() },
-            SatelliteElements("TLE", name.trim(), lineOne.trim(), lineTwo.trim(), Instant.now().epochSecond, "MANUAL"),
-            Instant.now().epochSecond, true)
-        val rows = parseManualElements().filterNot { it.noradId == noradId } + entry
+    fun saveManualElements(entry: SatelliteCatalogueEntry): Boolean {
+        if (!entry.manual || entry.noradId !in 1..999_999_999 || entry.elementEpoch <= 0 ||
+            !entry.elements.elementOne.startsWith("1 ") || !entry.elements.elementTwo.startsWith("2 ")) return false
+        val rows = parseManualElements().filterNot { it.noradId == entry.noradId } + entry
         prefs.edit().putString("manual_elements", JSONArray(rows.map(::elementJson)).toString()).apply()
         return true
     }
@@ -180,21 +181,12 @@ internal class SatelliteProviderRepository(context: Context) {
     }
 
     fun timers(now: Long = Instant.now().epochSecond): SatelliteProviderData<SatelliteTimer> {
-        val rows = parseTimers(cache("timers.json"), now)
-        return SatelliteProviderData(rows, metadata("timers", "DF2ET/TEVEL optional timer adapter", TIMER_TTL, rows.size, now))
+        return SatelliteProviderData(emptyList(), SatelliteProviderMetadata(
+            "Timers unsupported · no stable machine-readable provider contract", 0, null,
+            SatelliteCacheState.EMPTY, "UNSUPPORTED_MACHINE_CONTRACT"))
     }
 
     fun refreshTimers(force: Boolean = false, now: Long = Instant.now().epochSecond): SatelliteProviderData<SatelliteTimer> {
-        if (!force && now - prefs.getLong("timers_fetched", 0) < TIMER_TTL) return timers(now)
-        val response = get(TIMER_URL, "timers")
-        if (response.notModified) markSuccess("timers", now, response)
-        else if (response.error.isBlank()) runCatching {
-            val rows = parseTimers(response.body, now)
-            require(rows.isNotEmpty()) { "service unavailable or empty" }
-            JSONArray(rows.map { timerJson(it) }).toString()
-        }.onSuccess { writeAtomic("timers.json", it); markSuccess("timers", now, response) }
-            .onFailure { markError("timers", safeError(it)) }
-        else markError("timers", response.error)
         return timers(now)
     }
 
@@ -218,25 +210,6 @@ internal class SatelliteProviderRepository(context: Context) {
         return output.toString(Charsets.UTF_8.name())
     }
 
-    private fun parseCelesTrakCsv(raw: String, fetchedAt: Long): List<SatelliteCatalogueEntry> {
-        require(raw.isNotBlank() && !raw.trimStart().startsWith("<"))
-        val lines = raw.lineSequence().filter(String::isNotBlank).toList(); require(lines.size > 1)
-        val header = csvRow(lines.first()); val index = header.mapIndexed { i, value -> value to i }.toMap()
-        val required = listOf("OBJECT_NAME", "EPOCH", "MEAN_MOTION", "ECCENTRICITY", "INCLINATION", "NORAD_CAT_ID")
-        require(required.all(index::containsKey))
-        val seen = mutableSetOf<Long>()
-        return lines.drop(1).mapNotNull { line -> runCatching {
-            val fields = csvRow(line); fun field(name: String) = fields.getOrNull(index.getValue(name)).orEmpty().trim()
-            val id = field("NORAD_CAT_ID").toLong(); require(id in 1..999_999_999 && seen.add(id))
-            require(field("MEAN_MOTION").toDouble() in 0.01..20.0)
-            require(field("ECCENTRICITY").toDouble() in 0.0..<1.0)
-            require(field("INCLINATION").toDouble() in 0.0..180.0)
-            val epoch = Instant.parse(field("EPOCH")).epochSecond
-            SatelliteCatalogueEntry(id, field("OBJECT_NAME").ifBlank { id.toString() }, SatelliteElements("CSV", field("OBJECT_NAME"), line, fetchedAt = fetchedAt, source = "CELESTRAK"), epoch)
-        }.getOrNull() }.also { require(it.isNotEmpty()) }
-    }
-
-    private fun csvRow(line: String): List<String> { val out=mutableListOf<String>();val cell=StringBuilder();var quoted=false;var i=0;while(i<line.length){val ch=line[i];when{ch=='"'&&quoted&&i+1<line.length&&line[i+1]=='"'->{cell.append('"');i++};ch=='"'->quoted=!quoted;ch==','&&!quoted->{out+=cell.toString();cell.clear()};else->cell.append(ch)};i++};out+=cell.toString();return out }
     private fun parseElementCache(raw: String): List<SatelliteCatalogueEntry> = runCatching {
         val rows = JSONArray(raw)
         buildList { for (index in 0 until rows.length()) elementFromJson(rows.getJSONObject(index), false)?.let(::add) }
@@ -259,18 +232,16 @@ internal class SatelliteProviderRepository(context: Context) {
     private fun transponderJson(e:SatelliteTransponder)=JSONObject().put("uuid",e.id).put("norad_cat_id",e.noradId).put("description",e.description).put("uplink_low",e.uplinkLowHz).put("uplink_high",e.uplinkHighHz).put("downlink_low",e.downlinkLowHz).put("downlink_high",e.downlinkHighHz).put("mode",e.mode).put("uplink_mode",e.uplinkMode).put("invert",e.inverted).put("alive",e.alive).put("status",e.providerStatus).put("updated",e.updated)
 
     private fun parseAmsat(raw:String):List<AmsatStatusSummary> = runCatching {
-        data class Aggregate(val display:String,val counts:MutableMap<String,Int>,var latest:Long?=null,val reporters:MutableList<Pair<Long,String>> = mutableListOf())
+        data class Aggregate(val display:String,val counts:MutableMap<String,Int>,var latest:Long?=null,
+            val reporters:MutableList<Pair<Long,String>> = mutableListOf(),val timeline:MutableList<AmsatStatusReport> = mutableListOf())
         val rows=JSONObject(raw).getJSONArray("data");val grouped=mutableMapOf<String,Aggregate>()
         for(i in 0 until rows.length()){
             val o=rows.getJSONObject(i);val name=o.getString("name");val value=grouped.getOrPut(name){Aggregate(o.optString("satellite_display_name",name),mutableMapOf())}
             val report=o.getString("report");if(report in setOf("Heard","Crew Active","Telemetry Only","Not Heard"))value.counts[report]=(value.counts[report]?:0)+o.optInt("report_count",1).coerceAtLeast(1)
-            val epoch=parseInstant(o.optString("reported_time").ifBlank{o.optString("latest_reported_time")});if(epoch!=null){value.latest=maxOf(value.latest?:0,epoch).takeIf{it>0};val call=o.optString("callsign").trim();val grid=o.optString("grid_square").trim();if(call.isNotBlank())value.reporters+=epoch to listOf(call,grid,report).filter(String::isNotBlank).joinToString(" · ")}
+            val epoch=parseInstant(o.optString("reported_time").ifBlank{o.optString("latest_reported_time")});if(epoch!=null){value.latest=maxOf(value.latest?:0,epoch).takeIf{it>0};val call=o.optString("callsign").trim();val grid=o.optString("grid_square").trim();if(call.isNotBlank())value.reporters+=epoch to listOf(call,grid,report).filter(String::isNotBlank).joinToString(" · ");value.timeline+=AmsatStatusReport(report,epoch,call,grid)}
         }
-        grouped.map{AmsatStatusSummary(it.key,it.value.display,it.value.counts,it.value.latest,it.value.reporters.sortedByDescending(Pair<Long,String>::first).map(Pair<Long,String>::second).distinct().take(5))}.sortedBy(AmsatStatusSummary::displayName)
+        grouped.map{AmsatStatusSummary(it.key,it.value.display,it.value.counts,it.value.latest,it.value.reporters.sortedByDescending(Pair<Long,String>::first).map(Pair<Long,String>::second).distinct().take(5),it.value.timeline.sortedByDescending(AmsatStatusReport::reportedEpoch).distinctBy{r->listOf(r.reportedEpoch,r.callsign,r.status)}.take(12))}.sortedBy(AmsatStatusSummary::displayName)
     }.getOrDefault(emptyList())
-    private fun parseTimers(raw:String,now:Long):List<SatelliteTimer> = runCatching { val root=raw.trim();val rows=if(root.startsWith("["))JSONArray(root)else JSONObject(root).optJSONArray("timers")?:JSONArray();buildList{for(i in 0 until rows.length()){val o=rows.optJSONObject(i)?:continue;val start=o.optLong("start",o.optLong("start_epoch"));val end=o.optLong("end",o.optLong("end_epoch"));val functional=o.optBoolean("functional",o.optString("status").equals("active",true));if(!functional||start<=0||end<=start||end<now-86400||end>now+30*86400)continue;add(SatelliteTimer(o.optString("id","timer-$i"),o.optString("satellite"),o.optString("label"),start,end,true))}} }.getOrDefault(emptyList())
-    private fun timerJson(e:SatelliteTimer)=JSONObject().put("id",e.id).put("satellite",e.satellite).put("label",e.label).put("start",e.startEpoch).put("end",e.endEpoch).put("functional",e.functional)
-
     private fun metadata(key:String,source:String,ttl:Long,count:Int,now:Long,dataEpoch:Long?=null,manualOverride:Boolean=false):SatelliteProviderMetadata{val fetched=prefs.getLong("${key}_fetched",0);val error=prefs.getString("${key}_error","").orEmpty();return SatelliteProviderMetadata(source,fetched,dataEpoch,satelliteCacheState(count,error,now,fetched,ttl),error,manualOverride)}
     private fun markSuccess(key:String,now:Long,response:HttpResult){prefs.edit().putLong("${key}_fetched",now).putString("${key}_error","").apply{if(response.etag.isNotBlank())putString("${key}_etag",response.etag);if(response.modified.isNotBlank())putString("${key}_modified",response.modified)}.apply()}
     private fun markError(key:String,error:String){prefs.edit().putString("${key}_error",error.take(100)).apply()}
@@ -280,3 +251,30 @@ internal class SatelliteProviderRepository(context: Context) {
     private fun safeError(error:Throwable)=error.message.orEmpty().lowercase(Locale.US).let{when{it.contains("zero")->"EMPTY_RESPONSE";it.contains("large")->"RESPONSE_TOO_LARGE";else->error.javaClass.simpleName.uppercase(Locale.US).take(40)}}
     private fun JSONObject.nullableLong(key:String)=if(!has(key)||isNull(key))null else optLong(key).takeIf{it>0}
 }
+
+internal fun parseSatelliteUtc(value: String): Long? {
+    val candidate = value.trim()
+    if (!Regex("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-]\\d{2}:\\d{2})?$").matches(candidate)) return null
+    return runCatching { OffsetDateTime.parse(candidate).toInstant().epochSecond }.getOrNull()
+        ?: runCatching { LocalDateTime.parse(candidate).toEpochSecond(ZoneOffset.UTC) }.getOrNull()
+}
+
+internal fun parseCelesTrakCsvPayload(raw: String, fetchedAt: Long): List<SatelliteCatalogueEntry> {
+    require(raw.isNotBlank() && !raw.trimStart().startsWith("<"))
+    val lines = raw.lineSequence().filter(String::isNotBlank).toList(); require(lines.size > 1)
+    val header = satelliteCsvRow(lines.first()); val index = header.mapIndexed { i, value -> value to i }.toMap()
+    val required = listOf("OBJECT_NAME", "EPOCH", "MEAN_MOTION", "ECCENTRICITY", "INCLINATION", "NORAD_CAT_ID")
+    require(required.all(index::containsKey))
+    val seen = mutableSetOf<Long>()
+    return lines.drop(1).mapNotNull { line -> runCatching {
+        val fields = satelliteCsvRow(line); fun field(name: String) = fields.getOrNull(index.getValue(name)).orEmpty().trim()
+        val id = field("NORAD_CAT_ID").toLong(); require(id in 1..999_999_999 && seen.add(id))
+        require(field("MEAN_MOTION").toDouble() in 0.01..20.0)
+        require(field("ECCENTRICITY").toDouble() in 0.0..<1.0)
+        require(field("INCLINATION").toDouble() in 0.0..180.0)
+        val epoch = parseSatelliteUtc(field("EPOCH")) ?: error("invalid epoch")
+        SatelliteCatalogueEntry(id, field("OBJECT_NAME").ifBlank { id.toString() }, SatelliteElements("CSV", field("OBJECT_NAME"), line, fetchedAt = fetchedAt, source = "CELESTRAK"), epoch)
+    }.getOrNull() }.also { require(it.isNotEmpty()) }
+}
+
+private fun satelliteCsvRow(line: String): List<String> { val out=mutableListOf<String>();val cell=StringBuilder();var quoted=false;var i=0;while(i<line.length){val ch=line[i];when{ch=='"'&&quoted&&i+1<line.length&&line[i+1]=='"'->{cell.append('"');i++};ch=='"'->quoted=!quoted;ch==','&&!quoted->{out+=cell.toString();cell.clear()};else->cell.append(ch)};i++};out+=cell.toString();return out }

@@ -25,7 +25,8 @@ class OvernightScaleSatelliteTest {
     @Test fun satelliteDraftCarriesReviewableAdifAndPassContext() {
         val draft = satelliteFastEntryDraft(SatellitePassRow(satellite, pass, transponder), "JN88TQ")
         listOf("<PROP_MODE:SAT>", "<SAT_NAME:AO-91>", "<SAT_MODE:FM>", "<MODE:FM>",
-            "<MY_GRIDSQUARE:JN88TQ>", "<BAND:2m>", "<FREQ:145.960000>", "<FREQ_RX:435.250000>",
+            "<MY_GRIDSQUARE:JN88TQ>", "<BAND:70cm>", "<FREQ:435.250000>", "<BAND_RX:2m>", "<FREQ_RX:145.960000>",
+            "RX PREVIEW 145.960000 FM",
             "AOS 1700000100", "TCA 1700000300", "LOS 1700000500").forEach { assertTrue(it, it in draft) }
     }
 
@@ -38,6 +39,27 @@ class OvernightScaleSatelliteTest {
         assertEquals("SAT", parsed.rows.single().qso.propagationMode)
         assertEquals("AO-91", parsed.rows.single().qso.extraAdifFields["SAT_NAME"])
         assertEquals("FM", parsed.rows.single().qso.extraAdifFields["SAT_MODE"])
+        assertEquals(435_250_000, parsed.rows.single().qso.frequencyHz)
+        assertEquals("70cm", parsed.rows.single().qso.band)
+        assertEquals(145_960_000, parsed.rows.single().qso.frequencyRxHz)
+        assertEquals("2m", parsed.rows.single().qso.bandRx)
+    }
+
+    @Test fun realCelesTrakOffsetlessEpochPreservesCompleteCsvAndRejectsHtml() {
+        val header = "OBJECT_NAME,OBJECT_ID,EPOCH,MEAN_MOTION,ECCENTRICITY,INCLINATION,RA_OF_ASC_NODE,ARG_OF_PERICENTER,MEAN_ANOMALY,EPHEMERIS_TYPE,CLASSIFICATION_TYPE,NORAD_CAT_ID,ELEMENT_SET_NO,REV_AT_EPOCH,BSTAR,MEAN_MOTION_DOT,MEAN_MOTION_DDOT"
+        val row = "OSCAR 7 (AO-7),1974-089B,2026-08-19T00:23:27.496608,12.53699154,.00123316,101.9919,244.9197,13.2706,15.2415,0,U,123456,999,36839,-.5025725E-5,-.47E-6,0"
+        val parsed = parseCelesTrakCsvPayload("$header\n$row", 123).single()
+        assertEquals(123456, parsed.noradId)
+        assertEquals(1787099007, parsed.elementEpoch)
+        assertEquals(row, parsed.elements.elementOne)
+        assertTrue(runCatching { parseCelesTrakCsvPayload("<html>error</html>", 123) }.isFailure)
+    }
+
+    @Test fun needsRefreshIdentityChangesWhenSpotContentChangesAtSameCountAndTime() {
+        val first = PortableSpot("1", setOf(PortableProgram.POTA), "K1ABC", 14_074_000, "FT8",
+            listOf(PortableReference(PortableProgram.POTA, "US-0001")), 100, 1_000, "TEST")
+        val changed = first.copy(callsign = "K2XYZ")
+        assertTrue(progressSpotIdentity(emptyList(), listOf(first)) != progressSpotIdentity(emptyList(), listOf(changed)))
     }
 
     @Test fun satelliteLogbookFiltersAreDeterministic() {

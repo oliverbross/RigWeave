@@ -65,6 +65,15 @@ jstring satellite_text(JNIEnv *env, Work work) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeSatellite_inspectNative(JNIEnv *env, jobject, jstring format, jstring name,
+    jstring elementOne, jstring elementTwo) {
+    const std::string f = utf(env, format), n = utf(env, name), one = utf(env, elementOne), two = utf(env, elementTwo);
+    return satellite_text(env, [&](char *out, size_t size) {
+        return rw_satellite_inspect_json(out, size, f.c_str(), n.c_str(), one.c_str(), two.c_str());
+    });
+}
+
+extern "C" JNIEXPORT jstring JNICALL
 Java_app_rigweave_mobile_NativeSatellite_propagateNative(JNIEnv *env, jobject, jstring format, jstring name,
     jstring elementOne, jstring elementTwo, jlong epoch, jlong maxAge, jdouble latitude, jdouble longitude, jdouble altitude) {
     const std::string f = utf(env, format), n = utf(env, name), one = utf(env, elementOne), two = utf(env, elementTwo);

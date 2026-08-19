@@ -9,6 +9,10 @@ extern "C" {
 #endif
 
 /* Stable versioned JSON is returned. format is "TLE" or "CSV" (CelesTrak OMM CSV row). */
+int rw_satellite_inspect_json(char *output, size_t output_size,
+                              const char *format, const char *name,
+                              const char *element_one, const char *element_two);
+
 int rw_satellite_propagate_json(char *output, size_t output_size,
                                 const char *format, const char *name,
                                 const char *element_one, const char *element_two,
