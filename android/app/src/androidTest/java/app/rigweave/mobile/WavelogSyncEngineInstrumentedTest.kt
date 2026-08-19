@@ -171,6 +171,34 @@ class WavelogSyncEngineInstrumentedTest {
         assertNull(database.qso(historic.id))
     }
 
+    @Test fun quickPullsRecentEditAndFullFindsEditBeyondTheQuickOverlap() {
+        val binding = writableBinding()
+        store.saveBinding(binding)
+        val recent = qso("recent-edit", "VK8REC").copy(notes = "base")
+        val historic = qso("historic-edit", "VK8HIS").copy(createdAt = 1_699_999_000, notes = "base")
+        listOf(recent to "101", historic to "7").forEach { (qso, remoteId) ->
+            database.save(qso, QsoOrigin.REMOTE_SYNC)
+            val baseline = canonical(qso)
+            store.saveLink(WavelogRemoteLink(binding.id, qso.id, remoteId, baseline.hash, baseline.encoded))
+        }
+        val quick = WavelogSyncEngine(database, store, client { request ->
+            require(request.url.contains("page=1"))
+            WavelogV2Response(200, pageEnvelope(listOf(remoteRow("101", "VK8REC", "recent remote")), false, 1))
+        }, mutations).quickSync(binding)
+        assertEquals(1, quick.pulled)
+        assertEquals("recent remote", database.qso(recent.id)?.notes)
+        assertEquals("base", database.qso(historic.id)?.notes)
+
+        val full = WavelogSyncEngine(database, store, client { request ->
+            if (request.url.contains("page=1")) WavelogV2Response(200,
+                pageEnvelope(listOf(remoteRow("101", "VK8REC", "recent remote")), true, 2))
+            else WavelogV2Response(200,
+                pageEnvelope(listOf(remoteRow("7", "VK8HIS", "historic remote")), false, 2))
+        }, mutations).fullReconcile(binding)
+        assertTrue(full.completed)
+        assertEquals("historic remote", database.qso(historic.id)?.notes)
+    }
+
     @Test fun threeWayConflictPersistsFieldValuesAndKeepRemoteResolvesWithoutEcho() {
         val binding = writableBinding()
         store.saveBinding(binding)
@@ -199,6 +227,35 @@ class WavelogSyncEngineInstrumentedTest {
         engine.resolveConflict(binding, conflict, WavelogConflictState.KEEP_REMOTE)
         assertEquals("remote", database.qso(base.id)?.notes)
         assertEquals(WavelogConflictState.KEEP_REMOTE, store.conflicts(binding.id).single().state)
+        assertEquals(0, outstandingWrites(binding.id, base.id))
+    }
+
+    @Test fun keepLocalAndMergedResolutionsRequeueExactlyOneOperatorChoice() {
+        val binding = writableBinding()
+        store.saveBinding(binding)
+        val base = qso("resolution-matrix", "VK8RES").copy(notes = "base")
+        database.save(base, QsoOrigin.REMOTE_SYNC)
+        val baseline = canonical(base)
+        val local = canonical(base.copy(notes = "local"))
+        val remote = canonical(base.copy(notes = "remote"))
+        store.saveLink(WavelogRemoteLink(binding.id, base.id, "62", baseline.hash, baseline.encoded))
+        val engine = WavelogSyncEngine(database, store, client { error("Network is not used by resolution") }, mutations)
+
+        val keepLocal = conflict(binding, base.id, "62", baseline, local, remote)
+        store.saveConflict(keepLocal)
+        engine.resolveConflict(binding, keepLocal, WavelogConflictState.KEEP_LOCAL)
+        assertEquals(1, outstandingWrites(binding.id, base.id))
+        store.pendingFor(binding.id, base.id)?.let {
+            store.updateOutbox(it.copy(state = WavelogOutboxState.ACCEPTED))
+        }
+
+        val mergeConflict = conflict(binding, base.id, "62", baseline, local, remote)
+        store.saveConflict(mergeConflict)
+        val merged = canonical(base.copy(notes = "operator merge"))
+        engine.resolveConflict(binding, mergeConflict, WavelogConflictState.MERGED, merged)
+        assertEquals("operator merge", database.qso(base.id)?.notes)
+        assertEquals(1, outstandingWrites(binding.id, base.id))
+        assertEquals(WavelogConflictState.MERGED, store.conflicts(binding.id).last().state)
     }
 
     @Test fun remoteChangeAfterLocalDeleteBlocksDeleteAndKeepRemoteRestoresTheQso() {
@@ -265,6 +322,19 @@ class WavelogSyncEngineInstrumentedTest {
     )
 
     private fun canonical(qso: Qso) = WavelogCanonicalizer.fromAdif(database.toADIF(qso))
+
+    private fun conflict(binding: WavelogBinding, localId: String, remoteId: String, baseline: CanonicalQso,
+        local: CanonicalQso, remote: CanonicalQso) = WavelogConflict(
+        java.util.UUID.randomUUID().toString(), binding.id, localId, remoteId,
+        baseline.encoded, local.encoded, remote.encoded, setOf("NOTES"),
+        WavelogConflictState.OPEN, System.currentTimeMillis() / 1_000,
+    )
+
+    private fun outstandingWrites(bindingId: String, localId: String): Int = database.readableDatabase.rawQuery(
+        "SELECT COUNT(*) FROM wavelog_outbox WHERE binding_id=? AND local_qso_id=? " +
+            "AND operation IN ('CREATE','UPDATE') AND state<>'ACCEPTED'",
+        arrayOf(bindingId, localId),
+    ).use { cursor -> cursor.moveToFirst(); cursor.getInt(0) }
 
     private fun remoteRow(id: String, call: String, notes: String = "") = JSONObject()
         .put("id", id).put("call", call).put("qso_date", "2023-11-14 22:18:20")

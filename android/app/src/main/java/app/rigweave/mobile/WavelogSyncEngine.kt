@@ -197,7 +197,10 @@ class WavelogSyncEngine(
                 else -> store.enqueue(binding.id, conflict.localQsoId, WavelogOperation.UPDATE, local)
             }
             WavelogConflictState.KEEP_REMOTE -> when {
-                "REMOTE_DELETE" in conflict.conflictingFields -> mutations.delete(conflict.localQsoId, QsoOrigin.REMOTE_SYNC)
+                "REMOTE_DELETE" in conflict.conflictingFields -> {
+                    store.cancelWrites(binding.id, conflict.localQsoId, "Superseded by Keep Remote deletion")
+                    mutations.delete(conflict.localQsoId, QsoOrigin.REMOTE_SYNC)
+                }
                 "LOCAL_DELETE" in conflict.conflictingFields -> {
                     val restored = qsoFromCanonical(binding, remote, conflict.remoteQsoId, conflict.localQsoId)
                         ?: error("Remote conflict value is not a valid QSO")
@@ -207,6 +210,7 @@ class WavelogSyncEngine(
                         remote.hash, remote.encoded))
                 }
                 else -> {
+                    store.cancelWrites(binding.id, conflict.localQsoId, "Superseded by Keep Remote resolution")
                     val replacement = qsoFromCanonical(binding, remote, conflict.remoteQsoId, conflict.localQsoId)
                         ?: error("Remote conflict value is not a valid QSO")
                     mutations.update(replacement, QsoOrigin.REMOTE_SYNC)

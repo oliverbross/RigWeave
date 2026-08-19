@@ -56,6 +56,10 @@ class WavelogApiV2Test {
             failure(401, """{"error":{"code":"unauthorized","message":"No"}}""").errorClass)
         assertEquals(WavelogErrorClass.MISSING_SCOPE,
             failure(403, """{"error":{"code":"missing_scope","message":"No"}}""").errorClass)
+        assertEquals(WavelogErrorClass.VALIDATION,
+            failure(400, """{"error":{"code":"invalid_qso","message":"No"}}""").errorClass)
+        assertEquals(WavelogErrorClass.TEMPORARY,
+            failure(500, """{"error":{"code":"server_error","message":"No"}}""").errorClass)
         assertEquals(WavelogErrorClass.MALFORMED_RESPONSE, failure(200, "not-json").errorClass)
     }
 

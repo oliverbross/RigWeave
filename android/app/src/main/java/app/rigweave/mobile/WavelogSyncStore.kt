@@ -137,6 +137,14 @@ class WavelogSyncStore(private val database: QsoDatabase) {
         "wavelog_outbox", "binding_id=? AND local_qso_id=? AND operation='CREATE' AND state<>'ACCEPTED'",
         arrayOf(bindingId, localQsoId)) > 0
 
+    fun cancelWrites(bindingId: String, localQsoId: String, reason: String) {
+        database.writableDatabase.execSQL(
+            "UPDATE wavelog_outbox SET state='ACCEPTED',next_attempt_at=NULL,last_error=?,updated_at=? " +
+                "WHERE binding_id=? AND local_qso_id=? AND operation IN ('CREATE','UPDATE') AND state<>'ACCEPTED'",
+            arrayOf(reason.take(500), System.currentTimeMillis() / 1_000, bindingId, localQsoId),
+        )
+    }
+
     fun updateOutbox(entry: WavelogOutboxEntry) {
         database.writableDatabase.execSQL("UPDATE wavelog_outbox SET state=?,attempt_count=?,next_attempt_at=?,last_error=?,updated_at=? WHERE id=?",
             arrayOf(entry.state.name, entry.attemptCount, entry.nextAttemptAt, entry.lastError.take(500), entry.updatedAt, entry.id))
