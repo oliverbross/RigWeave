@@ -2,6 +2,7 @@ package app.rigweave.mobile
 
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.Locale
 
@@ -12,6 +13,8 @@ internal enum class ProgressMode(val label: String) { ALL("All"), CW("CW"), PHON
 internal data class ProgressFilters(
     val allStations: Boolean = false, val stationProfileId: String = "", val stationCallsign: String = "",
     val period: ProgressPeriod = ProgressPeriod.ALL, val band: String = "", val mode: ProgressMode = ProgressMode.ALL,
+    val submode: String = "", val operator: String = "", val confirmationSource: String = "",
+    val portableProgram: String = "", val includeConflicted: Boolean = false, val includeDeleted: Boolean = false,
 )
 
 internal enum class ProgressGoalMetric(val label: String) {
@@ -35,6 +38,31 @@ internal data class ProgressCount(val worked: Int, val confirmed: Int)
 internal data class ProgressBucket(val label: String, val count: Int)
 internal data class ProgressHeatCell(val day: Int, val hour: Int, val count: Int)
 internal data class ProgressContactPoint(val grid: String, val latitude: Double, val longitude: Double)
+internal data class ConfirmationProgress(val confirmed: Int, val total: Int) {
+    val percent get() = if (total == 0) null else confirmed * 100.0 / total
+}
+internal data class GeographyProgress(val code: String, val label: String, val count: ProgressCount)
+internal data class BestDxContact(val callsign: String, val country: String, val distanceKm: Double, val band: String, val mode: String)
+internal enum class AwardKind(val label: String, val rule: String, val filterKey: String) {
+    DXCC("DXCC", "Unique DXCC entities worked; local confirmation is paper QSL or LoTW.", "dxcc"),
+    WAZ("CQ / WAZ", "CQ zones 1–40 worked.", "cqzone"),
+    ITU("ITU Zones", "ITU zones 1–90 worked.", "ituzone"),
+    WAC("WAC", "Six populated continental regions worked.", "continent"),
+    WAS("WAS", "The 50 U.S. states worked; territories and D.C. are shown separately, not counted.", "state"),
+    WPX("WPX", "Unique worked callsign prefixes derived from the logged callsign.", "wpx"),
+    IOTA("IOTA", "Unique logged IOTA references worked.", "iota"),
+    POTA("POTA", "Unique hunted POTA references in the local log.", "pota"),
+    SOTA("SOTA", "Unique SOTA summit references worked.", "sota"),
+    WWFF("WWFF", "Unique WWFF references worked.", "wwff"),
+    QRP("QRP variants", "DXCC and continental units worked with known transmit power from 1–5 W.", "dxcc"),
+}
+internal data class AwardUnit(val code: String, val label: String, val qsos: Int, val confirmed: Boolean)
+internal data class AwardEstimate(
+    val kind: AwardKind, val count: ProgressCount, val target: Int? = null,
+    val units: List<AwardUnit> = emptyList(), val missing: List<String> = emptyList(),
+    val byBand: Map<String, ProgressCount> = emptyMap(), val byMode: Map<String, ProgressCount> = emptyMap(),
+    val coverage: ProgressCoverage = ProgressCoverage(0, 0), val warning: String = "",
+)
 internal data class SatelliteAnalytics(
     val qsos: Int = 0, val satellites: Int = 0, val grids: Int = 0, val confirmed: Int = 0,
     val bySatellite: Map<String, Int> = emptyMap(), val byMode: Map<String, Int> = emptyMap(),
@@ -77,6 +105,15 @@ internal data class ProgressSnapshot(
     val operators: Map<String, Int> = emptyMap(), val years: Map<String, Int> = emptyMap(),
     val months: Map<String, Int> = emptyMap(), val confirmations: Map<String, Int> = emptyMap(),
     val satellite: SatelliteAnalytics = SatelliteAnalytics(), val antennas: List<AntennaAnalytics> = emptyList(),
+    val activeDays: Int = 0, val averageDistanceKm: Double? = null, val unconfirmedDxccCount: Int = 0,
+    val continents: Map<String, ProgressCount> = emptyMap(), val cqZones: Map<String, ProgressCount> = emptyMap(),
+    val ituZones: Map<String, ProgressCount> = emptyMap(), val gridsConfirmed: Int = 0,
+    val geography: List<GeographyProgress> = emptyList(), val bestDx: List<BestDxContact> = emptyList(),
+    val submodes: Map<String, Int> = emptyMap(), val recentDays: Map<String, Int> = emptyMap(),
+    val localHeatmap: List<ProgressHeatCell> = emptyList(),
+    val confirmationDetails: Map<String, ConfirmationProgress> = emptyMap(),
+    val stationProfiles: Map<String, Int> = emptyMap(), val stationCallsigns: Map<String, Int> = emptyMap(),
+    val radios: Map<String, Int> = emptyMap(), val awards: Map<AwardKind, AwardEstimate> = emptyMap(),
 )
 
 internal val canonicalUsStates = setOf(
@@ -90,8 +127,8 @@ internal fun progressModeFamily(raw: String): String = when (modeFamily(raw)) {
 internal fun isAwardConfirmed(qso: Qso) =
     qso.lotwReceived.trim().uppercase(Locale.US) in setOf("Y", "V") ||
         qso.qslReceived.trim().uppercase(Locale.US) in setOf("Y", "V")
-private fun qsoBand(qso: Qso) = qso.band.trim().lowercase(Locale.US).ifBlank { bandForFrequency(qso.frequencyHz) }
-private fun qsoMode(qso: Qso) = progressModeFamily(qso.submode.ifBlank { qso.mode })
+internal fun qsoBand(qso: Qso) = qso.band.trim().lowercase(Locale.US).ifBlank { bandForFrequency(qso.frequencyHz) }
+internal fun qsoMode(qso: Qso) = progressModeFamily(qso.submode.ifBlank { qso.mode })
 
 internal fun filterProgressQsos(qsos: List<Qso>, filters: ProgressFilters, now: Long): List<Qso> {
     val start = when (filters.period) {
@@ -110,8 +147,53 @@ internal fun filterProgressQsos(qsos: List<Qso>, filters: ProgressFilters, now: 
             filters.stationProfileId.isBlank() && filters.stationCallsign.isBlank()
         stationMatches && qso.createdAt >= start &&
             (filters.band.isBlank() || qsoBand(qso) == filters.band.lowercase(Locale.US)) &&
-            (filters.mode == ProgressMode.ALL || qsoMode(qso) == filters.mode.name)
+            (filters.mode == ProgressMode.ALL || qsoMode(qso) == filters.mode.name) &&
+            (filters.submode.isBlank() || qso.submode.ifBlank { qso.mode }.equals(filters.submode, true)) &&
+            (filters.operator.isBlank() || qso.operatorCallsign.equals(filters.operator, true)) &&
+            progressConfirmationMatches(qso, filters.confirmationSource) &&
+            progressPortableMatches(qso, filters.portableProgram) &&
+            (filters.includeConflicted || !qso.syncState.equals("conflict", true)) &&
+            (filters.includeDeleted || qso.syncState.lowercase(Locale.US) !in setOf("tombstone", "remote_deleted"))
     }
+}
+
+private fun progressConfirmationMatches(qso: Qso, source: String): Boolean = when (source.uppercase(Locale.US)) {
+    "PAPER", "QSL" -> qso.qslReceived.isReceived()
+    "LOTW" -> qso.lotwReceived.isReceived()
+    "EQSL" -> qso.eqslReceived.isReceived()
+    "QRZ" -> qso.qrzReceived.isReceived()
+    "CLUBLOG" -> qso.clublogReceived.isReceived()
+    "DCL" -> qso.dclReceived.isReceived()
+    "AWARD" -> isAwardConfirmed(qso)
+    "UNCONFIRMED" -> !isAwardConfirmed(qso)
+    else -> true
+}
+private fun String.isReceived() = trim().uppercase(Locale.US) in setOf("Y", "V")
+private fun progressPortableMatches(qso: Qso, program: String): Boolean = when (program.uppercase(Locale.US)) {
+    "POTA" -> qso.potaRef.isNotBlank() || qso.potaRefs.isNotEmpty() || qso.myPotaRef.isNotBlank() || qso.myPotaRefs.isNotEmpty()
+    "SOTA" -> qso.sotaRef.isNotBlank() || qso.mySotaRef.isNotBlank()
+    "WWFF" -> qso.wwffRef.isNotBlank() || qso.myWwffRef.isNotBlank()
+    "IOTA" -> qso.iota.isNotBlank() || qso.myIota.isNotBlank()
+    else -> true
+}
+
+internal fun progressLogbookFilter(filters: ProgressFilters, now: Long = Instant.now().epochSecond): LogbookFilter {
+    val start = when (filters.period) {
+        ProgressPeriod.DAYS_30 -> now - 30 * 86_400L
+        ProgressPeriod.DAYS_90 -> now - 90 * 86_400L
+        ProgressPeriod.MONTHS_12 -> Instant.ofEpochSecond(now).atZone(ZoneOffset.UTC).minusMonths(12).toEpochSecond()
+        ProgressPeriod.YEAR -> LocalDate.ofInstant(Instant.ofEpochSecond(now), ZoneOffset.UTC).withDayOfYear(1).atStartOfDay().toEpochSecond(ZoneOffset.UTC)
+        ProgressPeriod.ALL -> null
+    }
+    return LogbookFilter(
+        fromEpochSeconds = start,
+        stationProfile = filters.stationProfileId.takeUnless { filters.allStations }.orEmpty(),
+        stationCallsign = filters.stationCallsign.takeIf { !filters.allStations && filters.stationProfileId.isBlank() }.orEmpty(),
+        band = filters.band, modeFamily = filters.mode.name.takeUnless { filters.mode == ProgressMode.ALL }.orEmpty(),
+        submode = filters.submode, operator = filters.operator, confirmationSource = filters.confirmationSource,
+        portableProgram = filters.portableProgram,
+        recordVisibility = when { filters.includeDeleted -> "ALL"; filters.includeConflicted -> "ACTIVE_AND_CONFLICTS"; else -> "ACTIVE" },
+    )
 }
 
 private fun normalizedRefs(primary: String, values: List<String>, normalizer: (String) -> String) =
@@ -176,6 +258,70 @@ private fun metricValue(metric: ProgressGoalMetric, s: ProgressSnapshot) = when 
     ProgressGoalMetric.STATES -> s.states.worked; ProgressGoalMetric.CQ_ZONES -> s.zones.worked
 }
 
+internal fun wpxPrefix(rawCallsign: String): String {
+    val parts = rawCallsign.uppercase(Locale.US).trim().split('/').filter(String::isNotBlank)
+    val base = parts.firstOrNull { it.any(Char::isDigit) && it.any(Char::isLetter) }.orEmpty()
+    val portableDigit = parts.drop(1).firstOrNull { it.length == 1 && it[0].isDigit() }
+    if (portableDigit != null) return base.takeWhile(Char::isLetter).ifBlank { base.take(1) } + portableDigit
+    val digit = base.indexOfFirst(Char::isDigit)
+    return if (digit < 0) "" else base.take(digit + 1)
+}
+
+private fun awardEstimate(
+    kind: AwardKind,
+    rows: List<Qso>,
+    unitsFor: (Qso) -> Set<String>,
+    labels: Map<String, String> = emptyMap(),
+    universe: Set<String>? = null,
+    target: Int? = universe?.size,
+    warning: String = "",
+): AwardEstimate {
+    val unitsByQso = rows.associateWith { unitsFor(it).map(String::uppercase).filter(String::isNotBlank).toSet() }
+    val worked = unitsByQso.values.flatten().toSet()
+    val confirmed = unitsByQso.filterKeys(::isAwardConfirmed).values.flatten().toSet()
+    fun scopedCounts(grouped: Map<String, List<Qso>>) = grouped.mapValues { (_, scoped) ->
+        val scopedWorked = scoped.flatMap { unitsByQso.getValue(it) }.toSet()
+        ProgressCount(scopedWorked.size, scoped.filter(::isAwardConfirmed).flatMap { unitsByQso.getValue(it) }.toSet().size)
+    }.filterKeys(String::isNotBlank)
+    val unitRows = worked.sortedWith(compareBy<String> { it.toIntOrNull() ?: Int.MAX_VALUE }.thenBy { it }).map { code ->
+        AwardUnit(code, labels[code].orEmpty().ifBlank { code }, unitsByQso.count { code in it.value }, code in confirmed)
+    }
+    val available = unitsByQso.count { it.value.isNotEmpty() }
+    return AwardEstimate(kind, ProgressCount(worked.size, confirmed.size), target, unitRows,
+        universe?.minus(worked).orEmpty().sortedWith(compareBy<String> { it.toIntOrNull() ?: Int.MAX_VALUE }.thenBy { it }),
+        scopedCounts(rows.groupBy(::qsoBand)), scopedCounts(rows.groupBy(::qsoMode)),
+        ProgressCoverage(available, rows.size), warning)
+}
+
+private fun buildAwardEstimates(
+    rows: List<Qso>,
+    dxccFor: (Qso) -> String,
+    countryFor: (Qso) -> String,
+    continentFor: (Qso) -> String,
+    cqFor: (Qso) -> String,
+    ituFor: (Qso) -> String,
+): Map<AwardKind, AwardEstimate> {
+    val dxccLabels = rows.mapNotNull { qso -> dxccFor(qso).takeIf(String::isNotBlank)?.let { it.uppercase(Locale.US) to countryFor(qso) } }.toMap()
+    val continents = setOf("AF", "AS", "EU", "NA", "OC", "SA")
+    fun single(value: String) = value.trim().uppercase(Locale.US).takeIf(String::isNotBlank)?.let(::setOf).orEmpty()
+    fun pota(qso: Qso) = normalizedRefs(qso.potaRef, qso.potaRefs, ::normalizePotaReference)
+    val qrp = rows.filter { it.txPowerW in 1..5 }
+    return linkedMapOf(
+        AwardKind.DXCC to awardEstimate(AwardKind.DXCC, rows, { single(dxccFor(it)) }, dxccLabels, target = 100),
+        AwardKind.WAZ to awardEstimate(AwardKind.WAZ, rows, { single(cqFor(it).toIntOrNull()?.takeIf { zone -> zone in 1..40 }?.toString().orEmpty()) }, universe = (1..40).map(Int::toString).toSet()),
+        AwardKind.ITU to awardEstimate(AwardKind.ITU, rows, { single(ituFor(it).toIntOrNull()?.takeIf { zone -> zone in 1..90 }?.toString().orEmpty()) }, universe = (1..90).map(Int::toString).toSet()),
+        AwardKind.WAC to awardEstimate(AwardKind.WAC, rows, { single(continentFor(it)).intersect(continents) }, universe = continents),
+        AwardKind.WAS to awardEstimate(AwardKind.WAS, rows, { single(it.state).intersect(canonicalUsStates) }, universe = canonicalUsStates),
+        AwardKind.WPX to awardEstimate(AwardKind.WPX, rows, { single(wpxPrefix(it.callsign)) }, warning = "WPX is a practical callsign-prefix estimate; special-event and portable-prefix adjudication may differ."),
+        AwardKind.IOTA to awardEstimate(AwardKind.IOTA, rows, { single(it.iota) }, warning = "No worldwide IOTA denominator is bundled."),
+        AwardKind.POTA to awardEstimate(AwardKind.POTA, rows, ::pota, warning = "Local hunted references; verify official programme credit in POTA."),
+        AwardKind.SOTA to awardEstimate(AwardKind.SOTA, rows, { single(normalizeSotaReference(it.sotaRef)) }, warning = "Local summit references; official points and validity are not claimed."),
+        AwardKind.WWFF to awardEstimate(AwardKind.WWFF, rows, { single(normalizeWwffReference(it.wwffRef)) }, warning = "No worldwide WWFF denominator is bundled."),
+        AwardKind.QRP to awardEstimate(AwardKind.QRP, qrp, { single(dxccFor(it)) }, dxccLabels, target = 100,
+            warning = "Based only on QSOs with recorded transmit power from 1–5 W; ${rows.count { it.txPowerW > 0 }} of ${rows.size} QSOs have power data."),
+    )
+}
+
 internal fun buildProgressSnapshot(
     qsos: List<Qso>, filters: ProgressFilters, goals: List<ProgressGoal> = emptyList(),
     dxSpots: List<AndroidDXSpot> = emptyList(), portableSpots: List<PortableSpot> = emptyList(),
@@ -184,13 +330,19 @@ internal fun buildProgressSnapshot(
     ctyLookup: (String) -> AndroidCtyRecord? = { null },
 ): ProgressSnapshot {
     val rows = filterProgressQsos(qsos, filters, now)
-    val dxccByQso = rows.associateWith { progressDxcc(it, ctyLookup) }
+    val resolvedByQso = rows.associateWith { qso -> if (qso.dxcc.isBlank()) ctyLookup(qso.callsign) else null }
+    fun dxccFor(qso: Qso) = qso.dxcc.trim().uppercase(Locale.US).ifBlank { resolvedByQso[qso]?.dxcc.orEmpty().trim().uppercase(Locale.US) }
+    fun countryFor(qso: Qso) = qso.country.trim().ifBlank { resolvedByQso[qso]?.country.orEmpty().trim() }
+    fun continentFor(qso: Qso) = qso.continent.trim().uppercase(Locale.US).ifBlank { resolvedByQso[qso]?.continent.orEmpty().trim().uppercase(Locale.US) }
+    fun cqFor(qso: Qso) = qso.cqZone.trim().ifBlank { resolvedByQso[qso]?.cqZone.orEmpty().trim() }
+    fun ituFor(qso: Qso) = qso.ituZone.trim().ifBlank { resolvedByQso[qso]?.ituZone.orEmpty().trim() }
+    val dxccByQso = rows.associateWith(::dxccFor)
     val workedDxcc = dxccByQso.values.filter(String::isNotBlank).toSet()
     val confirmedDxcc = dxccByQso.filter { isAwardConfirmed(it.key) }.values.filter(String::isNotBlank).toSet()
     val states = rows.map { it.state.trim().uppercase(Locale.US) }.filter(canonicalUsStates::contains).toSet()
     val confirmedStates = rows.filter(::isAwardConfirmed).map { it.state.trim().uppercase(Locale.US) }.filter(canonicalUsStates::contains).toSet()
-    val zones = rows.mapNotNull { it.cqZone.trim().toIntOrNull()?.takeIf { z -> z in 1..40 } }.toSet()
-    val confirmedZones = rows.filter(::isAwardConfirmed).mapNotNull { it.cqZone.trim().toIntOrNull()?.takeIf { z -> z in 1..40 } }.toSet()
+    val zones = rows.mapNotNull { cqFor(it).toIntOrNull()?.takeIf { z -> z in 1..40 } }.toSet()
+    val confirmedZones = rows.filter(::isAwardConfirmed).mapNotNull { cqFor(it).toIntOrNull()?.takeIf { z -> z in 1..40 } }.toSet()
     val byMode = listOf("CW","PHONE","DIGITAL").associateWith { family ->
         val familyRows = rows.filter { qsoMode(it) == family }
         ProgressCount(familyRows.map { dxccByQso.getValue(it) }.filter(String::isNotBlank).distinct().size,
@@ -202,18 +354,24 @@ internal fun buildProgressSnapshot(
             bandRows.filter(::isAwardConfirmed).map { dxccByQso.getValue(it) }.filter(String::isNotBlank).distinct().size)
     }
     val portable = portableProgress(rows, sotaSummits)
+    val awards = buildAwardEstimates(rows, ::dxccFor, ::countryFor, ::continentFor, ::cqFor, ::ituFor)
+    val awardDxcc = awards.getValue(AwardKind.DXCC)
+    val awardWaz = awards.getValue(AwardKind.WAZ)
+    val awardItu = awards.getValue(AwardKind.ITU)
     val needs = buildList {
         dxSpots.forEach { spot ->
             val resolved = ctyLookup(spot.callsign)
             val dxcc = resolved?.dxcc.orEmpty().trim().uppercase(Locale.US)
             if (dxcc.isBlank()) return@forEach
             val reasons = buildList {
-                if (dxcc !in workedDxcc) add("NEW DXCC ENTITY") else {
+                if (dxcc !in awardDxcc.units.map(AwardUnit::code)) add("NEEDED DXCC · ${spot.band.uppercase(Locale.US)} ${progressModeFamily(spot.mode)}") else {
+                    if (awardDxcc.units.firstOrNull { it.code == dxcc }?.confirmed == false) add("UNCONFIRMED DXCC")
                     val entityRows = rows.filter { dxccByQso[it] == dxcc }
-                    if (entityRows.none { qsoBand(it) == spot.band.lowercase(Locale.US) }) add("NEW DXCC ON BAND")
-                    if (entityRows.none { qsoMode(it) == progressModeFamily(spot.mode) }) add("NEW DXCC MODE")
+                    if (entityRows.none { qsoBand(it) == spot.band.lowercase(Locale.US) }) add("NEEDED DXCC · ${spot.band.uppercase(Locale.US)}")
+                    if (entityRows.none { qsoMode(it) == progressModeFamily(spot.mode) }) add("NEEDED DXCC · ${progressModeFamily(spot.mode)}")
                 }
-                resolved?.cqZone?.toIntOrNull()?.takeIf { it in 1..40 && it !in zones }?.let { add("NEEDED CQ ZONE") }
+                resolved?.cqZone?.toIntOrNull()?.takeIf { it in 1..40 && awardWaz.units.none { unit -> unit.code == it.toString() } }?.let { add("NEEDED CQ ZONE · $it") }
+                resolved?.ituZone?.toIntOrNull()?.takeIf { it in 1..90 && awardItu.units.none { unit -> unit.code == it.toString() } }?.let { add("NEEDED ITU ZONE · $it") }
             }
             if (reasons.isNotEmpty()) add(ProgressNeed("dx:${spot.id}",spot.callsign,
                 "${resolved?.country.orEmpty()} · ${spot.band} · ${spot.mode}",reasons,reasons.size*20+spot.score.coerceIn(0,20),
@@ -221,8 +379,8 @@ internal fun buildProgressSnapshot(
         }
         portableSpots.filter { it.activeAt(now) }.forEach { spot ->
             val reasons = spot.references.mapNotNull { ref -> when (ref.program) {
-                PortableProgram.POTA -> "NEW POTA PARK".takeIf { normalizePotaReference(ref.code) !in portable.potaHunted }
-                PortableProgram.SOTA -> null
+                PortableProgram.POTA -> "NEW POTA REFERENCE".takeIf { normalizePotaReference(ref.code) !in portable.potaHunted }
+                PortableProgram.SOTA -> "NEW SOTA SUMMIT".takeIf { normalizeSotaReference(ref.code) !in portable.sotaHunted }
                 PortableProgram.WWFF -> "NEW WWFF REFERENCE".takeIf { normalizeWwffReference(ref.code) !in portable.wwffHunted }
             } }.distinct()
             if (reasons.isNotEmpty()) add(ProgressNeed("portable:${spot.id}",spot.callsign,
@@ -231,7 +389,8 @@ internal fun buildProgressSnapshot(
         }
     }.sortedByDescending(ProgressNeed::priority)
     val coverage = linkedMapOf(
-        "DXCC" to rows.count { it.dxcc.isNotBlank() }, "CQ zone" to rows.count { it.cqZone.toIntOrNull()?.let { zone -> zone in 1..40 } == true },
+        "DXCC" to rows.count { dxccFor(it).isNotBlank() }, "CQ zone" to rows.count { cqFor(it).toIntOrNull()?.let { zone -> zone in 1..40 } == true },
+        "ITU zone" to rows.count { ituFor(it).toIntOrNull()?.let { zone -> zone in 1..90 } == true },
         "U.S. state" to rows.count { it.state.uppercase(Locale.US) in canonicalUsStates },
         "Grid" to rows.count { maidenheadCenter(it.grid) != null }, "Distance" to rows.count { it.distanceKm > 0 },
         "TX power" to rows.count { it.txPowerW > 0 },
@@ -242,7 +401,7 @@ internal fun buildProgressSnapshot(
         .distinctBy(ProgressContactPoint::grid)
     val base = ProgressSnapshot(rows,rows.size,rows.map { it.callsign.uppercase(Locale.US) }.filter(String::isNotBlank).distinct().size,
         ProgressCount(workedDxcc.size,confirmedDxcc.size),
-        rows.map(Qso::country).map(String::trim).filter(String::isNotBlank).distinctBy { it.uppercase(Locale.US) }.size,
+        rows.map(::countryFor).map(String::trim).filter(String::isNotBlank).distinctBy { it.uppercase(Locale.US) }.size,
         rows.map(Qso::grid).map(String::trim).filter(String::isNotBlank).distinctBy { it.uppercase(Locale.US) }.size,
         rows.map(Qso::distanceKm).filter { it > 0 }.maxOrNull(),rows.count { it.txPowerW in 1..5 },syncAttention,
         coverage,activityBuckets(rows,filters.period),rows.groupingBy(::qsoBand).eachCount().filterKeys(String::isNotBlank),
@@ -269,16 +428,45 @@ internal fun buildProgressSnapshot(
         val distances = values.map(Qso::distanceKm).filter { it > 0 }
         AntennaAnalytics(path, values.size, values.count(::isAwardConfirmed), distances.average().takeUnless(Double::isNaN), distances.maxOrNull())
     }.sortedByDescending(AntennaAnalytics::qsos)
+    fun groupedProgress(values: (Qso) -> String, valid: (String) -> Boolean = String::isNotBlank) = rows
+        .map { it to values(it).trim().uppercase(Locale.US) }.filter { valid(it.second) }.groupBy(Pair<Qso, String>::second)
+        .mapValues { (_, pairs) -> ProgressCount(pairs.size, pairs.count { isAwardConfirmed(it.first) }) }.toSortedMap()
+    val geography = dxccByQso.filterValues(String::isNotBlank).entries.groupBy(Map.Entry<Qso, String>::value).map { (code, entries) ->
+        GeographyProgress(code, entries.map { countryFor(it.key) }.firstOrNull(String::isNotBlank).orEmpty().ifBlank { "Country unavailable" },
+            ProgressCount(entries.size, entries.count { isAwardConfirmed(it.key) }))
+    }.sortedByDescending { it.count.worked }
+    val distances = rows.map(Qso::distanceKm).filter { it > 0 }
+    val localZone = ZoneId.systemDefault()
+    val confirmationDetails = linkedMapOf(
+        "Paper QSL" to rows.count { received(it.qslReceived) }, "LoTW" to rows.count { received(it.lotwReceived) },
+        "eQSL" to rows.count { received(it.eqslReceived) }, "QRZ" to rows.count { received(it.qrzReceived) },
+        "Club Log" to rows.count { received(it.clublogReceived) }, "DCL" to rows.count { received(it.dclReceived) },
+    ).mapValues { ConfirmationProgress(it.value, rows.size) }
     return base.copy(
         goals = goals.take(4).map { GoalProgress(it,metricValue(it.metric,base)) },
         operators = rows.map { it.operatorCallsign.trim().uppercase(Locale.US).ifBlank { "UNKNOWN" } }.groupingBy { it }.eachCount(),
         years = rows.groupingBy { Instant.ofEpochSecond(it.createdAt).atZone(ZoneOffset.UTC).year.toString() }.eachCount().toSortedMap(),
         months = rows.groupingBy { Instant.ofEpochSecond(it.createdAt).atZone(ZoneOffset.UTC).toLocalDate().toString().take(7) }.eachCount().toSortedMap(),
-        confirmations = linkedMapOf(
-            "LoTW" to rows.count { received(it.lotwReceived) }, "Paper QSL" to rows.count { received(it.qslReceived) },
-            "eQSL" to rows.count { received(it.eqslReceived) }, "QRZ" to rows.count { received(it.qrzReceived) },
-            "Club Log" to rows.count { received(it.clublogReceived) }, "DCL" to rows.count { received(it.dclReceived) },
-        ),
+        confirmations = confirmationDetails.mapValues { it.value.confirmed },
         satellite = satellite, antennas = antennas,
+        activeDays = rows.map { Instant.ofEpochSecond(it.createdAt).atZone(ZoneOffset.UTC).toLocalDate() }.distinct().size,
+        averageDistanceKm = distances.average().takeUnless(Double::isNaN), unconfirmedDxccCount = workedDxcc.size - confirmedDxcc.size,
+        continents = groupedProgress(::continentFor),
+        cqZones = groupedProgress(::cqFor) { it.toIntOrNull() in 1..40 },
+        ituZones = groupedProgress(::ituFor) { it.toIntOrNull() in 1..90 },
+        gridsConfirmed = rows.filter(::isAwardConfirmed).map { it.grid.trim().uppercase(Locale.US) }.filter(String::isNotBlank).distinct().size,
+        geography = geography,
+        bestDx = rows.filter { it.distanceKm > 0 }.sortedByDescending(Qso::distanceKm).take(20).map {
+            BestDxContact(it.callsign, countryFor(it), it.distanceKm, qsoBand(it), it.submode.ifBlank { it.mode })
+        },
+        submodes = rows.map { it.submode.ifBlank { it.mode }.trim().uppercase(Locale.US) }.filter(String::isNotBlank).groupingBy { it }.eachCount(),
+        recentDays = rows.groupingBy { Instant.ofEpochSecond(it.createdAt).atZone(ZoneOffset.UTC).toLocalDate().toString() }.eachCount().toSortedMap().toList().takeLast(31).toMap(),
+        localHeatmap = rows.groupingBy { val d = Instant.ofEpochSecond(it.createdAt).atZone(localZone); d.dayOfWeek.value - 1 to d.hour }
+            .eachCount().map { ProgressHeatCell(it.key.first, it.key.second, it.value) },
+        confirmationDetails = confirmationDetails,
+        stationProfiles = rows.map { it.stationProfileId.trim().ifBlank { "UNKNOWN" } }.groupingBy { it }.eachCount(),
+        stationCallsigns = rows.map { it.stationCallsign.trim().uppercase(Locale.US).ifBlank { "UNKNOWN" } }.groupingBy { it }.eachCount(),
+        radios = rows.map { it.radioModel.trim().uppercase(Locale.US).ifBlank { "UNKNOWN" } }.groupingBy { it }.eachCount(),
+        awards = awards,
     )
 }

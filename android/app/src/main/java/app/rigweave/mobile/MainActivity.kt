@@ -375,6 +375,13 @@ private fun navIcon(item: Destination) = when (item) {
     tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openDx: () -> Unit, openPortable: () -> Unit,
     openActivation: () -> Unit, openLogbook: () -> Unit, openSync: () -> Unit, openProgress: () -> Unit, openDigi: () -> Unit) {
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
+    val intelligencePortableSpots = portable.pota.spots.map(PotaSpot::toPortable) + portable.sotaSpots + portable.wwffSpots
+    val deliveredStates = setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED)
+    val intelligenceAttention = syncHub.records.count { it.state !in deliveredStates }
+    LaunchedEffect(destination, progress.filters, database.changeToken(), features.liveSpots, intelligencePortableSpots,
+        intelligenceAttention, cty.dataRevision, progress.goalStore.goals) {
+        progress.refresh(progress.filters, features.liveSpots, intelligencePortableSpots, intelligenceAttention, cty, portable.sotaCatalogue)
+    }
     when (destination) {
         Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, send,
             openDx, openPortable, openProgress)
@@ -408,17 +415,19 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
         Destination.LOGBOOK -> Column(Modifier.fillMaxSize()) {
             PotaActivationStrip(activation, radio, openActivation)
-            Box(Modifier.weight(1f)) { LogbookScreen(radio, database, mutations, wavelog, wavelogNative, syncHub, callbook, app, openSync, openProgress) }
+            Box(Modifier.weight(1f)) { LogbookScreen(radio, database, mutations, wavelog, wavelogNative, syncHub, callbook, app,
+                openSync, openProgress, progress.logbookRequest, progress::consumeLogbookRequest) }
         }
         Destination.PROGRESS -> ProgressScreen(progress, features, portable, syncHub, cty,
             wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }.orEmpty(), app.stationCallsign, compact,
             openDx = openDx, openPortable = openPortable,
-            openLogbook = openLogbook, openSync = openSync)
+            openLogbook = openLogbook, openLogbookFilter = { filter -> progress.requestLogbook(filter); openLogbook() }, openSync = openSync)
         Destination.SYNC -> SyncHubScreen(database, mutations, syncHub, wavelog, wavelogNative, openLogbook)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
-        Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app, send)
+        Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app, progress.snapshot.needs, send)
         Destination.PORTABLE -> PortableWorkspaceScreen(portable, activation, radio, app.stationGrid, foreground, compact,
-            app, database, mutations, wavelog, callbook, cty, tunePortable, tuneLogPortable, openLogbook)
+            app, database, mutations, wavelog, callbook, cty, tunePortable, tuneLogPortable,
+            progress.snapshot.needs.mapNotNull { need -> need.portableSpot?.id?.let { it to need.reasons } }.toMap(), openLogbook)
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
             transport, flex, voiceStore, voiceAudio, voiceTx, openEq, openSync, connect, direct)
     }
@@ -2890,9 +2899,11 @@ private fun modeCode(mode: String) = when (mode.uppercase()) { "LSB" -> "1"; "US
 private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
 
 @Composable private fun DXScreen(neuralDx: NeuralDxController, features: FeatureController, database: QsoDatabase,
-    wavelog: WavelogController, callbook: CallbookController, cty: CtyController, app: AppController, send: (String) -> Unit) {
+    wavelog: WavelogController, callbook: CallbookController, cty: CtyController, app: AppController,
+    needs: List<ProgressNeed>, send: (String) -> Unit) {
     var previousQsoRecord by remember { mutableStateOf<AndroidCallbookRecord?>(null) }
-    NeuralDxScreen(neuralDx, features, database, wavelog, callbook, cty, app, send) { spot ->
+    val dxNeeds = needs.mapNotNull { need -> need.dxSpot?.id?.let { it to need.reasons } }.toMap()
+    NeuralDxScreen(neuralDx, features, database, wavelog, callbook, cty, app, send, dxNeeds) { spot ->
         previousQsoRecord = spot.previousQsoRecord(cty)
     }
     previousQsoRecord?.let { record ->
@@ -2907,7 +2918,8 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
 
 @Composable private fun LogbookScreen(state: RadioState, database: QsoDatabase, mutations: QsoMutationCoordinator,
     wavelog: WavelogController, wavelogNative: WavelogNativeController,
-    syncHub: SyncHubController, callbook: CallbookController, app: AppController, openSync: () -> Unit, openProgress: () -> Unit) {
+    syncHub: SyncHubController, callbook: CallbookController, app: AppController, openSync: () -> Unit, openProgress: () -> Unit,
+    initialFilter: LogbookFilter? = null, consumeInitialFilter: () -> Unit = {}) {
     var showFilters by remember { mutableStateOf(false) }
     var showFastEntry by remember { mutableStateOf(false) }
     var draft by rememberSaveable { mutableStateOf(LogbookFilter()) }
@@ -2929,6 +2941,15 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
         uri?.let { target -> runCatching { context.contentResolver.openOutputStream(target)?.bufferedWriter()?.use { it.write(exportText) } }
             .onSuccess { actionStatus = "ADIF export saved." }.onFailure { actionStatus = "ADIF export failed: ${it.message}" } }
         exportText = ""
+    }
+
+    LaunchedEffect(initialFilter) {
+        initialFilter?.let { requested ->
+            draft = requested; applied = requested; page = 0; selectedId = null
+            fromDate = requested.fromEpochSeconds?.let { Instant.ofEpochSecond(it).atZone(ZoneOffset.UTC).toLocalDate().toString() }.orEmpty()
+            toDate = requested.toEpochSecondsExclusive?.let { Instant.ofEpochSecond(it - 1).atZone(ZoneOffset.UTC).toLocalDate().toString() }.orEmpty()
+            consumeInitialFilter()
+        }
     }
 
     LaunchedEffect(wavelog.logMode, wavelog.stationId) {

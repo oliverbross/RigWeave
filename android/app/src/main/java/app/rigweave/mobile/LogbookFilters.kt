@@ -27,6 +27,7 @@ data class LogbookFilter(
     val cqZone: String = "",
     val ituZone: String = "",
     val mode: String = "",
+    val modeFamily: String = "",
     val submode: String = "",
     val band: String = "",
     val frequency: String = "",
@@ -40,6 +41,7 @@ data class LogbookFilter(
     val iota: String = "",
     val wwff: String = "",
     val operator: String = "",
+    val radioModel: String = "",
     val contest: String = "",
     val continent: String = "",
     val satellite: String = "",
@@ -69,6 +71,11 @@ data class LogbookFilter(
     val recordState: String = "",
     val duplicateState: String = "",
     val syncRelation: String = "",
+    val confirmationSource: String = "",
+    val portableProgram: String = "",
+    val callsignPrefix: String = "",
+    val txPower: String = "",
+    val recordVisibility: String = "",
     val sort: LogbookSort = LogbookSort.TIME,
     val direction: LogbookSortDirection = LogbookSortDirection.DESCENDING,
     val limit: Int = 50,
@@ -84,13 +91,14 @@ fun filterLogbook(records: List<Qso>, filter: LogbookFilter): List<Qso> {
             textMatches(qso.dxcc, filter.dxcc) && textMatches(qso.country, filter.country) &&
             textMatches(qso.state, filter.state) && textMatches(qso.grid, filter.grid) &&
             textMatches(qso.cqZone, filter.cqZone) && textMatches(qso.ituZone, filter.ituZone) &&
-            choiceMatches(qso.mode, filter.mode) && choiceMatches(qso.submode, filter.submode) &&
+            choiceMatches(qso.mode, filter.mode) && (filter.modeFamily.isBlank() || qsoMode(qso) == filter.modeFamily.uppercase()) &&
+            choiceMatches(qso.submode, filter.submode) &&
             choiceMatches(qso.band, filter.band) && numericMatches(qso.frequencyHz / 1_000_000.0, filter.frequency) &&
             numericMatches(qso.frequencyRxHz / 1_000_000.0, filter.frequencyRx) && choiceMatches(qso.bandRx, filter.bandRx) &&
             choiceMatches(qso.propagationMode, filter.propagation) && textMatches(qso.county, filter.county) &&
             textMatches(qso.dok, filter.dok) && textMatches(qso.sotaRef, filter.sota) &&
             textMatches(qso.potaRef, filter.pota) && textMatches(qso.iota, filter.iota) &&
-            textMatches(qso.wwffRef, filter.wwff) && textMatches(qso.operatorCallsign, filter.operator) &&
+            textMatches(qso.wwffRef, filter.wwff) && textMatches(qso.operatorCallsign, filter.operator) && textMatches(qso.radioModel, filter.radioModel) &&
             textMatches(qso.contestId, filter.contest) && choiceMatches(qso.continent, filter.continent) &&
             textMatches(qso.extraAdifFields["SAT_NAME"].orEmpty(), filter.satellite) &&
             textMatches(qso.extraAdifFields["SAT_MODE"].orEmpty(), filter.satelliteMode) &&
@@ -107,6 +115,9 @@ fun filterLogbook(records: List<Qso>, filter: LogbookFilter): List<Qso> {
             statusMatches(qso.qrzSent, filter.qrzSent) && statusMatches(qso.qrzReceived, filter.qrzReceived) &&
             textMatches(qso.qslVia, filter.qslVia) && presenceMatches(qso.qslImages, filter.qslImages) &&
             recordStateMatches(qso, filter.recordState) && syncRelationMatches(qso, filter.syncRelation) &&
+            confirmationSourceMatches(qso, filter.confirmationSource) && progressPortableMatchesForLogbook(qso, filter.portableProgram) &&
+            (filter.callsignPrefix.isBlank() || wpxPrefix(qso.callsign) == filter.callsignPrefix.uppercase()) &&
+            numericMatches(qso.txPowerW.toDouble(), filter.txPower) && visibilityMatches(qso, filter.recordVisibility) &&
             (filter.duplicateState.isBlank() || filter.duplicateState.equals("CANDIDATE", true) && records.any { other ->
                 other.id != qso.id && other.callsign.equals(qso.callsign, true) && other.frequencyHz == qso.frequencyHz &&
                     other.mode.equals(qso.mode, true) && kotlin.math.abs(other.createdAt - qso.createdAt) <= 15
@@ -134,14 +145,15 @@ fun filterLogbook(records: List<Qso>, filter: LogbookFilter): List<Qso> {
 fun activeLogbookFilterCount(filter: LogbookFilter): Int = listOf(
     filter.fromEpochSeconds, filter.toEpochSecondsExclusive, filter.callsign, filter.stationProfile, filter.stationCallsign,
     filter.provenance, filter.name, filter.qth, filter.email, filter.dxcc, filter.country, filter.state, filter.grid,
-    filter.cqZone, filter.ituZone, filter.mode, filter.submode, filter.band, filter.frequency, filter.frequencyRx,
+    filter.cqZone, filter.ituZone, filter.mode, filter.modeFamily, filter.submode, filter.band, filter.frequency, filter.frequencyRx,
     filter.bandRx, filter.propagation, filter.county, filter.dok, filter.sota, filter.pota, filter.iota,
-    filter.wwff, filter.operator, filter.contest, filter.continent, filter.satellite, filter.satelliteMode, filter.orbit,
+    filter.wwff, filter.operator, filter.radioModel, filter.contest, filter.continent, filter.satellite, filter.satelliteMode, filter.orbit,
     filter.comment, filter.qslMessage, filter.notes, filter.distance, filter.duration,
     filter.qslSent, filter.qslReceived, filter.qslSentMethod, filter.qslReceivedMethod, filter.lotwSent,
     filter.lotwReceived, filter.clublogSent, filter.clublogReceived, filter.eqslSent, filter.eqslReceived,
     filter.dclSent, filter.dclReceived, filter.qrzSent, filter.qrzReceived, filter.qslVia, filter.qslImages,
-    filter.recordState, filter.duplicateState, filter.syncRelation,
+    filter.recordState, filter.duplicateState, filter.syncRelation, filter.confirmationSource, filter.portableProgram,
+    filter.callsignPrefix, filter.txPower, filter.recordVisibility,
 ).count { value -> value != null && value.toString().isNotBlank() }
 
 /** Shared contract for Progress/Analytics deep links into Advanced Logbook. */
@@ -153,9 +165,18 @@ fun logbookFilterForDimension(key: String, value: String, base: LogbookFilter = 
         "continent" -> base.copy(continent = value)
         "band" -> base.copy(band = value)
         "mode" -> base.copy(mode = value)
+        "modefamily" -> base.copy(modeFamily = value)
         "submode" -> base.copy(submode = value)
         "grid" -> base.copy(grid = value)
         "state" -> base.copy(state = value)
+        "cqzone", "cq" -> base.copy(cqZone = value)
+        "ituzone", "itu" -> base.copy(ituZone = value)
+        "operator" -> base.copy(operator = value)
+        "stationprofile" -> base.copy(stationProfile = value)
+        "stationcallsign" -> base.copy(stationCallsign = value)
+        "radio" -> base.copy(radioModel = value)
+        "wpx", "prefix" -> base.copy(callsignPrefix = value)
+        "qrp" -> base.copy(txPower = "1..5")
         "pota" -> base.copy(pota = value)
         "sota" -> base.copy(sota = value)
         "wwff" -> base.copy(wwff = value)
@@ -163,7 +184,8 @@ fun logbookFilterForDimension(key: String, value: String, base: LogbookFilter = 
         else -> base
     }
 
-private fun textMatches(actual: String, expected: String) = expected.isBlank() || actual.contains(expected.trim(), ignoreCase = true)
+private fun textMatches(actual: String, expected: String) = expected.isBlank() ||
+    expected.trim() == "*" && actual.isNotBlank() || actual.contains(expected.trim(), ignoreCase = true)
 private fun choiceMatches(actual: String, expected: String) = expected.isBlank() || actual.equals(expected, ignoreCase = true)
 private fun provenanceMatches(qso: Qso, expected: String) = when (expected.uppercase()) {
     "LOCAL" -> qso.remoteId.isBlank()
@@ -179,7 +201,40 @@ private fun syncRelationMatches(qso: Qso, expected: String) = when (expected.upp
     "LINKED" -> qso.remoteId.isNotBlank()
     "OUTBOX" -> qso.syncState.lowercase() in setOf("pending", "queued", "retry", "failed")
     "CONFLICT" -> qso.syncState.equals("conflict", true)
+    "ATTENTION" -> qso.syncState.lowercase() in setOf("pending", "queued", "retry", "failed", "conflict")
     "TOMBSTONE", "REMOTE_DELETED" -> qso.syncState.lowercase() in setOf("tombstone", "remote_deleted")
+    else -> true
+}
+
+private fun confirmationSourceMatches(qso: Qso, source: String): Boolean {
+    fun received(value: String) = value.trim().uppercase() in setOf("Y", "V")
+    return when (source.uppercase()) {
+        "PAPER", "QSL" -> received(qso.qslReceived)
+        "LOTW" -> received(qso.lotwReceived)
+        "EQSL" -> received(qso.eqslReceived)
+        "QRZ" -> received(qso.qrzReceived)
+        "CLUBLOG" -> received(qso.clublogReceived)
+        "DCL" -> received(qso.dclReceived)
+        "AWARD" -> isAwardConfirmed(qso)
+        "UNCONFIRMED" -> !isAwardConfirmed(qso)
+        else -> true
+    }
+}
+
+private fun progressPortableMatchesForLogbook(qso: Qso, program: String) = when (program.uppercase()) {
+    "POTA" -> qso.potaRef.isNotBlank() || qso.potaRefs.isNotEmpty() || qso.myPotaRef.isNotBlank() || qso.myPotaRefs.isNotEmpty()
+    "SOTA" -> qso.sotaRef.isNotBlank() || qso.mySotaRef.isNotBlank()
+    "WWFF" -> qso.wwffRef.isNotBlank() || qso.myWwffRef.isNotBlank()
+    "IOTA" -> qso.iota.isNotBlank() || qso.myIota.isNotBlank()
+    "ANY" -> qso.potaRef.isNotBlank() || qso.potaRefs.isNotEmpty() || qso.myPotaRef.isNotBlank() || qso.myPotaRefs.isNotEmpty() ||
+        qso.sotaRef.isNotBlank() || qso.mySotaRef.isNotBlank() || qso.wwffRef.isNotBlank() || qso.myWwffRef.isNotBlank()
+    else -> true
+}
+
+private fun visibilityMatches(qso: Qso, visibility: String) = when (visibility.uppercase()) {
+    "ACTIVE" -> qso.syncState.lowercase() !in setOf("conflict", "tombstone", "remote_deleted")
+    "ACTIVE_AND_CONFLICTS" -> qso.syncState.lowercase() !in setOf("tombstone", "remote_deleted")
+    "DELETED" -> qso.syncState.lowercase() in setOf("tombstone", "remote_deleted")
     else -> true
 }
 

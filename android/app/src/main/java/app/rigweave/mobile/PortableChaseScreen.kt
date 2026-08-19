@@ -67,6 +67,7 @@ internal fun PortableChaseScreen(
     onTune: (PortableSpot) -> Unit,
     onTuneAndLog: (PortableSpot) -> Unit,
     potaActivationActive: Boolean = false,
+    intelligenceNeeds: Map<String, List<String>> = emptyMap(),
     onP2p: (PortableSpot) -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -99,7 +100,7 @@ internal fun PortableChaseScreen(
             (program == "ALL" || spot.programs.any { it.label == program }) &&
                 (query.isBlank() || listOf(spot.callsign, spot.comments) .plus(spot.references.flatMap { listOf(it.code, it.name, it.association, it.region) }).any { it.uppercase(Locale.US).contains(query) }) &&
                 (band == "ALL" || spot.band == band) && (mode == "ALL" || modeFamily(spot.mode) == mode) &&
-                (!newOnly || row.worked.values.any { !it.referenceWorked || !it.bandWorked || !it.modeWorked }) && spot.activeAt(now)
+                (!newOnly || row.worked.values.any { !it.referenceWorked || !it.bandWorked || !it.modeWorked } || intelligenceNeeds[spot.id].orEmpty().isNotEmpty()) && spot.activeAt(now)
         }, sort)
     }
     val selected = filtered.firstOrNull { it.spot.id == selectedId } ?: all.firstOrNull { it.spot.id == selectedId }
@@ -126,11 +127,11 @@ internal fun PortableChaseScreen(
             PortablePage.ON_AIR -> BoxWithConstraints(Modifier.weight(1f)) {
                 if (!compact && maxWidth >= 900.dp) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PortableFilters(search, { search = it }, band, { band = it }, mode, { mode = it }, newOnly, { newOnly = it }, sort, { sort = it }, Modifier.width(220.dp).fillMaxHeight())
-                    PortableList(filtered, selectedId, { selectedId = it }, Modifier.weight(1.2f).fillMaxHeight())
-                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) { PortableMap(filtered, selectedId, { selectedId = it }, Modifier.weight(1f)); PortableDetail(selected, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true }, potaActivationActive, onP2p, Modifier.weight(.9f)) }
+                    PortableList(filtered, selectedId, { selectedId = it }, intelligenceNeeds, Modifier.weight(1.2f).fillMaxHeight())
+                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) { PortableMap(filtered, selectedId, { selectedId = it }, Modifier.weight(1f)); PortableDetail(selected, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true }, potaActivationActive, onP2p, intelligenceNeeds, Modifier.weight(.9f)) }
                 } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     PortableCompactFilters(search, { search = it }, band, { band = it }, mode, { mode = it }, newOnly, { newOnly = it }, sort, { sort = it })
-                    PortableList(filtered, selectedId, { selectedId = it }, Modifier.weight(1f)); selected?.let { PortableDetail(it, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true }, potaActivationActive, onP2p, Modifier.heightIn(min = 190.dp, max = 320.dp)) }
+                    PortableList(filtered, selectedId, { selectedId = it }, intelligenceNeeds, Modifier.weight(1f)); selected?.let { PortableDetail(it, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true }, potaActivationActive, onP2p, intelligenceNeeds, Modifier.heightIn(min = 190.dp, max = 320.dp)) }
                 }
             }
         }
@@ -175,25 +176,27 @@ internal fun PortableChaseScreen(
 
 @Composable private fun PortableChoice(label: String, value: String, choices: List<String>, change: (String) -> Unit) { var open by remember { mutableStateOf(false) }; Box { OutlinedButton({ open = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 7.dp)) { Text("$label · $value", maxLines = 1, overflow = TextOverflow.Ellipsis) }; DropdownMenu(open, { open = false }) { choices.forEach { item -> DropdownMenuItem({ Text(item) }, onClick = { change(item); open = false }, trailingIcon = { if (item == value) Icon(Icons.Outlined.Check, null) }) } } } }
 
-@Composable private fun PortableList(rows: List<PortableOpportunity>, selectedId: String?, select: (String) -> Unit, modifier: Modifier) {
+@Composable private fun PortableList(rows: List<PortableOpportunity>, selectedId: String?, select: (String) -> Unit,
+    intelligenceNeeds: Map<String, List<String>>, modifier: Modifier) {
     if (rows.isEmpty()) Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No matching active portable activity", color = PortableMuted) }
     else LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(5.dp), contentPadding = PaddingValues(bottom = 8.dp)) { items(rows, key = { it.spot.id }) { row -> val spot = row.spot; val selected = selectedId == spot.id
         Row(Modifier.fillMaxWidth().background(if (selected) PortableAmber.copy(alpha = .13f) else PortablePanel, RoundedCornerShape(8.dp)).border(1.dp, if (selected) PortableAmber else PortableRaised, RoundedCornerShape(8.dp)).clickable { select(spot.id) }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(spot.callsign, color = PortableInk, fontWeight = FontWeight.Black, fontSize = 18.sp); Text("${portableMHz(spot.frequencyHz)} · ${spot.mode}", color = PortableAmber, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
                 Text(spot.references.joinToString("  ") { "${it.program.label} ${it.code}" }, color = PortableInk, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(listOf(spot.primary.name.ifBlank { "Name unavailable" }, portableAge(spot.spottedAt), row.distanceKm?.let { "%.0f km · %03d°".format(it, row.bearingDegrees ?: 0) }).filterNotNull().joinToString(" · "), color = PortableMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) { (row.worked.flatMap { (p, w) -> w.labels(p) } + row.reasons.map(String::uppercase)).distinct().take(4).forEach { SuggestionChip({}, { Text(it, fontSize = 9.sp) }) } }
+                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) { (intelligenceNeeds[spot.id].orEmpty() + row.worked.flatMap { (p, w) -> w.labels(p) } + row.reasons.map(String::uppercase)).distinct().take(4).forEach { SuggestionChip({}, { Text(it, fontSize = 9.sp) }) } }
             }; Icon(Icons.Outlined.ChevronRight, null, tint = PortableMuted)
         }
     } }
 }
 
 @Composable private fun PortableDetail(row: PortableOpportunity?, radio: RadioState, tune: (PortableOpportunity) -> Unit, tuneLog: (PortableOpportunity) -> Unit,
-    potaActivationActive: Boolean, onP2p: (PortableSpot) -> Unit, modifier: Modifier) {
+    potaActivationActive: Boolean, onP2p: (PortableSpot) -> Unit, intelligenceNeeds: Map<String, List<String>>, modifier: Modifier) {
     Column(modifier.fillMaxWidth().background(PortablePanel, RoundedCornerShape(10.dp)).border(1.dp, PortableRaised, RoundedCornerShape(10.dp)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         if (row == null) { Text("SELECT AN ACTIVITY", color = PortableAmber, fontWeight = FontWeight.Black); Text("Selection never tunes. Review details, then choose Tune or Tune & Log.", color = PortableMuted); return@Column }
         val spot = row.spot; Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(spot.callsign, color = PortableAmber, fontWeight = FontWeight.Black); Text("SCORE ${row.score}", color = PortableMuted, fontFamily = FontFamily.Monospace) }
         spot.references.forEach { ref -> Text("${ref.program.label} ${ref.code} · ${ref.name.ifBlank { "name unavailable" }}", color = PortableInk, fontWeight = FontWeight.SemiBold); val detail = listOf(ref.association, ref.region, ref.altitudeM?.let { "$it m" }, ref.points?.let { "$it points" }, ref.activeAgenda.takeIf(String::isNotBlank)?.let { "AGENDA · $it" }).filterNotNull().filter(String::isNotBlank).joinToString(" · "); if (detail.isNotBlank()) Text(detail, color = PortableMuted, fontSize = 12.sp) }
         Text("${portableMHz(spot.frequencyHz)} MHz · ${spot.mode.ifBlank { "mode unspecified" }} · ${spot.band} · via ${spot.source}", color = PortableInk, fontFamily = FontFamily.Monospace); if (spot.comments.isNotBlank()) Text(spot.comments, color = PortableMuted, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        intelligenceNeeds[spot.id].orEmpty().takeIf { it.isNotEmpty() }?.let { Text(it.joinToString(" · "), color = PortableAmber, fontWeight = FontWeight.Bold) }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedButton({ tune(row) }, enabled = radio.connected, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Tune") }; Button({ tuneLog(row) }, enabled = radio.connected, modifier = Modifier.weight(1.4f).heightIn(min = 48.dp)) { Text("Tune & Log", fontWeight = FontWeight.Black) } }
         if (potaActivationActive && PortableProgram.POTA in spot.programs) Button({ onP2p(spot) }, Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
             Text("P2P LOG · OPEN EDITABLE DRAFT", fontWeight = FontWeight.Black)

@@ -99,8 +99,8 @@ class ProgressModelsTest {
         val result=buildProgressSnapshot(emptyList(),ProgressFilters(allStations=true),
             dxSpots=listOf(dxSpot("resolved","K1ABC"),dxSpot("unresolved","BAD")),portableSpots=listOf(park),now=now,
             ctyLookup={if(it=="K1ABC")AndroidCtyRecord("United States","291","NA",cqZone="5")else null})
-        assertTrue(result.needs.any{it.id=="dx:resolved"&&"NEW DXCC ENTITY" in it.reasons})
-        assertFalse(result.needs.any{it.id=="dx:unresolved"});assertTrue(result.needs.any{"NEW POTA PARK" in it.reasons})
+        assertTrue(result.needs.any{it.id=="dx:resolved"&&it.reasons.any { reason -> reason.startsWith("NEEDED DXCC") }})
+        assertFalse(result.needs.any{it.id=="dx:unresolved"});assertTrue(result.needs.any{"NEW POTA REFERENCE" in it.reasons})
     }
 
     @Test fun pinnedGoalsRoundTripCapAndProgressAreDeterministic() {
@@ -117,6 +117,57 @@ class ProgressModelsTest {
             ctyLookup={lookups++;null})
         assertEquals(1,result.coverage.getValue("DXCC").available);assertEquals(0,result.coverage.getValue("Grid").available)
         assertEquals(0,lookups);assertFalse(SOTA_LIVE_APPROVED)
+    }
+
+    @Test fun majorAwardFamiliesShareOneFilteredSnapshot() {
+        val row = qso("1", now, dxcc="291", state="CA", zone="5", power=5).copy(country="United States",
+            continent="NA", ituZone="8", iota="NA-001", potaRef="K-0001", sotaRef="W1/AA-001",
+            wwffRef="KFF-0001", lotwReceived="Y")
+        val result = buildProgressSnapshot(listOf(row), ProgressFilters(allStations=true))
+        assertEquals(AwardKind.entries.toSet(), result.awards.keys)
+        assertEquals(1, result.awards.getValue(AwardKind.DXCC).count.confirmed)
+        assertEquals(setOf("5"), result.awards.getValue(AwardKind.WAZ).units.map(AwardUnit::code).toSet())
+        assertEquals(setOf("8"), result.awards.getValue(AwardKind.ITU).units.map(AwardUnit::code).toSet())
+        assertEquals(1, result.awards.getValue(AwardKind.WAC).count.worked)
+        assertEquals(1, result.awards.getValue(AwardKind.WAS).count.worked)
+        assertEquals("K1", result.awards.getValue(AwardKind.WPX).units.single().code)
+        assertEquals(1, result.awards.getValue(AwardKind.QRP).count.worked)
+    }
+
+    @Test fun intelligenceFiltersAndDrillThroughUseTheSameContract() {
+        val filters = ProgressFilters(allStations=true, period=ProgressPeriod.DAYS_30, band="20m", mode=ProgressMode.CW,
+            operator="OM0RX", confirmationSource="LOTW", portableProgram="POTA")
+        val base = progressLogbookFilter(filters, now)
+        assertEquals("20m", base.band); assertEquals("CW", base.modeFamily); assertEquals("OM0RX", base.operator)
+        assertEquals("LOTW", base.confirmationSource); assertEquals("POTA", base.portableProgram)
+        assertEquals("291", logbookFilterForDimension("dxcc", "291", base).dxcc)
+        assertEquals("1..5", logbookFilterForDimension("qrp", "", base).txPower)
+    }
+
+    @Test fun geographyConfirmationsAndOperatorDimensionsRemainInspectable() {
+        val rows = listOf(qso("1",now,dxcc="291").copy(country="United States",continent="NA",ituZone="8",grid="FN31",
+            operatorCallsign="OM0RX",stationProfileId="home",radioModel="KX3",lotwReceived="Y",distanceKm=7000.0),
+            qso("2",now+86_400,dxcc="230").copy(country="Germany",continent="EU",ituZone="28",grid="JO40",
+                operatorCallsign="OM0RX",stationProfileId="field",radioModel="KX3",eqslReceived="Y",distanceKm=900.0))
+        val result = buildProgressSnapshot(rows,ProgressFilters(allStations=true))
+        assertEquals(2,result.activeDays); assertEquals(2,result.geography.size)
+        assertEquals(1,result.confirmationDetails.getValue("LoTW").confirmed)
+        assertEquals(1,result.confirmationDetails.getValue("eQSL").confirmed)
+        assertEquals(2,result.operators.getValue("OM0RX")); assertEquals(2,result.radios.getValue("KX3"))
+        assertEquals("K1ABC",result.bestDx.first().callsign)
+    }
+
+    @Test fun needsReuseAwardUnitsForDxAndAllPortableProgrammes() {
+        val spots = listOf(
+            PortableSpot("p",setOf(PortableProgram.POTA),"K1P",14_032_000,"CW",listOf(PortableReference(PortableProgram.POTA,"K-0001")),now,now+3600,"POTA"),
+            PortableSpot("s",setOf(PortableProgram.SOTA),"K1S",14_032_000,"CW",listOf(PortableReference(PortableProgram.SOTA,"W1/AA-001")),now,now+3600,"SOTA"),
+            PortableSpot("w",setOf(PortableProgram.WWFF),"K1W",14_032_000,"CW",listOf(PortableReference(PortableProgram.WWFF,"KFF-0001")),now,now+3600,"WWFF"))
+        val result=buildProgressSnapshot(emptyList(),ProgressFilters(allStations=true),dxSpots=listOf(dxSpot("dx","K1ABC")),
+            portableSpots=spots,now=now,ctyLookup={AndroidCtyRecord("United States","291","NA",cqZone="5",ituZone="8")})
+        assertTrue(result.needs.first { it.id=="dx:dx" }.reasons.any { it.startsWith("NEEDED ITU ZONE") })
+        assertTrue(result.needs.any { "NEW POTA REFERENCE" in it.reasons })
+        assertTrue(result.needs.any { "NEW SOTA SUMMIT" in it.reasons })
+        assertTrue(result.needs.any { "NEW WWFF REFERENCE" in it.reasons })
     }
 
     private fun qso(id:String,epoch:Long,profile:String="",band:String="20m",mode:String="CW",dxcc:String="",

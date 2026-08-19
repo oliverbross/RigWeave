@@ -622,6 +622,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         fun extra(key: String) = "COALESCE(json_extract(details_json,'$.extraAdifFields.${key}'),'')"
         fun text(expression: String, value: String) {
             if (value.isBlank()) return
+            if (value.trim() == "*") { clauses += "TRIM($expression) <> ''"; return }
             clauses += "$expression LIKE ? ESCAPE '\\' COLLATE NOCASE"
             args += "%" + value.trim().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         }
@@ -660,12 +661,20 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         text(json("stationCallsign"), filter.stationCallsign); text("name", filter.name); text("qth", filter.qth)
         text(json("email"), filter.email); text(json("dxcc"), filter.dxcc); text("country", filter.country)
         text(json("state"), filter.state); text(json("grid"), filter.grid); text(json("cqZone"), filter.cqZone)
-        text(json("ituZone"), filter.ituZone); choice("mode", filter.mode); choice(json("submode"), filter.submode)
+        text(json("ituZone"), filter.ituZone); choice("mode", filter.mode)
+        when (filter.modeFamily.uppercase()) {
+            "CW" -> clauses += "UPPER(COALESCE(NULLIF(${json("submode")},''),mode)) IN ('CW','CW-R','CWR')"
+            "PHONE" -> clauses += "UPPER(COALESCE(NULLIF(${json("submode")},''),mode)) IN ('SSB','USB','LSB','FM','AM')"
+            "DIGITAL" -> clauses += "UPPER(COALESCE(NULLIF(${json("submode")},''),mode)) IN ('FT8','FT4','RTTY','DIGITAL','DATA','PSK31','JS8')"
+        }
+        choice(json("submode"), filter.submode)
         choice(json("band"), filter.band); numeric("(frequency_hz / 1000000.0)", filter.frequency)
         numeric("(${json("frequencyRxHz")} / 1000000.0)", filter.frequencyRx); choice(json("bandRx"), filter.bandRx)
         choice(json("propagationMode"), filter.propagation); text(json("county"), filter.county)
-        text(json("dok"), filter.dok); text(json("sotaRef"), filter.sota); text(json("potaRef"), filter.pota)
+        text(json("dok"), filter.dok); text(json("sotaRef"), filter.sota)
+        text("(${json("potaRef")} || ' ' || ${json("potaRefs")})", filter.pota)
         text(json("iota"), filter.iota); text(json("wwffRef"), filter.wwff); text(json("operatorCallsign"), filter.operator)
+        text(json("radioModel"), filter.radioModel)
         text(json("contestId"), filter.contest); choice(json("continent"), filter.continent)
         text(extra("SAT_NAME"), filter.satellite); text(extra("SAT_MODE"), filter.satelliteMode)
         text(extra("ORBIT"), filter.orbit); text("(${json("comment")} || ' ' || notes)", filter.comment)
@@ -679,6 +688,30 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         status(json("dclSent"), filter.dclSent); status(json("dclReceived"), filter.dclReceived)
         status(json("qrzSent"), filter.qrzSent); status(json("qrzReceived"), filter.qrzReceived)
         text(json("qslVia"), filter.qslVia)
+        if (filter.callsignPrefix.isNotBlank()) { clauses += "UPPER(callsign) LIKE ?"; args += filter.callsignPrefix.uppercase() + "%" }
+        numeric(json("txPowerW"), filter.txPower)
+        when (filter.confirmationSource.uppercase()) {
+            "PAPER", "QSL" -> status(json("qslReceived"), "Y")
+            "LOTW" -> status(json("lotwReceived"), "Y")
+            "EQSL" -> status(json("eqslReceived"), "Y")
+            "QRZ" -> status(json("qrzReceived"), "Y")
+            "CLUBLOG" -> status(json("clublogReceived"), "Y")
+            "DCL" -> status(json("dclReceived"), "Y")
+            "AWARD" -> clauses += "(UPPER(TRIM(${json("qslReceived")})) IN ('Y','V') OR UPPER(TRIM(${json("lotwReceived")})) IN ('Y','V'))"
+            "UNCONFIRMED" -> clauses += "(UPPER(TRIM(${json("qslReceived")})) NOT IN ('Y','V') AND UPPER(TRIM(${json("lotwReceived")})) NOT IN ('Y','V'))"
+        }
+        when (filter.portableProgram.uppercase()) {
+            "POTA" -> clauses += "(${json("potaRef")}<>'' OR ${json("myPotaRef")}<>'' OR json_array_length(CASE WHEN json_valid(${json("potaRefs")}) THEN ${json("potaRefs")} ELSE '[]' END)>0 OR json_array_length(CASE WHEN json_valid(${json("myPotaRefs")}) THEN ${json("myPotaRefs")} ELSE '[]' END)>0)"
+            "SOTA" -> clauses += "(${json("sotaRef")}<>'' OR ${json("mySotaRef")}<>'')"
+            "WWFF" -> clauses += "(${json("wwffRef")}<>'' OR ${json("myWwffRef")}<>'')"
+            "IOTA" -> clauses += "(${json("iota")}<>'' OR ${json("myIota")}<>'')"
+            "ANY" -> clauses += "(${json("potaRef")}<>'' OR ${json("myPotaRef")}<>'' OR ${json("sotaRef")}<>'' OR ${json("mySotaRef")}<>'' OR ${json("wwffRef")}<>'' OR ${json("myWwffRef")}<>'')"
+        }
+        when (filter.recordVisibility.uppercase()) {
+            "ACTIVE" -> clauses += "LOWER(${json("syncState")}) NOT IN ('conflict','tombstone','remote_deleted')"
+            "ACTIVE_AND_CONFLICTS" -> clauses += "LOWER(${json("syncState")}) NOT IN ('tombstone','remote_deleted')"
+            "DELETED" -> clauses += "LOWER(${json("syncState")}) IN ('tombstone','remote_deleted')"
+        }
         if (filter.qslImages.equals("Y", true)) clauses += "${json("qslImages")} <> '' AND UPPER(${json("qslImages")}) NOT IN ('N','NO','0','FALSE')"
         if (filter.qslImages.equals("N", true)) clauses += "(${json("qslImages")} = '' OR UPPER(${json("qslImages")}) IN ('N','NO','0','FALSE'))"
         when (filter.provenance.uppercase()) {
@@ -699,6 +732,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             "LINKED" -> clauses += "EXISTS(SELECT 1 FROM wavelog_remote_link l WHERE l.local_qso_id=qso.id)"
             "OUTBOX" -> clauses += "EXISTS(SELECT 1 FROM wavelog_outbox o WHERE o.local_qso_id=qso.id AND o.state<>'ACCEPTED')"
             "CONFLICT" -> clauses += "EXISTS(SELECT 1 FROM wavelog_conflict c WHERE c.local_qso_id=qso.id AND c.state='OPEN')"
+            "ATTENTION" -> clauses += "(EXISTS(SELECT 1 FROM wavelog_outbox o WHERE o.local_qso_id=qso.id AND o.state<>'ACCEPTED') OR EXISTS(SELECT 1 FROM wavelog_conflict c WHERE c.local_qso_id=qso.id AND c.state='OPEN') OR LOWER(${json("syncState")}) IN ('pending','queued','retry','failed','conflict'))"
             "TOMBSTONE" -> clauses += "EXISTS(SELECT 1 FROM wavelog_tombstone t WHERE t.local_qso_id=qso.id AND t.acknowledged_at IS NULL)"
             "REMOTE_DELETED" -> clauses += "(${json("syncState")}='remote_deleted' OR EXISTS(SELECT 1 FROM wavelog_tombstone t WHERE t.local_qso_id=qso.id AND t.acknowledged_at IS NOT NULL))"
         }

@@ -59,6 +59,7 @@ internal fun decodeProgressGoals(raw: String): List<ProgressGoal> {
 
 internal class ProgressController(context: Context, private val database: QsoDatabase) {
     val goalStore = ProgressGoalStore(context.applicationContext)
+    private val preferences = context.applicationContext.getSharedPreferences("rigweave-log-intelligence", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var refreshJob: Job? = null
     private var lastKey: Any? = null
@@ -66,6 +67,47 @@ internal class ProgressController(context: Context, private val database: QsoDat
     var busy by mutableStateOf(false); private set
     var stationProfiles by mutableStateOf<List<String>>(emptyList()); private set
     var stationCallsigns by mutableStateOf<List<String>>(emptyList()); private set
+    var operators by mutableStateOf<List<String>>(emptyList()); private set
+    var submodes by mutableStateOf<List<String>>(emptyList()); private set
+    var filters by mutableStateOf(loadFilters()); private set
+    var selectedAward by mutableStateOf(runCatching {
+        AwardKind.valueOf(preferences.getString("selected_award", AwardKind.DXCC.name).orEmpty())
+    }.getOrDefault(AwardKind.DXCC)); private set
+    var logbookRequest by mutableStateOf<LogbookFilter?>(null); private set
+
+    fun requestLogbook(filter: LogbookFilter) { logbookRequest = filter }
+    fun consumeLogbookRequest() { logbookRequest = null }
+
+    fun updateFilters(value: ProgressFilters) {
+        filters = value
+        preferences.edit()
+            .putBoolean("all_stations", value.allStations).putString("station_profile", value.stationProfileId)
+            .putString("station_callsign", value.stationCallsign).putString("period", value.period.name)
+            .putString("band", value.band).putString("mode", value.mode.name).putString("submode", value.submode)
+            .putString("operator", value.operator).putString("confirmation", value.confirmationSource)
+            .putString("portable_program", value.portableProgram).putBoolean("include_conflicted", value.includeConflicted)
+            .putBoolean("include_deleted", value.includeDeleted).apply()
+        lastKey = null
+    }
+
+    fun selectAward(value: AwardKind) {
+        selectedAward = value
+        preferences.edit().putString("selected_award", value.name).apply()
+    }
+
+    private fun loadFilters() = ProgressFilters(
+        allStations = preferences.getBoolean("all_stations", false),
+        stationProfileId = preferences.getString("station_profile", "").orEmpty(),
+        stationCallsign = preferences.getString("station_callsign", "").orEmpty(),
+        period = runCatching { ProgressPeriod.valueOf(preferences.getString("period", ProgressPeriod.ALL.name).orEmpty()) }.getOrDefault(ProgressPeriod.ALL),
+        band = preferences.getString("band", "").orEmpty(),
+        mode = runCatching { ProgressMode.valueOf(preferences.getString("mode", ProgressMode.ALL.name).orEmpty()) }.getOrDefault(ProgressMode.ALL),
+        submode = preferences.getString("submode", "").orEmpty(), operator = preferences.getString("operator", "").orEmpty(),
+        confirmationSource = preferences.getString("confirmation", "").orEmpty(),
+        portableProgram = preferences.getString("portable_program", "").orEmpty(),
+        includeConflicted = preferences.getBoolean("include_conflicted", false),
+        includeDeleted = preferences.getBoolean("include_deleted", false),
+    )
 
     fun refresh(
         filters: ProgressFilters,
@@ -76,8 +118,8 @@ internal class ProgressController(context: Context, private val database: QsoDat
         sotaCatalogue: SotaCatalogue,
     ) {
         val key = listOf(database.changeToken(), filters, goalStore.goals, syncAttention, cty.dataRevision,
-            dxSpots.size, dxSpots.maxOfOrNull(AndroidDXSpot::receivedEpoch),
-            portableSpots.size, portableSpots.maxOfOrNull(PortableSpot::spottedAt))
+            dxSpots.map { listOf(it.id, it.callsign, it.band, it.mode, it.receivedEpoch) }.hashCode(),
+            portableSpots.map { listOf(it.id, it.band, it.mode, it.references.map(PortableReference::code), it.spottedAt) }.hashCode())
         if (key == lastKey) return
         lastKey = key
         refreshJob?.cancel()
@@ -94,6 +136,8 @@ internal class ProgressController(context: Context, private val database: QsoDat
             }
             stationProfiles = rows.map(Qso::stationProfileId).filter(String::isNotBlank).distinct().sorted()
             stationCallsigns = rows.map(Qso::stationCallsign).filter(String::isNotBlank).distinctBy(String::uppercase).sorted()
+            operators = rows.map(Qso::operatorCallsign).filter(String::isNotBlank).distinctBy(String::uppercase).sorted()
+            submodes = rows.map { it.submode.ifBlank { it.mode }.uppercase() }.filter(String::isNotBlank).distinct().sorted()
             snapshot = built
             busy = false
         }
