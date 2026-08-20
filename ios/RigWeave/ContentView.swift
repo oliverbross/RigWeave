@@ -4,22 +4,30 @@ import UniformTypeIdentifiers
 
 enum Destination: String, CaseIterable, Identifiable {
     case home = "Home", radio = "Radio", spots = "Spots", dx = "DX", log = "Log"
-    case panadapter = "Panadapter", lookup = "Lookup", settings = "Settings"
+    case panadapter = "Panadapter", lookup = "Lookup", groupsIo = "Groups.io", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
-        switch self { case .home: "house"; case .radio: "antenna.radiowaves.left.and.right"; case .spots: "dot.radiowaves.up.forward"; case .dx: "globe.americas"; case .log: "list.clipboard"; case .panadapter: "waveform.path.ecg.rectangle"; case .lookup: "person.text.rectangle"; case .settings: "gearshape" }
+        switch self { case .home: "house"; case .radio: "antenna.radiowaves.left.and.right"; case .spots: "dot.radiowaves.up.forward"; case .dx: "globe.americas"; case .log: "list.clipboard"; case .panadapter: "waveform.path.ecg.rectangle"; case .lookup: "person.text.rectangle"; case .groupsIo: "person.3.sequence"; case .settings: "gearshape" }
     }
 }
 
 struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @EnvironmentObject private var groupsIo: GroupsIoController
     @State private var selection: Destination = .home
+
+    private var destinations: [Destination] {
+        Destination.allCases.filter { destination in
+            if destination == .groupsIo { return groupsIo.enabled && sizeClass != .compact }
+            return true
+        }
+    }
 
     var body: some View {
         Group {
             if sizeClass == .compact {
                 TabView(selection: $selection) {
-                    ForEach(Destination.allCases) { destination in
+                    ForEach(destinations) { destination in
                         NavigationStack { destinationView(destination) }
                             .tabItem { Label(destination.rawValue, systemImage: destination.icon) }
                             .tag(destination)
@@ -28,7 +36,7 @@ struct ContentView: View {
             } else {
                 NavigationSplitView {
                     List {
-                        ForEach(Destination.allCases) { destination in
+                        ForEach(destinations) { destination in
                             Button { selection = destination } label: {
                                 Label(destination.rawValue, systemImage: destination.icon)
                                     .foregroundStyle(selection == destination ? RigTheme.amber : .primary)
@@ -42,6 +50,7 @@ struct ContentView: View {
             }
         }
         .tint(RigTheme.amber)
+        .onChange(of: groupsIo.enabled) { _, enabled in if !enabled && selection == .groupsIo { selection = .settings } }
     }
 
     @ViewBuilder private func destinationView(_ destination: Destination) -> some View {
@@ -53,6 +62,7 @@ struct ContentView: View {
         case .log: LogView()
         case .panadapter: PanadapterView()
         case .lookup: LookupView()
+        case .groupsIo: GroupsIoView()
         case .settings: SettingsView()
         }
     }
@@ -762,7 +772,7 @@ struct LookupView: View {
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case defaults = "Default", log = "Log", cluster = "Cluster", macros = "Macros", alerts = "Alerts"
-    case safety = "Safety", audio = "Audio", health = "Health", diag = "Diag", about = "About"
+    case safety = "Safety", audio = "Audio", integrations = "Integrations", health = "Health", diag = "Diag", about = "About"
     var id: String { rawValue }
 }
 
@@ -882,6 +892,8 @@ struct SettingsView: View {
                 Text(features.clusterStatus).font(.caption).foregroundStyle(.secondary)
                     .accessibilityIdentifier("clusterStatus")
             }
+        case .integrations:
+            GroupsIoSettingsSection()
         case .macros:
             Section("CW macros") {
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {

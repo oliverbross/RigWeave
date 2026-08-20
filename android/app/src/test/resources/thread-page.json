@@ -1,0 +1,9 @@
+{
+  "object": "list",
+  "has_more": false,
+  "next_page_token": 0,
+  "data": [
+    {"id": 3001, "topic_id": 2001, "msg_num": 41, "subject": "Portable antennas", "name": "Synthetic Operator", "created": "2026-07-30T12:00:00Z", "body": "<p>Try the linked dipole.</p>"},
+    {"id": 3002, "topic_id": 2001, "msg_num": 42, "reply_to": 41, "name": "Example Member", "created": "2026-07-30T12:05:00Z", "body": "<blockquote>linked dipole</blockquote><p>Thanks &amp; 73.</p>", "has_attachments": true}
+  ]
+}

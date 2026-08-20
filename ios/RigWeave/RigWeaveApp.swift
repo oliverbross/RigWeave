@@ -7,6 +7,7 @@ struct RigWeaveApp: App {
     @StateObject private var radio = RadioModel()
     @StateObject private var logbook = QSOStore()
     @StateObject private var features = FeatureModel()
+    @StateObject private var groupsIo = GroupsIoController()
     @State private var hardwareSelfTestStarted = false
 
     var body: some Scene {
@@ -15,6 +16,7 @@ struct RigWeaveApp: App {
                 .environmentObject(radio)
                 .environmentObject(logbook)
                 .environmentObject(features)
+                .environmentObject(groupsIo)
                 .preferredColorScheme(.dark)
                 .task {
                     guard !hardwareSelfTestStarted else { return }

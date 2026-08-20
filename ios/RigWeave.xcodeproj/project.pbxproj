@@ -26,6 +26,7 @@
 		A10000000000000000000010 /* FeatureModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* FeatureModel.swift */; };
 		A10000000000000000000011 /* WavelogSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000015 /* WavelogSync.swift */; };
 		A10000000000000000000012 /* CallbookService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000016 /* CallbookService.swift */; };
+		G10000000000000000000001 /* GroupsIoFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = G20000000000000000000001 /* GroupsIoFeature.swift */; };
 		A10000000000000000000013 /* Settings.bundle in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* Settings.bundle */; };
 		A10000000000000000000014 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* IOKit.framework */; };
 		A10000000000000000000015 /* KXUSBDriverClient.mm in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* KXUSBDriverClient.mm */; };
@@ -98,6 +99,7 @@
 		A20000000000000000000014 /* FeatureModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureModel.swift; sourceTree = "<group>"; };
 		A20000000000000000000015 /* WavelogSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WavelogSync.swift; sourceTree = "<group>"; };
 		A20000000000000000000016 /* CallbookService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallbookService.swift; sourceTree = "<group>"; };
+		G20000000000000000000001 /* GroupsIoFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupsIoFeature.swift; sourceTree = "<group>"; };
 		A20000000000000000000017 /* Settings.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = Settings.bundle; sourceTree = "<group>"; };
 		A20000000000000000000018 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
 		A20000000000000000000019 /* KXUSBDriverClient.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = KXUSBDriverClient.mm; sourceTree = "<group>"; };
@@ -169,6 +171,7 @@
 				A20000000000000000000014 /* FeatureModel.swift */,
 				A20000000000000000000015 /* WavelogSync.swift */,
 				A20000000000000000000016 /* CallbookService.swift */,
+				G20000000000000000000001 /* GroupsIoFeature.swift */,
 				A20000000000000000000017 /* Settings.bundle */,
 				D20000000000000000000001 /* Assets.xcassets */,
 				A20000000000000000000009 /* SerialTransport.swift */,
@@ -401,6 +404,7 @@
 				A10000000000000000000010 /* FeatureModel.swift in Sources */,
 				A10000000000000000000011 /* WavelogSync.swift in Sources */,
 				A10000000000000000000012 /* CallbookService.swift in Sources */,
+				G10000000000000000000001 /* GroupsIoFeature.swift in Sources */,
 				A10000000000000000000006 /* core.cpp in Sources */,
 				A10000000000000000000008 /* SerialTransport.swift in Sources */,
 				A10000000000000000000015 /* KXUSBDriverClient.mm in Sources */,

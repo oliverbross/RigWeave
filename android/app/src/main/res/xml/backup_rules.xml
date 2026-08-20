@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <exclude domain="database" path="rigweave-groupsio.sqlite" />
+    <exclude domain="sharedpref" path="rigweave-groupsio-credentials.xml" />
+    <exclude domain="file" path="GroupsIO/" />
+</full-backup-content>
