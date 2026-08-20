@@ -55,6 +55,7 @@ enum class HamClockUnitSystem { METRIC, IMPERIAL }
 enum class HamClockPskDirection { BEING_HEARD, HEARING, BOTH, MUTUAL }
 enum class HamClockDxNewsSource { ALL, DX_WORLD, NG3K }
 enum class HamClockRbnSource { CONFIGURED_RETAIL_CLUSTER }
+enum class HamClockRbnMode { WHO_HEARS_ME, SKIMMER_VIEW, WATCHLIST, ALL_RBN }
 enum class HamClockDxTargetSource { MANUAL, AUTOMATIC }
 
 data class HamClockPanelPreference(
@@ -116,6 +117,7 @@ data class HamClockDxNewsPreference(
 data class HamClockRbnPreference(
     val enabled: Boolean = true,
     val source: HamClockRbnSource = HamClockRbnSource.CONFIGURED_RETAIL_CLUSTER,
+    val viewMode: HamClockRbnMode = HamClockRbnMode.ALL_RBN,
     val windowMinutes: Int = 10,
     val maximumRows: Int = 120,
     val bands: Set<String> = emptySet(),
@@ -148,7 +150,7 @@ data class HamClockIbpPreference(
 data class HamClockBandHealthPreference(
     val windowMinutes: Int = 15,
     val mode: String = "ALL",
-    val enabledSources: Set<String> = setOf("CLUSTER", "PSK", "RBN", "WSPR", "QSO_HISTORY"),
+    val enabledSources: Set<String> = setOf("CLUSTER", "PSK", "RBN", "WSPR"),
     val visibleBands: Set<String> = setOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"),
 )
 

@@ -141,6 +141,8 @@ class FeatureController internal constructor(private val context: Context, priva
     private val prefs = context.getSharedPreferences("dx_cluster", Context.MODE_PRIVATE)
     private val rbnBuffer = ArrayDeque<HamClockRbnObservation>()
     private var rbnPreference = HamClockRbnPreference(enabled = false)
+    private var rbnPublishJob: Job? = null
+    @Volatile private var rbnDirty = false
 
     var clusterHost by mutableStateOf(prefs.getString("host", RigWeaveDefaults.CLUSTER_HOST) ?: RigWeaveDefaults.CLUSTER_HOST)
     var clusterPort by mutableStateOf(prefs.getInt("port", RigWeaveDefaults.CLUSTER_PORT))
@@ -171,7 +173,8 @@ class FeatureController internal constructor(private val context: Context, priva
     var newestSpotEpoch by mutableStateOf(0L); private set
     var requestedSpotId by mutableStateOf<String?>(null); private set
     var requestedSpotRequiresReceiveReview by mutableStateOf(false); private set
-    var rbnObservations by mutableStateOf(emptyList<HamClockRbnObservation>()); private set
+    internal var rbnObservations by mutableStateOf(emptyList<HamClockRbnObservation>()); private set
+    var latestRbnEpoch by mutableStateOf(0L); private set
 
     init {
         val defaults = prefs.edit()
@@ -180,6 +183,7 @@ class FeatureController internal constructor(private val context: Context, priva
         if (!prefs.contains("callsign")) defaults.putString("callsign", clusterCallsign)
         defaults.apply()
         NativeCore.featureWatchlist(handle, watchlistText)
+        scheduleRbnPublish()
     }
 
     fun setWatchlist(value: String) {
@@ -187,6 +191,7 @@ class FeatureController internal constructor(private val context: Context, priva
             .map(String::trim).filter(String::isNotBlank).map(String::uppercase).distinct().take(32).joinToString("\n")
         prefs.edit().putString("watchlist", watchlistText).apply()
         NativeCore.featureWatchlist(handle, watchlistText)
+        scheduleRbnPublish(immediate = true)
     }
 
     fun requestSpot(id: String, requireReceiveReview: Boolean = false) {
@@ -200,7 +205,7 @@ class FeatureController internal constructor(private val context: Context, priva
         if (!value.enabled) {
             synchronized(rbnBuffer) { rbnBuffer.clear() }
             rbnObservations = emptyList()
-        } else publishRbn()
+        } else scheduleRbnPublish(immediate = true)
     }
 
     fun connectConfiguredCluster() {
@@ -251,14 +256,17 @@ class FeatureController internal constructor(private val context: Context, priva
                     BufferedReader(InputStreamReader(socket.getInputStream())).useLines { lines ->
                         lines.forEach { line ->
                             if (generation != clusterGeneration) return@useLines
-                            parseRbnClusterLine(line)?.let {
+                            val rbn = parseRbnClusterLine(line)
+                            rbn?.let {
                                 synchronized(rbnBuffer) {
                                     rbnBuffer.addLast(it)
                                     while (rbnBuffer.size > 1_000) rbnBuffer.removeFirst()
                                 }
-                                withContext(Dispatchers.Main) { publishRbn() }
+                                scheduleRbnPublish()
                             }
-                            if (NativeCore.featureClusterLine(handle, line, Instant.now().epochSecond)) refreshDX()
+                            // An RBN line is already represented by the typed RBN observation path.
+                            // Do not also ingest it as a generic DX-cluster spot.
+                            if (rbn == null && NativeCore.featureClusterLine(handle, line, Instant.now().epochSecond)) refreshDX()
                         }
                     }
                 } catch (error: Exception) {
@@ -388,10 +396,35 @@ class FeatureController internal constructor(private val context: Context, priva
         }
     }
 
-    private fun publishRbn() {
+    @Synchronized private fun scheduleRbnPublish(immediate: Boolean = false) {
+        rbnDirty = true
+        if (rbnPublishJob?.isActive == true) return
+        rbnPublishJob = scope.launch {
+            try {
+                var first = true
+                do {
+                    rbnDirty = false
+                    if (!immediate || !first) delay(250)
+                    first = false
+                    publishRbn()
+                } while (rbnDirty)
+            } finally {
+                synchronized(this@FeatureController) {
+                    rbnPublishJob = null
+                    if (rbnDirty) scheduleRbnPublish()
+                }
+            }
+        }
+    }
+
+    private suspend fun publishRbn() {
         val watchlist = watchlistText.lineSequence().map(String::trim).filter(String::isNotBlank).toSet()
         val buffered = synchronized(rbnBuffer) { rbnBuffer.toList() }
-        rbnObservations = boundedRbnObservations(buffered, rbnPreference, watchlist)
+        val bounded = boundedRbnObservations(buffered, rbnPreference, watchlist)
+        withContext(Dispatchers.Main) {
+            rbnObservations = bounded
+            latestRbnEpoch = bounded.maxOfOrNull(HamClockRbnObservation::observedEpoch) ?: 0L
+        }
     }
 
     private fun summaryValue(url: String, keys: List<String>): Float {

@@ -140,16 +140,16 @@ internal class HamClockInFlightCoalescer(
                 executor.execute {
                     try {
                         val result = block()
-                        active.remove(key, future)
                         future.complete(result)
                     } catch (error: Throwable) {
-                        active.remove(key, future)
                         future.completeExceptionally(error)
+                    } finally {
+                        active.remove(key, future)
                     }
                 }
             } catch (error: Throwable) {
-                active.remove(key, future)
                 future.completeExceptionally(error)
+                active.remove(key, future)
             }
         }
         return try {

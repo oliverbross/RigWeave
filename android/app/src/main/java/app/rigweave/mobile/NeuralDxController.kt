@@ -178,11 +178,26 @@ internal fun consumeSignalRequest(referenceId: String, reports: List<SignalRepor
     val report = reports.firstOrNull { signalReportReference(it) == referenceId }
     return ConsumedSignalRequest(report, if (report == null) "PSK report expired or filtered; request consumed" else "")
 }
+internal enum class NeuralSignalSourceState { CURRENT, DEGRADED, ERROR, EMPTY }
+internal fun neuralSignalSourceState(snapshot: PskReporterSnapshot, hasRows: Boolean): NeuralSignalSourceState {
+    val mixedAvailability = (snapshot.beingHeard.state == HamClockFeedState.UNAVAILABLE) xor
+        (snapshot.hearing.state == HamClockFeedState.UNAVAILABLE)
+    val error = snapshot.beingHeard.error.isNotBlank() || snapshot.hearing.error.isNotBlank()
+    return when {
+        mixedAvailability -> NeuralSignalSourceState.DEGRADED
+        snapshot.beingHeard.state == HamClockFeedState.UNAVAILABLE &&
+            snapshot.hearing.state == HamClockFeedState.UNAVAILABLE && error -> NeuralSignalSourceState.ERROR
+        hasRows || snapshot.beingHeard.state != HamClockFeedState.UNAVAILABLE ||
+            snapshot.hearing.state != HamClockFeedState.UNAVAILABLE -> NeuralSignalSourceState.CURRENT
+        else -> NeuralSignalSourceState.EMPTY
+    }
+}
 internal data class NeuralMySignal(val available:Boolean=false,val callsign:String="",val fetchedEpoch:Long=0,
     val reports:List<SignalReport> = emptyList(),val source:String="PSK Reporter",val error:String="",
     val beingHeardState: HamClockFeedState = HamClockFeedState.UNAVAILABLE,
     val hearingState: HamClockFeedState = HamClockFeedState.UNAVAILABLE,
-    val beingHeardCount: Int = 0, val hearingCount: Int = 0)
+    val beingHeardCount: Int = 0, val hearingCount: Int = 0,
+    val sourceState: NeuralSignalSourceState = NeuralSignalSourceState.EMPTY)
 
 internal data class GeoPoint(val latitude: Double, val longitude: Double)
 
@@ -409,6 +424,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
     private var lastWsprCall = ""
     private var lastWsprPoint: GeoPoint? = null
     private var lastWsprAttemptEpoch = 0L
+    private var foreground = true
     private var dxpeditionFeed: HamClockFeed<List<HamClockDxpedition>>? = null
     private var ctyController: CtyController? = null
     private val lightningBuffer = ArrayDeque<LightningStrike>()
@@ -511,6 +527,21 @@ class NeuralDxController internal constructor(private val context: Context, priv
 
     fun stopLegacySatelliteTicker() { satelliteJob?.cancel(); satelliteJob = null; satellitePoint = null }
 
+    fun setForeground(value: Boolean) {
+        if (foreground == value) return
+        foreground = value
+        if (!value) {
+            refreshJob?.cancel(); refreshJob = null
+            pskGeneration++; pskJob?.cancel(); pskJob = null
+            wsprGeneration++; wsprJob?.cancel(); wsprJob = null
+            lightningJob?.cancel(); lightningJob = null
+            satelliteJob?.cancel(); satelliteJob = null
+        } else {
+            lightningPoint?.let(::ensureLightning)
+            satellitePoint?.let(::ensureSatelliteTicker)
+        }
+    }
+
     internal fun updateDxNewsCalendar(feed: HamClockFeed<List<HamClockDxpedition>>) {
         dxpeditionFeed = feed
         scope.launch { refreshBriefing(false) }
@@ -531,7 +562,8 @@ class NeuralDxController internal constructor(private val context: Context, priv
     }
 
     internal fun applyWsprPreference(value: HamClockWsprPreference) {
-        val providerChanged = wsprPreference != value
+        val providerChanged = wsprPreference.personalEnabled != value.personalEnabled ||
+            wsprPreference.windowMinutes != value.windowMinutes
         wsprPreference = value
         if (!value.personalEnabled) {
             wsprGeneration++; wsprJob?.cancel(); wsprJob = null
@@ -542,7 +574,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
         } else if (providerChanged && lastWsprCall.isNotBlank()) {
             lastWsprAttemptEpoch = 0
             refreshWspr(lastWsprCall, "", false)
-        }
+        } else publishWsprSnapshot(publicProviders.wspr.reprojectPersonal(value, lastWsprPoint))
     }
 
     fun refreshWspr(call: String, grid: String, force: Boolean = false) {
@@ -555,7 +587,10 @@ class NeuralDxController internal constructor(private val context: Context, priv
             return
         }
         val now = Instant.now().epochSecond
-        if (!force && now - lastWsprAttemptEpoch < 300L) return
+        if (!force && now - lastWsprAttemptEpoch < 300L) {
+            publishWsprSnapshot(publicProviders.wspr.reprojectPersonal(wsprPreference, point))
+            return
+        }
         lastWsprAttemptEpoch = now
         val generation = ++wsprGeneration
         wsprJob?.cancel()
@@ -778,6 +813,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
         }
         val rows = filterPskReports(enriched, pskPreference)
         val error = listOf(snapshot.beingHeard.error, snapshot.hearing.error).filter(String::isNotBlank).joinToString(" · ")
+        val sourceState = neuralSignalSourceState(snapshot, rows.isNotEmpty())
         scope.launch(Dispatchers.Main) {
             mySignal = NeuralMySignal(
                 available = snapshot.beingHeard.state != HamClockFeedState.UNAVAILABLE || snapshot.hearing.state != HamClockFeedState.UNAVAILABLE,
@@ -789,6 +825,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
                 hearingState = snapshot.hearing.state,
                 beingHeardCount = snapshot.beingHeard.reports.size,
                 hearingCount = snapshot.hearing.reports.size,
+                sourceState = sourceState,
             )
         }
     }

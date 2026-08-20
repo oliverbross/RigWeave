@@ -106,7 +106,7 @@ object HamClockSettingsCodec {
             bandHealth = value.bandHealth.copy(
                 windowMinutes = value.bandHealth.windowMinutes.takeIf { it in setOf(5, 10, 15, 30, 60) } ?: 15,
                 mode = value.bandHealth.mode.trim().uppercase(Locale.US).take(12).ifBlank { "ALL" },
-                enabledSources = cleanTokens(value.bandHealth.enabledSources, 8),
+                enabledSources = cleanTokens(value.bandHealth.enabledSources, 8) - "QSO_HISTORY",
                 visibleBands = cleanTokens(value.bandHealth.visibleBands, 24),
             ),
             portable = value.portable.copy(
@@ -256,13 +256,15 @@ object HamClockSettingsCodec {
     )
 
     private fun encodeRbn(value: HamClockRbnPreference) = JSONObject()
-        .put("enabled", value.enabled).put("source", value.source.name).put("window_minutes", value.windowMinutes)
+        .put("enabled", value.enabled).put("source", value.source.name).put("view_mode", value.viewMode.name)
+        .put("window_minutes", value.windowMinutes)
         .put("maximum_rows", value.maximumRows).put("bands", value.bands.strings()).put("modes", value.modes.strings())
         .put("minimum_snr", value.minimumSnr).put("skimmer_call", value.skimmerCall).put("dx_call", value.dxCall)
         .put("watchlist_only", value.watchlistOnly).put("show_paths", value.showPaths)
 
     private fun decodeRbn(row: JSONObject) = HamClockRbnPreference(
         enabled = row.optBoolean("enabled", true), source = row.enum("source", HamClockRbnSource.CONFIGURED_RETAIL_CLUSTER),
+        viewMode = row.enum("view_mode", HamClockRbnMode.ALL_RBN),
         windowMinutes = row.optInt("window_minutes", 10), maximumRows = row.optInt("maximum_rows", 120),
         bands = row.optJSONArray("bands").stringSet(), modes = row.optJSONArray("modes").stringSet(),
         minimumSnr = if (row.has("minimum_snr") && !row.isNull("minimum_snr")) row.optInt("minimum_snr") else null,
@@ -299,7 +301,8 @@ object HamClockSettingsCodec {
 
     private fun decodeBandHealth(row: JSONObject) = HamClockBandHealthPreference(
         windowMinutes = row.optInt("window_minutes", 15), mode = row.optString("mode", "ALL"),
-        enabledSources = row.optJSONArray("enabled_sources").stringSet(),
+        enabledSources = row.optJSONArray("enabled_sources")?.stringSet()
+            ?.takeIf(Set<String>::isNotEmpty) ?: HamClockBandHealthPreference().enabledSources,
         visibleBands = row.optJSONArray("visible_bands").stringSet(),
     )
 
