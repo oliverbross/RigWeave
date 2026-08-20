@@ -55,6 +55,8 @@ The reload contract is:
 
 Android queries only callsign, stored country, frequency, mode, timestamp, band, and submode under the existing `stationScope()` rule. Current CTY resolution takes precedence over stored country; stored country is the fallback. A valid stored HF/6 m band takes precedence over frequency-derived band. A fingerprint of QSO change token, authority, selected Wavelog station, and CTY revision prevents unchanged periodic rebuilds. For each new CTY revision, the installed bounded `cty.dat` text is loaded through JNI into the same native feature context before the worked-log rebuild is installed under the native lock. Native live spots and historical QSO classification therefore use the same installed CTY authority when available; without CTY, a blank live entity cannot receive the new-entity claim.
 
+iOS loads the bounded installed `cty.dat` text into its existing shared feature context before rebuilding the local `QSOStore` authority. Historical QSO entity classification prefers the current CTY country and falls back to the stored country when CTY is unavailable or has no match. A successful CTY replacement triggers one native CTY load, one complete local WorkedIndex rebuild, and one DX snapshot refresh. ADIF import defers visible-record reload and worked-log notification during per-record inserts, then performs each once for a changed batch. iOS still does not fabricate Wavelog station authority or implement the Android-only seven-page Neural DX workspace.
+
 ## Intentional differences from the behavioural reference
 
 - RigWeave retains one active cluster connection with configured failover, not simultaneous multi-cluster aggregation.
@@ -70,7 +72,7 @@ Current source contains integrations for the configured DX cluster; NOAA SWPC so
 
 ## Future upstream review procedure
 
-1. Obtain the owner's confirmed immutable upstream commit and explicit licence/permission status.
+1. Retain the approved immutable upstream commit and obtain explicit licence/permission status.
 2. Fetch the upstream repository and record the exact commit, tree, licence files, notices, and release/version label.
 3. Review behaviour and documentation as a reference; do not copy source or assets without a compatible licence and the repository's required provenance record.
 4. Compare concepts against the mapping above and update the capability/deviation matrix truthfully.
@@ -83,7 +85,7 @@ Current source contains integrations for the configured DX cluster; NOAA SWPC so
 - Android JVM suite passed `218/218`; debug APK and instrumentation APK assembly passed.
 - Android database instrumentation: the focused authority/station scope, entity/band fallback, and change-token test passed on the connected TB373FU. This is database evidence, not physical UI, RF, or service evidence.
 - Android JNI/CTY instrumentation: the focused test APK assembled. A test-only install on TB373FU could not enter the new JNI path because the preserved installed target app predates `featureLoadCty` (`NoSuchMethodError`). The normal app was not reinstalled and its data was not cleared; runtime JNI scoring proof remains pending.
-- No iOS validation is claimed for this Android-only closure.
+- iOS CTY/worked-log closure: the complete generic iOS Simulator build passed. The installed CTY text is loaded before local worked-log rebuild, current CTY country takes precedence with stored-country fallback, and ADIF batches defer the complete rebuild to one final notification for a changed import.
 - No live external provider, authenticated service, physical radio, transmission, or RF validation was required or performed.
 
 Validation commands:
@@ -97,4 +99,7 @@ cd android
 ./gradlew :app:testDebugUnitTest
 ./gradlew :app:assembleDebug
 ./gradlew :app:assembleDebugAndroidTest
+
+xcodebuild -project ios/RigWeave.xcodeproj -scheme RigWeave \
+  -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 ```

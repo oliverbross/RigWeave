@@ -850,7 +850,7 @@ final class GroupsIoController: ObservableObject {
                 updated: now, messageCount: page.values.count, closed: false, firstMessageNumber: page.values.map(\.number).min(), latestMessageNumber: page.values.map(\.number).max())], next: nil, hasMore: false, at: now)
             try db().applyMessages(groupId: hit.groupId, topicId: hit.topicId, messages: page.values, next: page.nextPageToken, hasMore: page.hasMore, at: now)
             let attachments = try await phase2API.messageAttachments(key: key, groupId: hit.groupId, messageNumber: hit.messageNumber)
-            try attachments.forEach { try db().saveIncomingAttachment(groupId: hit.groupId, messageNumber: hit.messageNumber, value: $0) }
+            try attachments.forEach { try self.db().saveIncomingAttachment(groupId: hit.groupId, messageNumber: hit.messageNumber, value: $0) }
             selectedGroupId = hit.groupId; selectedTopicId = hit.topicId; topics = try db().topics(groupId: hit.groupId); messages = try db().messages(topicId: hit.topicId)
             searchResults = []; status = "Online result cached and opened"
         }
@@ -976,7 +976,7 @@ final class GroupsIoController: ObservableObject {
         replaceOperation { [weak self] in
             guard let self else { return }
             incomingAttachments = try await phase2API.messageAttachments(key: KeychainValue.load(keyAccount), groupId: message.groupId, messageNumber: message.number)
-            try incomingAttachments.forEach { try db().saveIncomingAttachment(groupId: message.groupId, messageNumber: message.number, value: $0) }
+            try incomingAttachments.forEach { try self.db().saveIncomingAttachment(groupId: message.groupId, messageNumber: message.number, value: $0) }
             showIncomingAttachments = true
             status = incomingAttachments.isEmpty ? "No downloadable attachments reported" : "Attachment metadata refreshed · choose a file to download"
         }
@@ -1000,7 +1000,7 @@ final class GroupsIoController: ObservableObject {
             let size = (attributes[.size] as? NSNumber)?.int64Value
             try db().saveIncomingAttachment(groupId: message.groupId, messageNumber: message.number, value: value,
                 relativePath: "\(relativeDirectory)/\(filename)", localSize: size, sha256: try groupsIoFileSHA256(final))
-            incomingDownloadedFiles[value.id] = final; storageBytes = db().storageBytes; status = "Attachment downloaded to private storage"
+            incomingDownloadedFiles[value.id] = final; storageBytes = try db().storageBytes; status = "Attachment downloaded to private storage"
         }
     }
 
@@ -1078,7 +1078,7 @@ final class GroupsIoController: ObservableObject {
             let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             try? FileManager.default.removeItem(at: support.appendingPathComponent("RigWeave/GroupsIO/attachments/\(groupId)", isDirectory: true))
             try? FileManager.default.removeItem(at: support.appendingPathComponent("RigWeave/GroupsIO/archive-exports/\(groupId)", isDirectory: true))
-            topics = []; messages = []; selectedTopicId = nil; archiveState = "not_started"; archiveExportURL = nil; storageBytes = db().storageBytes
+            topics = []; messages = []; selectedTopicId = nil; archiveState = "not_started"; archiveExportURL = nil; storageBytes = try db().storageBytes
             status = "Downloaded archive removed for selected group · drafts preserved"
         } catch { status = error.localizedDescription }
     }

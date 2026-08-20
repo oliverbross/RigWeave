@@ -148,6 +148,11 @@ final class FeatureCore {
         text.withCString { _ = rw_feature_set_watchlist(context, $0) }
     }
 
+    func loadCty(_ text: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return text.withCString { rw_feature_load_cty_text(context, $0) == 1 }
+    }
+
     func setSolar(flux: Float, aIndex: Float, kpIndex: Float, at date: Date) {
         lock.lock(); defer { lock.unlock() }
         _ = rw_feature_set_solar(context, flux, aIndex, kpIndex, Int64(date.timeIntervalSince1970))
@@ -180,17 +185,17 @@ final class FeatureCore {
         }
     }
 
-    func reloadWorkedLog(_ records: [QSO]) {
+    func reloadWorkedLog(_ records: [(qso: QSO, country: String)]) {
         lock.lock(); defer { lock.unlock() }
         guard rw_feature_begin_worked_sync(context) == 1 else { return }
         for record in records {
-            let band = workedBand(for: record.frequencyHz)
-            record.callsign.withCString { callsign in
+            let band = workedBand(for: record.qso.frequencyHz)
+            record.qso.callsign.withCString { callsign in
                 record.country.withCString { country in
                     band.withCString { bandValue in
-                        record.mode.withCString { mode in
+                        record.qso.mode.withCString { mode in
                             _ = rw_feature_add_worked_qso(context, callsign, country, bandValue, mode, "",
-                                Int64(record.createdAt.timeIntervalSince1970), 0)
+                                Int64(record.qso.createdAt.timeIntervalSince1970), 0)
                         }
                     }
                 }
@@ -515,6 +520,7 @@ final class FeatureModel: ObservableObject {
     private var accumulatedAudioFrames: UInt64 = 0
     private var lastPublishedAudioFrame: UInt64 = 0
     private var workedLogBound = false
+    private weak var boundLogbook: QSOStore?
 
     init() {
         clusterHost = defaults.string(forKey: "clusterHost") ?? "cluster.om0rx.com"
@@ -539,6 +545,7 @@ final class FeatureModel: ObservableObject {
         cty.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &observations)
+        cty.onInstalledDataChanged = { [weak self] in self?.reloadBoundWorkedLog() }
         core.setWatchlist(watchlist)
         cluster.onStatus = { [weak self] value in Task { @MainActor in self?.clusterStatus = value } }
         cluster.onLine = { [weak self] line in
@@ -567,13 +574,21 @@ final class FeatureModel: ObservableObject {
     func bind(logbook: QSOStore) {
         guard !workedLogBound else { return }
         workedLogBound = true
-        let reload = { [weak self, weak logbook] in
-            guard let self, let logbook else { return }
-            self.core.reloadWorkedLog(logbook.workedLogRecords())
-            self.refreshDX()
+        boundLogbook = logbook
+        logbook.onWorkedLogChanged = { [weak self] in self?.reloadBoundWorkedLog() }
+        reloadBoundWorkedLog()
+    }
+
+    private func reloadBoundWorkedLog() {
+        guard let logbook = boundLogbook else { return }
+        let installedCty = cty.installedText()
+        if let installedCty, !core.loadCty(installedCty) { return }
+        let records = logbook.workedLogRecords().map { qso in
+            let currentCountry = installedCty == nil ? "" : cty.country(for: qso.callsign)
+            return (qso, currentCountry.isEmpty ? qso.country : currentCountry)
         }
-        logbook.onWorkedLogChanged = reload
-        reload()
+        core.reloadWorkedLog(records)
+        refreshDX()
     }
 
     deinit { cluster.disconnect(); wsjtx.stop(); audioEngine.stop() }

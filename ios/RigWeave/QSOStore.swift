@@ -29,6 +29,8 @@ final class QSOStore: ObservableObject {
     @Published private(set) var message = ""
     private var database: OpaquePointer?
     var onWorkedLogChanged: (() -> Void)?
+    private var workedLogNotificationBatchDepth = 0
+    private var workedLogNotificationPending = false
 
     init() {
         let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -74,7 +76,10 @@ final class QSOStore: ObservableObject {
         let saved = sqlite3_step(statement) == SQLITE_DONE
         sqlite3_finalize(statement)
         message = saved ? "QSO saved locally" : "QSO save failed"
-        if saved { reload() }
+        if saved {
+            if workedLogNotificationBatchDepth > 0 { workedLogNotificationPending = true }
+            else { reload() }
+        }
         return saved
     }
 
@@ -90,7 +95,9 @@ final class QSOStore: ObservableObject {
                 createdAt: Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(statement, 6))),
                 name: text(statement, 7), qth: text(statement, 8), country: text(statement, 9), notes: text(statement, 10)))
         }
-        sqlite3_finalize(statement); records = loaded; onWorkedLogChanged?()
+        sqlite3_finalize(statement); records = loaded
+        if workedLogNotificationBatchDepth > 0 { workedLogNotificationPending = true }
+        else { onWorkedLogChanged?() }
     }
 
     func exportADIF(using serialize: (QSO) -> String) -> URL? {
@@ -113,6 +120,16 @@ final class QSOStore: ObservableObject {
     func importADIF(from url: URL) -> Int {
         guard url.startAccessingSecurityScopedResource() else { message = "ADIF file access denied"; return 0 }
         defer { url.stopAccessingSecurityScopedResource() }
+        workedLogNotificationBatchDepth += 1
+        var databaseChanged = false
+        defer {
+            if databaseChanged { reload() }
+            workedLogNotificationBatchDepth -= 1
+            if workedLogNotificationBatchDepth == 0, workedLogNotificationPending {
+                workedLogNotificationPending = false
+                onWorkedLogChanged?()
+            }
+        }
         do {
             let text = try String(contentsOf: url, encoding: .utf8)
             let folded = text.uppercased(); var cursor = folded.range(of: "<EOH>")?.upperBound ?? folded.startIndex
@@ -139,9 +156,9 @@ final class QSOStore: ObservableObject {
                 let qso = QSO(id: identity, callsign: call, frequencyHz: UInt64((mhz * 1_000_000).rounded()),
                     mode: mode, rstSent: field("RST_SENT"), rstReceived: field("RST_RCVD"), createdAt: date,
                     name: field("NAME"), qth: field("QTH"), country: field("COUNTRY"), notes: field("COMMENT"))
-                if save(qso) { imported += 1 } else { skipped += 1 }
+                if save(qso) { imported += 1; databaseChanged = true } else { skipped += 1 }
             }
-            reload(); message = "ADIF import complete · \(imported) added · \(skipped) skipped"
+            message = "ADIF import complete · \(imported) added · \(skipped) skipped"
             return imported
         } catch { message = "ADIF import failed: \(error.localizedDescription)"; return 0 }
     }
