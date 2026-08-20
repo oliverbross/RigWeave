@@ -285,7 +285,7 @@ internal fun buildHamClockMapSnapshot(
             val path = greatCirclePath(LatLng(origin.latitude, origin.longitude), LatLng(latitude, longitude), 20)
             lines += HamClockMapLine(reportId, HamClockMapLayerId.PSK_REPORTER,
                 report.callsign, mapPoint.detail, splitAtDateline(path).map { segment -> segment.map { GeoPoint(it.latitude, it.longitude) } },
-                "#43d17c", HamClockMapSelection.PSK_REPORT, reportId, report.callsign,
+                if (report.mutual) "#f3d054" else hamClockBandColor(report.band), HamClockMapSelection.PSK_REPORT, reportId, report.callsign,
                 report.frequencyHz, report.mode)
         }
     }
@@ -351,13 +351,13 @@ internal fun hamClockDxMapPoint(spot: AndroidDXSpot): HamClockMapPoint {
 internal fun hamClockPskMapPoint(report: SignalReport, units: HamClockUnitSystem): HamClockMapPoint? {
     val latitude = report.latitude ?: return null
     val longitude = report.longitude ?: return null
-    val detail = listOf(report.locator, "${report.band} ${report.mode}",
+    val detail = listOf(report.direction.name.replace('_', ' '), report.locator, "${report.band} ${report.mode}",
         report.snr?.let { "$it dB" } ?: "SNR unavailable",
-        report.distanceKm?.let { hamClockDistanceLabel(it.toDouble(), units) }).filterNotNull()
+        report.distanceKm?.let { hamClockDistanceLabel(it.toDouble(), units) }, "MUTUAL".takeIf { report.mutual }).filterNotNull()
         .filter(String::isNotBlank).joinToString(" · ")
     val reportId = signalReportReference(report)
     return HamClockMapPoint(reportId, HamClockMapLayerId.PSK_REPORTER,
-        report.callsign, detail, latitude, longitude, "#43d17c", HamClockMapSelection.PSK_REPORT,
+        report.callsign, detail, latitude, longitude, if (report.mutual) "#f3d054" else hamClockBandColor(report.band), HamClockMapSelection.PSK_REPORT,
         reportId, report.callsign, report.frequencyHz, report.mode)
 }
 

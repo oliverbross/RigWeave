@@ -17,6 +17,7 @@ import org.json.JSONTokener
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
+import java.net.HttpURLConnection
 import java.net.Socket
 import java.net.URL
 import java.time.Instant
@@ -40,6 +41,58 @@ data class AndroidDXBand(val band: String, val spots5m: Int, val spots60m: Int, 
 data class AndroidDXRegion(val region: String, val spots15m: Int, val spots60m: Int,
     val uniqueCalls: Int, val activityPercent: Int, val anomaly: Boolean)
 
+enum class ClusterConnectionState { DISABLED, DISCONNECTED, CONNECTING, CONNECTED, RETRYING, ERROR }
+data class ClusterConnectionTruth(
+    val state: ClusterConnectionState = ClusterConnectionState.DISCONNECTED,
+    val activeEndpoint: String = "",
+    val connectedSinceEpoch: Long = 0,
+    val stateChangedEpoch: Long = Instant.now().epochSecond,
+    val latestSpotEpoch: Long = 0,
+    val error: String = "",
+)
+
+internal data class FeatureHttpResponse(val status: Int, val body: ByteArray, val contentType: String,
+    val effectiveUrl: String)
+internal fun interface FeatureHttpTransport { fun get(url: String, maximumBytes: Int): FeatureHttpResponse }
+internal class FeatureUrlConnectionTransport : FeatureHttpTransport {
+    override fun get(url: String, maximumBytes: Int): FeatureHttpResponse {
+        var target = URL(url)
+        repeat(4) { redirects ->
+            require(target.protocol.equals("https", true)) { "NOAA transport requires HTTPS" }
+            val connection = target.openConnection() as HttpURLConnection
+            try {
+                connection.connectTimeout = 10_000; connection.readTimeout = 10_000
+                connection.instanceFollowRedirects = false
+                connection.setRequestProperty("User-Agent", "RigWeave-Android/0.1 NOAA")
+                connection.setRequestProperty("Accept", "application/json")
+                val status = connection.responseCode
+                if (status in 300..399) {
+                    require(redirects < 3) { "NOAA redirect limit exceeded" }
+                    target = URL(target, connection.getHeaderField("Location") ?: error("NOAA redirect omitted Location"))
+                    require(target.protocol.equals("https", true)) { "NOAA redirected outside HTTPS" }
+                    return@repeat
+                }
+                if (connection.contentLengthLong > maximumBytes) error("NOAA response is too large")
+                val bytes = (if (status in 200..299) connection.inputStream else connection.errorStream)
+                    ?.use { it.readNBytes(maximumBytes + 1) } ?: ByteArray(0)
+                if (bytes.size > maximumBytes) error("NOAA response is too large")
+                return FeatureHttpResponse(status, bytes, connection.contentType.orEmpty(), target.toString())
+            } finally { connection.disconnect() }
+        }
+        error("NOAA redirect limit exceeded")
+    }
+}
+
+internal fun boundedFeatureText(transport: FeatureHttpTransport, url: String, maximumBytes: Int): String {
+    require(url.startsWith("https://")) { "NOAA transport requires HTTPS" }
+    val response = transport.get(url, maximumBytes)
+    require(response.effectiveUrl.startsWith("https://")) { "NOAA redirected outside HTTPS" }
+    require(response.status in 200..299) { "NOAA returned HTTP ${response.status}" }
+    require(response.contentType.isBlank() || response.contentType.contains("json", true)) { "NOAA returned unexpected content type" }
+    require(response.body.size <= maximumBytes) { "NOAA response is too large" }
+    return response.body.toString(Charsets.UTF_8)
+}
+
 internal fun parseNoaaSummaryValue(text: String, keys: List<String>): Float? {
     val parsed = JSONTokener(text).nextValue()
     val rows = when(parsed) { is JSONObject -> listOf(parsed); is JSONArray -> (0 until parsed.length()).mapNotNull(parsed::optJSONObject); else -> emptyList() }
@@ -58,7 +111,7 @@ internal fun parseLatestNoaaSunspot(
     val latest = (0 until rows.length()).asSequence().mapNotNull(rows::optJSONObject).mapNotNull { row ->
         val month = runCatching { YearMonth.parse(row.optString("time-tag")) }.getOrNull() ?: return@mapNotNull null
         val value = row.optDouble("observed_swpc_ssn", Double.NaN)
-        if (!value.isFinite() || value !in 0.0..1000.0 || month.isAfter(currentMonth.plusMonths(1))) null
+        if (!value.isFinite() || value !in 0.0..1000.0 || month.isAfter(currentMonth)) null
         else Triple(month, value.toFloat(), row.getString("time-tag"))
     }.maxByOrNull { it.first } ?: error("NOAA returned no usable observed sunspot number")
     return latest.second to latest.third
@@ -76,7 +129,7 @@ internal suspend fun completeSolarRefresh(
     }
 }
 
-class FeatureController(private val context: Context) {
+class FeatureController internal constructor(private val context: Context, private val http: FeatureHttpTransport = FeatureUrlConnectionTransport()) {
     private val handle = NativeCore.featureCreate()
     private val scope = CoroutineScope(Job() + Dispatchers.IO)
     private var clusterSocket: Socket? = null
@@ -93,6 +146,7 @@ class FeatureController(private val context: Context) {
     var watchlistText by mutableStateOf(prefs.getString("watchlist", "") ?: ""); private set
 
     var clusterStatus by mutableStateOf("DX cluster disconnected"); private set
+    var clusterConnection by mutableStateOf(ClusterConnectionTruth()); private set
     var spots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
     var liveSpots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
     var watchSpots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
@@ -105,6 +159,7 @@ class FeatureController(private val context: Context) {
     var sunspotNumber by mutableStateOf(prefs.getFloat("noaa_sunspot_number", Float.NaN).takeIf(Float::isFinite)); private set
     var sunspotObservedMonth by mutableStateOf(prefs.getString("noaa_sunspot_month", "").orEmpty()); private set
     var sunspotError by mutableStateOf(""); private set
+    var solarError by mutableStateOf(""); private set
     var learnedSpots by mutableStateOf(0); private set
     var duplicateSpots by mutableStateOf(0); private set
     var newestSpotEpoch by mutableStateOf(0L); private set
@@ -164,7 +219,8 @@ class FeatureController(private val context: Context) {
             var reconnectAttempt = 0
             while (generation == clusterGeneration && endpoints.isNotEmpty()) {
                 val (endpointHost, endpointPort) = endpoints[endpointIndex]
-                publishCluster("Connecting to $endpointHost:$endpointPort…")
+                publishCluster("Connecting to $endpointHost:$endpointPort…", ClusterConnectionState.CONNECTING,
+                    "$endpointHost:$endpointPort")
                 try {
                     val socket = Socket(); socket.connect(InetSocketAddress(endpointHost, endpointPort), 12_000); clusterSocket = socket
                     val output = socket.getOutputStream()
@@ -175,7 +231,8 @@ class FeatureController(private val context: Context) {
                         output.write("sh/dx 50\r\n".toByteArray()); output.flush()
                     }
                     reconnectAttempt = 0
-                    publishCluster("Connected to $endpointHost:$endpointPort")
+                    publishCluster("Connected to $endpointHost:$endpointPort", ClusterConnectionState.CONNECTED,
+                        "$endpointHost:$endpointPort", connectedSince = Instant.now().epochSecond)
                     BufferedReader(InputStreamReader(socket.getInputStream())).useLines { lines ->
                         lines.forEach { line ->
                             if (generation != clusterGeneration) return@useLines
@@ -183,20 +240,27 @@ class FeatureController(private val context: Context) {
                         }
                     }
                 } catch (error: Exception) {
-                    if (generation == clusterGeneration) publishCluster("$endpointHost failed · trying next cluster")
+                    if (generation == clusterGeneration) publishCluster("$endpointHost failed · trying next cluster",
+                        ClusterConnectionState.ERROR, "$endpointHost:$endpointPort", safeFeatureError(error))
                 } finally { clusterSocket?.close(); clusterSocket = null }
                 if (generation != clusterGeneration) return@launch
                 endpointIndex = (endpointIndex + 1) % endpoints.size
                 val next = endpoints[endpointIndex]
                 val waitSeconds = minOf(30, 1 shl minOf(reconnectAttempt, 4))
                 reconnectAttempt++
-                publishCluster("Trying ${next.first}:${next.second} in ${waitSeconds}s…")
+                publishCluster("Trying ${next.first}:${next.second} in ${waitSeconds}s…",
+                    ClusterConnectionState.RETRYING, "${next.first}:${next.second}")
                 delay(waitSeconds * 1_000L)
             }
         }
     }
 
-    fun disconnectCluster() { clusterGeneration++; clusterSocket?.close(); clusterSocket = null; clusterStatus = "DX cluster disconnected" }
+    fun disconnectCluster(disabled: Boolean = false) {
+        clusterGeneration++; clusterSocket?.close(); clusterSocket = null
+        clusterStatus = if (disabled) "DX cluster disabled" else "DX cluster disconnected"
+        clusterConnection = ClusterConnectionTruth(if (disabled) ClusterConnectionState.DISABLED else ClusterConnectionState.DISCONNECTED,
+            stateChangedEpoch = Instant.now().epochSecond, latestSpotEpoch = newestSpotEpoch)
+    }
 
     fun postSpot(callsign: String, frequencyKHz: Double, comment: String) {
         val call = callsign.trim().uppercase()
@@ -226,8 +290,9 @@ class FeatureController(private val context: Context) {
                     refreshOptionalSunspot = { refreshSunspotNumber() },
                     reportSunspotFailure = { sunspotError = it.ifBlank { "NOAA SSN unavailable; retained last monthly value" } },
                 )
+                solarError = ""
             } catch (error: Exception) {
-                publishCluster("NOAA solar data unavailable · retained last values")
+                solarError = safeFeatureError(error).ifBlank { "NOAA solar data unavailable · retained last values" }
             }
         }
     }
@@ -297,6 +362,7 @@ class FeatureController(private val context: Context) {
             dxTimeline = matrix("bandTimeline"); dxWorld = matrix("worldGrid"); dxSummary = summary; solar = parsedSolar
             learnedSpots = root.optInt("learnedSpots"); duplicateSpots = root.optInt("duplicateSpots")
             newestSpotEpoch = root.optLong("newestSpotEpoch")
+            clusterConnection = clusterConnection.copy(latestSpotEpoch = newestSpotEpoch)
         }
     }
 
@@ -306,9 +372,19 @@ class FeatureController(private val context: Context) {
     }
 
     private fun summaryText(url: String): String {
-        val connection = URL(url).openConnection(); connection.connectTimeout = 10_000; connection.readTimeout = 10_000
-        return connection.getInputStream().bufferedReader().use { it.readText() }
+        val maximum = if (url.contains("observed-solar-cycle")) 1_500_000 else 256_000
+        return boundedFeatureText(http, url, maximum)
     }
 
-    private suspend fun publishCluster(value: String) = withContext(Dispatchers.Main) { clusterStatus = value }
+    private suspend fun publishCluster(value: String, state: ClusterConnectionState = clusterConnection.state,
+        endpoint: String = clusterConnection.activeEndpoint, error: String = "", connectedSince: Long = clusterConnection.connectedSinceEpoch) =
+        withContext(Dispatchers.Main) {
+            clusterStatus = value
+            clusterConnection = ClusterConnectionTruth(state, endpoint,
+                if (state == ClusterConnectionState.CONNECTED) connectedSince else 0,
+                Instant.now().epochSecond, newestSpotEpoch, error.take(160))
+        }
 }
+
+private fun safeFeatureError(error: Throwable): String = error.message.orEmpty()
+    .replace(Regex("https?://\\S+|(?i)(token|key|password)=[^\\s]+"), "[redacted]").take(160)

@@ -6,6 +6,7 @@ object HamClockPanelId {
     const val WEATHER = "weather"
     const val BAND_ACTIVITY = "band_activity"
     const val PSK_REPORTER = "psk_reporter"
+    const val DX_NEWS = "dx_news"
     const val DX_EXPEDITIONS = "dxpeditions"
     const val DX_CLUSTER = "dx_cluster"
     const val SOLAR = "solar"
@@ -47,7 +48,7 @@ enum class HamClockDensity { COMPACT, COMFORTABLE, LARGE_TOUCH }
 enum class HamClockTimeZoneMode { UTC, LOCAL, BOTH }
 enum class HamClockHourFormat { H12, H24 }
 enum class HamClockUnitSystem { METRIC, IMPERIAL }
-enum class HamClockPskDirection { HEARD, HEARING, BOTH }
+enum class HamClockPskDirection { BEING_HEARD, HEARING, BOTH, MUTUAL }
 enum class HamClockDxTargetSource { MANUAL, AUTOMATIC }
 
 data class HamClockPanelPreference(
@@ -96,7 +97,7 @@ data class HamClockPskPreference(
     val enabled: Boolean = true,
     val direction: HamClockPskDirection = HamClockPskDirection.BOTH,
     val windowMinutes: Int = 15,
-    val refreshSeconds: Int = 60,
+    val refreshSeconds: Int = 300,
     val maximumReports: Int = 250,
     val filter: HamClockSpotFilter = HamClockSpotFilter(),
 )

@@ -179,7 +179,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val portable = remember { PortableController(context, database) }
     val activation = remember { PotaActivationController(context, database) }
     val features = remember { FeatureController(context) }
-    val neuralDx = remember { NeuralDxController(context, database) }
+    val neuralDx = remember { NeuralDxController(context, database, publicProviders) }
     val wavelog = remember { WavelogController(context, database) }
     val wavelogNative = remember { WavelogNativeController(database, wavelog, mutations) }
     val app = remember { AppController(context) }

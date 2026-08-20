@@ -3,7 +3,7 @@ package app.rigweave.mobile.hamclock
 internal enum class HamClockModuleCategory { STATION, MAP, RF, SPACE_WEATHER, ACTIVITY, OPERATIONS }
 internal enum class HamClockModuleAvailability { ACTIVE, DELEGATED, UNAVAILABLE }
 internal enum class HamClockModuleRenderer {
-    MAP, STATION, WEATHER, PSK_REPORTER, DX_EXPEDITIONS, BAND_ACTIVITY, DX_CLUSTER,
+    MAP, STATION, WEATHER, PSK_REPORTER, DX_NEWS, DX_EXPEDITIONS, BAND_ACTIVITY, DX_CLUSTER,
     SOLAR, DX_TARGET, PROPAGATION, PORTABLE, SATELLITES, CONTESTS, ANALOG_CLOCK, LEGACY,
 }
 internal enum class HamClockDeepLink { NONE, DX, PORTABLE, OPERATIONS, LOGBOOK, LOG_INTELLIGENCE, RADIO, DIGI }
@@ -43,9 +43,13 @@ internal val hamClockModuleRegistry: List<HamClockModuleSpec> = listOf(
     HamClockModuleSpec(HamClockPanelId.PSK_REPORTER, setOf("psk-reporter"), "PSK Reporter",
         HamClockModuleCategory.RF, "signal-reports", true, 0, 2, preferredHeightDp = 190,
         sourceLabel = "PSK Reporter", renderer = HamClockModuleRenderer.PSK_REPORTER,
-        deepLink = HamClockDeepLink.DIGI, lowDataRepresentation = "Bounded reception-report rows"),
+        deepLink = HamClockDeepLink.DX, lowDataRepresentation = "Bounded reception-report rows"),
+    HamClockModuleSpec(HamClockPanelId.DX_NEWS, setOf("dx-news-ticker", "dx-news-sources", "dx-news-merge"), "DX News",
+        HamClockModuleCategory.ACTIVITY, "source-attributed-headlines", true, 0, 3, preferredHeightDp = 210,
+        sourceLabel = "DX-World · NG3K", renderer = HamClockModuleRenderer.DX_NEWS,
+        deepLink = HamClockDeepLink.DX, lowDataRepresentation = "Static current headline with source and age"),
     HamClockModuleSpec(HamClockPanelId.DX_EXPEDITIONS, setOf("dxpeditions"), "DXpeditions",
-        HamClockModuleCategory.ACTIVITY, "schedule", true, 0, 3, preferredHeightDp = 210,
+        HamClockModuleCategory.ACTIVITY, "schedule", true, 0, 4, preferredHeightDp = 210,
         sourceLabel = "NG3K ADXO", renderer = HamClockModuleRenderer.DX_EXPEDITIONS,
         deepLink = HamClockDeepLink.DX, lowDataRepresentation = "Current schedule rows"),
     HamClockModuleSpec(HamClockPanelId.MAP, setOf("world-map", "map-list-view"), "World activity",

@@ -26,7 +26,7 @@ class HamClockSettingsStoreTest {
             map = HamClockMapPreference(HamClockBasemap.SATELLITE, false, -33.865, 151.209, 5.75, layers),
             cluster = HamClockClusterPreference(false, 45, 20, 333,
                 HamClockSpotFilter(setOf("20m", "6m"), setOf("FT8", "CW"), setOf("EU", "OC"), "vk9", -18)),
-            pskReporter = HamClockPskPreference(true, HamClockPskDirection.HEARD, 120, 90, 444,
+            pskReporter = HamClockPskPreference(true, HamClockPskDirection.BEING_HEARD, 120, 300, 444,
                 HamClockSpotFilter(setOf("40m"), setOf("FT4"), setOf("NA"), "n0call", -22)),
             portable = HamClockPortablePreference(setOf("POTA", "SOTA"), 60, 321, true, true),
             satellites = HamClockSatellitePreference(setOf(25544, 43017), 48, 20, false, true, true),

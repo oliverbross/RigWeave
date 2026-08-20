@@ -82,9 +82,9 @@ object HamClockSettingsCodec {
                 filter = normalizeFilter(value.cluster.filter),
             ),
             pskReporter = value.pskReporter.copy(
-                windowMinutes = value.pskReporter.windowMinutes.coerceIn(1, 24 * 60),
-                refreshSeconds = value.pskReporter.refreshSeconds.coerceIn(15, 60 * 60),
-                maximumReports = value.pskReporter.maximumReports.coerceIn(1, 5_000),
+                windowMinutes = value.pskReporter.windowMinutes.takeIf { it in setOf(2, 5, 10, 15, 30, 60, 120) } ?: 15,
+                refreshSeconds = value.pskReporter.refreshSeconds.coerceIn(300, 60 * 60),
+                maximumReports = value.pskReporter.maximumReports.coerceIn(1, 500),
                 filter = normalizeFilter(value.pskReporter.filter),
             ),
             portable = value.portable.copy(
@@ -206,8 +206,11 @@ object HamClockSettingsCodec {
         .put("maximum_reports", value.maximumReports).put("filter", encodeFilter(value.filter))
 
     private fun decodePsk(row: JSONObject) = HamClockPskPreference(
-        enabled = row.optBoolean("enabled", true), direction = row.enum("direction", HamClockPskDirection.BOTH),
-        windowMinutes = row.optInt("window_minutes", 15), refreshSeconds = row.optInt("refresh_seconds", 60),
+        enabled = row.optBoolean("enabled", true), direction = when (row.optString("direction").uppercase(Locale.US)) {
+            "HEARD" -> HamClockPskDirection.BEING_HEARD
+            else -> row.enum("direction", HamClockPskDirection.BOTH)
+        },
+        windowMinutes = row.optInt("window_minutes", 15), refreshSeconds = row.optInt("refresh_seconds", 300),
         maximumReports = row.optInt("maximum_reports", 250),
         filter = row.optJSONObject("filter")?.let(::decodeFilter) ?: HamClockSpotFilter(),
     )

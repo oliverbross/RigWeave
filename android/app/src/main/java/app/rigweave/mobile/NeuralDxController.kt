@@ -18,6 +18,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import app.rigweave.mobile.hamclock.DxNewsItem
+import app.rigweave.mobile.hamclock.DxNewsSource
+import app.rigweave.mobile.hamclock.HamClockDxpedition
+import app.rigweave.mobile.hamclock.HamClockFeed
+import app.rigweave.mobile.hamclock.HamClockFeedState
+import app.rigweave.mobile.hamclock.HamClockPskDirection
+import app.rigweave.mobile.hamclock.HamClockPskPreference
+import app.rigweave.mobile.hamclock.HamClockPublicProviders
+import app.rigweave.mobile.hamclock.PskReporterSnapshot
+import app.rigweave.mobile.hamclock.filterPskReports
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -60,6 +70,7 @@ enum class NeuralDxPage(val label: String) {
 enum class NeuralDxRefreshScope { HOME, FULL_DX }
 
 internal fun NeuralDxRefreshScope.includesLegacySatelliteWork(): Boolean = this == NeuralDxRefreshScope.FULL_DX
+internal fun NeuralDxRefreshScope.stopsLegacySatelliteTicker(): Boolean = this == NeuralDxRefreshScope.HOME
 
 data class NeuralWeather(
     val available: Boolean = false, val updatedEpoch: Long = 0, val temperatureC: Double? = null,
@@ -74,10 +85,8 @@ data class WsprBandActivity(val band: String, val spots: Int, val averageSnr: Do
 data class NeuralWspr(val available: Boolean = false, val updatedEpoch: Long = 0,
     val hf: List<WsprBandActivity> = emptyList(), val vhf: List<WsprBandActivity> = emptyList(), val error: String = "")
 
-data class BriefingItem(val title: String, val link: String, val published: String = "", val summary: String = "",
-    val callsigns: List<String> = emptyList(), val imageUrl: String = "")
-data class BriefingSource(val id: String, val name: String, val site: String, val items: List<BriefingItem> = emptyList(),
-    val updatedEpoch: Long = 0, val stale: Boolean = false, val error: String = "")
+internal typealias BriefingItem = DxNewsItem
+internal typealias BriefingSource = DxNewsSource
 
 data class NeuralPrediction(val callsign: String, val country: String, val band: String, val mode: String,
     val probability: Int, val model: String, val reason: String, val startEpoch: Long, val endEpoch: Long,
@@ -151,13 +160,26 @@ data class LightningStrike(val epoch: Long, val latitude: Double, val longitude:
     val bearingDegrees: Int, val bearing: String)
 data class NeuralLightning(val connected: Boolean = false, val updatedEpoch: Long = 0,
     val strikes: List<LightningStrike> = emptyList(), val source: String = "Blitzortung community MQTT", val error: String = "")
+enum class SignalDirection { BEING_HEARD, HEARING }
 data class SignalReport(val callsign:String,val locator:String,val latitude:Double?,val longitude:Double?,val frequencyHz:Long,
-    val band:String,val mode:String,val snr:Int?,val distanceKm:Int?,val epoch:Long)
+    val band:String,val mode:String,val snr:Int?,val distanceKm:Int?,val epoch:Long,
+    val direction: SignalDirection = SignalDirection.BEING_HEARD, val localCallsign: String = "",
+    val senderCallsign: String = localCallsign, val senderLocator: String = "",
+    val receiverCallsign: String = callsign, val receiverLocator: String = locator, val mutual: Boolean = false,
+    val continent: String = "")
 internal fun signalReportReference(report: SignalReport): String =
-    listOf(report.callsign.uppercase(Locale.US), report.epoch.toString(), report.frequencyHz.toString(),
+    listOf(report.direction.name, report.callsign.uppercase(Locale.US), report.epoch.toString(), report.frequencyHz.toString(),
         report.locator.uppercase(Locale.US)).joinToString("|")
-data class NeuralMySignal(val available:Boolean=false,val callsign:String="",val fetchedEpoch:Long=0,
-    val reports:List<SignalReport> = emptyList(),val source:String="PSK Reporter",val error:String="")
+internal data class ConsumedSignalRequest(val report: SignalReport?, val message: String)
+internal fun consumeSignalRequest(referenceId: String, reports: List<SignalReport>): ConsumedSignalRequest {
+    val report = reports.firstOrNull { signalReportReference(it) == referenceId }
+    return ConsumedSignalRequest(report, if (report == null) "PSK report expired or filtered; request consumed" else "")
+}
+internal data class NeuralMySignal(val available:Boolean=false,val callsign:String="",val fetchedEpoch:Long=0,
+    val reports:List<SignalReport> = emptyList(),val source:String="PSK Reporter",val error:String="",
+    val beingHeardState: HamClockFeedState = HamClockFeedState.UNAVAILABLE,
+    val hearingState: HamClockFeedState = HamClockFeedState.UNAVAILABLE,
+    val beingHeardCount: Int = 0, val hearingCount: Int = 0)
 
 internal data class GeoPoint(val latitude: Double, val longitude: Double)
 
@@ -360,7 +382,8 @@ private class NeuralDxStore(context: Context) : SQLiteOpenHelper(context, "neura
     }
 }
 
-class NeuralDxController(private val context: Context, private val database: QsoDatabase) {
+class NeuralDxController internal constructor(private val context: Context, private val database: QsoDatabase,
+    private val publicProviders: HamClockPublicProviders) {
     private val scope = CoroutineScope(Job() + Dispatchers.IO)
     private val store = NeuralDxStore(context)
     private val prefs = context.getSharedPreferences("neural-dx-v12", Context.MODE_PRIVATE)
@@ -370,6 +393,14 @@ class NeuralDxController(private val context: Context, private val database: Qso
     private var lightningPoint: GeoPoint? = null
     private var satelliteJob: Job? = null
     private var satellitePoint: GeoPoint? = null
+    private var pskPreference = HamClockPskPreference()
+    private var pskSnapshot = PskReporterSnapshot()
+    private var pskJob: Job? = null
+    private var pskGeneration = 0
+    private var lastPskCall = ""
+    private var lastPskPoint: GeoPoint? = null
+    private var dxpeditionFeed: HamClockFeed<List<HamClockDxpedition>>? = null
+    private var ctyController: CtyController? = null
     private val lightningBuffer = ArrayDeque<LightningStrike>()
     private var lastIngestIds = emptySet<String>()
     private var lastIngestStation: String? = null
@@ -377,7 +408,7 @@ class NeuralDxController(private val context: Context, private val database: Qso
 
     var weather by mutableStateOf(loadWeatherCache()); private set
     var wspr by mutableStateOf(NeuralWspr()); private set
-    var briefing by mutableStateOf(loadBriefingCache()); private set
+    internal var briefing by mutableStateOf(loadBriefingCache()); private set
     var satelliteCatalogue by mutableStateOf(loadOrbitCache()); private set
     var satellites by mutableStateOf(emptyList<SatellitePosition>()); private set
     var passes by mutableStateOf(emptyList<SatellitePass>()); private set
@@ -391,8 +422,10 @@ class NeuralDxController(private val context: Context, private val database: Qso
     var beaconReference by mutableStateOf(loadBeaconReference()); private set
     var beaconStatus by mutableStateOf(if (beaconReference.isEmpty()) "Beacon reference not downloaded" else "${beaconReference.size} beacon references cached"); private set
     var lightning by mutableStateOf(NeuralLightning()); private set
-    var mySignal by mutableStateOf(loadMySignalCache()); private set
+    internal var mySignal by mutableStateOf(loadMySignalCache()); private set
     var requestedSignalReportId by mutableStateOf<String?>(null); private set
+    var requestedPage by mutableStateOf<NeuralDxPage?>(null); private set
+    var signalSelectionMessage by mutableStateOf(""); private set
     val alerts = mutableStateListOf<String>()
     var status by mutableStateOf("Neural DX cache ready"); private set
     var refreshing by mutableStateOf(false); private set
@@ -411,6 +444,7 @@ class NeuralDxController(private val context: Context, private val database: Qso
     init { createNotificationChannel() }
 
     fun ingest(spots: List<AndroidDXSpot>, stationId: String?, cty: CtyController, stationCall: String = "") {
+        ctyController = cty
         if (spots.isEmpty()) return
         val ids = spots.mapTo(linkedSetOf()) { it.id }
         if (ids == lastIngestIds && stationId == lastIngestStation && cty.dataRevision == lastCtyRevision) return
@@ -453,6 +487,49 @@ class NeuralDxController(private val context: Context, private val database: Qso
     }
 
     fun requestSignalReport(referenceId: String) { requestedSignalReportId = referenceId }
+    fun requestPage(page: NeuralDxPage) { requestedPage = page }
+    fun consumeRequestedPage() { requestedPage = null }
+    fun consumeRequestedSignalReport(message: String = "") {
+        requestedSignalReportId = null
+        signalSelectionMessage = message.take(160)
+    }
+
+    fun stopLegacySatelliteTicker() { satelliteJob?.cancel(); satelliteJob = null; satellitePoint = null }
+
+    internal fun updateDxNewsCalendar(feed: HamClockFeed<List<HamClockDxpedition>>) {
+        dxpeditionFeed = feed
+        scope.launch { refreshBriefing(false) }
+    }
+
+    internal fun applyPskPreference(value: HamClockPskPreference) {
+        val providerChanged = pskPreference.enabled != value.enabled || pskPreference.windowMinutes != value.windowMinutes
+        pskPreference = value
+        if (!value.enabled) {
+            pskGeneration++; pskJob?.cancel(); pskJob = null
+            pskSnapshot = PskReporterSnapshot(lastPskCall)
+            publishPskSnapshot(pskSnapshot)
+        } else if (providerChanged && lastPskCall.isNotBlank() && lastPskPoint != null) {
+            val generation = ++pskGeneration
+            pskJob?.cancel()
+            pskJob = scope.launch { runCatching { refreshMySignal(lastPskCall, lastPskPoint!!, false, generation) } }
+        } else publishPskSnapshot(pskSnapshot)
+    }
+
+    fun refreshPsk(call: String, grid: String, force: Boolean = false) {
+        if (!pskPreference.enabled) { publishPskSnapshot(PskReporterSnapshot(call.trim().uppercase())); return }
+        val point = maidenheadCenter(grid) ?: return
+        val generation = ++pskGeneration
+        pskJob?.cancel()
+        pskJob = scope.launch { runCatching { refreshMySignal(call, point, force, generation) }
+            .onFailure { error -> withContext(Dispatchers.Main) { mySignal = mySignal.copy(error = safeError(error)) } } }
+    }
+
+    fun clearPskDisplay() {
+        pskGeneration++; pskJob?.cancel(); pskJob = null
+        pskSnapshot = PskReporterSnapshot(lastPskCall)
+        publishPskSnapshot(pskSnapshot)
+        consumeRequestedSignalReport("PSK display cleared")
+    }
 
     fun moveBriefingSource(id: String, direction: Int) {
         val order = briefingOrder.toMutableList(); val from = order.indexOf(id); val to = (from + direction).coerceIn(0, order.lastIndex)
@@ -464,6 +541,7 @@ class NeuralDxController(private val context: Context, private val database: Qso
 
     fun refresh(call: String, grid: String, stationId: String?, live: List<AndroidDXSpot>, force: Boolean = false,
         refreshScope: NeuralDxRefreshScope = NeuralDxRefreshScope.FULL_DX) {
+        if (refreshScope.stopsLegacySatelliteTicker()) stopLegacySatelliteTicker()
         if (refreshJob?.isActive == true) return
         refreshJob = scope.launch {
             withContext(Dispatchers.Main) { refreshing = true; status = "Refreshing Neural DX sources…" }
@@ -504,7 +582,7 @@ class NeuralDxController(private val context: Context, private val database: Qso
     }
 
     fun testNtfy() = scope.launch { deliverAlert("RigWeave Neural DX", "Notification test successful", "test:${Instant.now().epochSecond}", force = true) }
-    fun close() { refreshJob?.cancel(); lightningJob?.cancel(); satelliteJob?.cancel(); scope.cancel(); store.close() }
+    fun close() { refreshJob?.cancel(); pskJob?.cancel(); lightningJob?.cancel(); satelliteJob?.cancel(); scope.cancel(); store.close() }
 
     private suspend fun publishDerived(rows: List<AndroidDXSpot>, stationId: String?, stationCall: String) {
         val p = store.predictions(rows); val w = store.worldCells(worldWindowMinutes, worldBand)
@@ -614,43 +692,46 @@ class NeuralDxController(private val context: Context, private val database: Qso
         scope.launch(Dispatchers.Main) { wspr = NeuralWspr(true, cache.lastModified() / 1000, hf, vhf) }
     }
 
-    private fun refreshMySignal(call: String, point: GeoPoint, force: Boolean) {
-        val normalized=call.trim().uppercase(Locale.US);if(normalized.isBlank())return
-        val cache=cacheFile("pskreporter-${normalized.replace(Regex("[^A-Z0-9]"),"_")}.json")
-        val text=cachedFetch(cache,5*60L,force){
-            val params="senderCallsign=${URLEncoder.encode(normalized,Charsets.UTF_8.name())}&flowStartSeconds=-1800&callback=cb"
-            readUrl("https://retrieve.pskreporter.info/query?$params",2_000_000)
+    private fun refreshMySignal(call: String, point: GeoPoint, force: Boolean, generation: Int = pskGeneration) {
+        val normalized = call.trim().uppercase(Locale.US)
+        lastPskCall = normalized; lastPskPoint = point
+        if (normalized.isBlank() || !pskPreference.enabled) {
+            pskSnapshot = PskReporterSnapshot(normalized)
+            publishPskSnapshot(pskSnapshot)
+            return
         }
-        val payload=Regex("^\\s*cb\\s*\\(([\\s\\S]*)\\)\\s*;?\\s*$").find(text)?.groupValues?.get(1)?:text
-        val root=JSONObject(payload);val raw=root.opt("receptionReport");val reports=when(raw){is JSONArray->raw;is JSONObject->JSONArray().put(raw);else->JSONArray()}
-        val rows=buildList{for(i in 0 until reports.length()){val r=reports.optJSONObject(i)?:continue;val rx=r.optString("receiverCallsign").uppercase(Locale.US);val epoch=r.optLong("flowStartSeconds");if(rx.isBlank()||epoch<=0)continue
-            val locator=r.optString("receiverLocator");val location=maidenheadCenter(locator);val frequency=r.optDouble("frequency",0.0).toLong();add(SignalReport(rx,locator,location?.latitude,location?.longitude,frequency,frequencyBand(frequency),r.optString("mode"),r.optString("sNR").toIntOrNull(),location?.let{greatCircleKm(point,it).roundToInt()},epoch))}}
-            .groupBy{it.callsign}.values.mapNotNull{it.maxByOrNull(SignalReport::epoch)}.sortedByDescending{it.epoch}.take(20)
-        val result=NeuralMySignal(true,normalized,cache.lastModified()/1000,rows)
-        cacheFile("my-signal.json").writeText(JSONObject().put("call",normalized).put("fetched",result.fetchedEpoch).put("reports",JSONArray(rows.map{signalToJson(it)})).toString())
-        scope.launch(Dispatchers.Main){mySignal=result}
+        val loaded = publicProviders.pskReporter.refresh(normalized, point, pskPreference.windowMinutes, force)
+        if (generation != pskGeneration) return
+        pskSnapshot = loaded
+        publishPskSnapshot(pskSnapshot)
     }
 
     private fun refreshBriefing(force: Boolean) {
-        val sources = listOf(
-            Triple("dxworld", "DX-World", "https://www.dx-world.net/feed/"),
-            Triple("dxnews", "DXNews", "https://dxnews.com/"),
-            Triple("ng3k", "NG3K ADXO", "https://www.ng3k.com/Misc/adxoplain.html"),
-            Triple("qo100", "QO-100 DX Club", "https://qo100dx.club/news"),
-        )
-        val loaded = sources.map { (id, name, url) ->
-            val file = cacheFile("brief-$id.txt")
-            try {
-                val text = cachedFetch(file, 12 * 3600L, force) { readUrl(url, 2_000_000) }
-                BriefingSource(id, name, runCatching { URL(url).host }.getOrDefault(url), parseBriefing(text, url),
-                    file.lastModified() / 1000, System.currentTimeMillis() - file.lastModified() > 12 * 3600_000L)
-            } catch (error: Exception) {
-                BriefingSource(id, name, url, emptyList(), file.lastModified() / 1000, true, safeError(error))
-            }
-        }
-        val ordered = briefingOrder.mapNotNull { key -> loaded.firstOrNull { it.id == key } } + loaded.filter { it.id !in briefingOrder }
-        cacheFile("briefing.json").writeText(JSONArray(ordered.map { sourceToJson(it) }).toString())
+        val snapshot = publicProviders.dxNews.refresh(dxpeditionFeed, force)
+        val ordered = briefingOrder.mapNotNull { key -> snapshot.sources.firstOrNull { it.id == key } } +
+            snapshot.sources.filter { it.id !in briefingOrder }
         scope.launch(Dispatchers.Main) { briefing = ordered }
+    }
+
+    private fun publishPskSnapshot(snapshot: PskReporterSnapshot) {
+        val enriched = snapshot.reports.map { report ->
+            report.copy(continent = ctyController?.lookup(report.callsign)?.continent.orEmpty())
+        }
+        val rows = filterPskReports(enriched, pskPreference)
+        val error = listOf(snapshot.beingHeard.error, snapshot.hearing.error).filter(String::isNotBlank).joinToString(" · ")
+        scope.launch(Dispatchers.Main) {
+            mySignal = NeuralMySignal(
+                available = snapshot.beingHeard.state != HamClockFeedState.UNAVAILABLE || snapshot.hearing.state != HamClockFeedState.UNAVAILABLE,
+                callsign = snapshot.callsign,
+                fetchedEpoch = maxOf(snapshot.beingHeard.fetchedEpoch, snapshot.hearing.fetchedEpoch),
+                reports = rows,
+                error = error,
+                beingHeardState = snapshot.beingHeard.state,
+                hearingState = snapshot.hearing.state,
+                beingHeardCount = snapshot.beingHeard.reports.size,
+                hearingCount = snapshot.hearing.reports.size,
+            )
+        }
     }
 
     private fun refreshSatellites(point: GeoPoint, force: Boolean) {
@@ -917,7 +998,7 @@ class NeuralDxController(private val context: Context, private val database: Qso
             r.optInt("distance").takeIf{r.has("distance")&&!r.isNull("distance")},r.optString("bearing"),r.optBoolean("range")))}}
     }.getOrDefault(emptyList())
     private fun loadBriefingOrder(): List<String> {
-        val canonical=listOf("dxworld","dxnews","ng3k","qo100")
+        val canonical=listOf("dxworld","dxnews","ng3k")
         val saved=prefs.getString("briefing_order","").orEmpty().split(',').filter{it in canonical}.distinct()
         return saved + canonical.filter{it !in saved}
     }

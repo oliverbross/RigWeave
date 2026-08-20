@@ -72,9 +72,7 @@ class OpenHamClockTruthAuditTest {
 
     @Test fun unsupportedSettingsCannotClaimActiveConsumption() {
         val planned = listOf(
-            "cluster.windowMinutes", "cluster.refreshSeconds",
-            "cluster.maximumSpots", "cluster.filter", "pskReporter.direction", "portable.enabledPrograms",
-            "satellites.trackedNoradIds",
+            "portable.enabledPrograms", "satellites.trackedNoradIds",
         )
         planned.forEach { key ->
             assertEquals(key, HamClockSettingAvailability.PLANNED_NOT_AVAILABLE, hamClockSettingAvailability[key])
@@ -83,7 +81,10 @@ class OpenHamClockTruthAuditTest {
             "panels.rowSpan", "panels.columnSpan", "panels.collapsed", "map.basemap", "map.followStation",
             "map.centerLatitude", "map.centerLongitude", "map.zoom", "map.layers.visible", "map.layers.opacity",
             "dxTarget.locked", "dxTarget.source", "display.timeZoneMode", "display.hourFormat",
-            "display.unitSystem", "display.lowDataMode",
+            "display.unitSystem", "display.lowDataMode", "cluster.enabled", "cluster.windowMinutes",
+            "cluster.refreshSeconds", "cluster.maximumSpots", "cluster.filter", "pskReporter.enabled",
+            "pskReporter.direction", "pskReporter.windowMinutes", "pskReporter.refreshSeconds",
+            "pskReporter.maximumReports", "pskReporter.filter",
         ).forEach { key ->
             assertEquals(key, HamClockSettingAvailability.ACTIVE, hamClockSettingAvailability[key])
         }
