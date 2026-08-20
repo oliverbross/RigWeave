@@ -6,7 +6,7 @@ import java.util.Locale
 
 object HamClockSettingsCodec {
     const val SCHEMA = "rigweave.hamclock.settings"
-    const val CURRENT_VERSION = 5
+    const val CURRENT_VERSION = 6
     const val MAX_PROFILES = 24
     const val MAX_JSON_BYTES = 1_048_576
 
@@ -119,6 +119,26 @@ object HamClockSettingsCodec {
                 passWindowHours = value.satellites.passWindowHours.coerceIn(1, 168),
                 minimumElevationDegrees = value.satellites.minimumElevationDegrees.coerceIn(0, 90),
             ),
+            propagation = value.propagation.copy(
+                txPowerWatts = value.propagation.txPowerWatts.coerceIn(1, 1_000_000),
+                txGainDb = value.propagation.txGainDb.finiteOr(0.0).coerceIn(-100.0, 100.0),
+                rxGainDb = value.propagation.rxGainDb.finiteOr(0.0).coerceIn(-100.0, 100.0),
+                requiredReliability = value.propagation.requiredReliability.coerceIn(1, 99),
+                requiredSnrDb = value.propagation.requiredSnrDb.finiteOr(10.0).coerceIn(-50.0, 100.0),
+                bandwidthHz = value.propagation.bandwidthHz.coerceIn(1, 1_000_000),
+                selectedFrequenciesMHz = value.propagation.selectedFrequenciesMHz.asSequence()
+                    .filter(Double::isFinite).filter { it in 0.1..60.0 }.distinct().take(24).toList()
+                    .ifEmpty { HamClockPropagationPreference().selectedFrequenciesMHz },
+                coverageResolution = value.propagation.coverageResolution.takeIf { it in setOf(288, 720) } ?: 288,
+            ),
+            idReminder = value.idReminder.copy(
+                intervalMinutes = value.idReminder.intervalMinutes.takeIf { it in setOf(5, 10, 15, 20, 30) } ?: 10,
+                lastResetEpochSeconds = value.idReminder.lastResetEpochSeconds.coerceAtLeast(0),
+            ),
+            shackDisplay = value.shackDisplay.copy(
+                rotationSeconds = value.shackDisplay.rotationSeconds.takeIf { it in setOf(15, 30, 60, 120) } ?: 30,
+                selectedProfileId = value.shackDisplay.selectedProfileId?.trim()?.take(64)?.takeIf(String::isNotBlank),
+            ),
             dxTarget = target,
         )
     }
@@ -161,6 +181,9 @@ object HamClockSettingsCodec {
             .put("portable", encodePortable(settings.portable))
             .put("satellites", encodeSatellites(settings.satellites))
             .put("display", encodeDisplay(settings.display))
+            .put("propagation", encodePropagation(settings.propagation))
+            .put("id_reminder", encodeIdReminder(settings.idReminder))
+            .put("shack_display", encodeShackDisplay(settings.shackDisplay))
             .also { root -> settings.dxTarget?.let { root.put("dx_target", encodeTarget(it)) } }
     }
 
@@ -178,6 +201,9 @@ object HamClockSettingsCodec {
         satellites = root.optJSONObject("satellites")?.let(::decodeSatellites) ?: HamClockSatellitePreference(),
         dxTarget = root.optJSONObject("dx_target")?.let(::decodeTarget),
         display = root.optJSONObject("display")?.let(::decodeDisplay) ?: HamClockDisplayPreference(),
+        propagation = root.optJSONObject("propagation")?.let(::decodePropagation) ?: HamClockPropagationPreference(),
+        idReminder = root.optJSONObject("id_reminder")?.let(::decodeIdReminder) ?: HamClockIdReminderPreference(),
+        shackDisplay = root.optJSONObject("shack_display")?.let(::decodeShackDisplay) ?: HamClockShackDisplayPreference(),
     )
 
     private fun encodePanel(value: HamClockPanelPreference) = JSONObject()
@@ -355,6 +381,49 @@ object HamClockSettingsCodec {
         immersive = row.optBoolean("immersive"),
     )
 
+    private fun encodePropagation(value: HamClockPropagationPreference) = JSONObject()
+        .put("tx_power_watts", value.txPowerWatts).put("tx_gain_db", value.txGainDb)
+        .put("rx_gain_db", value.rxGainDb).put("noise_environment", value.noiseEnvironment.name)
+        .put("required_reliability", value.requiredReliability).put("required_snr_db", value.requiredSnrDb)
+        .put("bandwidth_hz", value.bandwidthHz).put("digital", value.digital).put("long_path", value.longPath)
+        .put("selected_frequencies_mhz", JSONArray(value.selectedFrequenciesMHz)).put("coverage_resolution", value.coverageResolution)
+
+    private fun decodePropagation(row: JSONObject) = HamClockPropagationPreference(
+        txPowerWatts = row.optInt("tx_power_watts", 100), txGainDb = row.optDouble("tx_gain_db", 0.0),
+        rxGainDb = row.optDouble("rx_gain_db", 0.0),
+        noiseEnvironment = row.enum("noise_environment", HamClockNoiseEnvironment.RESIDENTIAL),
+        requiredReliability = row.optInt("required_reliability", 90), requiredSnrDb = row.optDouble("required_snr_db", 10.0),
+        bandwidthHz = row.optInt("bandwidth_hz", 2400), digital = row.optBoolean("digital"),
+        longPath = row.optBoolean("long_path"),
+        selectedFrequenciesMHz = row.optJSONArray("selected_frequencies_mhz")?.doubles()
+            ?: HamClockPropagationPreference().selectedFrequenciesMHz,
+        coverageResolution = row.optInt("coverage_resolution", 288),
+    )
+
+    private fun encodeIdReminder(value: HamClockIdReminderPreference) = JSONObject()
+        .put("enabled", value.enabled).put("interval_minutes", value.intervalMinutes)
+        .put("start_on_verified_tx", value.startOnVerifiedTx).put("notification_enabled", value.notificationEnabled)
+        .put("running", value.running).put("paused", value.paused).put("last_reset_epoch_seconds", value.lastResetEpochSeconds)
+
+    private fun decodeIdReminder(row: JSONObject) = HamClockIdReminderPreference(
+        enabled = row.optBoolean("enabled"), intervalMinutes = row.optInt("interval_minutes", 10),
+        startOnVerifiedTx = row.optBoolean("start_on_verified_tx"), notificationEnabled = row.optBoolean("notification_enabled"),
+        running = row.optBoolean("running"), paused = row.optBoolean("paused"),
+        lastResetEpochSeconds = row.optLong("last_reset_epoch_seconds"),
+    )
+
+    private fun encodeShackDisplay(value: HamClockShackDisplayPreference) = JSONObject()
+        .put("theme", value.theme.name).put("keep_screen_on", value.keepScreenOn)
+        .put("rotation_enabled", value.rotationEnabled).put("rotation_seconds", value.rotationSeconds)
+        .put("reduced_motion", value.reducedMotion)
+        .also { row -> value.selectedProfileId?.let { row.put("selected_profile_id", it) } }
+
+    private fun decodeShackDisplay(row: JSONObject) = HamClockShackDisplayPreference(
+        theme = row.enum("theme", HamClockShackTheme.STANDARD_DARK), keepScreenOn = row.optBoolean("keep_screen_on"),
+        rotationEnabled = row.optBoolean("rotation_enabled"), rotationSeconds = row.optInt("rotation_seconds", 30),
+        selectedProfileId = row.optionalString("selected_profile_id"), reducedMotion = row.optBoolean("reduced_motion"),
+    )
+
     private fun encodeProfile(value: HamClockNamedProfile) = JSONObject()
         .put("id", value.id).put("name", value.name).put("created_at", value.createdAtMillis)
         .put("updated_at", value.updatedAtMillis).put("settings", encodeSettings(value.settings))
@@ -420,6 +489,9 @@ object HamClockSettingsCodec {
     private fun Set<String>.strings() = JSONArray(toList().sorted())
     private fun <T> JSONArray.objects(transform: (JSONObject) -> T): List<T> = buildList {
         for (index in 0 until length()) optJSONObject(index)?.let { add(transform(it)) }
+    }
+    private fun JSONArray.doubles(): List<Double> = buildList {
+        for (index in 0 until length()) optDouble(index).takeIf(Double::isFinite)?.let(::add)
     }
     private inline fun <reified T : Enum<T>> JSONObject.enum(key: String, fallback: T): T =
         enumValues<T>().firstOrNull { it.name == optString(key).uppercase(Locale.US) } ?: fallback

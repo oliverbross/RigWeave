@@ -37,6 +37,7 @@ object HamClockMapLayerId {
     const val GRID = "grid"
     const val AURORA = "aurora"
     const val LOGGED_QSOS = "logged_qsos"
+    const val CONTEST_QSOS = "contest_qsos"
     const val LIGHTNING = "lightning"
     const val RBN = "rbn"
     const val WSPR_EXPANDED = "wspr_expanded"
@@ -57,6 +58,8 @@ enum class HamClockDxNewsSource { ALL, DX_WORLD, NG3K }
 enum class HamClockRbnSource { CONFIGURED_RETAIL_CLUSTER }
 enum class HamClockRbnMode { WHO_HEARS_ME, SKIMMER_VIEW, WATCHLIST, ALL_RBN }
 enum class HamClockDxTargetSource { MANUAL, AUTOMATIC }
+enum class HamClockNoiseEnvironment { QUIET_RURAL, RURAL, RESIDENTIAL, CITY, INDUSTRIAL }
+enum class HamClockShackTheme { STANDARD_DARK, AMBER_SHACK, RED_NIGHT }
 
 data class HamClockPanelPreference(
     val id: String,
@@ -188,6 +191,39 @@ data class HamClockDisplayPreference(
     val immersive: Boolean = false,
 )
 
+data class HamClockPropagationPreference(
+    val txPowerWatts: Int = 100,
+    val txGainDb: Double = 0.0,
+    val rxGainDb: Double = 0.0,
+    val noiseEnvironment: HamClockNoiseEnvironment = HamClockNoiseEnvironment.RESIDENTIAL,
+    val requiredReliability: Int = 90,
+    val requiredSnrDb: Double = 10.0,
+    val bandwidthHz: Int = 2400,
+    val digital: Boolean = false,
+    val longPath: Boolean = false,
+    val selectedFrequenciesMHz: List<Double> = listOf(1.84, 3.6, 5.35, 7.1, 10.12, 14.1, 18.1, 21.1, 24.93, 28.1),
+    val coverageResolution: Int = 288,
+)
+
+data class HamClockIdReminderPreference(
+    val enabled: Boolean = false,
+    val intervalMinutes: Int = 10,
+    val startOnVerifiedTx: Boolean = false,
+    val notificationEnabled: Boolean = false,
+    val running: Boolean = false,
+    val paused: Boolean = false,
+    val lastResetEpochSeconds: Long = 0,
+)
+
+data class HamClockShackDisplayPreference(
+    val theme: HamClockShackTheme = HamClockShackTheme.STANDARD_DARK,
+    val keepScreenOn: Boolean = false,
+    val rotationEnabled: Boolean = false,
+    val rotationSeconds: Int = 30,
+    val selectedProfileId: String? = null,
+    val reducedMotion: Boolean = false,
+)
+
 data class HamClockUserSettings(
     val panels: List<HamClockPanelPreference> = defaultHamClockPanels(),
     val map: HamClockMapPreference = HamClockMapPreference(),
@@ -202,6 +238,9 @@ data class HamClockUserSettings(
     val satellites: HamClockSatellitePreference = HamClockSatellitePreference(),
     val dxTarget: HamClockDxTarget? = null,
     val display: HamClockDisplayPreference = HamClockDisplayPreference(),
+    val propagation: HamClockPropagationPreference = HamClockPropagationPreference(),
+    val idReminder: HamClockIdReminderPreference = HamClockIdReminderPreference(),
+    val shackDisplay: HamClockShackDisplayPreference = HamClockShackDisplayPreference(),
 )
 
 data class HamClockNamedProfile(

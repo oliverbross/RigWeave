@@ -1,6 +1,7 @@
 package app.rigweave.mobile.hamclock.finishline
 
 import org.json.JSONObject
+import app.rigweave.mobile.hamclock.HamClockNoiseEnvironment
 
 internal data class HamClockNativeStatus(
     val available: Boolean,
@@ -60,6 +61,4 @@ internal data class HamClockPropagationInput(
     val digital: Boolean,
     val longPath: Boolean,
 )
-
-internal enum class HamClockNoiseEnvironment { QUIET_RURAL, RURAL, RESIDENTIAL, CITY, INDUSTRIAL }
 
