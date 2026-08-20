@@ -1,0 +1,9 @@
+{
+  "object": "list",
+  "has_more": false,
+  "next_page_token": 0,
+  "data": [
+    {"id": 2001, "group_id": 1001, "subject": "Portable antennas", "updated": "2026-07-30T12:00:00Z", "message_count": 2, "first_msg_num": 41, "last_msg_num": 42},
+    {"id": 2002, "group_id": 1001, "subject": "Field power", "updated": "2026-07-29T09:30:00Z", "message_count": 1, "closed": true}
+  ]
+}

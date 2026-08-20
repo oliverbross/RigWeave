@@ -1,5 +1,10 @@
 package app.rigweave.mobile
 
+import app.rigweave.mobile.groupsio.GroupsIoController
+import app.rigweave.mobile.groupsio.GroupsIoScreen
+import app.rigweave.mobile.groupsio.GroupsIoSettingsPanel
+import app.rigweave.mobile.groupsio.groupsIoDestinationVisible
+
 import android.Manifest
 import android.content.Intent
 import android.graphics.BitmapFactory
@@ -117,11 +122,11 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), DIGI("Digi"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Progress"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), DIGI("Digi"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Progress"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), GROUPS_IO("Groups.io"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
-    AUDIO("Audio"), HEALTH("Health"), DIAG("Diag"), ABOUT("About")
+    AUDIO("Audio"), INTEGRATIONS("Integrations"), HEALTH("Health"), DIAG("Diag"), ABOUT("About")
 }
 private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Station"), GENERAL("General"), NOTES("Notes"), QSL("QSL") }
 
@@ -154,6 +159,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val eqAudio = remember { EqAudioController(context, audio) }
     val eqProfiles = remember { EqProfileStore(context) }
     val eqStudio = remember { EqStudioController(transport, { radio }, eqAudio, eqProfiles) }
+    val groupsIo = remember { GroupsIoController(context) }
     var foreground by remember { mutableStateOf(true) }
     val voiceTx = remember { VoiceMacroTransmitController(context, transport, audio, voiceStore, app,
         radioState = { radio }, foreground = { foreground }, audioOperationIdle = { voiceAudio.state is VoiceAudioState.Idle }, onFrames = { frames ->
@@ -169,6 +175,9 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         }.getOrDefault(Destination.HOME))
     }
     LaunchedEffect(destination) { navigationPrefs.edit().putString("destination", destination.name).apply() }
+    LaunchedEffect(groupsIo.enabled, destination) {
+        if (!groupsIo.enabled && destination == Destination.GROUPS_IO) destination = Destination.SETTINGS
+    }
     var pendingPortableDraft by remember { mutableStateOf<PortableLogDraft?>(null) }
     var pendingRisk by remember { mutableStateOf<String?>(null) }
     var pendingVoiceSlot by remember { mutableStateOf<Int?>(null) }
@@ -266,7 +275,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     }
     LaunchedEffect(voiceAudio) { voiceAudio.onFailure = { app.updateVoiceMacrosArmed(false) } }
     DisposableEffect(Unit) { onDispose {
-        app.disarmAll(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close()
+        app.disarmAll(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close(); groupsIo.close()
         scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
         portable.close(); progress.close(); syncHub.close(); NativeCore.destroy(core); database.close()
     } }
@@ -310,6 +319,7 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 Text("RW", color = Amber, fontWeight = FontWeight.Black, modifier = Modifier.padding(18.dp))
                 Destination.entries.filterNot { item ->
                     item == Destination.SYNC ||
+                    (item == Destination.GROUPS_IO && !groupsIoDestinationVisible(groupsIo.enabled, compact = false)) ||
                     (item == Destination.PANADAPTER && (!app.panadapterEnabled || app.radioFamily == RadioFamily.FLEXRADIO)) ||
                         (item == Destination.EQ && app.radioFamily == RadioFamily.FLEXRADIO)
                 }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
@@ -317,20 +327,20 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
             }
             Screen(destination, radio, usbDetail, database, progress, features, neuralDx, wavelog, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
-                voiceStore, voiceAudio, voiceTx, eqStudio, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
+                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI })
+                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.GROUPS_IO })
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
-            Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
+            Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.GROUPS_IO }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
             Screen(destination, radio, usbDetail, database, progress, features, neuralDx, wavelog, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
-                voiceStore, voiceAudio, voiceTx, eqStudio, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
+                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI })
+                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.GROUPS_IO })
         } }
     }
 }
@@ -347,6 +357,7 @@ private fun navIcon(item: Destination) = when (item) {
     Destination.PRESETS -> Icons.Outlined.Bookmarks
     Destination.DX -> Icons.Outlined.Public
     Destination.PORTABLE -> Icons.Outlined.Hiking
+    Destination.GROUPS_IO -> Icons.Outlined.Forum
     Destination.SETTINGS -> Icons.Outlined.Settings
 }
 
@@ -354,10 +365,11 @@ private fun navIcon(item: Destination) = when (item) {
     features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, syncHub: SyncHubController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
     portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
     transport: UsbRadioTransport, flex: FlexRadioController, digi: DigiController, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
-    eqStudio: EqStudioController, compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
+    eqStudio: EqStudioController, groupsIo: GroupsIoController, compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
     tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openDx: () -> Unit, openPortable: () -> Unit,
-    openActivation: () -> Unit, openLogbook: () -> Unit, openSync: () -> Unit, openProgress: () -> Unit, openDigi: () -> Unit) {
+    openActivation: () -> Unit, openLogbook: () -> Unit, openSync: () -> Unit, openProgress: () -> Unit, openDigi: () -> Unit,
+    openGroupsIo: () -> Unit) {
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     when (destination) {
         Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, send,
@@ -403,8 +415,9 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app, send)
         Destination.PORTABLE -> PortableWorkspaceScreen(portable, activation, radio, app.stationGrid, foreground, compact,
             app, database, wavelog, callbook, cty, tunePortable, tuneLogPortable, openLogbook)
+        Destination.GROUPS_IO -> GroupsIoScreen(groupsIo, compact)
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
-            transport, flex, voiceStore, voiceAudio, voiceTx, openEq, openSync, connect, direct)
+            transport, flex, voiceStore, voiceAudio, voiceTx, groupsIo, { openEq() }, { openSync() }, openGroupsIo, connect, direct)
     }
 }
 
@@ -3313,7 +3326,8 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
     callbook: CallbookController, cty: CtyController,
     audio: AudioMonitorController, panadapter: PanadapterController, app: AppController, transport: UsbRadioTransport,
     flex: FlexRadioController, voiceStore: VoiceMacroStore,
-    voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, openEq: () -> Unit, openSync: () -> Unit,
+    voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, groupsIo: GroupsIoController,
+    openEq: () -> Unit, openSync: () -> Unit, openGroupsIo: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
     var section by remember { mutableStateOf(SettingsSection.RADIO) }
     var host by remember { mutableStateOf(features.clusterHost) }; var port by remember { mutableStateOf(features.clusterPort.toString()) }
@@ -3895,6 +3909,9 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             val command = raw.trim().let { if (it.endsWith(';')) it else "$it;" }
             Row { OutlinedTextField(raw, { raw = it.uppercase() }, label = { Text("Safe CAT command") }, modifier = Modifier.weight(1f))
                 Button({ direct(command); raw = "" }, enabled = state.connected && NativeCore.classify(command) in 1..2) { Text("Send") } }
+        }
+        if (section == SettingsSection.INTEGRATIONS) SettingsCard("GROUPS.IO") {
+            GroupsIoSettingsPanel(groupsIo, openGroupsIo)
         }
         if (section == SettingsSection.ABOUT) SettingsCard("ABOUT RIGWEAVE") {
             Text("Radio. Spectrum. Spots. Logs.", color = Amber)

@@ -1,0 +1,7 @@
+{
+  "object": "list",
+  "total_count": 1,
+  "has_more": true,
+  "next_page_token": "opaque-next-2",
+  "data": [{"id": 1001, "name": "field-operators", "title": "Field Operators", "perms": {"archives_visible": true}}]
+}
