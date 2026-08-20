@@ -148,6 +148,11 @@ fun NeuralDxScreen(
     val distances = remember(stationGrid) { mutableStateMapOf<String, Int>() }
     val distanceLookups = remember(stationGrid) { mutableStateMapOf<String, Boolean>() }
     val stationId = wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }
+    LaunchedEffect(features.requestedSpotId, features.liveSpots) {
+        features.requestedSpotId?.let { id ->
+            features.liveSpots.firstOrNull { it.id == id }?.let { selected = it; features.consumeRequestedSpot() }
+        }
+    }
     LaunchedEffect(features.liveSpots, stationId, wavelog.logMode, wavelog.configured, cty.dataRevision) {
         if (features.liveSpots.isEmpty() ||
             (wavelog.logMode == LogMode.WAVELOG && (!wavelog.configured || stationId.isNullOrBlank()))) {

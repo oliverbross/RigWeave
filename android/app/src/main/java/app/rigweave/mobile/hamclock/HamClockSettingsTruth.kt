@@ -55,5 +55,5 @@ internal val hamClockSettingAvailability = mapOf(
     "display.hourFormat" to HamClockSettingAvailability.ACTIVE,
     "display.unitSystem" to HamClockSettingAvailability.ACTIVE,
     "display.lowDataMode" to HamClockSettingAvailability.ACTIVE,
-    "display.immersive" to HamClockSettingAvailability.ACTIVE,
+    "display.immersive" to HamClockSettingAvailability.PARTIAL,
 )

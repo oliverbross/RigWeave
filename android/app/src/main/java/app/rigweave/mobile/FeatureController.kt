@@ -20,6 +20,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
 import java.time.Instant
+import java.time.YearMonth
 
 data class AndroidDXSpot(
     val id: String, val callsign: String, val spotter: String, val frequencyHz: Long,
@@ -49,6 +50,15 @@ internal fun parseNoaaSummaryValue(text: String, keys: List<String>): Float? {
     return null
 }
 
+internal fun parseLatestNoaaSunspot(body: String): Pair<Float, String> {
+    val rows = JSONArray(body)
+    val latest = (rows.length() - 1 downTo 0).asSequence().mapNotNull(rows::optJSONObject).firstOrNull { row ->
+        runCatching { YearMonth.parse(row.optString("time-tag")) }.isSuccess &&
+            row.optDouble("observed_swpc_ssn", Double.NaN).let { it.isFinite() && it >= 0.0 }
+    } ?: error("NOAA returned no usable observed sunspot number")
+    return latest.getDouble("observed_swpc_ssn").toFloat() to latest.getString("time-tag")
+}
+
 class FeatureController(private val context: Context) {
     private val handle = NativeCore.featureCreate()
     private val scope = CoroutineScope(Job() + Dispatchers.IO)
@@ -75,9 +85,13 @@ class FeatureController(private val context: Context) {
     var dxWorld by mutableStateOf(emptyList<List<Int>>()); private set
     var dxSummary by mutableStateOf("No live DX data"); private set
     var solar by mutableStateOf(AndroidSolar()); private set
+    var sunspotNumber by mutableStateOf(prefs.getFloat("noaa_sunspot_number", Float.NaN).takeIf(Float::isFinite)); private set
+    var sunspotObservedMonth by mutableStateOf(prefs.getString("noaa_sunspot_month", "").orEmpty()); private set
+    var sunspotError by mutableStateOf(""); private set
     var learnedSpots by mutableStateOf(0); private set
     var duplicateSpots by mutableStateOf(0); private set
     var newestSpotEpoch by mutableStateOf(0L); private set
+    var requestedSpotId by mutableStateOf<String?>(null); private set
 
     init {
         val defaults = prefs.edit()
@@ -94,6 +108,9 @@ class FeatureController(private val context: Context) {
         prefs.edit().putString("watchlist", watchlistText).apply()
         NativeCore.featureWatchlist(handle, watchlistText)
     }
+
+    fun requestSpot(id: String) { requestedSpotId = id }
+    fun consumeRequestedSpot() { requestedSpotId = null }
 
     fun connectConfiguredCluster() {
         if (clusterHost.isNotBlank() && clusterPort in 1..65535 && clusterCallsign.isNotBlank()) {
@@ -183,9 +200,23 @@ class FeatureController(private val context: Context) {
                 val geomagnetic = summaryText("https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json")
                 val kp = parseNoaaSummaryValue(geomagnetic, listOf("Kp", "kp_index", "KpIndex")) ?: error("Unexpected NOAA Kp response")
                 val a = parseNoaaSummaryValue(geomagnetic, listOf("a_running", "A", "a_index")) ?: error("Unexpected NOAA A response")
+                refreshSunspotNumber()
                 NativeCore.featureSolar(handle, flux, a, kp, Instant.now().epochSecond); refreshDX()
-            } catch (_: Exception) { publishCluster("NOAA solar data unavailable · retained last values") }
+            } catch (error: Exception) {
+                sunspotError = error.message.orEmpty().take(120)
+                publishCluster("NOAA solar data unavailable · retained last values")
+            }
         }
+    }
+
+    private fun refreshSunspotNumber() {
+        val body = summaryText("https://services.swpc.noaa.gov/json/solar-cycle/observed-solar-cycle-indices.json")
+        val latest = parseLatestNoaaSunspot(body)
+        sunspotNumber = latest.first
+        sunspotObservedMonth = latest.second
+        sunspotError = ""
+        prefs.edit().putFloat("noaa_sunspot_number", sunspotNumber!!)
+            .putString("noaa_sunspot_month", sunspotObservedMonth).apply()
     }
 
     fun close() {

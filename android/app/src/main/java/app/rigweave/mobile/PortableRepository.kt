@@ -53,6 +53,10 @@ internal data class SotaCatalogueMetadata(
 ) { val stale get() = ready && importedAt > 0 && Instant.now().epochSecond - importedAt > 14 * 86_400L }
 
 internal class PortableController(context: Context, private val qsoDatabase: QsoDatabase) {
+    var requestedSpotId by mutableStateOf<String?>(null); private set
+
+    fun requestSpot(id: String) { requestedSpotId = id }
+    fun consumeRequestedSpot() { requestedSpotId = null }
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("rigweave-portable", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)

@@ -122,6 +122,8 @@ internal fun HamClockHomeScreen(
     openLogbook: () -> Unit,
     openRadio: () -> Unit,
     openDigi: () -> Unit,
+    requestReceiveTune: (Long, String?, String, String) -> Unit,
+    openExactQso: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val stationId = wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }
@@ -264,20 +266,65 @@ internal fun HamClockHomeScreen(
             .filter { it.activeAt(portableMinute * 60) && it.latitude != null && it.longitude != null }
             .take(160).toList()
     }
-    val mapSnapshot = remember(visibleMapSpots, neuralDx.mySignal, portableMapSpots, neuralDx.satellites,
-        recentQsos, neuralDx.lightning, resolvedDxTarget, stationCall, stationGrid, mapInstant) {
+    val mapSourceStatus = remember(visibleMapSpots, portableMapSpots, operations.satellites.hamClockPositions,
+        recentQsos, neuralDx.mySignal, neuralDx.lightning, mapInstant) {
+        fun state(rows: Int) = if (rows > 0) HamClockMapSourceState.LIVE else HamClockMapSourceState.EMPTY
+        fun safe(value: String) = value.replace(Regex("https?://\\S+|(?i)(token|key|password)=[^\\s]+"), "[redacted]").take(160)
+        val portableStatuses = PortableProgram.entries.map(portable::providerStatus)
+        val portableState = when {
+            portableStatuses.any { it.kind == PortableFeedKind.FAILED } -> HamClockMapSourceState.ERROR
+            portableStatuses.any { it.kind == PortableFeedKind.OFFLINE } -> HamClockMapSourceState.OFFLINE_CACHE
+            portableStatuses.any { it.kind == PortableFeedKind.STALE } -> HamClockMapSourceState.STALE
+            portableStatuses.any { it.kind == PortableFeedKind.CACHED } -> HamClockMapSourceState.CACHED
+            else -> state(portableMapSpots.size)
+        }
+        val satelliteMetadata = operations.satellites.elements.metadata
+        val satelliteState = when (satelliteMetadata.state) {
+            SatelliteCacheState.CURRENT -> state(operations.satellites.hamClockPositions.size)
+            SatelliteCacheState.STALE -> HamClockMapSourceState.STALE
+            SatelliteCacheState.OFFLINE_CACHE -> HamClockMapSourceState.OFFLINE_CACHE
+            SatelliteCacheState.EMPTY -> HamClockMapSourceState.EMPTY
+            SatelliteCacheState.ERROR -> HamClockMapSourceState.ERROR
+        }
+        mapOf(
+            HamClockMapLayerId.DX_SPOTS to HamClockMapSourceStatus(
+                if (features.clusterStatus.startsWith("DX cluster connected", true)) state(visibleMapSpots.size) else HamClockMapSourceState.ERROR,
+                features.newestSpotEpoch, "Configured DX cluster", safe(features.clusterStatus)),
+            HamClockMapLayerId.PSK_REPORTER to HamClockMapSourceStatus(
+                if (neuralDx.mySignal.error.isNotBlank()) HamClockMapSourceState.ERROR else state(neuralDx.mySignal.reports.size),
+                neuralDx.mySignal.fetchedEpoch, neuralDx.mySignal.source, safe(neuralDx.mySignal.error)),
+            HamClockMapLayerId.PORTABLE to HamClockMapSourceStatus(portableState,
+                portableStatuses.maxOfOrNull(ProviderStatus::fetchedAt) ?: 0, "POTA · SOTA · WWFF",
+                safe(portableStatuses.map(ProviderStatus::error).firstOrNull(String::isNotBlank).orEmpty())),
+            HamClockMapLayerId.SATELLITES to HamClockMapSourceStatus(satelliteState,
+                operations.satellites.hamClockPositions.maxOfOrNull(HamClockSatellitePosition::generatedAtEpoch) ?: 0,
+                "Satellite Operations · pinned NativeSatellite SGP4", safe(satelliteMetadata.lastError)),
+            HamClockMapLayerId.LOGGED_QSOS to HamClockMapSourceStatus(state(recentQsos.size), mapInstant.epochSecond, "RigWeave QSO compact projection"),
+            HamClockMapLayerId.LIGHTNING to HamClockMapSourceStatus(
+                if (neuralDx.lightning.error.isNotBlank()) HamClockMapSourceState.ERROR else state(neuralDx.lightning.strikes.size),
+                neuralDx.lightning.updatedEpoch, neuralDx.lightning.source, safe(neuralDx.lightning.error)),
+        )
+    }
+    val mapSnapshot = remember(visibleMapSpots, neuralDx.mySignal, portableMapSpots, operations.satellites.hamClockPositions,
+        recentQsos, neuralDx.lightning, resolvedDxTarget, stationCall, stationGrid, mapInstant,
+        settingsDocument.settings.display.unitSystem, mapSourceStatus) {
         buildHamClockMapSnapshot(stationCall, stationGrid, visibleMapSpots, neuralDx.mySignal,
-            portableMapSpots, neuralDx.satellites, recentQsos, neuralDx.lightning, resolvedDxTarget, mapInstant)
+            portableMapSpots, operations.satellites.hamClockPositions, recentQsos, neuralDx.lightning,
+            resolvedDxTarget, mapInstant, settingsDocument.settings.display.unitSystem, mapSourceStatus)
     }
     fun updateMapPreference(value: HamClockMapPreference) {
         settingsDocument = settingsStore.updateSettings { it.copy(map = value) }
     }
-    fun openMapSelection(selection: HamClockMapSelection) {
-        when (selection) {
-            HamClockMapSelection.DX, HamClockMapSelection.TARGET -> openDx()
-            HamClockMapSelection.PORTABLE -> openPortable()
-            HamClockMapSelection.SATELLITE -> { operations.openSection("SATELLITES"); openOperations() }
-            HamClockMapSelection.QSO -> openLogbook()
+    fun openMapSelection(reference: HamClockMapFeatureRef) {
+        when (reference.selection) {
+            HamClockMapSelection.DX -> { features.requestSpot(reference.featureId); openDx() }
+            HamClockMapSelection.TARGET -> configureTarget = true
+            HamClockMapSelection.PORTABLE -> { portable.requestSpot(reference.featureId); openPortable() }
+            HamClockMapSelection.SATELLITE -> {
+                reference.featureId.toLongOrNull()?.let(operations.satellites::selectNorad)
+                operations.openSection("SATELLITES"); openOperations()
+            }
+            HamClockMapSelection.QSO -> openExactQso(reference.featureId)
             HamClockMapSelection.WEATHER -> openDx()
             HamClockMapSelection.NONE -> Unit
         }
@@ -295,11 +342,12 @@ internal fun HamClockHomeScreen(
         }
     }
     val visiblePanels = settingsDocument.settings.panels.filter(HamClockPanelPreference::visible)
-    val leftPanels = visiblePanels.filter { it.id != HamClockPanelId.MAP && it.column <= 0 && it.columnSpan == 1 }
+    val mapPanel = visiblePanels.firstOrNull { it.id == HamClockPanelId.MAP }
+    val leftPanels = visiblePanels.filter { mapPanel != null && it.id != HamClockPanelId.MAP && it.column <= 0 && it.columnSpan == 1 }
         .sortedBy(HamClockPanelPreference::order)
-    val centerPanels = visiblePanels.filter { it.id != HamClockPanelId.MAP && it.columnSpan > 1 }
+    val centerPanels = visiblePanels.filter { it.id != HamClockPanelId.MAP && (mapPanel == null || it.columnSpan > 1) }
         .sortedBy(HamClockPanelPreference::order)
-    val rightPanels = visiblePanels.filter { it.id != HamClockPanelId.MAP && it.column > 0 && it.columnSpan == 1 }
+    val rightPanels = visiblePanels.filter { mapPanel != null && it.id != HamClockPanelId.MAP && it.column > 0 && it.columnSpan == 1 }
         .sortedBy(HamClockPanelPreference::order)
 
     @Composable fun SidePanel(panel: HamClockPanelPreference, modifier: Modifier) {
@@ -321,7 +369,8 @@ internal fun HamClockHomeScreen(
             HamClockModuleRenderer.MAP -> HamClockHomeMap(mapSnapshot, settingsDocument.settings.map,
                 stationPoint, settingsDocument.settings.display.lowDataMode, ::updateMapPreference,
                 ::openMapSelection, modifier)
-            HamClockModuleRenderer.STATION -> StationPanel(stationCall, stationGrid, radio, wavelog, app, send, open, modifier)
+            HamClockModuleRenderer.STATION -> StationPanel(stationCall, stationGrid, radio, wavelog, app,
+                { hz -> requestReceiveTune(hz, null, "Home favourite band", "Review receive-only frequency change") }, open, modifier)
             HamClockModuleRenderer.WEATHER -> WeatherPanel(neuralDx.weather, settingsDocument.settings.display.unitSystem, modifier)
             HamClockModuleRenderer.PSK_REPORTER -> SignalPanel(neuralDx.mySignal, open, modifier)
             HamClockModuleRenderer.DX_EXPEDITIONS -> DxpeditionPanel(dxpeditionFeed, open, modifier)
@@ -342,12 +391,13 @@ internal fun HamClockHomeScreen(
             }
         }
     }
+    val densityScale = when (settingsDocument.settings.display.density) {
+        HamClockDensity.COMPACT -> .9f; HamClockDensity.COMFORTABLE -> 1f; HamClockDensity.LARGE_TOUCH -> 1.18f
+    }
     fun sidePanelHeight(panel: HamClockPanelPreference) = when {
         panel.collapsed -> 82.dp
-        else -> ((hamClockModuleSpec(panel.id)?.preferredHeightDp ?: 200) * panel.rowSpan).dp
+        else -> ((hamClockModuleSpec(panel.id)?.preferredHeightDp ?: 200) * panel.rowSpan * densityScale).dp
     }
-    val mapPanel = visiblePanels.firstOrNull { it.id == HamClockPanelId.MAP }
-        ?: defaultHamClockPanels().first { it.id == HamClockPanelId.MAP }
     val compactPanels = visiblePanels.sortedWith(compareBy<HamClockPanelPreference> {
         if (it.id == HamClockPanelId.MAP) -1 else it.column
     }.thenBy(HamClockPanelPreference::order))
@@ -356,6 +406,9 @@ internal fun HamClockHomeScreen(
         HamClockDensity.COMFORTABLE -> 10.dp
         HamClockDensity.LARGE_TOUCH -> 14.dp
     }
+    val panelGap = when (settingsDocument.settings.display.density) {
+        HamClockDensity.COMPACT -> 6.dp; HamClockDensity.COMFORTABLE -> 8.dp; HamClockDensity.LARGE_TOUCH -> 12.dp
+    }
     fun mutatePanel(value: HamClockPanelPreference) { settingsDocument = settingsStore.setPanel(value) }
     fun mutateLayer(value: HamClockMapLayerPreference) { settingsDocument = settingsStore.setMapLayer(value) }
     fun mutateDisplay(value: HamClockDisplayPreference) {
@@ -363,31 +416,34 @@ internal fun HamClockHomeScreen(
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(HcBg).windowInsetsPadding(WindowInsets.safeDrawing).testTag("openhamclock-home")) {
-        val wide = maxWidth >= 960.dp && maxHeight >= 700.dp
+        val wideThreshold = when (settingsDocument.settings.display.density) {
+            HamClockDensity.COMPACT -> 900.dp; HamClockDensity.COMFORTABLE -> 960.dp; HamClockDensity.LARGE_TOUCH -> 1080.dp
+        }
+        val wide = maxWidth >= wideThreshold && maxHeight >= (650 * densityScale).dp
         if (wide) {
-            Column(Modifier.fillMaxSize().padding(outerPadding).testTag("openhamclock-safe-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.fillMaxSize().padding(outerPadding).testTag("openhamclock-safe-content"), verticalArrangement = Arrangement.spacedBy(panelGap)) {
                 HamClockHeader(stationCall, stationGrid, radio, app, features, neuralDx,
                     settingsDocument.settings.display, neuralDx.weather, {
                     neuralDx.refresh(stationCall, stationGrid, stationId, features.liveSpots, true)
                     features.refreshSolar(); portable.refreshAll()
                 }) { configureDashboard = true }
                 if (!settingsDocument.settings.display.immersive) OperationsHomeSummary(operations, openOperations)
-                Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    LazyColumn(Modifier.widthIn(min = 208.dp, max = 250.dp).weight(.22f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(panelGap)) {
+                    if (leftPanels.isNotEmpty()) LazyColumn(Modifier.widthIn(min = 208.dp, max = 250.dp).weight(.22f), verticalArrangement = Arrangement.spacedBy(panelGap)) {
                         items(leftPanels, key = HamClockPanelPreference::id) { panel ->
                             SidePanel(panel, Modifier.fillMaxWidth().height(sidePanelHeight(panel)))
                         }
                     }
-                    LazyColumn(Modifier.weight(when (mapPanel.columnSpan) { 1 -> .34f; 2 -> .56f; else -> .75f }),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        item(key = HamClockPanelId.MAP) {
+                    LazyColumn(Modifier.weight(when (mapPanel?.columnSpan) { 1 -> .34f; 2 -> .56f; else -> .75f }),
+                        verticalArrangement = Arrangement.spacedBy(panelGap)) {
+                        if (mapPanel != null) item(key = HamClockPanelId.MAP) {
                             SidePanel(mapPanel, Modifier.fillMaxWidth().height((390 * mapPanel.rowSpan).dp))
                         }
                         items(centerPanels, key = HamClockPanelPreference::id) { panel ->
                             SidePanel(panel, Modifier.fillMaxWidth().height(sidePanelHeight(panel)))
                         }
                     }
-                    LazyColumn(Modifier.widthIn(min = 250.dp, max = 310.dp).weight(.25f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (rightPanels.isNotEmpty()) LazyColumn(Modifier.widthIn(min = 250.dp, max = 310.dp).weight(.25f), verticalArrangement = Arrangement.spacedBy(panelGap)) {
                         items(rightPanels, key = HamClockPanelPreference::id) { panel ->
                             SidePanel(panel, Modifier.fillMaxWidth().height(sidePanelHeight(panel)))
                         }
@@ -395,7 +451,7 @@ internal fun HamClockHomeScreen(
                 }
             }
         } else {
-            LazyColumn(Modifier.fillMaxSize().padding(outerPadding).testTag("openhamclock-safe-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(Modifier.fillMaxSize().padding(outerPadding).testTag("openhamclock-safe-content"), verticalArrangement = Arrangement.spacedBy(panelGap)) {
                 item { HamClockHeader(stationCall, stationGrid, radio, app, features, neuralDx,
                     settingsDocument.settings.display, neuralDx.weather, {
                     neuralDx.refresh(stationCall, stationGrid, stationId, features.liveSpots, true)
@@ -493,7 +549,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 StatusPill(if (app.transmitArmed) "TX ARMED" else "SAFE / RX", !app.transmitArmed)
                 ConfigButton(configure); SyncButton(neuralDx.refreshing, refresh)
             }
-            Text("RigWeave ${BuildConfig.VERSION_NAME} · OHC d4a50ea · watcher enabled",
+            Text("RigWeave ${BuildConfig.VERSION_NAME} · OHC reviewed v26.5.0 · d4a50ea · checked 2026-08-20",
                 color = HcMuted, fontSize = 8.sp, modifier = Modifier.align(Alignment.BottomStart))
         }
     }
@@ -553,7 +609,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 ToggleRow("Low-data Map Data view", settings.display.lowDataMode) {
                     updateDisplay(settings.display.copy(lowDataMode = it))
                 }
-                ToggleRow("Immersive Home", settings.display.immersive) {
+                ToggleRow("Minimal Home (hides Operations summary)", settings.display.immersive) {
                     updateDisplay(settings.display.copy(immersive = it))
                 }
                 OutlinedButton(editTarget, modifier = Modifier.heightIn(min = 48.dp)) { Text("MANUAL DX TARGET") }
@@ -598,7 +654,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("MODULE REGISTRY", color = HcAmber, fontWeight = FontWeight.Black,
                         fontSize = 10.sp, modifier = Modifier.weight(1f))
-                    TextButton(resetLayout) { Text("RESET ALL") }
+                    TextButton(resetLayout) { Text("RESET PANELS") }
                 }
             }
             items(panelRows, key = HamClockPanelPreference::id) { panel ->
@@ -759,7 +815,22 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
         if (features.solar.aIndex >= 30) HcRed else HcYellow)
     Metric("KP", features.solar.kpIndex.takeIf { features.solar.valid }?.let { "%.1f".format(Locale.US, it) } ?: "—",
         if (features.solar.kpIndex >= 5) HcRed else HcGreen)
-    Metric("SSN", "—", HcMuted)
+    SunspotMetric(features)
+}
+
+@Composable private fun SunspotMetric(features: FeatureController) {
+    val observed = features.sunspotObservedMonth
+    val stale = observed.isNotBlank() && runCatching {
+        java.time.temporal.ChronoUnit.MONTHS.between(java.time.YearMonth.parse(observed), java.time.YearMonth.now()) > 2
+    }.getOrDefault(true)
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("SSN NOAA", color = HcMuted, fontSize = HcLabelSize, fontWeight = FontWeight.Bold)
+        Text(features.sunspotNumber?.roundToInt()?.toString() ?: "—", color = when {
+            features.sunspotNumber == null -> HcMuted; stale || features.sunspotError.isNotBlank() -> HcYellow; else -> HcGreen
+        }, fontFamily = FontFamily.Monospace, fontSize = 17.sp, fontWeight = FontWeight.Black)
+        Text(when { observed.isBlank() -> "UNAVAILABLE"; stale -> "$observed STALE"; features.sunspotError.isNotBlank() -> "$observed CACHED"; else -> "$observed MONTHLY" },
+            color = HcMuted, fontSize = 8.sp)
+    }
 }
 
 @Composable private fun SyncButton(refreshing: Boolean, refresh: () -> Unit) {
@@ -815,7 +886,7 @@ internal fun mergeEnrichedSpots(live: List<AndroidDXSpot>, enriched: List<Androi
 }
 
 @Composable private fun StationPanel(call: String, grid: String, radio: RadioState, wavelog: WavelogController,
-    app: AppController, send: (String) -> Unit, openRadio: () -> Unit, modifier: Modifier) {
+    app: AppController, requestReceiveTune: (Long) -> Unit, openRadio: () -> Unit, modifier: Modifier) {
     Module("DE station", if (wavelog.logMode == LogMode.WAVELOG) "WAVELOG" else "LOCAL", openRadio, modifier) {
         KeyValue("CALL", call.ifBlank { "NOT SET" }, HcCyan)
         KeyValue("GRID", grid.ifBlank { "NOT SET" }, HcInk)
@@ -831,7 +902,7 @@ internal fun mergeEnrichedSpots(live: List<AndroidDXSpot>, enriched: List<Androi
         }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             app.favoriteBands.forEach { value -> OutlinedButton({
-                value.toDoubleOrNull()?.let { send("FA%011d;".format((it * 1_000_000).toLong())) }
+                value.toDoubleOrNull()?.let { requestReceiveTune((it * 1_000_000).toLong()) }
             }, enabled = radio.connected, modifier = Modifier.heightIn(min = 48.dp)) { Text(value, fontFamily = FontFamily.Monospace, fontSize = HcMetaSize) } }
         }
     }

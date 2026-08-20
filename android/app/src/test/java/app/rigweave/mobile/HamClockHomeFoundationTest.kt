@@ -4,6 +4,9 @@ import app.rigweave.mobile.hamclock.HamClockDxTarget
 import app.rigweave.mobile.hamclock.HamClockDxTargetSource
 import app.rigweave.mobile.hamclock.HamClockMapLayerAvailability
 import app.rigweave.mobile.hamclock.HamClockMapLayerId
+import app.rigweave.mobile.hamclock.HamClockMapPreference
+import app.rigweave.mobile.hamclock.HamClockMapSelection
+import app.rigweave.mobile.hamclock.HamClockUnitSystem
 import app.rigweave.mobile.hamclock.defaultHamClockMapLayers
 import app.rigweave.mobile.hamclock.defaultHamClockPanels
 import app.rigweave.mobile.hamclock.hamClockMapLayerRegistry
@@ -32,6 +35,10 @@ class HamClockHomeFoundationTest {
         assertTrue(hamClockMapLayerRegistry.all { it.maximumObjectCount >= 0 })
         assertTrue(hamClockMapLayerRegistry.filter { it.availability == HamClockMapLayerAvailability.UNAVAILABLE }
             .all { it.unavailableReason.isNotBlank() && it.maximumObjectCount == 0 })
+        assertEquals("psk-reporter", hamClockMapLayerRegistry.first { it.id == HamClockMapLayerId.PSK_REPORTER }.upstreamId)
+        assertEquals(32, hamClockMapLayerRegistry.first { it.id == HamClockMapLayerId.GRID }.maximumObjectCount)
+        assertEquals(HamClockMapLayerAvailability.UNAVAILABLE,
+            hamClockMapLayerRegistry.first { it.id == HamClockMapLayerId.MOON }.availability)
     }
 
     @Test
@@ -66,6 +73,40 @@ class HamClockHomeFoundationTest {
 
         assertEquals("ZL1AUTO", resolved?.callsign)
         assertEquals(HamClockDxTargetSource.AUTOMATIC, resolved?.source)
+    }
+
+    @Test
+    fun featureIdentityUsesBandColoursUnitsAndNeverClaimsMoonGeometry() {
+        val spot = dxSpot("ZL1AUTO", -36.8, 174.7)
+        val dx = hamClockDxMapPoint(spot)
+        assertEquals(spot.id, dx.contextId)
+        assertEquals(spot.frequencyHz, dx.frequencyHz)
+        assertEquals(HamClockMapSelection.DX, dx.selection)
+        assertEquals(hamClockBandColor("20m"), dx.color)
+        assertEquals("260 mi", hamClockDistanceLabel(420.0, HamClockUnitSystem.IMPERIAL))
+        assertEquals(HamClockMapLayerAvailability.UNAVAILABLE,
+            hamClockMapLayerRegistry.first { it.id == HamClockMapLayerId.MOON }.availability)
+    }
+
+    @Test
+    fun delayedGestureCameraMergesLatestNonCameraSettingsButRejectsNewerCamera() {
+        val latest = HamClockMapPreference(layers = defaultHamClockMapLayers().map { it.copy(visible = false) })
+        val merged = mergeGestureCameraPreference(latest, 0.0, 0.0, 1.2, 12.0, 30.0, 4.0)
+        assertEquals(latest.layers, merged?.layers)
+        assertEquals(12.0, merged?.centerLatitude ?: 0.0, 0.0)
+        assertEquals(null, mergeGestureCameraPreference(latest.copy(centerLatitude = 44.0),
+            0.0, 0.0, 1.2, 12.0, 30.0, 4.0))
+    }
+
+    @Test
+    fun noaaSunspotParserUsesLatestValidObservedValue() {
+        val parsed = parseLatestNoaaSunspot("""[
+            {"time-tag":"2026-05","observed_swpc_ssn":82.0},
+            {"time-tag":"bad","observed_swpc_ssn":999.0},
+            {"time-tag":"2026-06","observed_swpc_ssn":79.5}
+        ]""")
+        assertEquals(79.5f, parsed.first)
+        assertEquals("2026-06", parsed.second)
     }
 
     private fun dxSpot(call: String, latitude: Double, longitude: Double) = AndroidDXSpot(

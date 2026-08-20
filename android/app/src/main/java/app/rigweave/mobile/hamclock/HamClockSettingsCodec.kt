@@ -281,8 +281,15 @@ object HamClockSettingsCodec {
 
     private fun normalizePanel(value: HamClockPanelPreference): HamClockPanelPreference? {
         val id = cleanId(value.id).takeIf(String::isNotBlank) ?: return null
-        return value.copy(id = id, order = value.order.coerceIn(0, 999), column = value.column.coerceIn(0, 7),
-            columnSpan = value.columnSpan.coerceIn(1, 8), rowSpan = value.rowSpan.coerceIn(1, 12))
+        val spec = hamClockModuleSpec(id)
+        if (spec == null) return value.copy(id = id, order = value.order.coerceIn(0, 999),
+            column = value.column.coerceIn(0, 2), columnSpan = value.columnSpan.coerceIn(1, 3),
+            rowSpan = value.rowSpan.coerceIn(1, 4), collapsed = false)
+        val column = value.column.takeIf { it in spec.allowedColumns } ?: spec.defaultColumn
+        val maximumSpan = if (column == 1) spec.defaultColumnSpan.coerceAtLeast(1) else 1
+        return value.copy(id = id, order = value.order.coerceIn(0, 999), column = column,
+            columnSpan = value.columnSpan.coerceIn(1, maximumSpan), rowSpan = value.rowSpan.coerceIn(1, 4),
+            collapsed = value.collapsed && spec.collapseSupported)
     }
 
     private fun normalizeLayer(value: HamClockMapLayerPreference): HamClockMapLayerPreference? {

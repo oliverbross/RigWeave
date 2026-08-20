@@ -21,6 +21,17 @@ internal data class SatellitePassRow(
 
 internal data class SatelliteObserverProfile(val id: String, val label: String, val grid: String)
 
+internal data class HamClockSatellitePosition(
+    val noradId: Long,
+    val name: String,
+    val latitude: Double,
+    val longitude: Double,
+    val altitudeKm: Double,
+    val elevationDeg: Double,
+    val generatedAtEpoch: Long,
+    val stale: Boolean,
+)
+
 private data class RefreshedSatelliteProviders(
     val elements: SatelliteProviderData<SatelliteCatalogueEntry>,
     val transponders: SatelliteProviderData<SatelliteTransponder>,
@@ -46,6 +57,7 @@ internal class SatelliteOperationsController(
     var groundTrack by mutableStateOf<List<OrbitalPoint>>(emptyList()); private set
     var skyTrack by mutableStateOf<List<OrbitalPoint>>(emptyList()); private set
     var livePoint by mutableStateOf<OrbitalPoint?>(null); private set
+    var hamClockPositions by mutableStateOf<List<HamClockSatellitePosition>>(emptyList()); private set
     var busy by mutableStateOf(false); private set
     var message by mutableStateOf("Offline prediction uses the last-good validated element cache."); private set
 
@@ -104,6 +116,18 @@ internal class SatelliteOperationsController(
                 }.sortedBy { it.pass.aos }.take(250)
             }
             passes = calculated
+            val homeEntries = elements.rows.asSequence()
+                .filter { it.noradId in favourites || it.noradId == selectedPass?.satellite?.noradId }
+                .ifEmpty { elements.rows.asSequence().take(8) }.take(40).toList()
+            hamClockPositions = withContext(Dispatchers.Default) {
+                homeEntries.mapNotNull { entry ->
+                    val position = (NativeSatellite.propagate(entry.elements, observer, now) as? SatelliteNativeResult.Success)?.value
+                        ?: return@mapNotNull null
+                    HamClockSatellitePosition(entry.noradId, entry.name, position.latitudeDeg, position.longitudeDeg,
+                        position.altitudeKm, position.elevationDeg, now,
+                        elements.metadata.state != SatelliteCacheState.CURRENT)
+                }
+            }
             busy = false
             message = when {
                 elements.rows.isEmpty() -> "No valid orbital elements. Refresh CelesTrak or add a manual TLE."
@@ -129,6 +153,23 @@ internal class SatelliteOperationsController(
             }
             groundTrack = tracks.first; skyTrack = tracks.second
             updateLivePoint()
+        }
+    }
+
+    fun selectNorad(noradId: Long) {
+        passes.firstOrNull { it.satellite.noradId == noradId }?.let { select(it); return }
+        val entry = elements.rows.firstOrNull { it.noradId == noradId } ?: return
+        val point = maidenheadCenter(observerGrid) ?: return
+        scope.launch {
+            val now = Instant.now().epochSecond
+            val row = withContext(Dispatchers.Default) {
+                val predicted = NativeSatellite.passes(entry.elements, SatelliteObserver(point.latitude, point.longitude),
+                    now, now + windowHours * 3600L, minimumPeakDeg = minimumElevation, maximumPasses = 1)
+                (predicted as? SatelliteNativeResult.Success)?.value?.firstOrNull()?.let {
+                    SatellitePassRow(entry, it, preferredTransponder(entry.noradId))
+                }
+            }
+            row?.let(::select)
         }
     }
 

@@ -758,7 +758,9 @@ private fun androidx.compose.foundation.lazy.LazyListScope.portableItems(
             map = value
             value.uiSettings.isAttributionEnabled = false
             value.uiSettings.isLogoEnabled = false
-            value.setStyle(Style.Builder().fromJson(progressMapStyle())) { ready = true }
+            value.uiSettings.isAttributionEnabled = true
+            value.uiSettings.isLogoEnabled = true
+            value.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { ready = true }
         }
         onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null }
     }
@@ -782,9 +784,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.portableItems(
     }
     Box(modifier.background(ProgressBackground).border(1.dp,ProgressRaised,RoundedCornerShape(8.dp))) {
         AndroidView({ mapView }, Modifier.fillMaxSize())
-        Text("© CARTO · © OpenStreetMap contributors", color = ProgressMuted, fontSize = 9.sp,
+        Text("OpenFreeMap © OpenMapTiles · OpenStreetMap", color = ProgressMuted, fontSize = 9.sp,
             modifier = Modifier.align(Alignment.BottomEnd).background(ProgressPanel.copy(alpha=.85f)).padding(4.dp))
     }
 }
-
-private fun progressMapStyle() = """{"version":8,"name":"RigWeave Progress","sources":{"carto":{"type":"raster","tiles":["https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"],"tileSize":256,"maxzoom":20},"labels":{"type":"raster","tiles":["https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png"],"tileSize":256,"maxzoom":20}},"layers":[{"id":"background","type":"background","paint":{"background-color":"#091015"}},{"id":"carto","type":"raster","source":"carto"},{"id":"labels","type":"raster","source":"labels"}]}"""

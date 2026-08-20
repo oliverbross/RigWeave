@@ -77,7 +77,7 @@ private const val MaxVisibleDxPaths = 80
 
 private enum class NeuralBasemap(val label: String, val styleJson: String) {
     SATELLITE("ESRI SATELLITE", satelliteStyleJson()),
-    DARK("CARTO DARK", darkStyleJson()),
+    DARK("OPENFREEMAP LIBERTY", ""),
 }
 
 private data class MapMarker(
@@ -178,8 +178,8 @@ private fun NativeNeuralMap(
             if (disposed) return@getMapAsync
             map = readyMap
             readyMap.uiSettings.apply {
-                isAttributionEnabled = false
-                isLogoEnabled = false
+                isAttributionEnabled = true
+                isLogoEnabled = true
                 isCompassEnabled = true
                 isZoomGesturesEnabled = true
                 isScrollGesturesEnabled = true
@@ -189,7 +189,10 @@ private fun NativeNeuralMap(
             readyMap.setMinZoomPreference(0.8)
             readyMap.setMaxZoomPreference(12.0)
             readyMap.cameraPosition = CameraPosition.Builder().target(center).zoom(zoom).build()
-            readyMap.setStyle(Style.Builder().fromJson(basemap.styleJson)) {
+            val style = if (basemap == NeuralBasemap.DARK)
+                Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")
+            else Style.Builder().fromJson(basemap.styleJson)
+            readyMap.setStyle(style) {
                 renderedAnnotations.reset()
                 styleReady = true
             }
@@ -257,7 +260,7 @@ private fun NativeNeuralMap(
         ) {
             Text(
                 if (basemap == NeuralBasemap.SATELLITE) "Imagery and reference labels © Esri"
-                else "© CARTO · © OpenStreetMap contributors",
+                else "OpenFreeMap © OpenMapTiles · OpenStreetMap",
                 color = MapMuted,
                 fontSize = 9.sp,
                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
@@ -736,22 +739,6 @@ private fun satelliteStyleJson() = """
     {"id":"background","type":"background","paint":{"background-color":"#06151c"}},
     {"id":"imagery","type":"raster","source":"esri","paint":{"raster-opacity":0.82,"raster-saturation":-0.32,"raster-contrast":0.16,"raster-brightness-max":0.72}},
     {"id":"labels","type":"raster","source":"labels","paint":{"raster-opacity":0.72}}
-  ]
-}
-""".trimIndent()
-
-private fun darkStyleJson() = """
-{
-  "version": 8,
-  "name": "RigWeave Dark Weather",
-  "sources": {
-    "carto": {"type":"raster","tiles":["https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"],"tileSize":256,"maxzoom":20,"attribution":"© CARTO © OpenStreetMap contributors"},
-    "labels": {"type":"raster","tiles":["https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png"],"tileSize":256,"maxzoom":20,"attribution":"© CARTO © OpenStreetMap contributors"}
-  },
-  "layers": [
-    {"id":"background","type":"background","paint":{"background-color":"#06151c"}},
-    {"id":"carto","type":"raster","source":"carto","paint":{"raster-opacity":1.0,"raster-contrast":0.12}},
-    {"id":"labels","type":"raster","source":"labels","paint":{"raster-opacity":0.9}}
   ]
 }
 """.trimIndent()

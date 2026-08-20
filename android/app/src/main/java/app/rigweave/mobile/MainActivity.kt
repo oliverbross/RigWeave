@@ -129,6 +129,13 @@ private enum class SettingsSection(val label: String) {
 }
 private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Station"), GENERAL("General"), NOTES("Notes"), QSL("QSL") }
 
+private data class HomeReceiveTuneReview(
+    val frequencyHz: Long,
+    val mode: String?,
+    val source: String,
+    val reason: String,
+)
+
 @Composable private fun RigWeaveApp() {
     val context = LocalContext.current
     val core = remember { NativeCore.create() }
@@ -187,6 +194,8 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     LaunchedEffect(destination) { navigationPrefs.edit().putString("destination", destination.name).apply() }
     var pendingPortableDraft by remember { mutableStateOf<PortableLogDraft?>(null) }
     var pendingRisk by remember { mutableStateOf<String?>(null) }
+    var pendingHomeReceiveTune by remember { mutableStateOf<HomeReceiveTuneReview?>(null) }
+    var pendingHomeQsoId by remember { mutableStateOf<String?>(null) }
     var pendingVoiceSlot by remember { mutableStateOf<Int?>(null) }
     var voiceArmedMode by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -220,12 +229,14 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         else if (risky) pendingRisk = command else direct(command)
     }
     val send: (String) -> Unit = { raw ->
-        if (app.radioFamily.isElecraft) sendKx(raw) else {
-            val frequency = Regex("FA(\\d{11});").find(raw.uppercase())?.groupValues?.get(1)?.toLongOrNull()
+        val frequency = Regex("FA(\\d{11});").find(raw.uppercase())?.groupValues?.get(1)?.toLongOrNull()
+        if (frequency != null) {
+            pendingHomeReceiveTune = HomeReceiveTuneReview(frequency, null, "RigWeave frequency action", "Review receive-only frequency change")
+        } else if (app.radioFamily.isElecraft) sendKx(raw) else {
             val mode = Regex("MD([1-5]);").find(raw.uppercase())?.groupValues?.get(1)?.let { code ->
                 mapOf("1" to "LSB", "2" to "USB", "3" to "CW", "4" to "FM", "5" to "AM")[code]
             }
-            val target = frequency ?: flex.snapshot.selected(flex.selectedSliceIndex)?.frequencyHz
+            val target = flex.snapshot.selected(flex.selectedSliceIndex)?.frequencyHz
             if (target != null) scope.launch { flex.tune(ReceiveTuneRequest(target, mode)) }
         }
     }
@@ -315,6 +326,22 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         } },
         dismissButton = { TextButton({ pendingRisk = null }) { Text("Cancel") } },
     ) }
+    pendingHomeReceiveTune?.let { review ->
+        AlertDialog(
+            onDismissRequest = { pendingHomeReceiveTune = null },
+            title = { Text("Review receive tune") },
+            text = { Text("${"%.6f".format(java.util.Locale.US, review.frequencyHz / 1_000_000.0)} MHz" +
+                review.mode?.takeIf(String::isNotBlank)?.let { " · $it" }.orEmpty() +
+                "\n${review.source}\n${review.reason}\nRadio: ${app.radioFamily.displayName}\n\nReceive frequency only. This does not key PTT or start TUNE.") },
+            confirmButton = { Button({
+                if (app.radioFamily.isElecraft) {
+                    direct("FA${review.frequencyHz.toString().padStart(11, '0')};")
+                } else scope.launch { flex.tune(ReceiveTuneRequest(review.frequencyHz, review.mode)) }
+                pendingHomeReceiveTune = null
+            }, enabled = radio.connected && review.frequencyHz in 100_000L..77_000_000_000L) { Text("Confirm receive tune") } },
+            dismissButton = { TextButton({ pendingHomeReceiveTune = null }) { Text("Cancel") } },
+        )
+    }
     pendingVoiceSlot?.let { slot ->
         val item = voiceStore.slots.getOrNull(slot)
         AlertDialog(onDismissRequest = { pendingVoiceSlot = null }, title = { Text("Arm & send voice macro?") },
@@ -347,7 +374,10 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
                 { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.OPERATIONS },
-                { row -> pendingPortableDraft = operations.satellites.normalLoggerDraft(row); destination = Destination.RADIO })
+                { row -> pendingPortableDraft = operations.satellites.normalLoggerDraft(row); destination = Destination.RADIO },
+                { frequency, mode, source, reason -> pendingHomeReceiveTune = HomeReceiveTuneReview(frequency, mode, source, reason) },
+                pendingHomeQsoId, { pendingHomeQsoId = null },
+                { id -> pendingHomeQsoId = id; destination = Destination.LOGBOOK })
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
             Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.OPERATIONS }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
@@ -358,7 +388,10 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
                 { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.OPERATIONS },
-                { row -> pendingPortableDraft = operations.satellites.normalLoggerDraft(row); destination = Destination.RADIO })
+                { row -> pendingPortableDraft = operations.satellites.normalLoggerDraft(row); destination = Destination.RADIO },
+                { frequency, mode, source, reason -> pendingHomeReceiveTune = HomeReceiveTuneReview(frequency, mode, source, reason) },
+                pendingHomeQsoId, { pendingHomeQsoId = null },
+                { id -> pendingHomeQsoId = id; destination = Destination.LOGBOOK })
         } }
     }
 }
@@ -390,7 +423,9 @@ private fun navIcon(item: Destination) = when (item) {
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
     tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openDx: () -> Unit, openPortable: () -> Unit,
     openActivation: () -> Unit, openLogbook: () -> Unit, openSync: () -> Unit, openProgress: () -> Unit, openDigi: () -> Unit,
-    openOperations: () -> Unit, prepareSatelliteLogger: (SatellitePassRow) -> Unit) {
+    openOperations: () -> Unit, prepareSatelliteLogger: (SatellitePassRow) -> Unit,
+    requestHomeReceiveTune: (Long, String?, String, String) -> Unit,
+    homeQsoId: String?, consumeHomeQso: () -> Unit, openHomeQso: (String) -> Unit) {
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     val intelligencePortableSpots = portable.pota.spots.map(PotaSpot::toPortable) + portable.sotaSpots + portable.wwffSpots
     val deliveredStates = setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED)
@@ -402,7 +437,8 @@ private fun navIcon(item: Destination) = when (item) {
     when (destination) {
         Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, callbook,
             publicProviders, operations, send, openDx, openPortable, openProgress, openOperations,
-            openLogbook, closeEq, openDigi)
+            openLogbook, closeEq, openDigi, requestHomeReceiveTune,
+            openHomeQso)
         Destination.RADIO -> Column(Modifier.fillMaxSize()) {
             if (compact) SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                 SegmentedButton(true, {}, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Radio") }
@@ -434,7 +470,7 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.LOGBOOK -> Column(Modifier.fillMaxSize()) {
             PotaActivationStrip(activation, radio, openActivation)
             Box(Modifier.weight(1f)) { LogbookScreen(radio, database, mutations, wavelog, wavelogNative, syncHub, callbook, app,
-                openSync, openProgress, progress.logbookRequest, progress::consumeLogbookRequest) }
+                openSync, openProgress, progress.logbookRequest, progress::consumeLogbookRequest, homeQsoId, consumeHomeQso) }
         }
         Destination.PROGRESS -> ProgressScreen(progress, features, portable, syncHub, cty,
             wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }.orEmpty(), app.stationCallsign, compact,
@@ -2968,7 +3004,8 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
 @Composable private fun LogbookScreen(state: RadioState, database: QsoDatabase, mutations: QsoMutationCoordinator,
     wavelog: WavelogController, wavelogNative: WavelogNativeController,
     syncHub: SyncHubController, callbook: CallbookController, app: AppController, openSync: () -> Unit, openProgress: () -> Unit,
-    initialFilter: LogbookFilter? = null, consumeInitialFilter: () -> Unit = {}) {
+    initialFilter: LogbookFilter? = null, consumeInitialFilter: () -> Unit = {},
+    initialQsoId: String? = null, consumeInitialQso: () -> Unit = {}) {
     var showFilters by remember { mutableStateOf(false) }
     var showFastEntry by remember { mutableStateOf(false) }
     var draft by rememberSaveable { mutableStateOf(LogbookFilter()) }
@@ -3005,6 +3042,12 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
             fromDate = requested.fromEpochSeconds?.let { Instant.ofEpochSecond(it).atZone(ZoneOffset.UTC).toLocalDate().toString() }.orEmpty()
             toDate = requested.toEpochSecondsExclusive?.let { Instant.ofEpochSecond(it - 1).atZone(ZoneOffset.UTC).toLocalDate().toString() }.orEmpty()
             consumeInitialFilter()
+        }
+    }
+    LaunchedEffect(initialQsoId) {
+        initialQsoId?.let { id ->
+            withContext(Dispatchers.IO) { database.qso(id) }?.let { editingQso = it; selectedId = id }
+            consumeInitialQso()
         }
     }
 

@@ -51,6 +51,7 @@ import app.rigweave.mobile.hamclock.HamClockMapLayerAvailability
 import app.rigweave.mobile.hamclock.HamClockMapPreference
 import app.rigweave.mobile.hamclock.HamClockMapRenderKind
 import app.rigweave.mobile.hamclock.HamClockMapSelection
+import app.rigweave.mobile.hamclock.HamClockUnitSystem
 import app.rigweave.mobile.hamclock.hamClockMapLayerRegistry
 import com.google.gson.JsonObject
 import kotlinx.coroutines.delay
@@ -89,6 +90,10 @@ internal data class HamClockMapPoint(
     val longitude: Double,
     val color: String,
     val selection: HamClockMapSelection = HamClockMapSelection.NONE,
+    val contextId: String = id,
+    val callsign: String = "",
+    val frequencyHz: Long? = null,
+    val mode: String = "",
 )
 
 internal data class HamClockMapLine(
@@ -99,6 +104,10 @@ internal data class HamClockMapLine(
     val segments: List<List<GeoPoint>>,
     val color: String,
     val selection: HamClockMapSelection = HamClockMapSelection.NONE,
+    val contextId: String = id,
+    val callsign: String = "",
+    val frequencyHz: Long? = null,
+    val mode: String = "",
 )
 
 internal data class HamClockMapFill(
@@ -115,7 +124,40 @@ internal data class HamClockMapSnapshot(
     val lines: List<HamClockMapLine> = emptyList(),
     val fills: List<HamClockMapFill> = emptyList(),
     val generatedAtEpoch: Long = 0,
+    val sourceStatus: Map<String, HamClockMapSourceStatus> = emptyMap(),
 )
+
+internal enum class HamClockMapSourceState { CURRENT, LIVE, CACHED, STALE, OFFLINE_CACHE, EMPTY, ERROR, UNAVAILABLE }
+
+internal data class HamClockMapSourceStatus(
+    val state: HamClockMapSourceState,
+    val observedAtEpoch: Long,
+    val provenance: String,
+    val detail: String = "",
+)
+
+internal data class HamClockMapFeatureRef(
+    val layerId: String,
+    val featureId: String,
+    val selection: HamClockMapSelection,
+    val callsign: String = "",
+    val frequencyHz: Long? = null,
+    val mode: String = "",
+)
+
+internal fun mergeGestureCameraPreference(
+    latest: HamClockMapPreference,
+    baseLatitude: Double,
+    baseLongitude: Double,
+    baseZoom: Double,
+    targetLatitude: Double,
+    targetLongitude: Double,
+    targetZoom: Double,
+): HamClockMapPreference? {
+    if (latest.centerLatitude != baseLatitude || latest.centerLongitude != baseLongitude || latest.zoom != baseZoom) return null
+    return latest.copy(centerLatitude = targetLatitude.coerceIn(-85.0, 85.0),
+        centerLongitude = targetLongitude.coerceIn(-180.0, 180.0), zoom = targetZoom.coerceIn(.8, 12.0))
+}
 
 internal data class HamClockResolvedTarget(
     val callsign: String,
@@ -162,11 +204,13 @@ internal fun buildHamClockMapSnapshot(
     dxSpots: List<AndroidDXSpot>,
     signal: NeuralMySignal,
     portableSpots: List<PortableSpot>,
-    satellites: List<SatellitePosition>,
+    satellites: List<HamClockSatellitePosition>,
     recentQsos: List<HamClockRecentQso>,
     lightning: NeuralLightning,
     target: HamClockResolvedTarget?,
     now: java.time.Instant,
+    units: HamClockUnitSystem = HamClockUnitSystem.METRIC,
+    sourceStatus: Map<String, HamClockMapSourceStatus> = emptyMap(),
 ): HamClockMapSnapshot {
     val station = maidenheadCenter(stationGrid)
     val points = mutableListOf<HamClockMapPoint>()
@@ -178,14 +222,14 @@ internal fun buildHamClockMapSnapshot(
             it.latitude, it.longitude, "#42c7d8")
     }
     dxSpots.asSequence().filter { it.latitude != 0.0 || it.longitude != 0.0 }.take(160).forEach { spot ->
-        val detail = "${spot.country.ifBlank { "Unknown" }} · ${spot.band} ${spot.mode} · ${spot.frequencyHz / 1000} kHz"
-        points += HamClockMapPoint(spot.id, HamClockMapLayerId.DX_SPOTS, spot.callsign, detail,
-            spot.latitude, spot.longitude, if (spot.watchlisted) "#f3d054" else "#42c7d8", HamClockMapSelection.DX)
+        val mapPoint = hamClockDxMapPoint(spot)
+        val detail = mapPoint.detail
+        points += mapPoint
         station?.let { origin ->
             val path = greatCirclePath(LatLng(origin.latitude, origin.longitude), LatLng(spot.latitude, spot.longitude), 28)
             lines += HamClockMapLine(spot.id, HamClockMapLayerId.DX_PATHS, spot.callsign, detail,
                 splitAtDateline(path).map { segment -> segment.map { GeoPoint(it.latitude, it.longitude) } },
-                "#42c7d8", HamClockMapSelection.DX)
+                hamClockBandColor(spot.band), HamClockMapSelection.DX, spot.id, spot.callsign, spot.frequencyHz, spot.mode)
         }
     }
     target?.let { selected ->
@@ -197,7 +241,7 @@ internal fun buildHamClockMapSnapshot(
                 LatLng(selected.point.latitude, selected.point.longitude), 40)
             lines += HamClockMapLine("target", HamClockMapLayerId.SELECTED_TARGET, selected.callsign,
                 selected.detail, splitAtDateline(path).map { segment -> segment.map { GeoPoint(it.latitude, it.longitude) } },
-                "#f0ad35", HamClockMapSelection.TARGET)
+                "#f0ad35", HamClockMapSelection.TARGET, "target", selected.callsign)
         }
     }
     signal.reports.asSequence().filter { it.latitude != null && it.longitude != null }.take(60).forEachIndexed { index, report ->
@@ -205,29 +249,35 @@ internal fun buildHamClockMapSnapshot(
         val longitude = report.longitude ?: return@forEachIndexed
         val detail = "${report.locator} · ${report.band} ${report.mode} · ${report.snr?.let { "$it dB" } ?: "SNR unavailable"}"
         points += HamClockMapPoint("${report.callsign}-${report.epoch}-$index", HamClockMapLayerId.PSK_REPORTER,
-            report.callsign, detail, latitude, longitude, "#43d17c", HamClockMapSelection.DX)
+            report.callsign, detail, latitude, longitude, "#43d17c", HamClockMapSelection.DX,
+            "${report.callsign}-${report.epoch}-$index", report.callsign, mode = report.mode)
         station?.let { origin ->
             val path = greatCirclePath(LatLng(origin.latitude, origin.longitude), LatLng(latitude, longitude), 20)
             lines += HamClockMapLine("${report.callsign}-${report.epoch}-$index", HamClockMapLayerId.PSK_REPORTER,
                 report.callsign, detail, splitAtDateline(path).map { segment -> segment.map { GeoPoint(it.latitude, it.longitude) } },
-                "#43d17c", HamClockMapSelection.DX)
+                "#43d17c", HamClockMapSelection.DX, "${report.callsign}-${report.epoch}-$index", report.callsign,
+                report.frequencyHz, report.mode)
         }
     }
     portableSpots.asSequence().filter { it.latitude != null && it.longitude != null }.take(160).forEach { spot ->
         points += HamClockMapPoint(spot.id, HamClockMapLayerId.PORTABLE, spot.callsign,
             "${spot.references.joinToString { it.code }} · ${spot.band} ${spot.mode}",
-            spot.latitude!!, spot.longitude!!, "#f3d054", HamClockMapSelection.PORTABLE)
+            spot.latitude!!, spot.longitude!!, "#f3d054", HamClockMapSelection.PORTABLE,
+            spot.id, spot.callsign, spot.frequencyHz, spot.mode)
     }
     satellites.take(40).forEach { satellite ->
-        points += HamClockMapPoint(satellite.norad.toString(), HamClockMapLayerId.SATELLITES, satellite.name,
-            "${satellite.altitudeKm.toInt()} km · elevation ${satellite.elevation.toInt()}°",
-            satellite.latitude, satellite.longitude, "#b783f5", HamClockMapSelection.SATELLITE)
+        val altitude = hamClockDistanceLabel(satellite.altitudeKm, units)
+        points += HamClockMapPoint(satellite.noradId.toString(), HamClockMapLayerId.SATELLITES, satellite.name,
+            "$altitude · elevation ${satellite.elevationDeg.toInt()}°${if (satellite.stale) " · STALE" else ""}",
+            satellite.latitude, satellite.longitude, "#b783f5", HamClockMapSelection.SATELLITE,
+            satellite.noradId.toString())
     }
     recentQsos.take(120).forEach { qso ->
         maidenheadCenter(qso.grid)?.let { location ->
             points += HamClockMapPoint(qso.id, HamClockMapLayerId.LOGGED_QSOS, qso.callsign,
                 "${qso.grid} · ${qso.band} ${qso.mode} · ${qso.country}",
-                location.latitude, location.longitude, "#91a1a9", HamClockMapSelection.QSO)
+                location.latitude, location.longitude, "#91a1a9", HamClockMapSelection.QSO,
+                qso.id, qso.callsign, mode = qso.mode)
         }
     }
     val grayline = greylineArea(now)
@@ -240,8 +290,6 @@ internal fun buildHamClockMapSnapshot(
     val sun = sunPosition(now)
     points += HamClockMapPoint("sun", HamClockMapLayerId.SUN, "Sun", "Approximate subsolar point",
         sun.first, sun.second, "#f3d054")
-    points += HamClockMapPoint("moon", HamClockMapLayerId.MOON, "Moon", "Approximate sublunar point",
-        -sun.first, if (sun.second > 0) sun.second - 180 else sun.second + 180, "#eaf0ed")
     var gridIndex = 0
     for (longitude in -160..160 step 20) {
         lines += HamClockMapLine("grid-${gridIndex++}", HamClockMapLayerId.GRID, "Maidenhead field grid",
@@ -255,16 +303,35 @@ internal fun buildHamClockMapSnapshot(
     }
     lightning.strikes.take(120).forEachIndexed { index, strike ->
         points += HamClockMapPoint("${strike.epoch}-$index", HamClockMapLayerId.LIGHTNING, "Lightning",
-            "${strike.distanceKm.toInt()} km · ${strike.bearing}", strike.latitude, strike.longitude,
+            hamClockDistanceLabel(strike.distanceKm, units) + " · ${strike.bearing}", strike.latitude, strike.longitude,
             "#e65b54", HamClockMapSelection.WEATHER)
     }
-    return boundedHamClockMapSnapshot(HamClockMapSnapshot(points, lines, fills, now.epochSecond))
+    return boundedHamClockMapSnapshot(HamClockMapSnapshot(points, lines, fills, now.epochSecond, sourceStatus))
 }
+
+internal fun hamClockDxMapPoint(spot: AndroidDXSpot): HamClockMapPoint {
+    val detail = "${spot.country.ifBlank { "Unknown" }} · ${spot.band} ${spot.mode} · ${spot.frequencyHz / 1000} kHz"
+    return HamClockMapPoint(spot.id, HamClockMapLayerId.DX_SPOTS, spot.callsign, detail,
+        spot.latitude, spot.longitude, if (spot.watchlisted) "#f3d054" else hamClockBandColor(spot.band),
+        HamClockMapSelection.DX, spot.id, spot.callsign, spot.frequencyHz, spot.mode)
+}
+
+internal fun hamClockDistanceLabel(kilometres: Double, units: HamClockUnitSystem): String =
+    if (units == HamClockUnitSystem.METRIC) "${kilometres.toInt()} km" else "${(kilometres * .621371).toInt()} mi"
 
 private data class HamClockSelectedFeature(
     val title: String,
     val detail: String,
     val selection: HamClockMapSelection,
+    val reference: HamClockMapFeatureRef,
+)
+
+private data class HamClockPendingCamera(
+    val camera: CameraPosition,
+    val generation: Int,
+    val baseLatitude: Double,
+    val baseLongitude: Double,
+    val baseZoom: Double,
 )
 
 internal fun boundedHamClockMapSnapshot(snapshot: HamClockMapSnapshot): HamClockMapSnapshot {
@@ -284,7 +351,7 @@ internal fun HamClockHomeMap(
     station: GeoPoint?,
     lowDataMode: Boolean,
     onPreferenceChange: (HamClockMapPreference) -> Unit,
-    onOpenSelection: (HamClockMapSelection) -> Unit,
+    onOpenSelection: (HamClockMapFeatureRef) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val bounded = remember(snapshot) { boundedHamClockMapSnapshot(snapshot) }
@@ -302,7 +369,11 @@ internal fun HamClockHomeMap(
     var styleReady by remember { mutableStateOf(false) }
     var mapError by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf<HamClockSelectedFeature?>(null) }
-    var pendingCamera by remember { mutableStateOf<CameraPosition?>(null) }
+    var pendingCamera by remember { mutableStateOf<HamClockPendingCamera?>(null) }
+    var cameraGeneration by remember { mutableStateOf(0) }
+    var gestureInProgress by remember { mutableStateOf(false) }
+    var styleGeneration by remember { mutableStateOf(0) }
+    val sourceFingerprints = remember { mutableMapOf<String, Int>() }
     val currentPreference by rememberUpdatedState(preference)
     val currentPreferenceChange by rememberUpdatedState(onPreferenceChange)
     val currentOpenSelection by rememberUpdatedState(onOpenSelection)
@@ -350,21 +421,34 @@ internal fun HamClockHomeMap(
                 .build()
             ready.addOnCameraMoveStartedListener { reason ->
                 val active = currentPreference
-                if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE && active.followStation) {
-                    currentPreferenceChange(active.copy(followStation = false))
+                gestureInProgress = reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE
+                if (gestureInProgress) {
+                    cameraGeneration += 1
+                    if (active.followStation) currentPreferenceChange(active.copy(followStation = false))
                 }
             }
-            ready.addOnCameraIdleListener { pendingCamera = ready.cameraPosition }
+            ready.addOnCameraIdleListener {
+                if (gestureInProgress) {
+                    val active = currentPreference
+                    pendingCamera = HamClockPendingCamera(ready.cameraPosition, cameraGeneration,
+                        active.centerLatitude, active.centerLongitude, active.zoom)
+                }
+                gestureInProgress = false
+            }
             ready.addOnMapClickListener { coordinate ->
-                val layerIds = activeLayerIds(preference)
+                val layerIds = activeLayerIds(currentPreference)
                 val hit = ready.queryRenderedFeatures(ready.projection.toScreenLocation(coordinate), *layerIds.toTypedArray())
                     .firstOrNull()
                 selected = hit?.let { feature ->
                     HamClockSelectedFeature(
                         feature.getStringProperty("title") ?: "Map item",
                         feature.getStringProperty("detail") ?: "",
-                        runCatching { HamClockMapSelection.valueOf(feature.getStringProperty("selection") ?: "NONE") }
-                            .getOrDefault(HamClockMapSelection.NONE),
+                        runCatching { HamClockMapSelection.valueOf(feature.getStringProperty("selection") ?: "NONE") }.getOrDefault(HamClockMapSelection.NONE),
+                        HamClockMapFeatureRef(feature.getStringProperty("layerId") ?: "",
+                            feature.getStringProperty("contextId") ?: feature.id() ?: "",
+                            runCatching { HamClockMapSelection.valueOf(feature.getStringProperty("selection") ?: "NONE") }.getOrDefault(HamClockMapSelection.NONE),
+                            feature.getStringProperty("callsign") ?: "",
+                            feature.getNumberProperty("frequencyHz")?.toLong(), feature.getStringProperty("mode") ?: ""),
                     )
                 }
                 hit != null
@@ -372,6 +456,7 @@ internal fun HamClockHomeMap(
         }
         onDispose {
             disposed = true
+            styleGeneration += 1
             lifecycle.removeObserver(observer)
             map = null
             styleReady = false
@@ -381,6 +466,7 @@ internal fun HamClockHomeMap(
 
     LaunchedEffect(map, preference.basemap) {
         val ready = map ?: return@LaunchedEffect
+        val generation = ++styleGeneration
         styleReady = false
         mapError = ""
         if (preference.basemap == HamClockBasemap.SATELLITE || preference.basemap == HamClockBasemap.TERRAIN) {
@@ -388,17 +474,26 @@ internal fun HamClockHomeMap(
             return@LaunchedEffect
         }
         runCatching {
-            ready.setStyle(Style.Builder().fromJson(hamClockStyleJson(preference.basemap))) { style ->
-                installHamClockLayers(style, preference)
-                styleReady = true
+            val builder = if (preference.basemap == HamClockBasemap.LIGHT)
+                Style.Builder().fromUri(OPEN_FREE_MAP_LIGHT_STYLE) else Style.Builder().fromJson(hamClockStyleJson(preference.basemap))
+            ready.setStyle(builder) { style ->
+                if (generation == styleGeneration) {
+                    sourceFingerprints.clear()
+                    installHamClockLayers(style, currentPreference)
+                    styleReady = true
+                }
             }
         }.onFailure { mapError = it.message ?: "Map style unavailable" }
+        if (!styleReady) {
+            delay(8_000)
+            if (generation == styleGeneration && !styleReady) mapError = "Basemap style timed out; showing bounded Map Data"
+        }
     }
 
     LaunchedEffect(map, styleReady, bounded, preference.layers) {
         val style = map?.style ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
-        updateHamClockSources(style, bounded, preference)
+        updateHamClockSources(style, bounded, preference, sourceFingerprints)
     }
 
     LaunchedEffect(preference.followStation, station, map, styleReady) {
@@ -407,16 +502,22 @@ internal fun HamClockHomeMap(
         }
     }
 
+    LaunchedEffect(preference.centerLatitude, preference.centerLongitude, preference.zoom, map, styleReady) {
+        if (styleReady && !preference.followStation) {
+            map?.animateCamera(CameraUpdateFactory.newLatLngZoom(
+                LatLng(preference.centerLatitude, preference.centerLongitude), preference.zoom), 300)
+        }
+    }
+
     LaunchedEffect(pendingCamera) {
-        val camera = pendingCamera ?: return@LaunchedEffect
+        val pending = pendingCamera ?: return@LaunchedEffect
+        val camera = pending.camera
         delay(600)
-        if (camera == pendingCamera) {
+        val active = currentPreference
+        if (pending == pendingCamera && pending.generation == cameraGeneration) {
             val target = camera.target ?: return@LaunchedEffect
-            onPreferenceChange(preference.copy(
-                centerLatitude = target.latitude.coerceIn(-85.0, 85.0),
-                centerLongitude = target.longitude.coerceIn(-180.0, 180.0),
-                zoom = camera.zoom.coerceIn(.8, 12.0),
-            ))
+            mergeGestureCameraPreference(active, pending.baseLatitude, pending.baseLongitude, pending.baseZoom,
+                target.latitude, target.longitude, camera.zoom)?.let(currentPreferenceChange)
         }
     }
 
@@ -426,7 +527,8 @@ internal fun HamClockHomeMap(
         AndroidView(factory = { mapView }, modifier = Modifier.fillMaxSize())
         Surface(color = Color(0xD9111C22), shape = RoundedCornerShape(5.dp),
             modifier = Modifier.align(Alignment.TopStart).padding(8.dp)) {
-            Text("MAP · ${preference.basemap.name} · bounded GeoJSON", color = Color(0xFFEAF0ED),
+            val degraded = bounded.sourceStatus.values.count { it.state in setOf(HamClockMapSourceState.STALE, HamClockMapSourceState.OFFLINE_CACHE, HamClockMapSourceState.ERROR) }
+            Text("MAP · ${preference.basemap.name} · ${bounded.sourceStatus.size - degraded} current / $degraded degraded", color = Color(0xFFEAF0ED),
                 fontSize = 10.sp, modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp))
         }
         IconButton(onClick = {
@@ -448,7 +550,7 @@ internal fun HamClockHomeMap(
                 Text(item.title, color = Color(0xFFEAF0ED), fontSize = 18.sp)
                 Text(item.detail.ifBlank { "No additional detail" }, color = Color(0xFF91A1A9))
                 if (item.selection != HamClockMapSelection.NONE) {
-                    TextButton(onClick = { selected = null; currentOpenSelection(item.selection) }) { Text("Open workspace") }
+                    TextButton(onClick = { selected = null; currentOpenSelection(item.reference) }) { Text("Open exact item") }
                 } else TextButton(onClick = { selected = null }) { Text("Close") }
                 if (item.selection != HamClockMapSelection.NONE) {
                     TextButton(onClick = { selected = null }) { Text("Close") }
@@ -462,7 +564,7 @@ internal fun HamClockHomeMap(
 internal fun HamClockMapDataView(
     snapshot: HamClockMapSnapshot,
     preference: HamClockMapPreference,
-    onOpenSelection: (HamClockMapSelection) -> Unit,
+    onOpenSelection: (HamClockMapFeatureRef) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val visible = preference.layers.filter { it.visible }.associateBy { it.id }
@@ -474,6 +576,10 @@ internal fun HamClockMapDataView(
                     Column(Modifier.weight(1f)) {
                         Text(spec.title, color = Color(0xFFEAF0ED), fontSize = 12.sp)
                         Text("${spec.sourceLabel} · ${spec.lowDataRepresentation}", color = Color(0xFF91A1A9), fontSize = 9.sp)
+                        snapshot.sourceStatus[spec.id]?.let { status ->
+                            Text("${status.state} · ${status.provenance} · ${status.observedAtEpoch.takeIf { it > 0 }?.let { java.time.Instant.ofEpochSecond(it).toString() } ?: "no observation time"}${status.detail.takeIf(String::isNotBlank)?.let { " · $it" }.orEmpty()}",
+                                color = if (status.state in setOf(HamClockMapSourceState.ERROR, HamClockMapSourceState.STALE, HamClockMapSourceState.OFFLINE_CACHE)) Color(0xFFF0AD35) else Color(0xFF42C7D8), fontSize = 9.sp)
+                        }
                     }
                     Text("${(pref.opacity * 100).toInt()}%", color = Color(0xFF42C7D8), fontSize = 9.sp)
                 }
@@ -489,7 +595,7 @@ internal fun HamClockMapDataView(
                         Text(row.title, color = Color(0xFFEAF0ED), fontSize = 11.sp)
                         Text(row.detail, color = Color(0xFF91A1A9), fontSize = 9.sp)
                         if (row.selection != HamClockMapSelection.NONE) {
-                            TextButton(onClick = { onOpenSelection(row.selection) }) { Text("Open") }
+                            TextButton(onClick = { onOpenSelection(row.reference()) }) { Text("Open exact item") }
                         }
                     }
                 }
@@ -508,7 +614,7 @@ private fun HamClockMapFallback(
     error: String,
     snapshot: HamClockMapSnapshot,
     preference: HamClockMapPreference,
-    onOpenSelection: (HamClockMapSelection) -> Unit,
+    onOpenSelection: (HamClockMapFeatureRef) -> Unit,
     modifier: Modifier,
 ) {
     Column(modifier.background(Color(0xF20B1419)).padding(12.dp)) {
@@ -544,7 +650,8 @@ private fun installHamClockLayers(style: Style, preference: HamClockMapPreferenc
     }
 }
 
-private fun updateHamClockSources(style: Style, snapshot: HamClockMapSnapshot, preference: HamClockMapPreference) {
+private fun updateHamClockSources(style: Style, snapshot: HamClockMapSnapshot, preference: HamClockMapPreference,
+    fingerprints: MutableMap<String, Int>) {
     val visible = preference.layers.filter { it.visible }.map { it.id }.toSet()
     hamClockMapLayerRegistry.filter { it.availability != HamClockMapLayerAvailability.UNAVAILABLE }.forEach { spec ->
         spec.renderKinds.forEach { kind ->
@@ -561,40 +668,55 @@ private fun updateHamClockSources(style: Style, snapshot: HamClockMapSnapshot, p
                 HamClockMapRenderKind.LINE -> snapshot.lines.filter { it.layerId == spec.id }.flatMap { lineFeatures(it) }
                 HamClockMapRenderKind.FILL -> snapshot.fills.filter { it.layerId == spec.id }.mapNotNull { fillFeature(it) }
             }
-            (style.getSource(sourceId) as? GeoJsonSource)?.setGeoJson(FeatureCollection.fromFeatures(features))
+            val fingerprint = features.fold(1) { hash, feature -> 31 * hash + feature.toJson().hashCode() }
+            if (fingerprints[sourceId] != fingerprint) {
+                (style.getSource(sourceId) as? GeoJsonSource)?.setGeoJson(FeatureCollection.fromFeatures(features))
+                fingerprints[sourceId] = fingerprint
+            }
         }
     }
 }
 
 private fun pointFeature(item: HamClockMapPoint): Feature =
-    feature(Point.fromLngLat(item.longitude, item.latitude), item.id, item.title, item.detail, item.color, item.selection)
+    feature(Point.fromLngLat(item.longitude, item.latitude), item.id, item.layerId, item.title, item.detail, item.color,
+        item.selection, item.contextId, item.callsign, item.frequencyHz, item.mode)
 
 private fun lineFeatures(item: HamClockMapLine): List<Feature> = item.segments.mapIndexedNotNull { index, segment ->
     val points = segment.map { Point.fromLngLat(it.longitude, it.latitude) }
-    if (points.size < 2) null else feature(LineString.fromLngLats(points), "${item.id}-$index", item.title,
-        item.detail, item.color, item.selection)
+    if (points.size < 2) null else feature(LineString.fromLngLats(points), "${item.id}-$index", item.layerId,
+        item.title, item.detail, item.color, item.selection, item.contextId, item.callsign, item.frequencyHz, item.mode)
 }
 
 private fun fillFeature(item: HamClockMapFill): Feature? {
     val points = item.ring.map { Point.fromLngLat(it.longitude, it.latitude) }.toMutableList()
     if (points.size < 3) return null
     if (points.first() != points.last()) points += points.first()
-    return feature(Polygon.fromLngLats(listOf(points)), item.id, item.title, item.detail, item.color, HamClockMapSelection.NONE)
+    return feature(Polygon.fromLngLats(listOf(points)), item.id, item.layerId, item.title, item.detail, item.color, HamClockMapSelection.NONE)
 }
 
 private fun feature(
     geometry: org.maplibre.geojson.Geometry,
     id: String,
+    layerId: String,
     title: String,
     detail: String,
     color: String,
     selection: HamClockMapSelection,
+    contextId: String = id,
+    callsign: String = "",
+    frequencyHz: Long? = null,
+    mode: String = "",
 ): Feature {
     val properties = JsonObject().apply {
         addProperty("title", title)
         addProperty("detail", detail)
         addProperty("color", color)
         addProperty("selection", selection.name)
+        addProperty("layerId", layerId)
+        addProperty("contextId", contextId)
+        addProperty("callsign", callsign)
+        frequencyHz?.let { addProperty("frequencyHz", it) }
+        addProperty("mode", mode)
     }
     return Feature.fromGeometry(geometry, properties, id)
 }
@@ -607,14 +729,19 @@ private fun hamClockStyleJson(basemap: HamClockBasemap): String {
     return """{
       "version":8,
       "name":"RigWeave HamClock ${family.replaceFirstChar(Char::uppercase)}",
-      "sources":{
-        "carto":{"type":"raster","tiles":["https://a.basemaps.cartocdn.com/${family}_nolabels/{z}/{x}/{y}.png"],"tileSize":256,"maxzoom":20,"attribution":"© CARTO © OpenStreetMap contributors"},
-        "labels":{"type":"raster","tiles":["https://a.basemaps.cartocdn.com/${family}_only_labels/{z}/{x}/{y}.png"],"tileSize":256,"maxzoom":20,"attribution":"© CARTO © OpenStreetMap contributors"}
-      },
+      "sources":{},
       "layers":[
-        {"id":"background","type":"background","paint":{"background-color":"$background"}},
-        {"id":"carto","type":"raster","source":"carto"},
-        {"id":"labels","type":"raster","source":"labels","paint":{"raster-opacity":0.92}}
+        {"id":"background","type":"background","paint":{"background-color":"$background"}}
       ]
     }""".trimIndent()
+}
+
+private const val OPEN_FREE_MAP_LIGHT_STYLE = "https://tiles.openfreemap.org/styles/liberty"
+
+private fun HamClockMapPoint.reference() = HamClockMapFeatureRef(layerId, contextId, selection, callsign, frequencyHz, mode)
+
+internal fun hamClockBandColor(band: String): String = when (band.trim().lowercase()) {
+    "160m" -> "#ff6b6b"; "80m" -> "#ff9f68"; "60m", "40m" -> "#f3d054"; "30m" -> "#8fdf62"
+    "20m" -> "#43d17c"; "17m" -> "#4ed9b2"; "15m" -> "#42c7d8"; "12m" -> "#69a7f5"
+    "10m" -> "#9d72f2"; "6m" -> "#e86ad7"; else -> "#42c7d8"
 }

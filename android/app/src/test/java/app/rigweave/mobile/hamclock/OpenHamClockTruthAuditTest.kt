@@ -83,10 +83,11 @@ class OpenHamClockTruthAuditTest {
             "panels.rowSpan", "panels.columnSpan", "panels.collapsed", "map.basemap", "map.followStation",
             "map.centerLatitude", "map.centerLongitude", "map.zoom", "map.layers.visible", "map.layers.opacity",
             "dxTarget.locked", "dxTarget.source", "display.density", "display.timeZoneMode", "display.hourFormat",
-            "display.unitSystem", "display.lowDataMode", "display.immersive",
+            "display.unitSystem", "display.lowDataMode",
         ).forEach { key ->
             assertEquals(key, HamClockSettingAvailability.ACTIVE, hamClockSettingAvailability[key])
         }
+        assertEquals(HamClockSettingAvailability.PARTIAL, hamClockSettingAvailability["display.immersive"])
     }
 
     @Test fun keyedCoalescerSharesResultAndPreservesIndependentRequests() {
