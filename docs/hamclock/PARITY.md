@@ -10,11 +10,11 @@ All IDs are the keys returned by `panelDefs` in upstream `src/DockableApp.jsx`. 
 
 | Upstream id / name | Upstream paths | Operator outcome | RigWeave status | RigWeave owner/files | Provider owner | Notes / gaps |
 |---|---|---|---|---|---|---|
-| `world-map` / World Map | `src/DockableApp.jsx`, `src/components/WorldMap.jsx` | Map-first RF activity view | PARTIAL | `HamClockHomeScreen.kt`, `NeuralDxMap.kt` | RigWeave controllers | Native map exists; stable layer set is incomplete. |
-| `map-list-view` / Map Data (text view) | `src/DockableApp.jsx`, `src/components/MapDataListView.jsx` | Accessible text equivalent of map layers | MISSING | — | — | Planned, not currently available. |
+| `world-map` / World Map | `src/DockableApp.jsx`, `src/components/WorldMap.jsx` | Map-first RF activity view | NATIVE | `HamClockHomeMap.kt`, `HamClockRegistries.kt` | RigWeave controllers | Persistent lifecycle-managed MapLibre view; registry-driven bounded GeoJSON layers, camera persistence and lawful CARTO styles. |
+| `map-list-view` / Map Data (text view) | `src/DockableApp.jsx`, `src/components/MapDataListView.jsx` | Accessible text equivalent of map layers | NATIVE | `HamClockHomeMap.kt` | Same native snapshots | Low-data and map-failure paths expose the same visible bounded layers and actions without tile work. |
 | `de-location` / DE Location | `src/DockableApp.jsx` | Station identity and position | NATIVE | `HamClockHomeScreen.kt`, `AppController.kt`, `WavelogController.kt` | RigWeave local/Wavelog | Live station identity; no upstream component embedded. |
-| `dx-location` / DX Target | `src/DockableApp.jsx` | Current DX target and path | NATIVE | `HamClockHomeScreen.kt` | DX cluster + CTY | Automatic live target; manual/locked setting is not active. |
-| `analog-clock` / Analog Clock | `src/DockableApp.jsx`, `src/components/AnalogClockPanel.jsx` | Analogue clock face | MISSING | — | — | Digital UTC/local readouts are native; analogue face is not. |
+| `dx-location` / DX Target | `src/DockableApp.jsx` | Current DX target and path | NATIVE | `HamClockHomeScreen.kt`, `HamClockHomeMap.kt` | Callbook + CTY + DX cluster | Persisted manual target, grid/coordinate resolution, lock and clear; locked manual state blocks automatic replacement. |
+| `analog-clock` / Analog Clock | `src/DockableApp.jsx`, `src/components/AnalogClockPanel.jsx` | Analogue clock face | NATIVE | `HamClockAnalogClock.kt` | Local time calculation | Optional registry module; UTC/local selection follows Home display preferences. |
 | `solar` / Solar (all views) | `src/DockableApp.jsx`, `src/components/SolarPanel.jsx` | Solar condition overview | PARTIAL | `HamClockHomeScreen.kt`, `FeatureController.kt` | NOAA SWPC + local astronomy | Core indices/X-ray/celestial truth; not every upstream view. |
 | `solar-image` / Solar Image | `src/DockableApp.jsx`, `src/components/SolarPanel.jsx` | Current SDO imagery | MISSING | `SolarCelestialProvider.kt` | NASA SDO metadata | Metadata exists; Home does not render image UI. |
 | `solar-indices` / Solar Indices | `src/DockableApp.jsx`, `src/components/SolarPanel.jsx` | SFI/A/Kp indices | NATIVE | `HamClockHomeScreen.kt`, `FeatureController.kt` | NOAA SWPC | Visible live/cached truth. |
@@ -53,7 +53,7 @@ These are all 24 static modules in upstream `src/plugins/layerRegistry.js`; loca
 
 | Upstream id / name | Upstream path | Operator outcome | RigWeave status | RigWeave owner/files | Provider owner | Notes / gaps |
 |---|---|---|---|---|---|---|
-| `n3fjp_logged_qsos` / Logged QSOs (N3FJP) | `src/plugins/layers/useN3FJPLoggedQSOs.js` | Logged-QSO map overlay | NATIVE | `HamClockHomeScreen.kt`, `QsoDatabase.kt` | RigWeave local/Wavelog | Native log source replaces N3FJP-specific transport. |
+| `n3fjp_logged_qsos` / Logged QSOs (N3FJP) | `src/plugins/layers/useN3FJPLoggedQSOs.js` | Logged-QSO map overlay | NATIVE | `HamClockHomeMap.kt`, `QsoDatabase.kt` | RigWeave local/Wavelog | Bounded 120-row compact projection query replaces N3FJP-specific transport and canonical JSON decoding. |
 | `wxradar` / Weather Radar | `src/plugins/layers/useWXRadar.js` | Radar overlay | MISSING | — | — | Not currently available. |
 | `owm-clouds` / Global Clouds (OWM) | `src/plugins/layers/useOWMClouds.js` | Cloud overlay | MISSING | — | OpenWeatherMap | Not currently available. |
 | `citylights` / City Lights (Night) | `src/plugins/layers/useCityLights.js` | Night imagery | MISSING | — | — | Grayline is native; imagery is not. |
@@ -63,8 +63,8 @@ These are all 24 static modules in upstream `src/plugins/layerRegistry.js`; loca
 | `tornado-warnings` / Tornado Warnings | `src/plugins/layers/useTornadoWarnings.js` | Warning overlay | MISSING | — | — | Not currently available. |
 | `aurora` / Aurora | `src/plugins/layers/useAurora.js` | Aurora oval | MISSING | — | NOAA | Persisted layer model alone is not a visible feature. |
 | `wspr` / WSPR | `src/plugins/layers/useWSPR.js` | WSPR paths/activity | PARTIAL | `NeuralDxController.kt`, `HamClockHomeScreen.kt` | WSPR.live | Native evidence summary; no equivalent map layer. |
-| `grayline` / Gray Line | `src/plugins/layers/useGrayLine.js` | Day/night terminator | NATIVE | `NeuralDxMap.kt`, `HamClockHomeScreen.kt` | Local calculation | Visible toggle and native map rendering. |
-| `lightning` / Lightning | `src/plugins/layers/useLightning.js` | Lightning strikes | NATIVE | `NeuralDxController.kt`, `HamClockHomeScreen.kt` | Public lightning feed | Native overlay with cache truth. |
+| `grayline` / Gray Line | `src/plugins/layers/useGrayLine.js` | Day/night terminator | NATIVE | `NeuralDxMap.kt`, `HamClockHomeMap.kt` | Local calculation | GeoJSON night fill and dateline-safe terminator line. |
+| `lightning` / Lightning | `src/plugins/layers/useLightning.js` | Lightning strikes | NATIVE | `NeuralDxController.kt`, `HamClockHomeMap.kt` | Public lightning feed | Bounded selectable GeoJSON points with source truth. |
 | `rbn` / Reverse Beacon Network | `src/plugins/layers/useRBN.js` | RBN spots | MISSING | — | RBN | Not currently available. |
 | `contest_qsos` / Contest QSOs | `src/plugins/layers/useContestQsos.js` | Contest-specific QSO overlay | PARTIAL | `QsoDatabase.kt`, `HamClockHomeScreen.kt` | RigWeave log | Logged QSOs visible; contest-specific selection is absent. |
 | `great-circle` / DE/DX Great Circle | `src/plugins/layers/useGreatCircle.js` | DE-to-DX path | NATIVE | `NeuralDxMap.kt`, `HamClockHomeScreen.kt` | Local geometry | Native reporting paths. |
@@ -77,6 +77,12 @@ These are all 24 static modules in upstream `src/plugins/layerRegistry.js`; loca
 | `winlink-gateways` / Winlink Gateways | `src/plugins/layers/useWinlinkGateways.js` | Gateway overlay | MISSING | — | — | Not currently available. |
 | `aircraft` / Aircraft | `src/plugins/layers/useAircraft.js` | Aircraft overlay | MISSING | — | — | Not currently available. |
 | `atc-sectors` / ATC Sectors | `src/plugins/layers/useATCSectors.js` | ATC sector overlay | EXCLUDED | — | — | Outside current amateur-radio operator outcome. |
+
+## Task 2A map availability
+
+Active registry layers are DE station, DX spots, DX reporting paths, selected target, PSK Reporter, portable activity, satellite positions, recent logged QSOs, grayline/night, sun, moon, Maidenhead field grid and lightning. RBN, expanded WSPR, IBP, aurora, global MUF, propagation heatmap, weather radar and WWBOTA remain explicitly unavailable with reasons in Layout and Map Data; Task 2B owns those provider/image contracts.
+
+Home now consumes panel visibility/order/column/row span/column span/collapse, map visibility/opacity/camera/follow/basemap, density, time-zone/hour format, units, low-data, immersive, manual-target and complete profile lifecycle settings. Satellite/portable/provider filter fields not wired by production UI remain truthfully planned.
 
 ## Closure rule
 

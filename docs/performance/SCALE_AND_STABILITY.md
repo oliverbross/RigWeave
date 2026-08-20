@@ -38,3 +38,9 @@ Several subsequent keyset pages were also exercised. All measured categories rem
 ## Private diagnostics
 
 The journal stores at most three sanitized crash summaries and twelve slow-query records in app-private storage. It excludes QSO payloads, credentials, URLs, tokens, callsigns, comments, and provider response bodies. Settings can show, copy a sanitized report, or clear the journal. Diagnostic failure never blocks database recovery or logging.
+
+## Task 2A Home and map safeguards
+
+Home no longer owns a screen-wide one-second clock state; the ticking state is isolated inside the header, while celestial/map snapshots advance once per minute. The MapLibre view is remembered across ordinary recomposition and style changes, forwards lifecycle events exactly once, and updates stable GeoJSON sources rather than reconstructing the map.
+
+Every map layer declares a maximum object count. DX points cap at 160, great-circle paths at 80, PSK reports at 60, portable points at 160, satellites at 40, recent QSO projection rows at 120, and lightning at 120. Geometry splits at the dateline. Recent QSOs select eight compact indexed projection columns and never call `QsoDatabase.all()` or decode canonical JSON. Camera persistence is debounced by 600 ms, manual pan disables follow, and low-data mode avoids MapLibre/tile work while retaining the same visibility and selection actions.
