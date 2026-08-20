@@ -21,7 +21,7 @@ Pinned OpenHamClock commit `d4a50eaaa61d3432a1de5f80cbe61790739930a5` was review
 
 ## Settings truth
 
-Versioned settings, named profiles, import/export and reset include RBN enabled/source/window/cap/bands/modes/minimum-SNR/skimmer/DX/watchlist/path controls; personal WSPR enabled/direction/window/band/minimum-SNR/cap/path controls; visible regional-policy/grid controls; IBP site/path controls; and Band Health window/mode/source/band controls.
+Versioned settings, named profiles, import/export and reset include RBN enabled/source/view/window/cap/bands/modes/minimum-SNR/skimmer/DX/watchlist/path controls; personal WSPR enabled/direction/window/band/minimum-SNR/cap/path controls; a disabled regional-policy explanation; IBP site/path controls; and Band Health window/mode/live-source/band controls.
 
 DX News source (`ALL`, `DX_WORLD`, `NG3K`) and compact visibility remain typed and profile-persisted. PSK Reporter requires a callsign but not a grid; geometry-only station changes republish cached distance/path state without fetching.
 
@@ -42,3 +42,12 @@ Map limits are RBN 120 points/paths, personal WSPR 100 points/paths, and IBP 18 
 ## Evidence boundary
 
 No physical Android device, authenticated external service, RF reception, CAT hardware or transmit behavior was exercised. Those layers remain unverified and are not inferred from compilation, JVM tests or APK assembly.
+
+## Task 2B2A correctness correction
+
+- RBN now preserves line UTC separately from receipt time, provides typed views, plots observed DX-to-skimmer geometry, publishes at a bounded off-Main cadence and is excluded from generic-cluster double ingestion.
+- Personal WSPR provider changes may fetch; direction, band, SNR, cap and station geometry changes reproject the last loaded snapshot. Regional WSPR.live controls are disabled as `UNAVAILABLE_POLICY`.
+- Home DX News renders the merged dated snapshot before applying the source filter.
+- The literal IBP manifest uses KH6RS `BL10TS` and a fixed reviewed hash. Schedule projection and observed cluster/RBN evidence are separate.
+- QSO history is comparison only and cannot make Band Health live. Source count, call diversity and receiver diversity are distinct, with cross-source event deduplication.
+- Physical layout, live-provider and RF acceptance remain external evidence.

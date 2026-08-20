@@ -66,11 +66,13 @@ The former Immersive Home label was overstated. It is now Minimal Home, hides on
 
 Task 2B2 deliberately avoids a second socket and a second PSK transport. RBN classification runs before the existing cluster parser but consumes the same configured retail connection and respects the app-scoped Home preference. It never opens the official raw RBN firehose.
 
-Personal WSPR delegates to `PskReporterRepository` with `mode=WSPR`. Regional WSPR.live remains a persisted, visible `UNAVAILABLE_POLICY` choice until explicit owner approval changes the provider decision; merely toggling the UI does not permit network access.
+Personal WSPR delegates to `PskReporterRepository` with `mode=WSPR`. Regional WSPR.live remains a visible, disabled `UNAVAILABLE_POLICY` explanation until explicit owner approval changes the provider decision; no request or active toggle is exposed.
 
 IBP uses a local 18-site manifest reviewed against NCDXF/IARU references. The five simultaneous scheduled transmissions are calculated locally from 10-second slots in a 180-second cycle. Schedule state and heard evidence remain separate types and labels.
 
 Band Health is explainable evidence, not an oracle. It caps repeated contributors, exposes source diversity/confidence/reasons, and uses `NO LIVE EVIDENCE` when selected providers are unavailable. It must never infer `CLOSED`.
+
+Task 2B2A corrects “source diversity” to separate source count, call diversity and receiver diversity. QSO projection is historical comparison only, and cross-source copies of one event count once. RBN paths are observed DX-to-skimmer paths; unresolved endpoints are not replaced by DE geometry. PSK/WSPR directions remain independent, so one available and one unavailable direction is `DEGRADED`. IBP schedule rows remain reference data while cluster/RBN matches are explicitly observed evidence.
 
 ## Provenance and licence
 
