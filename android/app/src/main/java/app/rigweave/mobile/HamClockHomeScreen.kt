@@ -99,9 +99,9 @@ private val HcCyan = Color(0xFF42C7D8)
 private val HcRed = Color(0xFFE65B54)
 private val HcYellow = Color(0xFFF3D054)
 private val HcDate = DateTimeFormatter.ofPattern("EEE dd MMM", Locale.US)
-private val HcLabelSize = 11.sp
-private val HcMetaSize = 11.sp
-private val HcRowSize = 12.sp
+private val HcLabelSize = 16.sp
+private val HcMetaSize = 16.sp
+private val HcRowSize = 18.sp
 
 internal fun filterClusterPresentation(spots: List<AndroidDXSpot>, preference: HamClockClusterPreference,
     nowEpoch: Long): List<AndroidDXSpot> {
@@ -307,21 +307,26 @@ internal fun HamClockHomeScreen(
     val portableMapStatuses = PortableProgram.entries.map(portable::providerStatus)
     val rbnMapRows = remember(features.rbnObservations, cty.dataRevision) {
         features.rbnObservations.mapNotNull { row ->
-            cty.lookup(row.dxCall)?.takeIf { it.latitude != 0.0 || it.longitude != 0.0 }
-                ?.let { row to GeoPoint(it.latitude, it.longitude) }
+            val dx = cty.lookup(row.dxCall)?.takeIf { it.latitude != 0.0 || it.longitude != 0.0 }
+                ?.let { GeoPoint(it.latitude, it.longitude) }
+            val skimmer = cty.lookup(row.skimmerCall.substringBefore('#'))
+                ?.takeIf { it.latitude != 0.0 || it.longitude != 0.0 }
+                ?.let { GeoPoint(it.latitude, it.longitude) }
+            dx?.let { row.copy(dxPoint = dx, skimmerPoint = skimmer,
+                dxGeometry = "CTY entity centroid", skimmerGeometry = if (skimmer == null) "UNRESOLVED" else "CTY entity centroid") to it }
         }
     }
     val ibpSchedule = remember(mapInstant.epochSecond / 10) { hamClockIbpSchedule(mapInstant.epochSecond) }
     val bandHealthEvidence = remember(visibleMapSpots, neuralDx.mySignal, features.rbnObservations,
         neuralDx.wsprPersonal, recentQsos) {
         visibleMapSpots.map { HamClockBandEvidence("CLUSTER", it.band, it.mode, it.callsign,
-            it.spotter, observedEpoch = it.receivedEpoch) } +
+            it.spotter, observedEpoch = it.receivedEpoch, frequencyHz = it.frequencyHz) } +
             neuralDx.mySignal.reports.map { HamClockBandEvidence("PSK", it.band, it.mode, it.callsign,
-                it.receiverCallsign, it.snr, it.epoch) } +
+                it.receiverCallsign, it.snr, it.epoch, it.frequencyHz) } +
             features.rbnObservations.map { HamClockBandEvidence("RBN", it.band, it.mode, it.dxCall,
-                it.skimmerCall, it.snr, it.observedEpoch) } +
+                it.skimmerCall, it.snr, it.observedEpoch, it.frequencyHz) } +
             neuralDx.wsprPersonal.reports.map { HamClockBandEvidence("WSPR", it.band, "WSPR", it.callsign,
-                it.receiverCallsign, it.snr, it.epoch) } +
+                it.receiverCallsign, it.snr, it.epoch, it.frequencyHz) } +
             recentQsos.map { HamClockBandEvidence("QSO_HISTORY", it.band, it.mode, it.callsign,
                 observedEpoch = it.createdAt) }
     }
@@ -347,7 +352,6 @@ internal fun HamClockHomeScreen(
                 else if (neuralDx.wsprPersonal.beingHeardState == HamClockFeedState.STALE ||
                     neuralDx.wsprPersonal.hearingState == HamClockFeedState.STALE)
                     HamClockEvidenceAvailability.STALE else HamClockEvidenceAvailability.CURRENT,
-            "QSO_HISTORY" to HamClockEvidenceAvailability.CURRENT,
         )
     }
     val bandHealth = remember(bandHealthEvidence, bandHealthAvailability, settingsDocument.settings.bandHealth,
@@ -404,8 +408,16 @@ internal fun HamClockHomeScreen(
                 if (resolvedDxTarget != null) HamClockMapSourceState.CURRENT else HamClockMapSourceState.EMPTY,
                 mapInstant.epochSecond, "Manual or ranked DX target"),
             HamClockMapLayerId.PSK_REPORTER to HamClockMapSourceStatus(
-                if (neuralDx.mySignal.error.isNotBlank()) HamClockMapSourceState.ERROR else state(neuralDx.mySignal.reports.size),
+                when {
+                    neuralDx.mySignal.sourceState == NeuralSignalSourceState.DEGRADED -> HamClockMapSourceState.STALE
+                    neuralDx.mySignal.reports.isNotEmpty() -> HamClockMapSourceState.CURRENT
+                    neuralDx.mySignal.beingHeardState == HamClockFeedState.UNAVAILABLE &&
+                        neuralDx.mySignal.hearingState == HamClockFeedState.UNAVAILABLE -> HamClockMapSourceState.UNAVAILABLE
+                    neuralDx.mySignal.error.isNotBlank() -> HamClockMapSourceState.ERROR
+                    else -> HamClockMapSourceState.EMPTY
+                },
                 neuralDx.mySignal.fetchedEpoch, neuralDx.mySignal.source, safe(listOf(
+                    if (neuralDx.mySignal.sourceState == NeuralSignalSourceState.DEGRADED) "DEGRADED · retained valid direction" else "",
                     "Being Heard ${neuralDx.mySignal.beingHeardState.name} ${neuralDx.mySignal.beingHeardCount}",
                     "Hearing ${neuralDx.mySignal.hearingState.name} ${neuralDx.mySignal.hearingCount}",
                     "window ${settingsDocument.settings.pskReporter.windowMinutes}m",
@@ -524,7 +536,7 @@ internal fun HamClockHomeScreen(
         }
         if (panel.collapsed && spec.collapseSupported) {
             Module(spec.title, "COLLAPSED · ${spec.sourceLabel}", modifier = modifier) {
-                Text(spec.lowDataRepresentation, color = HcMuted, fontSize = 10.sp)
+                Text(spec.lowDataRepresentation, color = HcMuted, fontSize = 15.sp)
             }
             return
         }
@@ -539,11 +551,11 @@ internal fun HamClockHomeScreen(
             HamClockModuleRenderer.PSK_REPORTER -> SignalPanel(neuralDx.mySignal, settingsDocument.settings.pskReporter,
                 { neuralDx.refreshPsk(stationCall, stationGrid, true) }, neuralDx::clearPskDisplay,
                 { neuralDx.requestPage(NeuralDxPage.MAP); openDeepLink(HamClockDeepLink.DX) }, modifier)
-            HamClockModuleRenderer.DX_NEWS -> DxNewsPanel(neuralDx.briefing.filter { source ->
+            HamClockModuleRenderer.DX_NEWS -> DxNewsPanel(neuralDx.dxNewsSnapshot.merged.filter { item ->
                 settingsDocument.settings.dxNews.source == HamClockDxNewsSource.ALL ||
-                    settingsDocument.settings.dxNews.source == HamClockDxNewsSource.DX_WORLD && source.id == "dxworld" ||
-                    settingsDocument.settings.dxNews.source == HamClockDxNewsSource.NG3K && source.id == "ng3k"
-            },
+                    settingsDocument.settings.dxNews.source == HamClockDxNewsSource.DX_WORLD && item.sourceId == "dxworld" ||
+                    settingsDocument.settings.dxNews.source == HamClockDxNewsSource.NG3K && item.sourceId == "ng3k"
+            }, neuralDx.dxNewsSnapshot.sources,
                 { neuralDx.requestPage(NeuralDxPage.BRIEFING); openDeepLink(HamClockDeepLink.DX) }, modifier)
             HamClockModuleRenderer.DX_EXPEDITIONS -> DxpeditionPanel(dxpeditionFeed, open, modifier)
             HamClockModuleRenderer.BAND_ACTIVITY -> BandConditionsPanel(neuralDx.bandActivity, open, modifier)
@@ -619,21 +631,23 @@ internal fun HamClockHomeScreen(
                 }) { configureDashboard = true }
                 if (!settingsDocument.settings.display.immersive) OperationsHomeSummary(operations, openOperations)
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(panelGap)) {
-                    if (leftPanels.isNotEmpty()) LazyColumn(Modifier.widthIn(min = 208.dp, max = 250.dp).weight(.22f), verticalArrangement = Arrangement.spacedBy(panelGap)) {
+                    if (leftPanels.isNotEmpty()) LazyColumn(Modifier.widthIn(min = 300.dp, max = 350.dp).weight(.26f), verticalArrangement = Arrangement.spacedBy(panelGap)) {
                         items(leftPanels, key = HamClockPanelPreference::id) { panel ->
                             SidePanel(panel, Modifier.fillMaxWidth().height(sidePanelHeight(panel)))
                         }
                     }
-                    LazyColumn(Modifier.weight(when (mapPanel?.columnSpan) { 1 -> .34f; 2 -> .56f; else -> .75f }),
+                    Column(Modifier.weight(when (mapPanel?.columnSpan) { 1 -> .34f; 2 -> .56f; else -> .75f }),
                         verticalArrangement = Arrangement.spacedBy(panelGap)) {
-                        if (mapPanel != null) item(key = HamClockPanelId.MAP) {
-                            SidePanel(mapPanel, Modifier.fillMaxWidth().height((390 * mapPanel.rowSpan).dp))
-                        }
-                        items(centerPanels, key = HamClockPanelPreference::id) { panel ->
-                            SidePanel(panel, Modifier.fillMaxWidth().height(sidePanelHeight(panel)))
+                        if (mapPanel != null) SidePanel(mapPanel, Modifier.fillMaxWidth()
+                            .weight(if (centerPanels.isEmpty()) 1f else 1.5f).heightIn(min = 390.dp))
+                        if (centerPanels.isNotEmpty()) LazyColumn(Modifier.fillMaxWidth().weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(panelGap)) {
+                            items(centerPanels, key = HamClockPanelPreference::id) { panel ->
+                                SidePanel(panel, Modifier.fillMaxWidth().height(sidePanelHeight(panel)))
+                            }
                         }
                     }
-                    if (rightPanels.isNotEmpty()) LazyColumn(Modifier.widthIn(min = 250.dp, max = 310.dp).weight(.25f), verticalArrangement = Arrangement.spacedBy(panelGap)) {
+                    if (rightPanels.isNotEmpty()) LazyColumn(Modifier.widthIn(min = 320.dp, max = 380.dp).weight(.28f), verticalArrangement = Arrangement.spacedBy(panelGap)) {
                         items(rightPanels, key = HamClockPanelPreference::id) { panel ->
                             SidePanel(panel, Modifier.fillMaxWidth().height(sidePanelHeight(panel)))
                         }
@@ -691,7 +705,7 @@ internal fun HamClockHomeScreen(
 
 @Composable private fun WsprPanel(snapshot: HamClockWsprSnapshot, open: () -> Unit, modifier: Modifier) {
     Module("Personal WSPR", "PSK REPORTER · ${snapshot.reports.size}", modifier = modifier, onClick = open) {
-        Text("Regional WSPR.live · ${snapshot.regionalState}", color = HcMuted, fontSize = 9.sp)
+        Text("Regional WSPR.live · ${snapshot.regionalState}", color = HcMuted, fontSize = 14.sp)
         if (snapshot.reports.isEmpty()) EmptyLine(snapshot.error.ifBlank { "No personal WSPR observations in the selected window." })
         snapshot.reports.take(6).forEach { row ->
             KeyValue(row.callsign, "${row.direction.name.replace('_', ' ')} · ${row.band}" +
@@ -702,7 +716,7 @@ internal fun HamClockHomeScreen(
 
 @Composable private fun IbpPanel(schedule: HamClockIbpSchedule, open: () -> Unit, modifier: Modifier) {
     Module("IBP schedule", "SLOT ${schedule.slot + 1}/18", modifier = modifier, onClick = open) {
-        Text("Schedule reference only · not heard evidence", color = HcAmber, fontSize = 9.sp)
+        Text("Schedule reference only · not heard evidence", color = HcAmber, fontSize = 14.sp)
         schedule.transmissions.forEach { row ->
             KeyValue(row.band, "${row.beacon.callsign} · ${row.beacon.grid} · %.3f MHz".format(Locale.US, row.frequencyHz / 1_000_000.0), HcInk)
         }
@@ -727,7 +741,7 @@ private fun OperationsHomeSummary(operations: OperationsController, open: () -> 
             horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Icon(Icons.Outlined.EventNote, null, tint = HcAmber)
             Column(Modifier.weight(1f)) {
-                Text("OPERATIONS", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 11.sp)
+                Text("OPERATIONS", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 16.sp)
                 Text("$activeDx active DX · $activeContests active contests · ${operations.nextPlan?.title ?: "no upcoming plan"}", color = HcInk)
             }
             Text("OPEN", color = HcAmber, fontWeight = FontWeight.Bold)
@@ -772,13 +786,13 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 if (display.timeZoneMode != HamClockTimeZoneMode.LOCAL) ClockReadout("UTC", utc.format(clock), utc.format(HcDate))
                 if (display.timeZoneMode != HamClockTimeZoneMode.UTC) ClockReadout("LOCAL", local.format(clock), local.format(HcDate))
                 SolarMetrics(features)
-                Text(weatherText, color = HcCyan, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                Text(weatherText, color = HcCyan, fontFamily = FontFamily.Monospace, fontSize = 16.sp)
                 StatusPill(if (radio.connected) "CAT LIVE" else "CAT OFFLINE", radio.connected)
                 StatusPill(if (app.transmitArmed) "TX ARMED" else "SAFE / RX", !app.transmitArmed)
                 ConfigButton(configure); SyncButton(neuralDx.refreshing, refresh)
             }
             Text("RigWeave ${BuildConfig.VERSION_NAME} · OHC reviewed v26.5.0 · d4a50ea · checked 2026-08-20",
-                color = HcMuted, fontSize = 8.sp, modifier = Modifier.align(Alignment.BottomStart))
+                color = HcMuted, fontSize = 12.sp, modifier = Modifier.align(Alignment.BottomStart))
         }
     }
 }
@@ -820,11 +834,11 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
         LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
             item {
                 Text("Every control below is live and persisted locally. Unknown imported IDs remain visible as unavailable and can be removed.",
-                    color = HcMuted, fontSize = 10.sp)
+                    color = HcMuted, fontSize = 15.sp)
             }
             item {
-                Text("DISPLAY", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 10.sp)
-                Text("Layout density · spacing, panel height and responsive breakpoints", color = HcMuted, fontSize = 9.sp)
+                Text("DISPLAY", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                Text("Layout density · spacing, panel height and responsive breakpoints", color = HcMuted, fontSize = 14.sp)
                 EnumChips(HamClockDensity.entries, settings.display.density) {
                     updateDisplay(settings.display.copy(density = it))
                 }
@@ -853,19 +867,19 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 val wspr = settings.wspr
                 val ibp = settings.ibp
                 val health = settings.bandHealth
-                Text("LIVE RF SOURCES", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 10.sp)
+                Text("LIVE RF SOURCES", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 15.sp)
                 ToggleRow("DX cluster connection and Home visibility", cluster.enabled) {
                     updateProviders(cluster.copy(enabled = it), psk)
                 }
-                Text("Cluster window", color = HcMuted, fontSize = 9.sp)
+                Text("Cluster window", color = HcMuted, fontSize = 14.sp)
                 IntChips(listOf(15, 30, 60, 120), cluster.windowMinutes, "m") {
                     updateProviders(cluster.copy(windowMinutes = it), psk)
                 }
-                Text("Cluster presentation cap", color = HcMuted, fontSize = 9.sp)
+                Text("Cluster presentation cap", color = HcMuted, fontSize = 14.sp)
                 IntChips(listOf(50, 100, 250, 500), cluster.maximumSpots) {
                     updateProviders(cluster.copy(maximumSpots = it), psk)
                 }
-                Text("Cluster stale threshold (live socket; not polling)", color = HcMuted, fontSize = 9.sp)
+                Text("Cluster stale threshold (live socket; not polling)", color = HcMuted, fontSize = 14.sp)
                 IntChips(listOf(30, 60, 120, 300), cluster.refreshSeconds, "s") {
                     updateProviders(cluster.copy(refreshSeconds = it), psk)
                 }
@@ -881,19 +895,19 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 OutlinedTextField(cluster.filter.callQuery, { value ->
                     updateProviders(cluster.copy(filter = cluster.filter.copy(callQuery = value.uppercase().take(32))), psk)
                 }, label = { Text("Cluster callsign filter") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Text("Cluster SNR filtering is unavailable: ordinary cluster spots do not carry comparable SNR.", color = HcMuted, fontSize = 9.sp)
+                Text("Cluster SNR filtering is unavailable: ordinary cluster spots do not carry comparable SNR.", color = HcMuted, fontSize = 14.sp)
                 HorizontalDivider(color = HcLine)
                 ToggleRow("PSK Reporter", psk.enabled) { updateProviders(cluster, psk.copy(enabled = it)) }
                 EnumChips(HamClockPskDirection.entries, psk.direction) { updateProviders(cluster, psk.copy(direction = it)) }
-                Text("PSK window", color = HcMuted, fontSize = 9.sp)
+                Text("PSK window", color = HcMuted, fontSize = 14.sp)
                 IntChips(listOf(2, 5, 10, 15, 30, 60, 120), psk.windowMinutes, "m") {
                     updateProviders(cluster, psk.copy(windowMinutes = it))
                 }
-                Text("Provider-safe refresh cadence", color = HcMuted, fontSize = 9.sp)
+                Text("Provider-safe refresh cadence", color = HcMuted, fontSize = 14.sp)
                 IntChips(listOf(300, 600, 900), psk.refreshSeconds, "s") {
                     updateProviders(cluster, psk.copy(refreshSeconds = it))
                 }
-                Text("PSK report cap", color = HcMuted, fontSize = 9.sp)
+                Text("PSK report cap", color = HcMuted, fontSize = 14.sp)
                 IntChips(listOf(50, 100, 250, 500), psk.maximumReports) {
                     updateProviders(cluster, psk.copy(maximumReports = it))
                 }
@@ -909,7 +923,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 OutlinedTextField(psk.filter.callQuery, { value ->
                     updateProviders(cluster, psk.copy(filter = psk.filter.copy(callQuery = value.uppercase().take(32))))
                 }, label = { Text("PSK remote callsign filter") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Text("Minimum SNR", color = HcMuted, fontSize = 9.sp)
+                Text("Minimum SNR", color = HcMuted, fontSize = 14.sp)
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     listOf<Int?>(null, -20, -15, -10, -5, 0).forEach { value ->
                         FilterChip(psk.filter.minimumSnr == value, {
@@ -918,20 +932,24 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                     }
                 }
                 HorizontalDivider(color = HcLine)
-                Text("RBN OBSERVATIONS", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 10.sp)
+                Text("RBN OBSERVATIONS", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 15.sp)
                 ToggleRow("RBN from configured retail cluster", rbn.enabled) {
                     updateRfEvidence(rbn.copy(enabled = it), wspr, ibp, health)
                 }
                 EnumChips(HamClockRbnSource.entries, rbn.source) {
                     updateRfEvidence(rbn.copy(source = it), wspr, ibp, health)
                 }
+                Text("RBN view", color = HcMuted, fontSize = HcMetaSize)
+                EnumChips(HamClockRbnMode.entries, rbn.viewMode) {
+                    updateRfEvidence(rbn.copy(viewMode = it), wspr, ibp, health)
+                }
                 Text("No official raw RBN firehose is opened. Source choices remain inside the existing configured retail-cluster connection.",
-                    color = HcMuted, fontSize = 9.sp)
-                Text("RBN window", color = HcMuted, fontSize = 9.sp)
+                    color = HcMuted, fontSize = 14.sp)
+                Text("RBN window", color = HcMuted, fontSize = 14.sp)
                 IntChips(listOf(2, 5, 10, 15, 30), rbn.windowMinutes, "m") {
                     updateRfEvidence(rbn.copy(windowMinutes = it), wspr, ibp, health)
                 }
-                Text("RBN row/map cap", color = HcMuted, fontSize = 9.sp)
+                Text("RBN row/map cap", color = HcMuted, fontSize = 14.sp)
                 IntChips(listOf(50, 100, 120, 250), rbn.maximumRows) {
                     updateRfEvidence(rbn.copy(maximumRows = it), wspr, ibp, health)
                 }
@@ -947,7 +965,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                     label = { Text("DX callsign") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 ToggleRow("Watchlist only", rbn.watchlistOnly) { updateRfEvidence(rbn.copy(watchlistOnly = it), wspr, ibp, health) }
                 ToggleRow("Show RBN paths", rbn.showPaths) { updateRfEvidence(rbn.copy(showPaths = it), wspr, ibp, health) }
-                Text("Minimum RBN SNR", color = HcMuted, fontSize = 9.sp)
+                Text("Minimum RBN SNR", color = HcMuted, fontSize = 14.sp)
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     listOf<Int?>(null, -20, -15, -10, -5, 0).forEach { value ->
                         FilterChip(rbn.minimumSnr == value, { updateRfEvidence(rbn.copy(minimumSnr = value), wspr, ibp, health) },
@@ -955,7 +973,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                     }
                 }
                 HorizontalDivider(color = HcLine)
-                Text("PERSONAL WSPR", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 10.sp)
+                Text("PERSONAL WSPR", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 15.sp)
                 ToggleRow("Personal WSPR via PSK Reporter", wspr.personalEnabled) {
                     updateRfEvidence(rbn, wspr.copy(personalEnabled = it), ibp, health)
                 }
@@ -971,46 +989,43 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 ToggleRow("Show personal WSPR paths", wspr.showPaths) {
                     updateRfEvidence(rbn, wspr.copy(showPaths = it), ibp, health)
                 }
-                Text("Personal WSPR path cap", color = HcMuted, fontSize = 9.sp)
+                Text("Personal WSPR path cap", color = HcMuted, fontSize = 14.sp)
                 IntChips(listOf(25, 50, 100), wspr.maximumPaths) {
                     updateRfEvidence(rbn, wspr.copy(maximumPaths = it), ibp, health)
                 }
-                Text("Minimum WSPR SNR", color = HcMuted, fontSize = 9.sp)
+                Text("Minimum WSPR SNR", color = HcMuted, fontSize = 14.sp)
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     listOf<Int?>(null, -25, -20, -15, -10, -5).forEach { value ->
                         FilterChip(wspr.minimumSnr == value, { updateRfEvidence(rbn, wspr.copy(minimumSnr = value), ibp, health) },
                             { Text(value?.let { "$it dB" } ?: "ANY") })
                     }
                 }
-                ToggleRow("Regional WSPR.live (policy unavailable)", wspr.regionalEnabled) {
-                    updateRfEvidence(rbn, wspr.copy(regionalEnabled = it), ibp, health)
-                }
-                Text("Regional state: UNAVAILABLE_POLICY. The app never queries WSPR.live without owner approval.",
-                    color = HcAmber, fontSize = 9.sp)
-                ToggleRow("Show regional grid (inactive while policy unavailable)", wspr.showRegionalGrid) {
-                    updateRfEvidence(rbn, wspr.copy(showRegionalGrid = it), ibp, health)
-                }
+                Text("Regional WSPR.live · UNAVAILABLE_POLICY", color = HcAmber,
+                    fontWeight = FontWeight.Bold, fontSize = HcMetaSize)
+                Text("No regional request or grid control is enabled until an owner-approved provider policy exists.",
+                    color = HcMuted, fontSize = HcMetaSize)
                 HorizontalDivider(color = HcLine)
-                Text("IBP AND BAND HEALTH", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 10.sp)
+                Text("IBP AND BAND HEALTH", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 15.sp)
                 ToggleRow("Show all 18 IBP sites", ibp.showAllSites) { updateRfEvidence(rbn, wspr, ibp.copy(showAllSites = it), health) }
                 ToggleRow("Show five scheduled IBP paths", ibp.showPaths) { updateRfEvidence(rbn, wspr, ibp.copy(showPaths = it), health) }
-                Text("Band Health window", color = HcMuted, fontSize = 9.sp)
+                Text("Band Health window", color = HcMuted, fontSize = 14.sp)
                 IntChips(listOf(5, 10, 15, 30, 60), health.windowMinutes, "m") {
                     updateRfEvidence(rbn, wspr, ibp, health.copy(windowMinutes = it))
                 }
                 FilterTokenChips("Band Health mode", listOf("ALL", "CW", "SSB", "FT8", "WSPR", "RTTY"), setOf(health.mode)) {
                     updateRfEvidence(rbn, wspr, ibp, health.copy(mode = it.firstOrNull() ?: "ALL"))
                 }
-                FilterTokenChips("Band Health sources", listOf("CLUSTER", "PSK", "RBN", "WSPR", "QSO_HISTORY"), health.enabledSources) {
+                FilterTokenChips("Band Health live sources", listOf("CLUSTER", "PSK", "RBN", "WSPR"), health.enabledSources) {
                     updateRfEvidence(rbn, wspr, ibp, health.copy(enabledSources = it))
                 }
+                Text("Logbook QSOs are historical comparison only and never make a band live.", color = HcMuted, fontSize = HcMetaSize)
                 FilterTokenChips("Band Health visible bands", listOf("160M", "80M", "60M", "40M", "30M", "20M", "17M", "15M", "12M", "10M", "6M"), health.visibleBands) {
                     updateRfEvidence(rbn, wspr, ibp, health.copy(visibleBands = it))
                 }
                 HorizontalDivider(color = HcLine)
             }
             item {
-                Text("LAYOUT PROFILES", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 10.sp)
+                Text("LAYOUT PROFILES", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 15.sp)
                 OutlinedTextField(profileName, { profileName = it.take(64) }, label = { Text("Profile name") },
                     modifier = Modifier.fillMaxWidth())
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1041,13 +1056,13 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                             .onSuccess { message = "Import applied" }.onFailure { message = it.message.orEmpty() }
                     }) { Text("IMPORT") }
                 }
-                if (message.isNotBlank()) Text(message, color = HcAmber, fontSize = 10.sp)
+                if (message.isNotBlank()) Text(message, color = HcAmber, fontSize = 15.sp)
                 HorizontalDivider(color = HcLine)
             }
             item {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("MODULE REGISTRY", color = HcAmber, fontWeight = FontWeight.Black,
-                        fontSize = 10.sp, modifier = Modifier.weight(1f))
+                        fontSize = 15.sp, modifier = Modifier.weight(1f))
                     TextButton(resetLayout) { Text("RESET PANELS") }
                 }
             }
@@ -1056,7 +1071,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 Column(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     ToggleRow(spec?.title ?: "Legacy ${panel.id}", panel.visible) { updatePanel(panel.copy(visible = it)) }
                     Text(spec?.let { "${it.category.name} · ${it.sourceLabel} · ${it.visualRole}" }
-                        ?: "Unavailable · unknown imported module ID", color = HcMuted, fontSize = 9.sp)
+                        ?: "Unavailable · unknown imported module ID", color = HcMuted, fontSize = 14.sp)
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
                         (spec?.allowedColumns ?: setOf(0, 2)).sorted().forEach { column ->
@@ -1085,7 +1100,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 }
             }
             item {
-                Text("MAP", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 10.sp)
+                Text("MAP", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 15.sp)
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     HamClockBasemap.entries.forEach { basemap ->
                         val lawful = basemap == HamClockBasemap.DARK || basemap == HamClockBasemap.LIGHT
@@ -1093,7 +1108,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                             { Text(basemap.name) }, enabled = lawful)
                     }
                 }
-                Text("Satellite and terrain unavailable: no lawful configured tile source.", color = HcMuted, fontSize = 9.sp)
+                Text("Satellite and terrain unavailable: no lawful configured tile source.", color = HcMuted, fontSize = 14.sp)
                 ToggleRow("Follow DE station", settings.map.followStation) { updateMap(settings.map.copy(followStation = it)) }
                 TextButton({ updateMap(settings.map.copy(followStation = true, centerLatitude = 0.0,
                     centerLongitude = 0.0, zoom = 1.2)) }) { Text("RESET CAMERA") }
@@ -1105,9 +1120,9 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                     ToggleRow(spec.title, pref.visible, spec.availability != HamClockMapLayerAvailability.UNAVAILABLE) {
                         updateLayer(pref.copy(visible = it))
                     }
-                    Text("${spec.sourceLabel} · ${spec.lowDataRepresentation}", color = HcMuted, fontSize = 9.sp)
+                    Text("${spec.sourceLabel} · ${spec.lowDataRepresentation}", color = HcMuted, fontSize = 14.sp)
                     if (spec.availability == HamClockMapLayerAvailability.UNAVAILABLE) {
-                        Text("Unavailable · ${spec.unavailableReason}", color = HcAmber, fontSize = 9.sp)
+                        Text("Unavailable · ${spec.unavailableReason}", color = HcAmber, fontSize = 14.sp)
                     } else {
                         Slider(pref.opacity, { updateLayer(pref.copy(opacity = it)) }, valueRange = 0.1f..1f)
                     }
@@ -1130,7 +1145,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
 }
 
 @Composable private fun FilterTokenChips(label: String, values: List<String>, selected: Set<String>, update: (Set<String>) -> Unit) {
-    Text(label, color = HcMuted, fontSize = 9.sp)
+    Text(label, color = HcMuted, fontSize = 14.sp)
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         values.forEach { value -> FilterChip(value in selected, {
             update(selected.toMutableSet().apply { if (!add(value)) remove(value) })
@@ -1182,7 +1197,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
     AlertDialog(onDismissRequest = dismiss, title = { Text("Manual DX target") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("A locked manual target blocks automatic cluster target replacement. This control never tunes the radio.",
-                color = HcMuted, fontSize = 10.sp)
+                color = HcMuted, fontSize = 15.sp)
             OutlinedTextField(callsign, { callsign = it.uppercase(Locale.US).take(16) },
                 label = { Text("Callsign") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(grid, {
@@ -1194,7 +1209,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
             Text(status.ifBlank {
                 listOfNotNull(latitude?.let { "%.4f".format(Locale.US, it) },
                     longitude?.let { "%.4f".format(Locale.US, it) }).joinToString(", ").ifBlank { "Coordinate not resolved" }
-            }, color = HcMuted, fontSize = 10.sp)
+            }, color = HcMuted, fontSize = 15.sp)
         }
     }, confirmButton = {
         TextButton(onClick = {
@@ -1212,7 +1227,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
 }
 
 @Composable private fun HeaderIdentity(call: String, grid: String, modifier: Modifier) = Column(modifier) {
-    Text("RIGWEAVE · OPEN HAM CLOCK", color = HcAmber, fontWeight = FontWeight.Black, letterSpacing = 1.4.sp, fontSize = 15.sp,
+    Text("RIGWEAVE · OPEN HAM CLOCK", color = HcAmber, fontWeight = FontWeight.Black, letterSpacing = 1.4.sp, fontSize = 22.sp,
         maxLines = 1, overflow = TextOverflow.Ellipsis)
     Text("${call.ifBlank { "CALL NOT SET" }} · ${grid.ifBlank { "GRID NOT SET" }}", color = HcInk,
         fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1236,9 +1251,9 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
         Text("SSN NOAA", color = HcMuted, fontSize = HcLabelSize, fontWeight = FontWeight.Bold)
         Text(features.sunspotNumber?.roundToInt()?.toString() ?: "—", color = when {
             features.sunspotNumber == null -> HcMuted; stale || features.sunspotError.isNotBlank() -> HcYellow; else -> HcGreen
-        }, fontFamily = FontFamily.Monospace, fontSize = 17.sp, fontWeight = FontWeight.Black)
+        }, fontFamily = FontFamily.Monospace, fontSize = 25.sp, fontWeight = FontWeight.Black)
         Text(when { observed.isBlank() -> "UNAVAILABLE"; stale -> "$observed STALE"; features.sunspotError.isNotBlank() -> "$observed CACHED"; else -> "$observed MONTHLY" },
-            color = HcMuted, fontSize = 8.sp)
+            color = HcMuted, fontSize = 12.sp)
     }
 }
 
@@ -1249,19 +1264,19 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
 }
 
 @Composable private fun ClockReadout(label: String, time: String, date: String) = Column(horizontalAlignment = Alignment.End) {
-    Text("$label  $time", color = HcInk, fontFamily = FontFamily.Monospace, fontSize = 20.sp, fontWeight = FontWeight.Black)
-    Text(date.uppercase(), color = HcMuted, fontSize = 10.sp)
+    Text("$label  $time", color = HcInk, fontFamily = FontFamily.Monospace, fontSize = 30.sp, fontWeight = FontWeight.Black)
+    Text(date.uppercase(), color = HcMuted, fontSize = 15.sp)
 }
 
 @Composable private fun Metric(label: String, value: String, color: Color) = Column(horizontalAlignment = Alignment.CenterHorizontally) {
     Text(label, color = HcMuted, fontSize = HcLabelSize, fontWeight = FontWeight.Bold, letterSpacing = .15.sp)
-    Text(value, color = color, fontFamily = FontFamily.Monospace, fontSize = 17.sp, fontWeight = FontWeight.Black)
+    Text(value, color = color, fontFamily = FontFamily.Monospace, fontSize = 25.sp, fontWeight = FontWeight.Black)
 }
 
 @Composable private fun StatusPill(text: String, good: Boolean) {
     val color = if (good) HcGreen else HcRed
     Surface(color = color.copy(alpha = .14f), shape = RoundedCornerShape(4.dp)) {
-        Text(text, color = color, fontSize = 10.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
+        Text(text, color = color, fontSize = 15.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
     }
 }
 
@@ -1271,7 +1286,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
         Column(Modifier.fillMaxSize().padding(9.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(Modifier.fillMaxWidth().heightIn(min = 32.dp).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
                 verticalAlignment = Alignment.CenterVertically) {
-                Text(title.uppercase(), color = HcAmber, fontWeight = FontWeight.Black, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                Text(title.uppercase(), color = HcAmber, fontWeight = FontWeight.Black, fontSize = 18.sp, modifier = Modifier.weight(1f))
                 if (subtitle.isNotBlank()) Text(subtitle, color = HcMuted, fontFamily = FontFamily.Monospace, fontSize = HcMetaSize,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -1349,19 +1364,21 @@ internal fun mergeEnrichedSpots(live: List<AndroidDXSpot>, enriched: List<Androi
                 }
             }
         }
-        if (total == 0) EmptyLine(status) else if (spots.isEmpty()) EmptyLine("No spots match the selected filters") else spots.take(7).forEach { spot ->
-            Row(Modifier.fillMaxWidth().heightIn(min = 34.dp), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(spot.callsign, color = if (spot.watchlisted) HcYellow else HcCyan, fontWeight = FontWeight.Black,
-                    fontFamily = FontFamily.Monospace, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.width(72.dp))
-                Text("${spot.country.ifBlank { "Unknown" }} · de ${spot.spotter}", color = HcMuted, fontSize = HcMetaSize,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                Text("%.3f".format(Locale.US, spot.frequencyHz / 1_000_000.0), color = HcInk,
-                    fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = HcRowSize,
-                    textAlign = TextAlign.End, modifier = Modifier.width(62.dp))
-                Text("${spot.band} ${spot.mode}", color = HcMuted, fontSize = HcMetaSize, maxLines = 1,
-                    textAlign = TextAlign.End, modifier = Modifier.width(52.dp))
+        if (total == 0) EmptyLine(status) else if (spots.isEmpty()) EmptyLine("No spots match the selected filters") else spots.take(6).forEach { spot ->
+            Column(Modifier.fillMaxWidth().heightIn(min = 62.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(spot.callsign, color = if (spot.watchlisted) HcYellow else HcCyan, fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace, fontSize = 19.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f))
+                    Text("%.3f".format(Locale.US, spot.frequencyHz / 1_000_000.0), color = HcInk,
+                        fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = HcRowSize,
+                        textAlign = TextAlign.End)
+                    Text("${spot.band} ${spot.mode}", color = HcMuted, fontSize = HcMetaSize, maxLines = 1,
+                        textAlign = TextAlign.End)
+                }
+                Text("${spot.country.ifBlank { "Unknown" }} · heard by ${spot.spotter}", color = HcMuted,
+                    fontSize = HcMetaSize, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -1429,7 +1446,7 @@ private fun preferredDxTarget(spots: List<AndroidDXSpot>): AndroidDXSpot? = spot
             band to hamClockReliability(band, zone, features.solar.flux, features.solar.kpIndex)
         }).forEach { (band, reliability) ->
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(band, color = HcMuted, fontSize = 10.sp, modifier = Modifier.width(34.dp))
+                Text(band, color = HcMuted, fontSize = 15.sp, modifier = Modifier.width(34.dp))
                 Box(Modifier.weight(1f).height(7.dp).background(HcRaised, RoundedCornerShape(4.dp))) {
                     Box(Modifier.fillMaxWidth(reliability / 100f).height(7.dp).background(if (reliability >= 70) HcGreen else HcAmber, RoundedCornerShape(4.dp)))
                 }
@@ -1439,10 +1456,10 @@ private fun preferredDxTarget(spots: List<AndroidDXSpot>): AndroidDXSpot? = spot
         val limits = listOfNotNull(prediction.distanceKm?.let { "PATH ${hamClockDistanceLabel(it.toDouble(), units)}" },
             prediction.mufMHz?.let { "MUF %.1f".format(Locale.US, it) },
             prediction.lufMHz?.let { "LUF %.1f MHz".format(Locale.US, it) }).joinToString(" · ")
-        if (limits.isNotBlank()) Text(limits, color = HcCyan, fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+        if (limits.isNotBlank()) Text(limits, color = HcCyan, fontFamily = FontFamily.Monospace, fontSize = 15.sp)
         Text(if (prediction.authoritative) "ITU-R P.533 path result · ${prediction.source}"
             else "ESTIMATE · ${prediction.source.ifBlank { prediction.error.ifBlank { "live SFI/Kp regional fallback" } }}",
-            color = if (prediction.authoritative) HcGreen else HcMuted, fontSize = 9.sp, maxLines = 2)
+            color = if (prediction.authoritative) HcGreen else HcMuted, fontSize = 14.sp, maxLines = 2)
     }
 }
 
@@ -1463,7 +1480,7 @@ private fun hamClockReliability(band: String, zone: String, sfi: Float, kp: Floa
             Row(Modifier.fillMaxWidth().heightIn(min = 30.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 Text(item.callsign, color = HcYellow, fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Black, fontSize = 13.sp, modifier = Modifier.width(70.dp),
+                    fontWeight = FontWeight.Black, fontSize = 19.sp, modifier = Modifier.width(70.dp),
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(listOf(item.entity.ifBlank { item.information }, item.dateText, item.modes.take(3).joinToString())
                     .filter(String::isNotBlank).joinToString(" · "), color = HcInk, fontSize = HcMetaSize,
@@ -1481,11 +1498,11 @@ private fun hamClockReliability(band: String, zone: String, sfi: Float, kp: Floa
         else rows.take(5).forEach { contest ->
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(contest.mode.uppercase(), color = if (contest.status.name == "ACTIVE") HcGreen else HcAmber,
-                    fontSize = 9.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(48.dp))
+                    fontSize = 14.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(48.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(contest.name, color = HcInk, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(contest.name, color = HcInk, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     val start = Instant.ofEpochSecond(contest.startEpoch).atZone(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("dd MMM HH:mm 'UTC'"))
-                    Text(start, color = HcMuted, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                    Text(start, color = HcMuted, fontSize = 14.sp, fontFamily = FontFamily.Monospace)
                 }
             }
         }
@@ -1496,22 +1513,27 @@ private fun hamClockReliability(band: String, zone: String, sfi: Float, kp: Floa
     refresh: () -> Unit, clear: () -> Unit, openDx: () -> Unit, modifier: Modifier) {
     val reports = signal.reports
     Module("PSK Reporter", "${preference.direction.name.replace('_', ' ')} · ↑${signal.beingHeardCount} ↓${signal.hearingCount}", openDx, modifier) {
-        Text("Being Heard ${signal.beingHeardState.name} · Hearing ${signal.hearingState.name} · ${ageLabel(signal.fetchedEpoch)}",
-            color = HcMuted, fontSize = 9.sp, maxLines = 1)
+        Text("${signal.sourceState.name} · Being Heard ${signal.beingHeardState.name} (${signal.beingHeardCount}) · Hearing ${signal.hearingState.name} (${signal.hearingCount})",
+            color = if (signal.sourceState == NeuralSignalSourceState.DEGRADED) HcYellow else HcMuted,
+            fontSize = HcMetaSize, maxLines = 2)
+        Text("Remote station shown for each direction · ${ageLabel(signal.fetchedEpoch)}", color = HcMuted,
+            fontSize = HcMetaSize, maxLines = 1)
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             TextButton(refresh) { Text("REFRESH") }
             TextButton(clear) { Text("CLEAR DISPLAY") }
         }
         if (!signal.available) EmptyLine(signal.error.ifBlank { "PSK Reporter unavailable or no station callsign set" })
-        else if (reports.isEmpty()) EmptyLine("PSK Reporter returned no recent reception reports") else reports.take(5).forEach { row ->
-            Row(Modifier.fillMaxWidth()) {
+        else if (reports.isEmpty()) EmptyLine("PSK Reporter returned no recent reception reports") else reports.take(3).forEach { row ->
+            Column(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth()) {
                 Text("${if(row.direction == SignalDirection.BEING_HEARD) "↑" else "↓"} ${row.callsign}${if(row.mutual)" ⇄" else ""}",
                     color = if (row.mutual) HcYellow else HcGreen, fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Text("${row.gridOrDash()} · ${row.band} ${row.mode}", color = HcInk, fontFamily = FontFamily.Monospace)
-                Spacer(Modifier.width(8.dp))
-                Text(listOfNotNull(row.snr?.let { "$it dB" }, row.distanceKm?.let { "${it}km" }).joinToString(" · ").ifBlank { "—" },
-                    color = HcMuted, fontFamily = FontFamily.Monospace)
+                    fontSize = HcRowSize, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text("${row.band} ${row.mode}", color = HcInk, fontSize = HcMetaSize, fontFamily = FontFamily.Monospace)
+                }
+                Text("${if(row.direction == SignalDirection.BEING_HEARD) "received by" else "transmitted by"} remote · ${row.gridOrDash()} · " +
+                    listOfNotNull(row.snr?.let { "$it dB" }, row.distanceKm?.let { "${it} km" }).joinToString(" · ").ifBlank { "no SNR/distance" },
+                    color = HcMuted, fontSize = HcMetaSize, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -1519,19 +1541,18 @@ private fun hamClockReliability(band: String, zone: String, sfi: Float, kp: Floa
 
 private fun SignalReport.gridOrDash() = locator.ifBlank { "—" }
 
-@Composable private fun DxNewsPanel(sources: List<BriefingSource>, openDx: () -> Unit, modifier: Modifier) {
-    val rows = sources.flatMap(BriefingSource::items).sortedByDescending(DxNewsItem::publishedEpoch).take(20)
+@Composable private fun DxNewsPanel(rows: List<DxNewsItem>, sources: List<BriefingSource>, openDx: () -> Unit, modifier: Modifier) {
     val current = rows.firstOrNull()
     val sourceTruth = sources.joinToString(" · ") { "${it.name} ${it.state.name}" }
     Module("DX News", sourceTruth, openDx, modifier) {
         if (current == null) EmptyLine(sources.map(DxNewsSource::error).firstOrNull(String::isNotBlank)
             ?: "No current or last-good DX News item") else {
-            Text(current.title, color = HcCyan, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(current.title, color = HcCyan, fontWeight = FontWeight.Black, fontSize = HcRowSize, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text("${current.sourceLabel} · ${ageLabel(current.publishedEpoch)}${if(sources.firstOrNull{it.id==current.sourceId}?.stale==true)" · STALE" else ""}",
-                color = HcMuted, fontSize = 10.sp)
+                color = HcMuted, fontSize = 15.sp)
             Text(listOf(current.callsigns.joinToString(), current.entity).filter(String::isNotBlank).joinToString(" · ").ifBlank { current.summary },
-                color = HcInk, fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text("Touch to open News/Briefing · no automatic tuning", color = HcMuted, fontSize = 9.sp)
+                color = HcInk, fontSize = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text("Touch to open News/Briefing · no automatic tuning", color = HcMuted, fontSize = 14.sp)
         }
     }
 }
@@ -1550,12 +1571,12 @@ private fun SignalReport.gridOrDash() = locator.ifBlank { "—" }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(spot.callsign, color = HcYellow, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
-                    Text(spot.references.joinToString { it.code }, color = HcMuted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(spot.references.joinToString { it.code }, color = HcMuted, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Text("%.3f".format(Locale.US, spot.frequencyHz / 1_000_000.0), color = HcInk, fontFamily = FontFamily.Monospace)
             }
         }
-        Text("SOTA live feed requires provider approval", color = HcMuted, fontSize = 9.sp)
+        Text("SOTA live feed requires provider approval", color = HcMuted, fontSize = 14.sp)
     }
 }
 
@@ -1568,8 +1589,8 @@ private fun SignalReport.gridOrDash() = locator.ifBlank { "—" }
                 Surface(color = (if (count > 0) HcGreen else HcRaised).copy(alpha = if (count > 0) .18f else 1f),
                     shape = RoundedCornerShape(3.dp), modifier = Modifier.weight(1f)) {
                     Column(Modifier.padding(vertical = 5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(band, color = if (count > 0) HcGreen else HcMuted, fontWeight = FontWeight.Bold, fontSize = 10.sp)
-                        Text(count.toString(), color = HcInk, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                        Text(band, color = if (count > 0) HcGreen else HcMuted, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text(count.toString(), color = HcInk, fontFamily = FontFamily.Monospace, fontSize = 18.sp)
                     }
                 }
             }
@@ -1614,7 +1635,7 @@ private fun SignalReport.gridOrDash() = locator.ifBlank { "—" }
             Column(Modifier.weight(1f)) {
                 Text(next?.let { "${it.callsign} · ${it.band} ${it.mode} · ${it.probability}%" } ?: "Learning from live RF and log history",
                     color = HcInk, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(next?.reason ?: "Predictions appear only when measured evidence is available", color = HcMuted, fontSize = 10.sp,
+                Text(next?.reason ?: "Predictions appear only when measured evidence is available", color = HcMuted, fontSize = 15.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -1624,13 +1645,13 @@ private fun SignalReport.gridOrDash() = locator.ifBlank { "—" }
 @Composable private fun KeyValue(key: String, value: String, color: Color) = Row(Modifier.fillMaxWidth()) {
     Text(key, color = HcMuted, fontSize = HcLabelSize, fontWeight = FontWeight.Bold,
         letterSpacing = .15.sp, modifier = Modifier.weight(1f))
-    Text(value, color = color, fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+    Text(value, color = color, fontFamily = FontFamily.Monospace, fontSize = 19.sp,
         fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 @Composable private fun EmptyLine(text: String) {
     Box(Modifier.fillMaxWidth().background(HcRaised, RoundedCornerShape(4.dp)).padding(10.dp)) {
-        Text(text, color = HcMuted, fontSize = 11.sp)
+        Text(text, color = HcMuted, fontSize = 16.sp)
     }
 }
 

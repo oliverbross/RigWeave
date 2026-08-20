@@ -307,8 +307,10 @@ internal fun buildHamClockMapSnapshot(
         points += HamClockMapPoint(row.id, HamClockMapLayerId.RBN, row.dxCall, detail,
             location.latitude, location.longitude, "#4ed9b2", HamClockMapSelection.RBN_OBSERVATION,
             row.id, row.dxCall, row.frequencyHz, row.mode)
-        if (station != null && rbnShowPaths) {
-            val path = greatCirclePath(LatLng(station.latitude, station.longitude), LatLng(location.latitude, location.longitude), 20)
+        val endpoints = hamClockRbnPathEndpoints(row)
+        if (endpoints != null && rbnShowPaths) {
+            val path = greatCirclePath(LatLng(endpoints.first.latitude, endpoints.first.longitude),
+                LatLng(endpoints.second.latitude, endpoints.second.longitude), 20)
             lines += HamClockMapLine(row.id, HamClockMapLayerId.RBN, row.dxCall, detail,
                 splitAtDateline(path).map { segment -> segment.map { GeoPoint(it.latitude, it.longitude) } },
                 hamClockBandColor(row.band), HamClockMapSelection.RBN_OBSERVATION, row.id, row.dxCall,
@@ -403,6 +405,9 @@ internal fun buildHamClockMapSnapshot(
     }
     return boundedHamClockMapSnapshot(HamClockMapSnapshot(points, lines, fills, now.epochSecond, sourceStatus))
 }
+
+internal fun hamClockRbnPathEndpoints(row: HamClockRbnObservation): Pair<GeoPoint, GeoPoint>? =
+    row.dxPoint?.let { dx -> row.skimmerPoint?.let { skimmer -> dx to skimmer } }
 
 internal fun hamClockSignalPathEndpoints(report: SignalReport, station: GeoPoint): Pair<GeoPoint, GeoPoint>? {
     val remote = GeoPoint(report.latitude ?: return null, report.longitude ?: return null)
@@ -595,8 +600,10 @@ internal fun HamClockHomeMap(
             return@LaunchedEffect
         }
         runCatching {
-            val builder = if (preference.basemap == HamClockBasemap.LIGHT)
-                Style.Builder().fromUri(OPEN_FREE_MAP_LIGHT_STYLE) else Style.Builder().fromJson(hamClockStyleJson(preference.basemap))
+                    val builder = Style.Builder().fromUri(
+                        if (preference.basemap == HamClockBasemap.LIGHT) OPEN_FREE_MAP_LIGHT_STYLE
+                        else OPEN_FREE_MAP_DARK_STYLE
+                    )
             ready.setStyle(builder) { style ->
                 val (accepted, recoveredError) = hamClockLateStyleSuccess(styleGeneration, generation, mapError)
                 if (accepted) {
@@ -866,6 +873,7 @@ private fun hamClockStyleJson(basemap: HamClockBasemap): String {
 }
 
 private const val OPEN_FREE_MAP_LIGHT_STYLE = "https://tiles.openfreemap.org/styles/liberty"
+private const val OPEN_FREE_MAP_DARK_STYLE = "https://tiles.openfreemap.org/styles/dark"
 
 private fun HamClockMapPoint.reference() = HamClockMapFeatureRef(layerId, contextId, selection, callsign, frequencyHz, mode)
 

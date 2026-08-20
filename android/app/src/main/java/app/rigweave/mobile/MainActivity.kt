@@ -332,10 +332,10 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event -> when (event) {
             Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> {
-                foreground = true; syncHub.setForeground(true); wavelogNative.onForeground()
+                foreground = true; syncHub.setForeground(true); neuralDx.setForeground(true); wavelogNative.onForeground()
             }
             Lifecycle.Event.ON_STOP, Lifecycle.Event.ON_DESTROY -> {
-                foreground = false; syncHub.setForeground(false); app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
+                foreground = false; syncHub.setForeground(false); neuralDx.setForeground(false); app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
                 digi.stopRx("App left foreground · RX stopped")
                 digi.disarm()
                 voiceTx.stop("App left foreground; defensive RX cleanup requested")
@@ -537,6 +537,7 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app,
             hamClockSettings.document.settings.cluster, hamClockSettings.document.settings.dxNews,
+            hamClockSettings.document.settings.bandHealth,
             { value -> hamClockSettings.updateSettings { it.copy(dxNews = value) } }, progress.snapshot.needs,
             operations, openOperations, send, requestHomeReceiveTune) { callsign ->
             progress.requestLogbook(logbookFilterForDimension("callsign", callsign)); openLogbook()
@@ -3036,6 +3037,7 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
     wavelog: WavelogController, callbook: CallbookController, cty: CtyController, app: AppController,
     clusterPreference: app.rigweave.mobile.hamclock.HamClockClusterPreference,
     dxNewsPreference: app.rigweave.mobile.hamclock.HamClockDxNewsPreference,
+    bandHealthPreference: app.rigweave.mobile.hamclock.HamClockBandHealthPreference,
     updateDxNewsPreference: (app.rigweave.mobile.hamclock.HamClockDxNewsPreference) -> Unit,
     needs: List<ProgressNeed>, operations: OperationsController, openOperations: () -> Unit, send: (String) -> Unit,
     requestReceiveTune: (Long, String?, String, String) -> Unit, openHistory: (String) -> Unit) {
@@ -3052,7 +3054,8 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
         }
         Box(Modifier.weight(1f)) {
             NeuralDxScreen(neuralDx, features, database, wavelog, callbook, cty, app, clusterPreference,
-                dxNewsPreference, updateDxNewsPreference, send, requestReceiveTune, dxNeeds) { spot ->
+                dxNewsPreference, updateDxNewsPreference, send, requestReceiveTune, dxNeeds,
+                bandHealthPreference, { call -> openHistory(call) }) { spot ->
                 openHistory(spot.callsign)
             }
         }
