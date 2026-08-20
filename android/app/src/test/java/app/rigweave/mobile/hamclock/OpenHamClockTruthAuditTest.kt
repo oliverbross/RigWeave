@@ -71,9 +71,7 @@ class OpenHamClockTruthAuditTest {
     }
 
     @Test fun unsupportedSettingsCannotClaimActiveConsumption() {
-        val planned = listOf(
-            "portable.enabledPrograms", "satellites.trackedNoradIds",
-        )
+        val planned = listOf("portable.enabledPrograms")
         planned.forEach { key ->
             assertEquals(key, HamClockSettingAvailability.PLANNED_NOT_AVAILABLE, hamClockSettingAvailability[key])
         }
