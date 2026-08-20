@@ -3,7 +3,8 @@
 ## Provenance and release status
 
 - RigWeave repository: https://github.com/oliverbross/RigWeave
-- Reviewed and implemented RigWeave base: `39a2926648bdd98ca3d8e1200eff4892dca5eee9`
+- Reviewed remediation base: `39a2926648bdd98ca3d8e1200eff4892dca5eee9`
+- Current-opportunities Android task base: `73b2f5e997d90a634dfa141fd414131599d2bf56`
 - Behavioural reference: https://github.com/F1SMV/Neural-DX-Watcher
 - Approved behavioural baseline: `fe3cba8ed9c0502f5dabdb2f64ebd990de986559` (`version 12.1`). The original remediation brief contained a non-resolving transcription/reference error; no upstream owner confirmation is required merely to identify this corrected pin.
 - Upstream licence status: no `LICENSE`, `LICENCE`, `COPYING`, or `NOTICE` file, SPDX declaration, or licence grant was found in the inspected upstream tree or README. GitHub does not display a detected licence for the repository. Permission is therefore not established.
@@ -66,6 +67,12 @@ iOS loads the bounded installed `cty.dat` text into its existing shared feature 
 - Android uses the selected RigWeave local or cached Wavelog authority. iOS currently uses only its provable local log authority.
 - RigWeave preserves its existing native UI, local storage, controllers, and separate `neural-dx.sqlite`; it does not run Flask/nginx or an upstream local web API.
 
+## Android current opportunities and historical spot journal
+
+Android labels the ranked live rows as **Current opportunities**. They are derived directly from the shared native spot priority and evidence values: `priority` is the existing opportunity `score`, and `evidenceScore` is the existing `confidence`. Rows below priority 45 are excluded, equal callsign/band/mode rows are deduplicated after ranking, and the list is capped at 12. There is no probability, forecast window, model label, verification history, or measured-reliability claim. Dynamic worked/QSL status remains authoritative in `QsoDatabase` and is not copied into the spot journal.
+
+The Android-only `neural-dx.sqlite` journal is schema version 3. Its spot rows now retain DXCC, confidence, sample count, reason, and last-update time for future historical analysis. The v2 migration preserves existing spot rows and the 90-day retention rule, seeds `updated_at` from the original spot timestamp, adds the DXCC/band/time index, and removes the obsolete `prediction_result` table. Repeated spot IDs update their latest dynamic ranking fields while blank later enrichment cannot erase a useful country, DXCC, continent, coordinate pair, or comment. Only an inserted ID is considered fresh, so an upsert cannot repeat watchlist/New-DXCC alerts.
+
 ## Android external providers
 
 Current source contains integrations for the configured DX cluster; NOAA SWPC solar products; country-files.com CTY data; Open-Meteo; wspr.live; PSK Reporter; DX-World; DXNews; NG3K ADXO; QO-100 DX Club; CelesTrak; AMSAT orbital elements; SatNOGS transmitters; the dl0tud beacon list; Blitzortung community MQTT; optional Perplexity; and an operator-configured HTTPS ntfy endpoint. Provider availability, terms, credentials, and live-service behaviour are separate from source/build validation.
@@ -80,6 +87,15 @@ Current source contains integrations for the configured DX cluster; NOAA SWPC so
 6. Run focused native, Android, and iOS validation and record source, automated, simulator/device, service, and RF evidence separately.
 
 ## Validation record for this remediation
+
+Current-opportunities Android closure on base `73b2f5e997d90a634dfa141fd414131599d2bf56`:
+
+- Android JVM suite passed, including the focused current-opportunity threshold, ranking, deduplication, 12-row cap, direct priority/evidence mapping, and forbidden prediction-field checks.
+- Android debug APK assembly passed.
+- Android instrumentation APK assembly passed, including compilation of the isolated `NeuralDxStoreInstrumentedTest` v2-to-v3 migration and insert/update preservation test.
+- The focused instrumentation test was not installed or run because the only connected target was Oliver's TB373FU operator tablet. No disposable emulator/device was available, and the normal app and its data were left untouched.
+- Production-source scans found no pseudo-prediction model, controller state, verification/reliability runtime, percentage display, or forecast heading. The only remaining `prediction_result` reference is the intentional v3 migration drop; the only remaining `probability` wording explicitly states that the live heuristic is not one.
+- No shared C++, iOS source, core validation, or iOS build is part of this Android-only task.
 
 - Shared core: configure/build passed; CTest `1/1` passed. Regression coverage includes unloaded, loaded-empty, matching-QSO, reset, score delta, and incomplete-index safety.
 - Android JVM suite passed `218/218`; debug APK and instrumentation APK assembly passed.

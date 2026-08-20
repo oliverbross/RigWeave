@@ -18,7 +18,7 @@ by in-process controllers, encrypted preferences, SQLite, and Compose UI.
 - **Cockpit:** live DX feed; HF/VHF/UHF, band, mode, watchlist, and new-DXCC
   filters; active-band rates and surge warnings; ranked opportunities; solar
   SFI/A/Kp; watchlist tracking and expiry; manual cluster spot; My Signal from
-  PSK Reporter; personalized predictions with measured reliability; LoTW/local
+  PSK Reporter; deterministic current opportunities with explicit priority and evidence support; LoTW/local
   worked-state opportunities; and 6 m activity heatmap.
 - **Map:** individual geolocated spots; time, count, band, and mode filters;
   station detail and tune action; recenter; and Who Hears Me receiver view with
@@ -59,7 +59,7 @@ by in-process controllers, encrypted preferences, SQLite, and Compose UI.
   RigWeave.
 - Watchlist/New DXCC/6 m alerts use Android notifications plus optional ntfy,
   cooldowns, and foreground-presence suppression.
-- All callsign, spot, prediction, map, and satellite actions remain receive-only
+- All callsign, spot, current-opportunity, map, and satellite actions remain receive-only
   until the operator explicitly confirms an existing RigWeave CAT tune or
   cluster-post action.
 - QRZ/HamQTH/CTY enrichment remains QRZ.com first, then HamQTH, then CTY.DAT.
@@ -77,3 +77,5 @@ The following points are targets from the earlier coverage programme, not eviden
   additive; network parsing is bounded; list/table rendering is paged or lazy.
 - Android debug build and tests pass, and the final APK is installed and
   exercised on the connected Lenovo tablet. No iOS build is run.
+
+For the current-opportunities closure, Android JVM tests and both debug APK assemblies pass. The focused disposable-database instrumentation test compiles but was not installed on the connected operator tablet; device execution awaits a safe disposable target. This build evidence does not prove physical UI, live-provider, authenticated-service, CAT, radio, or RF behaviour.

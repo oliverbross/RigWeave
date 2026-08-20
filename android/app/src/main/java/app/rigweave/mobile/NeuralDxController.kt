@@ -75,9 +75,21 @@ data class BriefingItem(val title: String, val link: String, val published: Stri
 data class BriefingSource(val id: String, val name: String, val site: String, val items: List<BriefingItem> = emptyList(),
     val updatedEpoch: Long = 0, val stale: Boolean = false, val error: String = "")
 
-data class NeuralPrediction(val callsign: String, val country: String, val band: String, val mode: String,
-    val probability: Int, val model: String, val reason: String, val startEpoch: Long, val endEpoch: Long,
-    val samples: Int, val measuredReliability: Int?)
+data class NeuralCurrentOpportunity(
+    val callsign: String, val country: String, val band: String, val mode: String,
+    val priority: Int, val evidenceScore: Int, val reason: String, val observedEpoch: Long, val samples: Int,
+)
+
+internal fun buildCurrentOpportunities(spots: List<AndroidDXSpot>): List<NeuralCurrentOpportunity> = spots.asSequence()
+    .filter { it.score >= 45 }
+    .sortedWith(compareByDescending<AndroidDXSpot> { it.score }.thenByDescending { it.receivedEpoch })
+    .distinctBy { Triple(it.callsign, it.band, it.mode) }
+    .take(12)
+    .map { spot -> NeuralCurrentOpportunity(
+        spot.callsign, spot.country, spot.band, spot.mode, spot.score, spot.confidence,
+        spot.reason, spot.receivedEpoch, spot.samples,
+    ) }
+    .toList()
 data class NeuralWorldCell(val row: Int, val column: Int, val latitude: Double, val longitude: Double,
     val observed: Int, val expected: Double?, val anomalyRatio: Double?, val confidence: String,
     val calls: List<String>, val greyline: Boolean)
@@ -203,21 +215,30 @@ internal fun tropoIndex(surface: Double?, at850: Double?, humidity: Int?, cape: 
 internal fun extractCallsigns(text: String): List<String> = Regex("(?<![A-Z0-9/])(?:[A-Z]{1,2}|[0-9][A-Z])[0-9][A-Z0-9]{1,4}(?:/[A-Z0-9]+)?(?![A-Z0-9])")
     .findAll(text.uppercase(Locale.US)).map { it.value }.filterNot { it in setOf("2024", "2025", "2026") }.distinct().take(24).toList()
 
-private class NeuralDxStore(context: Context) : SQLiteOpenHelper(context, "neural-dx.sqlite", null, 2) {
+internal class NeuralDxStore(context: Context, databaseName: String = "neural-dx.sqlite") :
+    SQLiteOpenHelper(context, databaseName, null, 3) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE spot(id TEXT PRIMARY KEY, ts INTEGER NOT NULL, call TEXT NOT NULL, spotter TEXT NOT NULL,
             frequency_hz INTEGER NOT NULL, band TEXT NOT NULL, mode TEXT NOT NULL, country TEXT NOT NULL,
-            continent TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL, score INTEGER NOT NULL,
-            watchlisted INTEGER NOT NULL, comment TEXT NOT NULL)""")
+            dxcc TEXT NOT NULL DEFAULT '', continent TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL,
+            score INTEGER NOT NULL, confidence INTEGER NOT NULL DEFAULT 0, samples INTEGER NOT NULL DEFAULT 0,
+            watchlisted INTEGER NOT NULL, comment TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+            updated_at INTEGER NOT NULL DEFAULT 0)""")
         db.execSQL("CREATE INDEX spot_ts_idx ON spot(ts DESC)")
         db.execSQL("CREATE INDEX spot_band_ts_idx ON spot(band,ts DESC)")
         db.execSQL("CREATE INDEX spot_call_ts_idx ON spot(call,ts DESC)")
-        createPredictionTable(db)
+        db.execSQL("CREATE INDEX spot_dxcc_band_ts_idx ON spot(dxcc,band,ts DESC)")
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        if (oldVersion < 2) {
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE spot ADD COLUMN dxcc TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE spot ADD COLUMN confidence INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE spot ADD COLUMN samples INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE spot ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE spot ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("UPDATE spot SET updated_at=ts WHERE updated_at=0")
+            db.execSQL("CREATE INDEX IF NOT EXISTS spot_dxcc_band_ts_idx ON spot(dxcc,band,ts DESC)")
             db.execSQL("DROP TABLE IF EXISTS prediction_result")
-            createPredictionTable(db)
         }
     }
 
@@ -225,14 +246,35 @@ private class NeuralDxStore(context: Context) : SQLiteOpenHelper(context, "neura
         val inserted = mutableListOf<AndroidDXSpot>(); val db = writableDatabase
         db.beginTransaction()
         try {
+            val updatedAt = Instant.now().epochSecond
             rows.forEach { row ->
                 val values = ContentValues().apply {
                     put("id", row.id); put("ts", row.receivedEpoch); put("call", row.callsign); put("spotter", row.spotter)
                     put("frequency_hz", row.frequencyHz); put("band", row.band); put("mode", row.mode); put("country", row.country)
-                    put("continent", row.continent); put("latitude", row.latitude); put("longitude", row.longitude)
-                    put("score", row.score); put("watchlisted", if (row.watchlisted) 1 else 0); put("comment", row.comment)
+                    put("dxcc", row.dxcc); put("continent", row.continent); put("latitude", row.latitude); put("longitude", row.longitude)
+                    put("score", row.score); put("confidence", row.confidence); put("samples", row.samples)
+                    put("watchlisted", if (row.watchlisted) 1 else 0); put("comment", row.comment); put("reason", row.reason)
+                    put("updated_at", updatedAt)
                 }
-                if (db.insertWithOnConflict("spot", null, values, SQLiteDatabase.CONFLICT_IGNORE) != -1L) inserted += row
+                if (db.insertWithOnConflict("spot", null, values, SQLiteDatabase.CONFLICT_IGNORE) != -1L) {
+                    inserted += row
+                } else {
+                    val updates = ContentValues().apply {
+                        put("ts", row.receivedEpoch); put("call", row.callsign); put("spotter", row.spotter)
+                        put("frequency_hz", row.frequencyHz); put("band", row.band); put("mode", row.mode)
+                        put("score", row.score); put("confidence", row.confidence); put("samples", row.samples)
+                        put("watchlisted", if (row.watchlisted) 1 else 0); put("reason", row.reason); put("updated_at", updatedAt)
+                        if (row.country.isNotBlank()) put("country", row.country)
+                        if (row.dxcc.isNotBlank()) put("dxcc", row.dxcc)
+                        if (row.continent.isNotBlank()) put("continent", row.continent)
+                        if (row.latitude in -90.0..90.0 && row.longitude in -180.0..180.0 &&
+                            (row.latitude != 0.0 || row.longitude != 0.0)) {
+                            put("latitude", row.latitude); put("longitude", row.longitude)
+                        }
+                        if (row.comment.isNotBlank()) put("comment", row.comment)
+                    }
+                    db.update("spot", updates, "id=?", arrayOf(row.id))
+                }
             }
             db.delete("spot", "ts<?", arrayOf((Instant.now().epochSecond - 90L * 86400L).toString()))
             db.setTransactionSuccessful()
@@ -286,65 +328,11 @@ private class NeuralDxStore(context: Context) : SQLiteOpenHelper(context, "neura
         }.filter { it.observed > 0 }.sortedByDescending { it.anomalyRatio ?: it.observed.toDouble() }
     }
 
-    fun predictions(spots: List<AndroidDXSpot>): List<NeuralPrediction> {
-        val now = Instant.now().epochSecond
-        verifyPredictions(now)
-        val measured = reliability(now)
-        return spots.asSequence().filter { it.score >= 45 }.distinctBy { "${it.callsign}|${it.band}|${it.mode}" }.take(12).map { spot ->
-            val probability = (spot.score * 0.72 + spot.confidence * 0.28).roundToInt().coerceIn(1, 99)
-            val model = if (spot.band in setOf("6m", "4m", "2m")) "es" else "hf"
-            val prediction = NeuralPrediction(spot.callsign, spot.country, spot.band, spot.mode, probability,
-                if (spot.band in setOf("6m", "4m", "2m")) "Es/tropo" else "HF empirical",
-                spot.reason.ifBlank { "Recent activity, path and solar context" }, now, now + 3 * 3600L,
-                spot.samples, measured)
-            logPrediction(prediction, model, now)
-            prediction
-        }.toList()
-    }
-
     fun recentBandCount(band: String, minutes: Int): Int = readableDatabase.rawQuery(
         "SELECT COUNT(*) FROM spot WHERE band=? AND ts>=?", arrayOf(band, (Instant.now().epochSecond - minutes * 60L).toString())
     ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
 
-    private fun logPrediction(row: NeuralPrediction, model: String, now: Long) {
-        val hour = row.startEpoch / 3600L
-        val values = ContentValues().apply {
-            put("key", "${row.callsign}|${row.band}|$hour"); put("created", now); put("start_ts", row.startEpoch)
-            put("end_ts", row.endEpoch); put("band", row.band); put("prefix", row.callsign.uppercase(Locale.US))
-            put("model", model); put("probability", row.probability); put("checked", 0); put("correct", 0)
-        }
-        writableDatabase.insertWithOnConflict("prediction_result", null, values, SQLiteDatabase.CONFLICT_IGNORE)
-    }
-
-    private fun verifyPredictions(now: Long) {
-        val db = writableDatabase
-        db.rawQuery("SELECT key,band,prefix,start_ts,end_ts FROM prediction_result WHERE checked=0 AND end_ts<?",
-            arrayOf(now.toString())).use { cursor ->
-            while (cursor.moveToNext()) {
-                val found = db.rawQuery("SELECT 1 FROM spot WHERE band=? AND call LIKE ? AND ts BETWEEN ? AND ? LIMIT 1",
-                    arrayOf(cursor.getString(1), cursor.getString(2) + "%", cursor.getLong(3).toString(), cursor.getLong(4).toString()))
-                    .use { it.moveToFirst() }
-                db.execSQL("UPDATE prediction_result SET checked=1,correct=? WHERE key=?", arrayOf(if (found) 1 else 0, cursor.getString(0)))
-            }
-        }
-        db.delete("prediction_result", "created<?", arrayOf((now - 90L * 86400L).toString()))
-    }
-
-    private fun reliability(now: Long): Int? = readableDatabase.rawQuery(
-        "SELECT SUM(correct),COUNT(*) FROM prediction_result WHERE checked=1 AND created>=?",
-        arrayOf((now - 30L * 86400L).toString())
-    ).use {
-        if (!it.moveToFirst() || it.getInt(1) < 5) null else (it.getInt(0) * 100.0 / it.getInt(1)).roundToInt()
-    }
-
     companion object {
-        private fun createPredictionTable(db: SQLiteDatabase) {
-            db.execSQL("""CREATE TABLE IF NOT EXISTS prediction_result(
-                key TEXT PRIMARY KEY, created INTEGER NOT NULL, start_ts INTEGER NOT NULL, end_ts INTEGER NOT NULL,
-                band TEXT NOT NULL, prefix TEXT NOT NULL, model TEXT NOT NULL, probability INTEGER NOT NULL,
-                checked INTEGER NOT NULL, correct INTEGER NOT NULL)""")
-            db.execSQL("CREATE INDEX IF NOT EXISTS prediction_pending_idx ON prediction_result(checked,end_ts)")
-        }
         private fun isGreyline(longitude: Double, epoch: Long): Boolean {
             val utc = Instant.ofEpochSecond(epoch).atZone(ZoneOffset.UTC)
             val localSolarHour = (utc.hour + utc.minute / 60.0 + longitude / 15.0 + 24.0) % 24.0
@@ -364,7 +352,7 @@ class NeuralDxController(private val context: Context, private val database: Qso
     private var satelliteJob: Job? = null
     private var satellitePoint: GeoPoint? = null
     private val lightningBuffer = ArrayDeque<LightningStrike>()
-    private var lastIngestIds = emptySet<String>()
+    private var lastIngestSpots = emptyList<AndroidDXSpot>()
     private var lastIngestStation: String? = null
     private var lastCtyRevision = Long.MIN_VALUE
 
@@ -376,7 +364,7 @@ class NeuralDxController(private val context: Context, private val database: Qso
     var passes by mutableStateOf(emptyList<SatellitePass>()); private set
     var transmitters by mutableStateOf(emptyMap<Int, List<SatelliteTransmitter>>()); private set
     var insight by mutableStateOf(NeuralInsight()); private set
-    var predictions by mutableStateOf(emptyList<NeuralPrediction>()); private set
+    var currentOpportunities by mutableStateOf(emptyList<NeuralCurrentOpportunity>()); private set
     var world by mutableStateOf(emptyList<NeuralWorldCell>()); private set
     var heatmap6m by mutableStateOf(List(7) { List(24) { 0 } }); private set
     var bandActivity by mutableStateOf(emptyMap<String, Int>()); private set
@@ -404,18 +392,19 @@ class NeuralDxController(private val context: Context, private val database: Qso
 
     fun ingest(spots: List<AndroidDXSpot>, stationId: String?, cty: CtyController, stationCall: String = "") {
         if (spots.isEmpty()) return
-        val ids = spots.mapTo(linkedSetOf()) { it.id }
-        if (ids == lastIngestIds && stationId == lastIngestStation && cty.dataRevision == lastCtyRevision) return
-        lastIngestIds = ids; lastIngestStation = stationId; lastCtyRevision = cty.dataRevision
+        if (spots == lastIngestSpots && stationId == lastIngestStation && cty.dataRevision == lastCtyRevision) return
+        lastIngestSpots = spots; lastIngestStation = stationId; lastCtyRevision = cty.dataRevision
         scope.launch {
-            val enriched = spots.map { row -> cty.lookup(row.callsign)?.let { entity -> row.copy(
+            val resolved = spots.map { row -> row to cty.lookup(row.callsign) }
+            val enriched = resolved.map { (row, entity) -> entity?.let { row.copy(
                 country = entity.country.ifBlank { row.country }, continent = entity.continent.ifBlank { row.continent },
+                dxcc = entity.dxcc.ifBlank { row.dxcc },
                 cqZone = entity.cqZone.toIntOrNull() ?: row.cqZone, ituZone = entity.ituZone.toIntOrNull() ?: row.ituZone,
                 latitude = entity.latitude.takeUnless { it == 0.0 } ?: row.latitude,
                 longitude = entity.longitude.takeUnless { it == 0.0 } ?: row.longitude) } ?: row }
             withContext(Dispatchers.Main) { enrichedSpots = enriched }
             val fresh = store.ingest(enriched)
-            val statuses = database.spotStatuses(enriched.map { it.toSpotLogIdentity(cty.lookup(it.callsign)) }, stationId)
+            val statuses = database.spotStatuses(enriched.map { it.toSpotLogIdentity(null) }, stationId)
             fresh.forEach { spot ->
                 val state = statuses[spot.id]
                 if (spot.watchlisted) deliverAlert("Watchlist · ${spot.callsign}", "${spot.band} ${spot.mode} · ${spot.country}", "watch:${spot.callsign}")
@@ -472,12 +461,12 @@ class NeuralDxController(private val context: Context, private val database: Qso
                 val log = database.neuralLogSummary(stationId)
                 val localInsight = buildInsight(call, log, live)
                 val finalInsight = if (perplexityKey.isNotBlank()) runCatching { enrichInsight(localInsight) }.getOrElse { localInsight.copy(error = "AI provider unavailable; local analysis shown") } else localInsight
-                val derivedPredictions = store.predictions(live)
+                val derivedOpportunities = buildCurrentOpportunities(live)
                 val derivedWorld = store.worldCells(worldWindowMinutes, worldBand)
                 val derivedBands = store.bandActivity(); val derivedHeatmap = store.heatmap6m()
                 val derivedBeacons = buildBeaconReception(live)
                 withContext(Dispatchers.Main) {
-                    insight = finalInsight; predictions = derivedPredictions; world = derivedWorld; bandActivity = derivedBands
+                    insight = finalInsight; currentOpportunities = derivedOpportunities; world = derivedWorld; bandActivity = derivedBands
                     heatmap6m = derivedHeatmap; beacons = derivedBeacons; lastRefreshEpoch = Instant.now().epochSecond
                     status = if (errors.isEmpty()) "All Neural DX sources current" else errors.joinToString(" · ") + " · cached data retained"
                 }
@@ -494,10 +483,10 @@ class NeuralDxController(private val context: Context, private val database: Qso
     fun close() { refreshJob?.cancel(); lightningJob?.cancel(); satelliteJob?.cancel(); scope.cancel(); store.close() }
 
     private suspend fun publishDerived(rows: List<AndroidDXSpot>, stationId: String?, stationCall: String) {
-        val p = store.predictions(rows); val w = store.worldCells(worldWindowMinutes, worldBand)
+        val opportunities = buildCurrentOpportunities(rows); val w = store.worldCells(worldWindowMinutes, worldBand)
         val b = store.bandActivity(); val h = store.heatmap6m(); val be = buildBeaconReception(rows)
         val currentInsight = buildInsight(stationCall, database.neuralLogSummary(stationId), rows)
-        withContext(Dispatchers.Main) { predictions = p; world = w; bandActivity = b; heatmap6m = h; beacons = be; insight = currentInsight }
+        withContext(Dispatchers.Main) { currentOpportunities = opportunities; world = w; bandActivity = b; heatmap6m = h; beacons = be; insight = currentInsight }
     }
 
     private fun ensureLightning(point: GeoPoint) {
