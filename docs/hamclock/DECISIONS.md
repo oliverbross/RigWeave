@@ -40,7 +40,7 @@ One module registry owns default layout, migration completion, configuration lab
 
 ## Persistent lawful map and text parity
 
-Android Home owns one lifecycle-forwarded MapLibre view whose style may change without recreating the view. DARK is a bundled no-network style. LIGHT is the documented public OpenFreeMap Liberty style with provider-required MapLibre attribution; no key or demo endpoint is committed. SATELLITE and TERRAIN remain explicitly unavailable. User pan disables follow, gesture camera writes debounce and merge into the latest non-camera settings, newer profile/camera state cancels a late write, reset returns to the configured station, and style failure/low-data mode uses the same bounded Map Data snapshot without tile work.
+Android Home owns one lifecycle-forwarded MapLibre view whose style may change without recreating the view. DARK and LIGHT currently use attributed OpenFreeMap network styles; no key or demo endpoint is committed. SATELLITE and TERRAIN remain explicitly unavailable. User pan disables follow, gesture camera writes debounce and merge into the latest non-camera settings, newer profile/camera state cancels a late write, reset returns to the configured station, and style failure/low-data mode uses the same bounded Map Data snapshot without tile work.
 
 ## Manual target and workspace actions
 
@@ -73,6 +73,8 @@ IBP uses a local 18-site manifest reviewed against NCDXF/IARU references. The fi
 Band Health is explainable evidence, not an oracle. It caps repeated contributors, exposes source diversity/confidence/reasons, and uses `NO LIVE EVIDENCE` when selected providers are unavailable. It must never infer `CLOSED`.
 
 Task 2B2A corrects “source diversity” to separate source count, call diversity and receiver diversity. QSO projection is historical comparison only, and cross-source copies of one event count once. RBN paths are observed DX-to-skimmer paths; unresolved endpoints are not replaced by DE geometry. PSK/WSPR directions remain independent, so one available and one unavailable direction is `DEGRADED`. IBP schedule rows remain reference data while cluster/RBN matches are explicitly observed evidence.
+
+Task 2B2B makes the RBN point the skimmer receiver, uses the current station identity for `WHO_HEARS_ME`, periodically expires quiet-feed rows and derives typed freshness only from RBN observations. Cached callbook grids precede approximate CTY centroids. Personal PSK/WSPR geometry changes are local reprojections with no request. One application-scoped Band Health snapshot feeds Home, DX RF Evidence and Log Intelligence; indexed projection aggregates are separate historical context and cannot make live evidence available. `STALE EVIDENCE` and `DEGRADED SOURCES` reduce confidence explicitly. Log Intelligence labels this context operational live evidence, not forecast or award credit.
 
 ## Provenance and licence
 

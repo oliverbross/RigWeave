@@ -70,3 +70,11 @@ Every map layer declares a maximum object count. DX points cap at 160, great-cir
 - Direct PSK responses cap at 2 MB and 500 rows per direction. Cache keys include direction/callsign/window; automatic/manual cadence cannot be below five minutes and Retry-After extends backoff.
 - PSK filters are applied before Home/map presentation, whose existing map cap remains 60. Direction generations discard late results after disable or provider-affecting changes; clearing PSK cancels the active job and removes displayed rows.
 - Cluster map presentation applies the active window/cap/band/mode/continent/callsign filters to typed controller state. Connected with zero current spots is `EMPTY`, not a transport error.
+
+# Task 2B2B RF evidence safeguards
+
+- RBN retains at most 1,000 raw rows and publishes at most the saved cap. A two-second maintenance cadence filters/sorts off-main, prevents overlap, expires quiet-feed rows and publishes one immutable typed snapshot on Main.
+- RBN geometry performs no per-frame or unbounded callbook work: stream/station/cached-callbook geometry precedes approximate CTY fallback, and unresolved skimmers remain list-only.
+- Station-grid changes reproject retained PSK and personal-WSPR geometry locally with zero HTTP requests. Direction truth has an explicit combined `DEGRADED` state.
+- Band Health is computed once into an application-scoped immutable snapshot. Exact contributing IDs are capped, and historical comparison is a compact grouped `qso_projection` query bounded to 128 rows and one year, keyed by station/filter/database revision.
+- Home provider loops and Neural DX/lightning starts are foreground-guarded. No RF-evidence action bypasses receive-only review or starts CAT/PTT/TUNE/TX.

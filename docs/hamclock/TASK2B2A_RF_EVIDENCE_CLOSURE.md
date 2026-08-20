@@ -4,8 +4,8 @@ Date: 2026-08-20
 
 ## Repository and watcher
 
-- Requested baseline: `637820759d0d7c56e001035079e7c7737811c18a`.
-- Safe start used: `19f19b3fbdefc2226c1ce906615fda8b4c1f64bd`; it retains the later Android startup/data-preservation fix.
+- Requested baseline: `63782075ce5a154404d5ff2a5956e9ba1a687732`.
+- Safe start history retained all five commits through `c524aab2260485cc3196e875208fad4282eab018`: `19f19b3` database startup, `a59d75d` RF truth, `c2a8c9e` Home integration, `8b026fb` closure records, and `c524aab` contributing DX News sources.
 - Final pushed SHA is recorded in the delivery report because a commit cannot contain its own hash.
 - Pre-edit upstream watcher: exit 0; reviewed pin unchanged.
 

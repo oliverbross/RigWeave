@@ -108,7 +108,10 @@
       "android/app/src/main/java/app/rigweave/mobile/hamclock/HamClockSettingsTruth.kt"
     ],
     "home_log_projection": [
-      "android/app/src/main/java/app/rigweave/mobile/QsoDatabase.kt"
+      "android/app/src/main/java/app/rigweave/mobile/QsoDatabase.kt",
+      "android/app/src/main/java/app/rigweave/mobile/LogIntelligenceRepository.kt",
+      "android/app/src/main/java/app/rigweave/mobile/ProgressController.kt",
+      "android/app/src/main/java/app/rigweave/mobile/ProgressScreen.kt"
     ],
     "public_providers": [
       "android/app/src/main/java/app/rigweave/mobile/hamclock/HamClockPublicProviders.kt",
