@@ -50,7 +50,7 @@ internal val hamClockSettingAvailability = mapOf(
     "dxTarget.longitude" to HamClockSettingAvailability.ACTIVE,
     "dxTarget.locked" to HamClockSettingAvailability.ACTIVE,
     "dxTarget.source" to HamClockSettingAvailability.ACTIVE,
-    "display.density" to HamClockSettingAvailability.ACTIVE,
+    "display.density" to HamClockSettingAvailability.PARTIAL,
     "display.timeZoneMode" to HamClockSettingAvailability.ACTIVE,
     "display.hourFormat" to HamClockSettingAvailability.ACTIVE,
     "display.unitSystem" to HamClockSettingAvailability.ACTIVE,

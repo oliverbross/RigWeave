@@ -57,6 +57,10 @@ enum class NeuralDxPage(val label: String) {
     BRIEFING("Briefing"), SATELLITES("Satellites"), WEATHER("Weather")
 }
 
+enum class NeuralDxRefreshScope { HOME, FULL_DX }
+
+internal fun NeuralDxRefreshScope.includesLegacySatelliteWork(): Boolean = this == NeuralDxRefreshScope.FULL_DX
+
 data class NeuralWeather(
     val available: Boolean = false, val updatedEpoch: Long = 0, val temperatureC: Double? = null,
     val pressureHpa: Double? = null, val humidityPercent: Int? = null, val windKmh: Double? = null,
@@ -149,6 +153,9 @@ data class NeuralLightning(val connected: Boolean = false, val updatedEpoch: Lon
     val strikes: List<LightningStrike> = emptyList(), val source: String = "Blitzortung community MQTT", val error: String = "")
 data class SignalReport(val callsign:String,val locator:String,val latitude:Double?,val longitude:Double?,val frequencyHz:Long,
     val band:String,val mode:String,val snr:Int?,val distanceKm:Int?,val epoch:Long)
+internal fun signalReportReference(report: SignalReport): String =
+    listOf(report.callsign.uppercase(Locale.US), report.epoch.toString(), report.frequencyHz.toString(),
+        report.locator.uppercase(Locale.US)).joinToString("|")
 data class NeuralMySignal(val available:Boolean=false,val callsign:String="",val fetchedEpoch:Long=0,
     val reports:List<SignalReport> = emptyList(),val source:String="PSK Reporter",val error:String="")
 
@@ -385,6 +392,7 @@ class NeuralDxController(private val context: Context, private val database: Qso
     var beaconStatus by mutableStateOf(if (beaconReference.isEmpty()) "Beacon reference not downloaded" else "${beaconReference.size} beacon references cached"); private set
     var lightning by mutableStateOf(NeuralLightning()); private set
     var mySignal by mutableStateOf(loadMySignalCache()); private set
+    var requestedSignalReportId by mutableStateOf<String?>(null); private set
     val alerts = mutableStateListOf<String>()
     var status by mutableStateOf("Neural DX cache ready"); private set
     var refreshing by mutableStateOf(false); private set
@@ -444,6 +452,8 @@ class NeuralDxController(private val context: Context, private val database: Qso
         prefs.edit().putString("satellites", followedNorads.joinToString(",")).apply()
     }
 
+    fun requestSignalReport(referenceId: String) { requestedSignalReportId = referenceId }
+
     fun moveBriefingSource(id: String, direction: Int) {
         val order = briefingOrder.toMutableList(); val from = order.indexOf(id); val to = (from + direction).coerceIn(0, order.lastIndex)
         if (from < 0 || from == to) return
@@ -452,7 +462,8 @@ class NeuralDxController(private val context: Context, private val database: Qso
         briefing = order.mapNotNull { key -> briefing.firstOrNull { it.id == key } } + briefing.filter { it.id !in order }
     }
 
-    fun refresh(call: String, grid: String, stationId: String?, live: List<AndroidDXSpot>, force: Boolean = false) {
+    fun refresh(call: String, grid: String, stationId: String?, live: List<AndroidDXSpot>, force: Boolean = false,
+        refreshScope: NeuralDxRefreshScope = NeuralDxRefreshScope.FULL_DX) {
         if (refreshJob?.isActive == true) return
         refreshJob = scope.launch {
             withContext(Dispatchers.Main) { refreshing = true; status = "Refreshing Neural DX sources…" }
@@ -465,7 +476,9 @@ class NeuralDxController(private val context: Context, private val database: Qso
                     runCatching { refreshWeather(point, force) }.onFailure { errors += "Weather unavailable" }
                     runCatching { refreshWspr(point, force) }.onFailure { errors += "WSPR unavailable" }
                     if(call.isNotBlank())runCatching { refreshMySignal(call,point,force) }.onFailure { errors += "PSK Reporter unavailable" }
-                    runCatching { refreshSatellites(point, force) }.onFailure { errors += "Satellites unavailable" }
+                    if (refreshScope.includesLegacySatelliteWork()) {
+                        runCatching { refreshSatellites(point, force) }.onFailure { errors += "Satellites unavailable" }
+                    }
                     runCatching { refreshBeaconReference(point, force) }.onFailure { errors += "Beacon reference unavailable" }
                 }
                 runCatching { refreshBriefing(force) }.onFailure { errors += "Briefing unavailable" }

@@ -6,10 +6,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.Instant
 import java.util.Locale
 
@@ -39,6 +44,29 @@ private data class RefreshedSatelliteProviders(
     val timers: SatelliteProviderData<SatelliteTimer>,
 )
 
+internal fun homeSatelliteEntries(
+    rows: List<SatelliteCatalogueEntry>,
+    favourites: Set<Long>,
+    selectedNoradId: Long?,
+): List<SatelliteCatalogueEntry> = rows.asSequence()
+    .filter { it.noradId in favourites || it.noradId == selectedNoradId }
+    .ifEmpty { rows.asSequence().take(8) }
+    .take(40)
+    .toList()
+
+internal fun calculateHomeSatellitePositions(
+    entries: List<SatelliteCatalogueEntry>,
+    observer: SatelliteObserver,
+    epoch: Long,
+    stale: Boolean,
+    propagate: (SatelliteElements, SatelliteObserver, Long) -> SatelliteNativeResult<OrbitalPoint>,
+): List<HamClockSatellitePosition> = entries.mapNotNull { entry ->
+    val position = (propagate(entry.elements, observer, epoch) as? SatelliteNativeResult.Success)?.value
+        ?: return@mapNotNull null
+    HamClockSatellitePosition(entry.noradId, entry.name, position.latitudeDeg, position.longitudeDeg,
+        position.altitudeKm, position.elevationDeg, epoch, stale)
+}
+
 internal class SatelliteOperationsController(
     context: Context,
     private val database: QsoDatabase,
@@ -47,6 +75,12 @@ internal class SatelliteOperationsController(
     private val providers = SatelliteProviderRepository(appContext)
     private val prefs = appContext.getSharedPreferences("satellite_operations_v1", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val homePropagationMutex = Mutex()
+    private var homeJob: Job? = null
+    private var homeGeneration = 0L
+    private var homeActive = false
+    private var homeObserverGrid = ""
+    private var selectedHomeNoradId: Long? = null
 
     var elements by mutableStateOf(providers.elements()); private set
     var transponders by mutableStateOf(providers.transponders()); private set
@@ -91,6 +125,7 @@ internal class SatelliteOperationsController(
             busy = false
             message = "Providers refreshed; predictions remain local in the pinned SGP4 engine."
             predict()
+            restartHomeTicker()
         }
     }
 
@@ -116,18 +151,6 @@ internal class SatelliteOperationsController(
                 }.sortedBy { it.pass.aos }.take(250)
             }
             passes = calculated
-            val homeEntries = elements.rows.asSequence()
-                .filter { it.noradId in favourites || it.noradId == selectedPass?.satellite?.noradId }
-                .ifEmpty { elements.rows.asSequence().take(8) }.take(40).toList()
-            hamClockPositions = withContext(Dispatchers.Default) {
-                homeEntries.mapNotNull { entry ->
-                    val position = (NativeSatellite.propagate(entry.elements, observer, now) as? SatelliteNativeResult.Success)?.value
-                        ?: return@mapNotNull null
-                    HamClockSatellitePosition(entry.noradId, entry.name, position.latitudeDeg, position.longitudeDeg,
-                        position.altitudeKm, position.elevationDeg, now,
-                        elements.metadata.state != SatelliteCacheState.CURRENT)
-                }
-            }
             busy = false
             message = when {
                 elements.rows.isEmpty() -> "No valid orbital elements. Refresh CelesTrak or add a manual TLE."
@@ -140,6 +163,8 @@ internal class SatelliteOperationsController(
 
     fun select(row: SatellitePassRow) {
         selectedPass = row
+        selectedHomeNoradId = row.satellite.noradId
+        restartHomeTicker()
         val point = maidenheadCenter(observerGrid) ?: return
         scope.launch {
             val observer = SatelliteObserver(point.latitude, point.longitude)
@@ -157,6 +182,8 @@ internal class SatelliteOperationsController(
     }
 
     fun selectNorad(noradId: Long) {
+        selectedHomeNoradId = noradId
+        restartHomeTicker()
         passes.firstOrNull { it.satellite.noradId == noradId }?.let { select(it); return }
         val entry = elements.rows.firstOrNull { it.noradId == noradId } ?: return
         val point = maidenheadCenter(observerGrid) ?: return
@@ -194,6 +221,43 @@ internal class SatelliteOperationsController(
     fun toggleFavourite(noradId: Long) {
         favourites = if (noradId in favourites) favourites - noradId else favourites + noradId
         prefs.edit().putStringSet("favourites", favourites.map(Long::toString).toSet()).apply()
+        restartHomeTicker()
+    }
+
+    fun setHomeActive(active: Boolean, observerGrid: String) {
+        val normalizedGrid = observerGrid.trim().uppercase(Locale.US)
+        if (homeActive == active && homeObserverGrid == normalizedGrid && (!active || homeJob?.isActive == true)) return
+        homeActive = active
+        homeObserverGrid = normalizedGrid
+        restartHomeTicker()
+    }
+
+    private fun restartHomeTicker() {
+        homeJob?.cancel()
+        homeJob = null
+        val generation = ++homeGeneration
+        if (!homeActive) return
+        val point = maidenheadCenter(homeObserverGrid) ?: run {
+            hamClockPositions = emptyList()
+            return
+        }
+        homeJob = scope.launch {
+            while (isActive && generation == homeGeneration && homeActive) {
+                val epoch = Instant.now().epochSecond
+                val entries = homeSatelliteEntries(elements.rows, favourites, selectedHomeNoradId)
+                val stale = elements.metadata.state != SatelliteCacheState.CURRENT
+                val positions = withContext(Dispatchers.Default) {
+                    homePropagationMutex.withLock {
+                        calculateHomeSatellitePositions(entries, SatelliteObserver(point.latitude, point.longitude),
+                            epoch, stale) { satelliteElements, observer, atEpoch ->
+                            NativeSatellite.propagate(satelliteElements, observer, atEpoch)
+                        }
+                    }
+                }
+                if (generation == homeGeneration && homeActive) hamClockPositions = positions
+                delay(45_000)
+            }
+        }
     }
 
     fun observerProfiles(currentGrid: String, activationGrid: String?): List<SatelliteObserverProfile> = buildList {
@@ -224,19 +288,20 @@ internal class SatelliteOperationsController(
         val entry = SatelliteCatalogueEntry(id, name.trim().ifBlank { id.toString() }, candidate, inspection.elementEpoch, true)
         return providers.saveManualElements(entry).also {
             elements = providers.elements()
+            restartHomeTicker()
             if (it) message = if (now - inspection.elementEpoch > 14L * 24 * 60 * 60)
                 "Manual TLE saved as MANUAL · STALE · prediction disabled until updated"
             else "Manual TLE saved and labelled MANUAL"
         }
     }
-    fun removeManualElements(id: Long) { providers.removeManualElements(id); elements=providers.elements(); message="Manual element override removed" }
+    fun removeManualElements(id: Long) { providers.removeManualElements(id); elements=providers.elements(); restartHomeTicker(); message="Manual element override removed" }
     fun saveManualTransponder(row: SatelliteTransponder) { providers.saveManualTransponder(row); transponders=providers.transponders(); message="Local transponder override saved" }
     fun removeManualTransponder(id: String) { providers.removeManualTransponder(id); transponders=providers.transponders() }
     fun transpondersFor(noradId: Long) = transponders.rows.rowsFor(noradId)
     private fun preferredTransponder(noradId: Long) = transponders.rows.rowsFor(noradId).firstOrNull { it.downlinkLowHz != null && it.alive && it.providerStatus.equals("active",true) }
         ?: transponders.rows.rowsFor(noradId).firstOrNull { it.downlinkLowHz != null }
     private fun List<SatelliteTransponder>.rowsFor(id: Long) = filter { it.noradId == id }
-    fun close() = scope.cancel()
+    fun close() { homeJob?.cancel(); scope.cancel() }
 }
 
 internal fun satelliteQsoMode(label: String): String? = label.uppercase(Locale.US).let {

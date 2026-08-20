@@ -50,13 +50,30 @@ internal fun parseNoaaSummaryValue(text: String, keys: List<String>): Float? {
     return null
 }
 
-internal fun parseLatestNoaaSunspot(body: String): Pair<Float, String> {
+internal fun parseLatestNoaaSunspot(
+    body: String,
+    currentMonth: YearMonth = YearMonth.now(java.time.Clock.systemUTC()),
+): Pair<Float, String> {
     val rows = JSONArray(body)
-    val latest = (rows.length() - 1 downTo 0).asSequence().mapNotNull(rows::optJSONObject).firstOrNull { row ->
-        runCatching { YearMonth.parse(row.optString("time-tag")) }.isSuccess &&
-            row.optDouble("observed_swpc_ssn", Double.NaN).let { it.isFinite() && it >= 0.0 }
-    } ?: error("NOAA returned no usable observed sunspot number")
-    return latest.getDouble("observed_swpc_ssn").toFloat() to latest.getString("time-tag")
+    val latest = (0 until rows.length()).asSequence().mapNotNull(rows::optJSONObject).mapNotNull { row ->
+        val month = runCatching { YearMonth.parse(row.optString("time-tag")) }.getOrNull() ?: return@mapNotNull null
+        val value = row.optDouble("observed_swpc_ssn", Double.NaN)
+        if (!value.isFinite() || value !in 0.0..1000.0 || month.isAfter(currentMonth.plusMonths(1))) null
+        else Triple(month, value.toFloat(), row.getString("time-tag"))
+    }.maxByOrNull { it.first } ?: error("NOAA returned no usable observed sunspot number")
+    return latest.second to latest.third
+}
+
+internal suspend fun completeSolarRefresh(
+    publishCore: suspend () -> Unit,
+    refreshOptionalSunspot: suspend () -> Unit,
+    reportSunspotFailure: (String) -> Unit,
+) {
+    publishCore()
+    runCatching { refreshOptionalSunspot() }.onFailure { error ->
+        reportSunspotFailure(error.message.orEmpty()
+            .replace(Regex("https?://\\S+|(?i)(token|key|password)=[^\\s]+"), "[redacted]").take(120))
+    }
 }
 
 class FeatureController(private val context: Context) {
@@ -92,6 +109,7 @@ class FeatureController(private val context: Context) {
     var duplicateSpots by mutableStateOf(0); private set
     var newestSpotEpoch by mutableStateOf(0L); private set
     var requestedSpotId by mutableStateOf<String?>(null); private set
+    var requestedSpotRequiresReceiveReview by mutableStateOf(false); private set
 
     init {
         val defaults = prefs.edit()
@@ -109,8 +127,11 @@ class FeatureController(private val context: Context) {
         NativeCore.featureWatchlist(handle, watchlistText)
     }
 
-    fun requestSpot(id: String) { requestedSpotId = id }
-    fun consumeRequestedSpot() { requestedSpotId = null }
+    fun requestSpot(id: String, requireReceiveReview: Boolean = false) {
+        requestedSpotId = id
+        requestedSpotRequiresReceiveReview = requireReceiveReview
+    }
+    fun consumeRequestedSpot() { requestedSpotId = null; requestedSpotRequiresReceiveReview = false }
 
     fun connectConfiguredCluster() {
         if (clusterHost.isNotBlank() && clusterPort in 1..65535 && clusterCallsign.isNotBlank()) {
@@ -200,10 +221,12 @@ class FeatureController(private val context: Context) {
                 val geomagnetic = summaryText("https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json")
                 val kp = parseNoaaSummaryValue(geomagnetic, listOf("Kp", "kp_index", "KpIndex")) ?: error("Unexpected NOAA Kp response")
                 val a = parseNoaaSummaryValue(geomagnetic, listOf("a_running", "A", "a_index")) ?: error("Unexpected NOAA A response")
-                refreshSunspotNumber()
-                NativeCore.featureSolar(handle, flux, a, kp, Instant.now().epochSecond); refreshDX()
+                completeSolarRefresh(
+                    publishCore = { NativeCore.featureSolar(handle, flux, a, kp, Instant.now().epochSecond); refreshDX() },
+                    refreshOptionalSunspot = { refreshSunspotNumber() },
+                    reportSunspotFailure = { sunspotError = it.ifBlank { "NOAA SSN unavailable; retained last monthly value" } },
+                )
             } catch (error: Exception) {
-                sunspotError = error.message.orEmpty().take(120)
                 publishCluster("NOAA solar data unavailable · retained last values")
             }
         }

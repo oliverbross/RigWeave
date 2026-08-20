@@ -81,7 +81,7 @@ class HamClockHomeFoundationTest {
         val dx = hamClockDxMapPoint(spot)
         assertEquals(spot.id, dx.contextId)
         assertEquals(spot.frequencyHz, dx.frequencyHz)
-        assertEquals(HamClockMapSelection.DX, dx.selection)
+        assertEquals(HamClockMapSelection.DX_SPOT, dx.selection)
         assertEquals(hamClockBandColor("20m"), dx.color)
         assertEquals("260 mi", hamClockDistanceLabel(420.0, HamClockUnitSystem.IMPERIAL))
         assertEquals(HamClockMapLayerAvailability.UNAVAILABLE,

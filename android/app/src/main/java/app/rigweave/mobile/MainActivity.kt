@@ -129,12 +129,35 @@ private enum class SettingsSection(val label: String) {
 }
 private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Station"), GENERAL("General"), NOTES("Notes"), QSL("QSL") }
 
-private data class HomeReceiveTuneReview(
+internal data class HomeReceiveTuneReview(
     val frequencyHz: Long,
     val mode: String?,
     val source: String,
     val reason: String,
 )
+
+internal data class HomeReceiveTuneDecision(
+    val pending: HomeReceiveTuneReview?,
+    val dispatch: HomeReceiveTuneReview?,
+)
+
+internal fun decideHomeReceiveTune(review: HomeReceiveTuneReview, confirm: Boolean): HomeReceiveTuneDecision =
+    HomeReceiveTuneDecision(pending = null, dispatch = review.takeIf { confirm })
+
+internal data class GeneralRadioCommand(
+    val raw: String,
+    val frequencyHz: Long?,
+    val mode: String?,
+)
+
+internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
+    val command = raw.uppercase(Locale.US)
+    val frequency = Regex("FA(\\d{11});").find(command)?.groupValues?.get(1)?.toLongOrNull()
+    val mode = Regex("MD([1-5]);").find(command)?.groupValues?.get(1)?.let { code ->
+        mapOf("1" to "LSB", "2" to "USB", "3" to "CW", "4" to "FM", "5" to "AM")[code]
+    }
+    return GeneralRadioCommand(raw, frequency, mode)
+}
 
 @Composable private fun RigWeaveApp() {
     val context = LocalContext.current
@@ -229,15 +252,10 @@ private data class HomeReceiveTuneReview(
         else if (risky) pendingRisk = command else direct(command)
     }
     val send: (String) -> Unit = { raw ->
-        val frequency = Regex("FA(\\d{11});").find(raw.uppercase())?.groupValues?.get(1)?.toLongOrNull()
-        if (frequency != null) {
-            pendingHomeReceiveTune = HomeReceiveTuneReview(frequency, null, "RigWeave frequency action", "Review receive-only frequency change")
-        } else if (app.radioFamily.isElecraft) sendKx(raw) else {
-            val mode = Regex("MD([1-5]);").find(raw.uppercase())?.groupValues?.get(1)?.let { code ->
-                mapOf("1" to "LSB", "2" to "USB", "3" to "CW", "4" to "FM", "5" to "AM")[code]
-            }
-            val target = flex.snapshot.selected(flex.selectedSliceIndex)?.frequencyHz
-            if (target != null) scope.launch { flex.tune(ReceiveTuneRequest(target, mode)) }
+        val command = parseGeneralRadioCommand(raw)
+        if (app.radioFamily.isElecraft) sendKx(command.raw) else {
+            val target = command.frequencyHz ?: flex.snapshot.selected(flex.selectedSliceIndex)?.frequencyHz
+            if (target != null) scope.launch { flex.tune(ReceiveTuneRequest(target, command.mode)) }
         }
     }
     LaunchedEffect(transport, app.radioFamily) {
@@ -328,18 +346,21 @@ private data class HomeReceiveTuneReview(
     ) }
     pendingHomeReceiveTune?.let { review ->
         AlertDialog(
-            onDismissRequest = { pendingHomeReceiveTune = null },
+            onDismissRequest = { pendingHomeReceiveTune = decideHomeReceiveTune(review, false).pending },
             title = { Text("Review receive tune") },
             text = { Text("${"%.6f".format(java.util.Locale.US, review.frequencyHz / 1_000_000.0)} MHz" +
                 review.mode?.takeIf(String::isNotBlank)?.let { " · $it" }.orEmpty() +
                 "\n${review.source}\n${review.reason}\nRadio: ${app.radioFamily.displayName}\n\nReceive frequency only. This does not key PTT or start TUNE.") },
             confirmButton = { Button({
-                if (app.radioFamily.isElecraft) {
-                    direct("FA${review.frequencyHz.toString().padStart(11, '0')};")
-                } else scope.launch { flex.tune(ReceiveTuneRequest(review.frequencyHz, review.mode)) }
-                pendingHomeReceiveTune = null
+                val decision = decideHomeReceiveTune(review, true)
+                decision.dispatch?.let { approved ->
+                    if (app.radioFamily.isElecraft) {
+                        direct("FA${approved.frequencyHz.toString().padStart(11, '0')};")
+                    } else scope.launch { flex.tune(ReceiveTuneRequest(approved.frequencyHz, approved.mode)) }
+                }
+                pendingHomeReceiveTune = decision.pending
             }, enabled = radio.connected && review.frequencyHz in 100_000L..77_000_000_000L) { Text("Confirm receive tune") } },
-            dismissButton = { TextButton({ pendingHomeReceiveTune = null }) { Text("Cancel") } },
+            dismissButton = { TextButton({ pendingHomeReceiveTune = decideHomeReceiveTune(review, false).pending }) { Text("Cancel") } },
         )
     }
     pendingVoiceSlot?.let { slot ->
@@ -437,7 +458,7 @@ private fun navIcon(item: Destination) = when (item) {
     when (destination) {
         Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, callbook,
             publicProviders, operations, send, openDx, openPortable, openProgress, openOperations,
-            openLogbook, closeEq, openDigi, requestHomeReceiveTune,
+            openLogbook, closeEq, openDigi, foreground, requestHomeReceiveTune,
             openHomeQso)
         Destination.RADIO -> Column(Modifier.fillMaxSize()) {
             if (compact) SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
@@ -479,14 +500,17 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.SYNC -> SyncHubScreen(database, mutations, syncHub, wavelog, wavelogNative, openLogbook)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app, progress.snapshot.needs,
-            operations, openOperations, send)
+            operations, openOperations, send, requestHomeReceiveTune) { callsign ->
+            progress.requestLogbook(logbookFilterForDimension("callsign", callsign)); openLogbook()
+        }
         Destination.PORTABLE -> PortableWorkspaceScreen(portable, activation, radio, app.stationGrid, foreground, compact,
             app, database, mutations, wavelog, callbook, cty, tunePortable, tuneLogPortable,
             progress.snapshot.needs.mapNotNull { need -> need.portableSpot?.id?.let { it to need.reasons } }.toMap(), openLogbook,
             operations.nextPlan, openOperations)
         Destination.OPERATIONS -> OperationsScreen(operations, portable, activation, features, progress, mutations, wavelog, callbook, cty,
             app, compact, openDx, openPortable, openLogbook, { frequency, mode ->
-                send("FA${frequency.toString().padStart(11, '0')};")
+                requestHomeReceiveTune(frequency, mode, "Operations satellite receive preview",
+                    "Review receive-only downlink change")
             }, prepareSatelliteLogger)
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
             transport, flex, voiceStore, voiceAudio, voiceTx, openEq, openSync, connect, direct)
@@ -2972,8 +2996,8 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
 
 @Composable private fun DXScreen(neuralDx: NeuralDxController, features: FeatureController, database: QsoDatabase,
     wavelog: WavelogController, callbook: CallbookController, cty: CtyController, app: AppController,
-    needs: List<ProgressNeed>, operations: OperationsController, openOperations: () -> Unit, send: (String) -> Unit) {
-    var previousQsoRecord by remember { mutableStateOf<AndroidCallbookRecord?>(null) }
+    needs: List<ProgressNeed>, operations: OperationsController, openOperations: () -> Unit, send: (String) -> Unit,
+    requestReceiveTune: (Long, String?, String, String) -> Unit, openHistory: (String) -> Unit) {
     val calendarByCall = operations.dxItems.associateBy { it.callsign.uppercase(Locale.US) }
     val calendarNeeds = features.liveSpots.mapNotNull { spot -> calendarByCall[spot.callsign.uppercase(Locale.US)]?.let { row ->
         spot.id to listOf("DX CALENDAR · ${row.status.replace('_', ' ')}") } }.toMap()
@@ -2986,13 +3010,10 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
             }
         }
         Box(Modifier.weight(1f)) {
-            NeuralDxScreen(neuralDx, features, database, wavelog, callbook, cty, app, send, dxNeeds) { spot ->
-                previousQsoRecord = spot.previousQsoRecord(cty)
+            NeuralDxScreen(neuralDx, features, database, wavelog, callbook, cty, app, send, requestReceiveTune, dxNeeds) { spot ->
+                openHistory(spot.callsign)
             }
         }
-    }
-    previousQsoRecord?.let { record ->
-        PreviousQsosDialog(record, database, wavelog, callbook) { previousQsoRecord = null }
     }
 }
 

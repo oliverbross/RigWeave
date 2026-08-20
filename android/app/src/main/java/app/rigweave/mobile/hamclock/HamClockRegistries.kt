@@ -112,7 +112,7 @@ internal fun defaultPanelsFromRegistry(): List<HamClockPanelPreference> =
 internal enum class HamClockMapLayerCategory { STATION, DX, REPORTS, PORTABLE, SPACE, LOG, WEATHER, REFERENCE, FUTURE }
 internal enum class HamClockMapLayerAvailability { ACTIVE, DELEGATED, UNAVAILABLE }
 internal enum class HamClockMapRenderKind { POINT, LINE, FILL }
-internal enum class HamClockMapSelection { NONE, DX, PORTABLE, SATELLITE, QSO, TARGET, WEATHER }
+internal enum class HamClockMapSelection { NONE, DX_SPOT, PSK_REPORT, PORTABLE, SATELLITE, QSO, TARGET, WEATHER }
 
 internal data class HamClockMapLayerSpec(
     val id: String,
@@ -138,11 +138,11 @@ internal val hamClockMapLayerRegistry = listOf(
         renderKinds = setOf(HamClockMapRenderKind.POINT), lowDataRepresentation = "Station callsign and grid", maximumObjectCount = 1),
     HamClockMapLayerSpec(HamClockMapLayerId.DX_SPOTS, "dx-cluster", "DX spots", HamClockMapLayerCategory.DX,
         true, availability = HamClockMapLayerAvailability.ACTIVE, sourceLabel = "Configured DX cluster",
-        renderKinds = setOf(HamClockMapRenderKind.POINT), selection = HamClockMapSelection.DX,
+        renderKinds = setOf(HamClockMapRenderKind.POINT), selection = HamClockMapSelection.DX_SPOT,
         lowDataRepresentation = "Bounded filtered spot rows", maximumObjectCount = 160),
     HamClockMapLayerSpec(HamClockMapLayerId.DX_PATHS, "great-circle", "DX reporting paths", HamClockMapLayerCategory.DX,
         true, .62f, HamClockMapLayerAvailability.ACTIVE, sourceLabel = "Local geodesic geometry",
-        renderKinds = setOf(HamClockMapRenderKind.LINE), selection = HamClockMapSelection.DX,
+        renderKinds = setOf(HamClockMapRenderKind.LINE), selection = HamClockMapSelection.DX_SPOT,
         lowDataRepresentation = "Reporter to DX path rows", maximumObjectCount = 80),
     HamClockMapLayerSpec(HamClockMapLayerId.SELECTED_TARGET, "great-circle", "Selected DX target", HamClockMapLayerCategory.DX,
         true, availability = HamClockMapLayerAvailability.ACTIVE, sourceLabel = "Manual or ranked DX target",
@@ -150,7 +150,7 @@ internal val hamClockMapLayerRegistry = listOf(
         lowDataRepresentation = "Target source, distance and bearing", maximumObjectCount = 2),
     HamClockMapLayerSpec(HamClockMapLayerId.PSK_REPORTER, "psk-reporter", "PSK Reporter", HamClockMapLayerCategory.REPORTS,
         false, .72f, HamClockMapLayerAvailability.ACTIVE, sourceLabel = "PSK Reporter",
-        renderKinds = setOf(HamClockMapRenderKind.POINT, HamClockMapRenderKind.LINE), selection = HamClockMapSelection.DX,
+        renderKinds = setOf(HamClockMapRenderKind.POINT, HamClockMapRenderKind.LINE), selection = HamClockMapSelection.PSK_REPORT,
         lowDataRepresentation = "Bounded report rows", maximumObjectCount = 60),
     HamClockMapLayerSpec(HamClockMapLayerId.PORTABLE, "pota", "Portable activity", HamClockMapLayerCategory.PORTABLE,
         true, availability = HamClockMapLayerAvailability.DELEGATED, sourceLabel = "POTA · SOTA · WWFF",
