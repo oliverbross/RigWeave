@@ -53,3 +53,12 @@ Every map layer declares a maximum object count. DX points cap at 160, great-cir
 - Home satellite positions reuse Satellite Operations' validated element cache and pinned SGP4 engine, with a bounded 40-object snapshot calculated off the main thread.
 - QSO projection remains capped at 120 compact rows; no canonical log JSON is materialized.
 - Camera persistence is gesture-only, delayed 600 ms, merges latest non-camera settings and rejects stale writes after profile/new-camera changes.
+
+# Task 2A2 runtime safeguards
+
+- Home satellite propagation is one foreground-only controller job at 45-second cadence. A mutex prevents overlap across lifecycle/reselection restarts; generation checks discard obsolete completion; output is favourites plus selected with a bounded fallback and a hard 40-row cap.
+- Home refresh uses `NeuralDxRefreshScope.HOME`, which excludes the legacy Neural DX satellite download and ticker. The remaining legacy path is limited to the dedicated full-DX workspace refresh.
+- Map source truth covers every registry layer, while header totals count only visible layers across current, degraded, empty and unavailable categories.
+- DX/PSK/Portable/Satellite/QSO routing carries typed exact identities. No marker selection performs CAT; Home DX review confirmation alone may change receive VFO.
+- DX points and paths retain the shared band palette; watchlist is a separate GeoJSON/stroke property. Existing per-source fingerprints still suppress unchanged full-source rewrites.
+- Recent Home QSOs remain the bounded `recentHamClockProjection(120)` path. No canonical QSO JSON decode or `QsoDatabase.all()` was introduced.

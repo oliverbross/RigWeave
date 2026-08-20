@@ -48,6 +48,12 @@ Manual targets resolve through configured callbook data, Maidenhead geometry and
 
 Task 2A1 retains exact marker identity across the hand-off: spot ID/callsign/frequency/mode, portable spot ID, NORAD, QSO ID and target context. Satellite positions are calculated only by `SatelliteOperationsController` through the pinned `NativeSatellite` SGP4 engine. Home frequency actions and destination frequency actions converge on one receive-only review dialog; confirmation may change RX frequency/mode but cannot key PTT or start TUNE.
 
+Task 2A2 narrows that decision: the shared application `send` callback is the established Radio/Preset transport and must never be intercepted by Home review. Only explicitly reviewed Home actions and the Operations satellite receive preview request the receive-only dialog. Home-launched DX detail retains that review requirement after exact navigation; normal Radio controls remain direct operator controls. General compound commands retain all fields.
+
+Home satellite presentation has one authority: `SatelliteOperationsController`. Its Home lifecycle is foreground/visibility-scoped, uses a separate station/Wavelog observer input, reuses validated elements, propagates locally at 45-second cadence, serializes calculations and caps output at 40. The legacy Neural DX satellite provider/ticker remains available only to `FULL_DX`; `HOME` refresh explicitly excludes it.
+
+Exact map routing uses distinct DX and PSK identities. Visible layer health counts come from the complete registry status map. Watchlist is a secondary marker property and never replaces band colour. A current-generation late style callback clears timeout state; obsolete callbacks remain ignored. Home unit selection covers distance/altitude surfaces, while density remains partial and is labelled Layout density until typography and controls share one complete metric model.
+
 The former Immersive Home label was overstated. It is now Minimal Home, hides only the Operations summary and remains `PARTIAL` in settings truth. `RESET PANELS` resets only the panel layout and never deletes named profiles.
 
 ## Provenance and licence
