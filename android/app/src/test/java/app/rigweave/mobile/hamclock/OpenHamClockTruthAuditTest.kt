@@ -5,6 +5,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -12,6 +13,8 @@ import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.Executor
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -49,11 +52,13 @@ class OpenHamClockTruthAuditTest {
     }
 
     @Test fun watcherDetectsPackageLicenceSecurityAndMalformedMetadata() {
-        val process = ProcessBuilder("python3", "scripts/check_openhamclock_upstream.py", "--self-test")
+        val process = ProcessBuilder(
+            "python3", "-m", "unittest", "scripts/test_check_openhamclock_upstream.py"
+        )
             .directory(root).redirectErrorStream(true).start()
         val output = process.inputStream.bufferedReader().use { it.readText() }
         assertEquals(output, 0, process.waitFor())
-        assertTrue(output, output.contains("8 watcher self-tests passed"))
+        assertTrue(output, output.contains("OK"))
     }
 
     @Test fun versionOneSettingsDecodeMigratesSafely() {
@@ -85,15 +90,16 @@ class OpenHamClockTruthAuditTest {
         val calls = AtomicInteger()
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
+        val sharedMarker = Any()
         val observersReady = CountDownLatch(6)
         val observersStart = CountDownLatch(1)
         val observers = Executors.newFixedThreadPool(6)
         val results = (1..6).map {
-            observers.submit<Int> {
+            observers.submit<Any> {
                 observersReady.countDown()
                 observersStart.await(2, TimeUnit.SECONDS)
                 coalescer.run("contests") {
-                    calls.incrementAndGet(); entered.countDown(); release.await(2, TimeUnit.SECONDS); 73
+                    calls.incrementAndGet(); entered.countDown(); release.await(2, TimeUnit.SECONDS); sharedMarker
                 }
             }
         }
@@ -102,7 +108,7 @@ class OpenHamClockTruthAuditTest {
         assertTrue(entered.await(2, TimeUnit.SECONDS))
         Thread.sleep(100)
         release.countDown()
-        assertEquals(List(6) { 73 }, results.map { it.get(2, TimeUnit.SECONDS) })
+        results.forEach { assertSame(sharedMarker, it.get(2, TimeUnit.SECONDS)) }
         assertEquals(1, calls.get())
         val keysEntered = CountDownLatch(2)
         val keysRelease = CountDownLatch(1)
@@ -121,6 +127,15 @@ class OpenHamClockTruthAuditTest {
         assertEquals(42, coalescer.run("failure") { calls.incrementAndGet(); 42 })
         assertEquals(2, calls.get())
         assertEquals(0, coalescer.activeRequestCount())
+        val rejecting = HamClockInFlightCoalescer(
+            Executor { throw RejectedExecutionException("rejected") }
+        )
+        repeat(2) {
+            val failure = runCatching { rejecting.run("rejected") { 1 } }.exceptionOrNull()
+            assertTrue(failure is RejectedExecutionException)
+            assertEquals("rejected", failure?.message)
+            assertEquals(0, rejecting.activeRequestCount())
+        }
         try {
             parseHamClockPropagation("""{"currentBands":[{"band":"20m","freq":14.1,"reliability":101,"snr":"1dB","status":"GOOD"}]}""", 1)
             fail("out-of-range reliability was accepted")

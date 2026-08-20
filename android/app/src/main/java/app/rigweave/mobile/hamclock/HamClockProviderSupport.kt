@@ -113,19 +113,26 @@ internal class HamClockInFlightCoalescer(
     fun <T> run(key: String, block: () -> T): T {
         val candidate = CompletableFuture<Any?>()
         val shared = active.putIfAbsent(key, candidate) ?: candidate.also { future ->
-            executor.execute {
-                try {
-                    val result = block()
-                    active.remove(key, future)
-                    future.complete(result)
-                } catch (error: Throwable) {
-                    active.remove(key, future)
-                    future.completeExceptionally(error)
+            try {
+                executor.execute {
+                    try {
+                        future.complete(block())
+                    } catch (error: Throwable) {
+                        future.completeExceptionally(error)
+                    } finally {
+                        active.remove(key, future)
+                    }
                 }
+            } catch (error: Throwable) {
+                active.remove(key, future)
+                future.completeExceptionally(error)
             }
         }
         return try {
             shared.get() as T
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw error
         } catch (error: ExecutionException) {
             throw (error.cause ?: error)
         }

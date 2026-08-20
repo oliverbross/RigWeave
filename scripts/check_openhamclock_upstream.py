@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Audit pinned OpenHamClock stable and preview channels through the GitHub API."""
+"""Audit pinned OpenHamClock branches and the latest release."""
 
 from __future__ import annotations
 
 import argparse
-import base64
-import datetime as dt
 import hashlib
 import json
 import os
@@ -17,319 +15,527 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-API = "https://api.github.com"
-ISSUE_TITLE = "OpenHamClock upstream audit requires review"
+EXIT_NO_REVIEW = 0
+EXIT_COMPARISON_FAILED = 1
+EXIT_REVIEW_REQUIRED = 2
+MAX_COMMITS = 100
+MAX_PATHS = 300
 MAX_API_BYTES = 8_000_000
-MAX_CHANGED_PATHS = 200
+MAX_CONTENT_BYTES = 2_000_000
 MAX_REPORT_BYTES = 500_000
+ISSUE_TITLE = "OpenHamClock upstream review required"
+
+SECURITY_RE = re.compile(
+    r"\b(security|xss|injection|escape[ds]?|saniti[sz](?:e|ed|ing)|ssrf|"
+    r"credential|token|auth(?:entication|orization)?|cors|csp|traversal|"
+    r"prototype pollution|dependency vulnerabilit|rate[- ]limit abuse)\b",
+    re.IGNORECASE,
+)
+PROVIDER_RE = re.compile(
+    r"\b(provider|endpoint|api contract|schema|payload|response format|"
+    r"request format|upstream feed)\b",
+    re.IGNORECASE,
+)
+ALGORITHM_RE = re.compile(
+    r"\b(propagation|voacap|p\.?533|muf|luf|prediction algorithm|"
+    r"satellite layer|sgp4|solar algorithm)\b",
+    re.IGNORECASE,
+)
 
 
 class AuditError(RuntimeError):
-    pass
+    """The upstream comparison could not be completed honestly."""
 
 
 class GitHub:
-    def __init__(self, token: str = "") -> None:
+    def __init__(self, token: str | None = None) -> None:
         self.token = token
 
-    def request(self, path: str, method: str = "GET", payload: dict[str, Any] | None = None) -> Any:
-        url = path if path.startswith("https://") else API + path
+    def request(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        body: dict[str, Any] | None = None,
+    ) -> Any:
         headers = {
             "Accept": "application/vnd.github+json",
-            "User-Agent": "RigWeave-OpenHamClock-Upstream-Watch/1",
+            "User-Agent": "RigWeave-OpenHamClock-audit",
             "X-GitHub-Api-Version": "2022-11-28",
         }
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
-        data = json.dumps(payload).encode() if payload is not None else None
-        request = urllib.request.Request(url, data=data, headers=headers, method=method)
+        data = None if body is None else json.dumps(body).encode()
+        request = urllib.request.Request(
+            f"https://api.github.com{path}",
+            data=data,
+            headers=headers,
+            method=method,
+        )
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
-                body = response.read(MAX_API_BYTES + 1)
-                if len(body) > MAX_API_BYTES:
-                    raise AuditError("GitHub response exceeded the audit byte limit")
-                remaining = response.headers.get("X-RateLimit-Remaining")
-                if remaining == "0":
-                    raise AuditError("GitHub rate limit exhausted")
+                raw = response.read(MAX_API_BYTES + 1)
+                if len(raw) > MAX_API_BYTES:
+                    raise AuditError("GitHub API response exceeded the audit byte limit")
+                if response.headers.get("X-RateLimit-Remaining") == "0":
+                    raise AuditError("GitHub API rate limit exhausted")
+                return json.loads(raw)
         except urllib.error.HTTPError as error:
-            detail = error.read(2048).decode("utf-8", "replace")
-            rate = error.headers.get("X-RateLimit-Remaining")
-            if error.code in (403, 429) or rate == "0":
-                raise AuditError(f"GitHub API rate-limited the audit (HTTP {error.code})") from error
-            raise AuditError(f"GitHub API HTTP {error.code}: {detail[:300]}") from error
-        except urllib.error.URLError as error:
-            raise AuditError(f"GitHub API unavailable: {error.reason}") from error
-        try:
-            return json.loads(body)
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise AuditError("GitHub returned malformed JSON") from error
+            raise AuditError(f"GitHub API HTTP {error.code} for {path}") from error
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+            raise AuditError(f"GitHub API request failed for {path}: {error}") from error
 
     def content(self, repo: str, path: str, ref: str) -> bytes:
-        encoded_path = "/".join(urllib.parse.quote(part, safe="") for part in path.split("/"))
-        row = self.request(f"/repos/{repo}/contents/{encoded_path}?ref={urllib.parse.quote(ref, safe='')}")
-        if not isinstance(row, dict) or row.get("encoding") != "base64" or not isinstance(row.get("content"), str):
-            raise AuditError(f"Malformed GitHub content metadata for {path}@{ref}")
+        quoted_path = "/".join(urllib.parse.quote(part, safe="") for part in path.split("/"))
+        row = self.request(
+            f"/repos/{repo}/contents/{quoted_path}?ref={urllib.parse.quote(ref, safe='')}"
+        )
+        if not isinstance(row, dict) or row.get("type") != "file":
+            raise AuditError(f"{path} at {ref} is not a file")
+        url = row.get("download_url")
+        if not isinstance(url, str) or not url.startswith("https://"):
+            raise AuditError(f"{path} at {ref} has no safe download URL")
+        request = urllib.request.Request(
+            url, headers={"User-Agent": "RigWeave-OpenHamClock-audit"}
+        )
         try:
-            return base64.b64decode(row["content"], validate=False)
-        except (ValueError, TypeError) as error:
-            raise AuditError(f"Malformed base64 content for {path}@{ref}") from error
+            with urllib.request.urlopen(request, timeout=30) as response:
+                raw = response.read(MAX_CONTENT_BYTES + 1)
+                if len(raw) > MAX_CONTENT_BYTES:
+                    raise AuditError(f"{path} at {ref} exceeded the content byte limit")
+                return raw
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as error:
+            raise AuditError(f"Unable to download {path} at {ref}: {error}") from error
+
+    def update_issue(self, repo: str, body: str) -> None:
+        if not self.token:
+            raise AuditError("--update-issue requires GITHUB_TOKEN")
+        issues = self.request(f"/repos/{repo}/issues?state=open&per_page=100")
+        matches = [
+            row
+            for row in issues
+            if isinstance(row, dict)
+            and "pull_request" not in row
+            and row.get("title") == ISSUE_TITLE
+        ]
+        payload = {"title": ISSUE_TITLE, "body": body}
+        if matches:
+            self.request(
+                f"/repos/{repo}/issues/{matches[0]['number']}",
+                method="PATCH",
+                body=payload,
+            )
+        else:
+            self.request(f"/repos/{repo}/issues", method="POST", body=payload)
 
 
-def require_sha(value: Any, label: str) -> str:
-    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
-        raise AuditError(f"Malformed {label} SHA")
-    return value
+def sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def package_version(data: bytes) -> str:
+    try:
+        value = json.loads(data.decode()).get("version")
+    except (UnicodeDecodeError, json.JSONDecodeError, AttributeError) as error:
+        raise AuditError(f"Malformed package.json: {error}") from error
+    if not isinstance(value, str) or not value.strip():
+        raise AuditError("package.json has no valid version")
+    return value.strip()
 
 
 def branch_sha(client: GitHub, repo: str, branch: str) -> str:
-    row = client.request(f"/repos/{repo}/branches/{urllib.parse.quote(branch, safe='')}")
-    if not isinstance(row, dict) or not isinstance(row.get("commit"), dict):
-        raise AuditError(f"Malformed branch metadata for {branch}")
-    return require_sha(row["commit"].get("sha"), branch)
-
-
-def package_version(client: GitHub, repo: str, ref: str) -> str:
+    row = client.request(
+        f"/repos/{repo}/branches/{urllib.parse.quote(branch, safe='')}"
+    )
     try:
-        row = json.loads(client.content(repo, "package.json", ref))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise AuditError(f"Malformed package.json at {ref}") from error
-    version = row.get("version") if isinstance(row, dict) else None
-    if not isinstance(version, str) or not version.strip() or len(version) > 80:
-        raise AuditError(f"Malformed package version at {ref}")
-    return version.strip()
+        value = row["commit"]["sha"]
+    except (KeyError, TypeError) as error:
+        raise AuditError(f"Malformed branch response for {branch}") from error
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+        raise AuditError(f"Invalid branch SHA for {branch}")
+    return value
 
 
-def licence_state(client: GitHub, repo: str, ref: str) -> dict[str, str]:
-    body = client.content(repo, "LICENSE", ref)
-    if len(body) > 200_000:
-        raise AuditError("Upstream LICENSE exceeded the audit byte limit")
-    text = body.decode("utf-8", "strict")
-    notice = next((line.strip() for line in text.splitlines() if line.lower().startswith("copyright")), "")
-    if "MIT License" not in text or not notice:
-        raise AuditError("Upstream LICENSE is not the expected MIT licence text")
-    return {"identifier": "MIT", "sha256": hashlib.sha256(body).hexdigest(), "copyright_notice": notice}
+def latest_release(client: GitHub, repo: str) -> dict[str, Any]:
+    row = client.request(f"/repos/{repo}/releases/latest")
+    tag = row.get("tag_name") if isinstance(row, dict) else None
+    if (
+        not isinstance(tag, str)
+        or not tag
+        or len(tag) > 80
+        or re.search(r"[\x00-\x20\x7f]", tag)
+    ):
+        raise AuditError("Latest release has an invalid tag name")
+    ref = client.request(
+        f"/repos/{repo}/git/ref/tags/{urllib.parse.quote(tag, safe='')}"
+    )
+    obj = ref.get("object") if isinstance(ref, dict) else None
+    annotated: list[str] = []
+    seen: set[str] = set()
+    while isinstance(obj, dict) and obj.get("type") == "tag":
+        tag_sha = obj.get("sha")
+        if not isinstance(tag_sha, str) or tag_sha in seen:
+            raise AuditError(f"Invalid or cyclic annotated tag {tag}")
+        seen.add(tag_sha)
+        annotated.append(tag_sha)
+        tag_row = client.request(f"/repos/{repo}/git/tags/{tag_sha}")
+        obj = tag_row.get("object") if isinstance(tag_row, dict) else None
+    commit = obj.get("sha") if isinstance(obj, dict) and obj.get("type") == "commit" else None
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise AuditError(f"Release tag {tag} does not peel to a commit")
+    return {
+        "tag": tag,
+        "commit": commit,
+        "published_at": row.get("published_at"),
+        "annotated_tag_objects": annotated,
+    }
 
 
 def compare(client: GitHub, repo: str, base: str, head: str) -> dict[str, Any]:
-    row = client.request(f"/repos/{repo}/compare/{base}...{head}")
-    if not isinstance(row, dict) or row.get("status") not in {"ahead", "behind", "diverged", "identical"}:
-        raise AuditError(f"Malformed comparison metadata for {base}...{head}")
-    merge = row.get("merge_base_commit")
-    files = row.get("files", [])
-    if not isinstance(merge, dict) or not isinstance(files, list):
-        raise AuditError(f"Incomplete comparison metadata for {base}...{head}")
-    paths = []
-    for item in files:
-        name = item.get("filename") if isinstance(item, dict) else None
-        if isinstance(name, str) and len(name) <= 500:
-            paths.append(name)
+    if base == head:
+        return {
+            "status": "identical",
+            "ahead_by": 0,
+            "behind_by": 0,
+            "total_commits": 0,
+            "commits": [],
+            "changed_paths": [],
+            "commits_truncated": False,
+            "changed_paths_truncated": False,
+            "truncated": False,
+        }
+    endpoint = (
+        f"/repos/{repo}/compare/{urllib.parse.quote(base, safe='')}..."
+        f"{urllib.parse.quote(head, safe='')}?per_page={MAX_COMMITS}&page=1"
+    )
+    row = client.request(endpoint)
+    if not isinstance(row, dict):
+        raise AuditError("Malformed compare response")
+    raw_commits, raw_files = row.get("commits"), row.get("files")
+    if not isinstance(raw_commits, list) or not isinstance(raw_files, list):
+        raise AuditError("Compare response omitted commits or files")
+    commits = []
+    for item in raw_commits[:MAX_COMMITS]:
+        message = item.get("commit", {}).get("message") if isinstance(item, dict) else None
+        commit_sha = item.get("sha") if isinstance(item, dict) else None
+        if isinstance(commit_sha, str) and isinstance(message, str):
+            commits.append({"sha": commit_sha, "message": message})
+    paths = [
+        item["filename"]
+        for item in raw_files[:MAX_PATHS]
+        if isinstance(item, dict) and isinstance(item.get("filename"), str)
+    ]
+    total = row.get("total_commits")
+    if not isinstance(total, int) or total < 0:
+        total = len(raw_commits)
+    commits_truncated = total > len(commits) or len(raw_commits) > MAX_COMMITS
+    paths_truncated = len(raw_files) >= MAX_PATHS
     return {
-        "status": row["status"],
-        "ahead_by": int(row.get("ahead_by", 0)),
-        "behind_by": int(row.get("behind_by", 0)),
-        "merge_base": require_sha(merge.get("sha"), "merge-base"),
-        "changed_paths": paths[:MAX_CHANGED_PATHS],
-        "changed_paths_truncated": len(paths) > MAX_CHANGED_PATHS,
+        "status": row.get("status", "unknown"),
+        "ahead_by": row.get("ahead_by"),
+        "behind_by": row.get("behind_by"),
+        "total_commits": total,
+        "commits": commits,
+        "changed_paths": paths,
+        "commits_truncated": commits_truncated,
+        "changed_paths_truncated": paths_truncated,
+        "truncated": commits_truncated or paths_truncated,
     }
 
 
-def classify(paths: list[str], watched: dict[str, Any]) -> dict[str, list[str]]:
-    result: dict[str, list[str]] = {}
-    for concern, patterns in watched.items():
-        if not isinstance(patterns, list):
-            raise AuditError(f"Watched-path group {concern} is malformed")
-        matches = []
-        for path in paths:
-            if any(isinstance(pattern, str) and (path == pattern or (pattern.endswith("/") and path.startswith(pattern))) for pattern in patterns):
-                matches.append(path)
-        if matches:
-            result[concern] = matches[:MAX_CHANGED_PATHS]
-    return result
+def classify(comparison: dict[str, Any], watched: dict[str, list[str]]) -> dict[str, Any]:
+    paths, commits = comparison["changed_paths"], comparison["commits"]
+    watched_hits = {
+        group: sorted(
+            path for path in paths if any(path.startswith(prefix) for prefix in prefixes)
+        )
+        for group, prefixes in watched.items()
+    }
+    watched_hits = {group: hits for group, hits in watched_hits.items() if hits}
+    categories: dict[str, dict[str, Any]] = {}
+    watched_category = {
+        "security": "security",
+        "providers": "provider_contract",
+        "propagation_algorithms": "propagation_algorithm",
+    }
+    for name, pattern in {
+        "security": SECURITY_RE,
+        "provider_contract": PROVIDER_RE,
+        "propagation_algorithm": ALGORITHM_RE,
+    }.items():
+        watched_paths = {
+            path
+            for group, hits in watched_hits.items()
+            if watched_category.get(group) == name
+            for path in hits
+        }
+        path_hits = sorted(watched_paths | {path for path in paths if pattern.search(path)})
+        commit_hits = [
+            {
+                "sha": item["sha"],
+                "subject": item["message"].splitlines()[0][:200],
+            }
+            for item in commits
+            if pattern.search(item["message"])
+        ]
+        if path_hits or commit_hits:
+            categories[name] = {"paths": path_hits, "commits": commit_hits}
+    return {
+        "watched_groups": watched_hits,
+        "triggering_categories": categories,
+        "sensitive": bool(watched_hits or categories),
+    }
 
 
-def current_release(client: GitHub, repo: str) -> dict[str, str]:
-    try:
-        row = client.request(f"/repos/{repo}/releases/latest")
-    except AuditError as error:
-        if "HTTP 404" in str(error):
-            return {"tag": "", "published_at": ""}
-        raise
-    if not isinstance(row, dict) or not isinstance(row.get("tag_name"), str):
-        raise AuditError("Malformed latest-release metadata")
-    return {"tag": row["tag_name"][:80], "published_at": str(row.get("published_at", ""))[:40]}
-
-
-def channel_result(client: GitHub, repo: str, branch: str, pinned: str, watched: dict[str, Any]) -> dict[str, Any]:
-    observed = branch_sha(client, repo, branch)
-    result: dict[str, Any] = {"branch": branch, "pinned_sha": pinned, "observed_sha": observed, "changed": observed != pinned}
-    if observed != pinned:
-        result["comparison"] = compare(client, repo, pinned, observed)
-        result["concerns"] = classify(result["comparison"]["changed_paths"], watched)
-    else:
-        result["comparison"] = {"status": "identical", "ahead_by": 0, "behind_by": 0, "merge_base": pinned,
-                                "changed_paths": [], "changed_paths_truncated": False}
-        result["concerns"] = {}
-    return result
+def channel_result(
+    client: GitHub,
+    repo: str,
+    branch: str,
+    reviewed_sha: str,
+    watched: dict[str, list[str]],
+) -> dict[str, Any]:
+    observed_sha = branch_sha(client, repo, branch)
+    comparison = compare(client, repo, reviewed_sha, observed_sha)
+    return {
+        "branch": branch,
+        "reviewed_sha": reviewed_sha,
+        "observed_sha": observed_sha,
+        "changed": reviewed_sha != observed_sha,
+        "comparison": comparison,
+        "classification": classify(comparison, watched),
+    }
 
 
 def audit(client: GitHub, manifest: dict[str, Any]) -> dict[str, Any]:
-    upstream = manifest.get("upstream", {})
-    repo = f"{upstream.get('owner', '')}/{upstream.get('repository', '')}"
-    if repo != "accius/openhamclock":
-        raise AuditError("Manifest upstream identity must be accius/openhamclock")
-    stable_pin = require_sha(manifest.get("stable", {}).get("sha"), "stable pin")
-    preview_pin = require_sha(manifest.get("preview", {}).get("sha"), "preview pin")
-    watched = manifest.get("watched_source_paths")
-    if not isinstance(watched, dict):
-        raise AuditError("Manifest watched_source_paths is malformed")
-    stable = channel_result(client, repo, str(manifest["stable"]["branch"]), stable_pin, watched)
-    preview = channel_result(client, repo, str(manifest["preview"]["branch"]), preview_pin, watched)
-    stable_version = package_version(client, repo, stable["observed_sha"])
-    licence = licence_state(client, repo, stable["observed_sha"])
+    upstream = manifest["upstream"]
+    repo = f"{upstream['owner']}/{upstream['repository']}"
+    watched = manifest["watched_source_paths"]
+    stable_pin, preview_pin = manifest["stable"], manifest["preview"]
+    stable = channel_result(
+        client, repo, stable_pin["branch"], stable_pin["sha"], watched
+    )
+    stable_package = client.content(repo, "package.json", stable["observed_sha"])
+    stable_licence = client.content(
+        repo, manifest["licence"]["file"], stable["observed_sha"]
+    )
+    stable.update(
+        reviewed_package_version=stable_pin["package_version"],
+        observed_package_version=package_version(stable_package),
+        reviewed_licence_sha256=manifest["licence"]["sha256"],
+        observed_licence_sha256=sha256(stable_licence),
+    )
+    stable["package_version_changed"] = (
+        stable["reviewed_package_version"] != stable["observed_package_version"]
+    )
+    stable["licence_changed"] = (
+        stable["reviewed_licence_sha256"] != stable["observed_licence_sha256"]
+    )
+    preview = channel_result(
+        client, repo, preview_pin["branch"], preview_pin["sha"], watched
+    )
     relationship = compare(client, repo, stable["observed_sha"], preview["observed_sha"])
-    pinned_version = str(manifest["stable"].get("package_version", ""))
-    pinned_licence = str(manifest.get("licence", {}).get("sha256", ""))
-    stable["package_version"] = stable_version
-    stable["package_version_changed"] = stable_version != pinned_version
-    stable["licence"] = licence
-    stable["licence_changed"] = licence["sha256"] != pinned_licence
-    preview_sensitive = bool(set(preview["concerns"]) & {"security", "providers", "propagation_algorithms"})
-    issue_required = bool(stable["changed"] or stable["package_version_changed"] or stable["licence_changed"] or
-                          (preview["changed"] and preview_sensitive))
-    return {
-        "schema_version": 1,
-        "checked_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
+
+    reviewed_release = manifest["release"]
+    observed_release = latest_release(client, repo)
+    unavailable = []
+    try:
+        release_package = client.content(
+            repo, "package.json", observed_release["commit"]
+        )
+        observed_package_version = package_version(release_package)
+    except AuditError as error:
+        if "404" not in str(error):
+            raise
+        unavailable.append("package.json")
+        observed_package_version = None
+    try:
+        release_licence = client.content(
+            repo, manifest["licence"]["file"], observed_release["commit"]
+        )
+        observed_licence_sha256 = sha256(release_licence)
+    except AuditError as error:
+        if "404" not in str(error):
+            raise
+        unavailable.append(manifest["licence"]["file"])
+        observed_licence_sha256 = None
+    observed_release.update(
+        package_version=observed_package_version,
+        licence_sha256=observed_licence_sha256,
+        unavailable_files=unavailable,
+    )
+    release_changed_fields = [
+        field
+        for field in ("tag", "commit", "package_version", "licence_sha256")
+        if (
+            observed_release.get(field) is not None
+            and reviewed_release.get(field) != observed_release.get(field)
+        )
+    ]
+    release_comparison = compare(
+        client, repo, reviewed_release["commit"], observed_release["commit"]
+    )
+    release = {
+        "reviewed": reviewed_release,
+        "observed": observed_release,
+        "changed": bool(release_changed_fields or unavailable),
+        "changed_fields": release_changed_fields,
+        "comparison": release_comparison,
+        "classification": classify(release_comparison, watched),
+    }
+
+    reasons = []
+    if stable["changed"]:
+        reasons.append("stable branch changed")
+    if stable["package_version_changed"]:
+        reasons.append("stable package version changed")
+    if stable["licence_changed"]:
+        reasons.append("stable licence digest changed")
+    if release["changed"]:
+        reasons.append("latest release identity or contents changed")
+    if preview["changed"] and preview["classification"]["sensitive"]:
+        reasons.append("preview changed in a sensitive area")
+    if preview["changed"] and preview["comparison"]["truncated"]:
+        reasons.append("preview inventory was truncated")
+    result = {
+        "schema_version": 2,
         "upstream": repo,
         "stable": stable,
         "preview": preview,
+        "release": release,
         "stable_preview_relationship": relationship,
-        "latest_release": current_release(client, repo),
-        "issue_required": issue_required,
-        "issue_reason": "stable change" if stable["changed"] or stable["package_version_changed"] or stable["licence_changed"]
-                        else "preview security/provider/algorithm change" if preview["changed"] and preview_sensitive else "none",
-        "automatic_source_or_pin_change": False,
+        "release_only_change": release["changed"] and not stable["changed"],
+        "review_required": bool(reasons),
+        "review_reasons": reasons,
     }
+    result["result"] = "REVIEW_REQUIRED" if reasons else "NO_REVIEW"
+    return result
 
 
-def markdown(report: dict[str, Any]) -> str:
-    stable, preview, relationship = report["stable"], report["preview"], report["stable_preview_relationship"]
+def markdown_report(result: dict[str, Any]) -> str:
+    if result.get("result") == "COMPARISON_FAILED":
+        return (
+            "# OpenHamClock upstream audit\n\n"
+            "**Result: COMPARISON FAILED**\n\n"
+            f"- Error: {result.get('error', 'unknown comparison failure')}\n"
+        )
+    stable, preview, release = result["stable"], result["preview"], result["release"]
     lines = [
         "# OpenHamClock upstream audit",
         "",
-        f"Checked: `{report['checked_at']}`",
-        f"Upstream: `{report['upstream']}`",
+        f"**Result: {result['result']}**",
         "",
-        "## Stable",
+        "## Latest release",
         "",
-        f"- `{stable['branch']}` pinned `{stable['pinned_sha']}`, observed `{stable['observed_sha']}`",
-        f"- Change: **{'YES' if stable['changed'] else 'NO'}**; package `{stable['package_version']}`; licence `{stable['licence']['identifier']}`",
-        f"- Package changed: **{stable['package_version_changed']}**; licence changed: **{stable['licence_changed']}**",
+        f"- Reviewed tag: {release['reviewed']['tag']}",
+        f"- Observed tag: {release['observed']['tag']}",
+        f"- Reviewed commit: {release['reviewed']['commit']}",
+        f"- Observed commit: {release['observed']['commit']}",
+        f"- Changed fields: {', '.join(release['changed_fields']) or 'none'}",
+        f"- Unavailable release files: {', '.join(release['observed']['unavailable_files']) or 'none'}",
+        f"- Comparison: {release['comparison']['status']}",
+        f"- Commit inventory truncated: {str(release['comparison']['commits_truncated']).lower()}",
+        f"- Path inventory truncated: {str(release['comparison']['changed_paths_truncated']).lower()}",
+        f"- Release-only change: {str(result['release_only_change']).lower()}",
         "",
-        "## Preview",
+        "## Stable and preview",
         "",
-        f"- `{preview['branch']}` pinned `{preview['pinned_sha']}`, observed `{preview['observed_sha']}`",
-        f"- Change: **{'YES' if preview['changed'] else 'NO'}**",
-        f"- Relationship to stable: `{relationship['status']}`, ahead {relationship['ahead_by']}, behind {relationship['behind_by']}, merge base `{relationship['merge_base']}`",
-        "",
-        "## Watched changes",
-        "",
+        f"- Stable: {stable['reviewed_sha']} -> {stable['observed_sha']}",
+        f"- Stable package: {stable['reviewed_package_version']} -> {stable['observed_package_version']}",
+        f"- Stable licence SHA-256: {stable['reviewed_licence_sha256']} -> {stable['observed_licence_sha256']}",
+        f"- Preview: {preview['reviewed_sha']} -> {preview['observed_sha']}",
+        f"- Preview inventory truncated: {str(preview['comparison']['truncated']).lower()}",
     ]
-    for name, channel in (("stable", stable), ("preview", preview)):
-        lines.append(f"### {name.title()}")
-        if not channel["comparison"]["changed_paths"]:
-            lines.append("- No changed paths from the pin.")
-        else:
-            for concern, paths in sorted(channel["concerns"].items()):
-                lines.append(f"- **{concern}**: " + ", ".join(f"`{path}`" for path in paths[:20]))
-            unclassified = [path for path in channel["comparison"]["changed_paths"] if not any(path in rows for rows in channel["concerns"].values())]
-            if unclassified:
-                lines.append("- **other**: " + ", ".join(f"`{path}`" for path in unclassified[:20]))
+    release_commits = release["comparison"]["commits"]
+    release_paths = release["comparison"]["changed_paths"]
+    if release_commits or release_paths:
+        lines.extend(["## Latest-release inventory", ""])
+        lines.extend(
+            f"- commit {item['sha']}: {item['message'].splitlines()[0][:200]}"
+            for item in release_commits
+        )
+        lines.extend(f"- path {path}" for path in release_paths)
         lines.append("")
-    lines += [f"Issue required: **{report['issue_required']}** ({report['issue_reason']}).",
-              "", "This audit never changes RigWeave source or pins automatically."]
-    body = "\n".join(lines) + "\n"
-    return body[:MAX_REPORT_BYTES]
+    lines.extend(["", "## Preview triggers", ""])
+    categories = preview["classification"]["triggering_categories"]
+    if not categories:
+        lines.append("- None")
+    for category, triggers in categories.items():
+        lines.append(f"- {category}")
+        for item in triggers["commits"]:
+            lines.append(f"  - commit {item['sha']}: {item['subject']}")
+        for path in triggers["paths"]:
+            lines.append(f"  - path {path}")
+    lines.extend(["", "## Review reasons", ""])
+    lines.extend(f"- {reason}" for reason in result["review_reasons"])
+    if not result["review_reasons"]:
+        lines.append("- None")
+    return "\n".join(lines) + "\n"
 
 
-def update_issue(client: GitHub, repository: str, body: str) -> str:
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
-        raise AuditError("Malformed issue repository")
-    issues = client.request(f"/repos/{repository}/issues?state=open&per_page=100")
-    if not isinstance(issues, list):
-        raise AuditError("Malformed issue-list response")
-    existing = next((row for row in issues if isinstance(row, dict) and row.get("title") == ISSUE_TITLE and "pull_request" not in row), None)
-    payload = {"title": ISSUE_TITLE, "body": body[:60_000]}
-    if existing is not None:
-        number = existing.get("number")
-        if not isinstance(number, int):
-            raise AuditError("Malformed existing issue metadata")
-        result = client.request(f"/repos/{repository}/issues/{number}", "PATCH", payload)
-    else:
-        result = client.request(f"/repos/{repository}/issues", "POST", payload)
-    if not isinstance(result, dict) or not isinstance(result.get("html_url"), str):
-        raise AuditError("Malformed issue-write response")
-    return result["html_url"]
+def write_reports(output_dir: Path, result: dict[str, Any]) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_text = json.dumps(result, indent=2, sort_keys=True) + "\n"
+    markdown_text = markdown_report(result)
+    if len(json_text.encode()) > MAX_REPORT_BYTES:
+        raise AuditError("JSON report exceeded the audit byte limit")
+    if len(markdown_text.encode()) > MAX_REPORT_BYTES:
+        raise AuditError("Markdown report exceeded the audit byte limit")
+    (output_dir / "openhamclock-upstream-audit.json").write_text(
+        json_text, encoding="utf-8"
+    )
+    (output_dir / "openhamclock-upstream-audit.md").write_text(
+        markdown_text, encoding="utf-8"
+    )
 
 
-def self_test() -> None:
-    watched = {"security": ["SECURITY.md", "server/middleware/"], "providers": ["server/routes/"], "licence": ["LICENSE"]}
-    assert require_sha("a" * 40, "test") == "a" * 40
-    try:
-        require_sha("bad", "test")
-        raise AssertionError("malformed SHA accepted")
-    except AuditError:
-        pass
-    classified = classify(["SECURITY.md", "server/routes/propagation.js", "README.md"], watched)
-    assert set(classified) == {"security", "providers"}
-    assert classify(["LICENSE"], watched) == {"licence": ["LICENSE"]}
-    stable = {"changed": False, "package_version_changed": False, "licence_changed": False}
-    preview = {"changed": True, "concerns": {"security": ["SECURITY.md"]}}
-    assert not stable["changed"] and preview["changed"]
-    assert bool(set(preview["concerns"]) & {"security", "providers", "propagation_algorithms"})
-    assert len(list(range(MAX_CHANGED_PATHS + 10))[:MAX_CHANGED_PATHS]) == MAX_CHANGED_PATHS
-    assert hashlib.sha256(b"old").hexdigest() != hashlib.sha256(b"new").hexdigest()
-    assert "26.5.0" != "26.6.0"
-    print("8 watcher self-tests passed")
-
-
-def main() -> int:
+def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", type=Path, default=Path("docs/hamclock/upstream.json"))
-    parser.add_argument("--json-out", type=Path, default=Path("build/reports/openhamclock-upstream.json"))
-    parser.add_argument("--markdown-out", type=Path, default=Path("build/reports/openhamclock-upstream.md"))
+    parser.add_argument(
+        "--manifest", type=Path, default=Path("docs/hamclock/upstream.json")
+    )
+    parser.add_argument("--output-dir", type=Path, default=Path("build/reports"))
     parser.add_argument("--update-issue", action="store_true")
-    parser.add_argument("--issue-repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
-    parser.add_argument("--self-test", action="store_true")
-    args = parser.parse_args()
-    if args.self_test:
-        self_test()
-        return 0
+    parser.add_argument("--issue-repository")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    client = GitHub(os.environ.get("GITHUB_TOKEN"))
+    issue_attempted = False
     try:
         manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
-        if not isinstance(manifest, dict):
-            raise AuditError("Manifest root must be an object")
-        client = GitHub(os.environ.get("GITHUB_TOKEN", ""))
-        report = audit(client, manifest)
-        rendered = markdown(report)
-        encoded = json.dumps(report, indent=2, sort_keys=True) + "\n"
-        if len(encoded.encode()) > MAX_REPORT_BYTES:
-            raise AuditError("JSON report exceeded the audit byte limit")
-        args.json_out.parent.mkdir(parents=True, exist_ok=True)
-        args.markdown_out.parent.mkdir(parents=True, exist_ok=True)
-        args.json_out.write_text(encoded, encoding="utf-8")
-        args.markdown_out.write_text(rendered, encoding="utf-8")
-        issue_url = ""
-        if args.update_issue and report["issue_required"]:
-            if not args.issue_repository or not client.token:
-                raise AuditError("Issue update requested without repository/token")
-            issue_url = update_issue(client, args.issue_repository, rendered)
-        print(json.dumps({"stable_changed": report["stable"]["changed"], "preview_changed": report["preview"]["changed"],
-                          "relationship": report["stable_preview_relationship"]["status"], "issue_required": report["issue_required"],
-                          "issue_url": issue_url}, sort_keys=True))
-        return 0
-    except (AuditError, OSError, json.JSONDecodeError) as error:
-        print(f"OpenHamClock upstream audit failed: {error}", file=sys.stderr)
-        return 2
+        result = audit(client, manifest)
+        write_reports(args.output_dir, result)
+        if result["review_required"] and args.update_issue:
+            repo = args.issue_repository or manifest.get("watcher", {}).get(
+                "issue_repository"
+            )
+            if not repo:
+                raise AuditError("--update-issue requires --issue-repository")
+            issue_attempted = True
+            client.update_issue(repo, markdown_report(result))
+        return EXIT_REVIEW_REQUIRED if result["review_required"] else EXIT_NO_REVIEW
+    except (AuditError, OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+        failure = {
+            "schema_version": 2,
+            "result": "COMPARISON_FAILED",
+            "review_required": True,
+            "review_reasons": ["upstream comparison failed"],
+            "error": str(error),
+        }
+        try:
+            write_reports(args.output_dir, failure)
+            repo = args.issue_repository or locals().get("manifest", {}).get(
+                "watcher", {}
+            ).get("issue_repository")
+            if args.update_issue and repo and not issue_attempted:
+                issue_attempted = True
+                client.update_issue(repo, markdown_report(failure))
+        except (AuditError, OSError):
+            pass
+        print(f"OpenHamClock upstream comparison failed: {error}", file=sys.stderr)
+        return EXIT_COMPARISON_FAILED
 
 
 if __name__ == "__main__":

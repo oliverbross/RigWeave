@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "upstream": {
     "owner": "accius",
     "repository": "openhamclock",
@@ -10,6 +10,12 @@
     "sha": "d4a50eaaa61d3432a1de5f80cbe61790739930a5",
     "package_version": "26.5.0",
     "latest_release": "v26.5.0"
+  },
+  "release": {
+    "tag": "v26.5.0",
+    "commit": "cc2415e70cce5f9a583fa32efaf1c66792d030df",
+    "package_version": "26.5.0",
+    "licence_sha256": "93d70a638444f963c10c1e4c67324bcdb4617952b2cf0c74f1bd483570ef6877"
   },
   "preview": {
     "branch": "Staging",
