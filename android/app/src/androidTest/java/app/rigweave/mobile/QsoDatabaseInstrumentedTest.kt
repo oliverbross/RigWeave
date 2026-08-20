@@ -26,6 +26,17 @@ class QsoDatabaseInstrumentedTest {
         context.deleteDatabase(databaseName)
     }
 
+    @Test fun opensDatabaseWithRuntimePragmasConfigured() {
+        database.readableDatabase.rawQuery("PRAGMA busy_timeout", null).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.getInt(0) > 0)
+        }
+        database.readableDatabase.rawQuery("PRAGMA synchronous", null).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1, cursor.getInt(0))
+        }
+    }
+
     @Test fun savesCompleteQsoAndRoundTripsAdifWithoutDuplicates() {
         val qso = Qso(
             id = "instrumented-qso", callsign = "VK0TEST", frequencyHz = 14_200_000, mode = "USB",

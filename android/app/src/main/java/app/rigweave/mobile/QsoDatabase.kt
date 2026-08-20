@@ -97,8 +97,8 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     init { setWriteAheadLoggingEnabled(true) }
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
-        db.execSQL("PRAGMA busy_timeout=3000")
-        db.execSQL("PRAGMA synchronous=NORMAL")
+        db.rawQuery("PRAGMA busy_timeout=3000", null).use { it.moveToFirst() }
+        db.rawQuery("PRAGMA synchronous=NORMAL", null).use { it.moveToFirst() }
     }
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
