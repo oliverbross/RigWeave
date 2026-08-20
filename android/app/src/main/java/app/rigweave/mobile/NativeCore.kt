@@ -68,6 +68,10 @@ object NativeCore {
     external fun featureWatchlist(handle: Long, value: String)
     external fun featureClusterLine(handle: Long, value: String, epoch: Long): Boolean
     external fun featureDxSnapshot(handle: Long, epoch: Long): String
+    external fun featureBeginWorkedSync(handle: Long): Boolean
+    external fun featureAddWorkedQso(handle: Long, callsign: String, entity: String, band: String,
+        mode: String, submode: String, epoch: Long, fromWavelog: Boolean): Boolean
+    external fun featureEndWorkedSync(handle: Long): Boolean
     external fun featureSolar(handle: Long, flux: Float, aIndex: Float, kpIndex: Float, epoch: Long)
     external fun flexCreate(): Long
     external fun flexDestroy(handle: Long)

@@ -238,6 +238,9 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         }
     }
     LaunchedEffect(features) { features.connectConfiguredCluster() }
+    LaunchedEffect(features, database, wavelog, cty) {
+        features.startWorkedLogSync(database, wavelog, cty)
+    }
     LaunchedEffect(wavelog.logMode) { syncHub.setAuthority(wavelog.logMode) }
     LaunchedEffect(transport, radio.mode) {
         while (isCwMacroMode(radio.mode)) { delay(90); transport.pollCwText()?.let(::accept) }

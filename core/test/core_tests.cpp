@@ -91,20 +91,81 @@ int main() {
     assert(rw_feature_set_solar(features, 145.0F, 7.0F, 2.0F, 1720000000) == 1);
     assert(rw_feature_ingest_cluster_line(features,
         "DX de VK3ABC:  14074.0  JA1XYZ  FT8 -10 dB", 1720000000) == 1);
-    char dx_json[8192]{};
+    assert(rw_feature_ingest_cluster_line(features,
+        "DX de VK3ABC:  14075.0  JA2ABC  FT8 -08 dB", 1720000000) == 1);
+    char dx_json[16384]{};
     assert(rw_feature_dx_snapshot_json(features, dx_json, sizeof(dx_json), 1720000001) > 0);
-    assert(std::string(dx_json).find("\"callsign\":\"JA1XYZ\"") != std::string::npos);
-    assert(std::string(dx_json).find("\"watchlisted\":true") != std::string::npos);
-    assert(std::string(dx_json).find("\"bandTimeline\":[") != std::string::npos);
-    assert(std::string(dx_json).find("\"worldGrid\":[") != std::string::npos);
-    assert(std::string(dx_json).find("]],\"opportunities\":[") != std::string::npos);
-    assert(std::string(dx_json).find("\"liveSpots\":[") != std::string::npos);
+    std::string dx(dx_json);
+    const auto opportunity_for = [](const std::string& json, const std::string& callsign) {
+        const auto start = json.find("\"callsign\":\"" + callsign + "\"");
+        assert(start != std::string::npos);
+        const auto end = json.find('}', start);
+        assert(end != std::string::npos);
+        return json.substr(start, end - start);
+    };
+    const auto score_of = [](const std::string& row) {
+        const auto start = row.find("\"score\":");
+        assert(start != std::string::npos);
+        return std::stoi(row.substr(start + 8));
+    };
+    assert(dx.find("\"callsign\":\"JA1XYZ\"") != std::string::npos);
+    assert(dx.find("\"watchlisted\":true") != std::string::npos);
+    assert(dx.find("\"bandTimeline\":[") != std::string::npos);
+    assert(dx.find("\"worldGrid\":[") != std::string::npos);
+    assert(dx.find("]],\"opportunities\":[") != std::string::npos);
+    assert(dx.find("\"liveSpots\":[") != std::string::npos);
+    assert(dx.find("\"workedLog\":{\"loaded\":false,\"complete\":false") != std::string::npos);
+    auto je_row = opportunity_for(dx, "JA2ABC");
+    assert(je_row.find("\"workedIndexComplete\":false") != std::string::npos);
+    assert(je_row.find("NEW ENTITY IN LOGBOOK") == std::string::npos);
 
-    assert(rw_feature_add_worked_qso(features, "JA1XYZ", "Japan", "20m", "FT8", "", 1719999900, 0) == 1);
+    assert(rw_feature_begin_worked_sync(features) == 1);
+    assert(rw_feature_end_worked_sync(features) == 1);
+    assert(rw_feature_dx_snapshot_json(features, dx_json, sizeof(dx_json), 1720000001) > 0);
+    dx = dx_json;
+    assert(dx.find("\"workedLog\":{\"loaded\":true,\"complete\":true,\"cells\":0") != std::string::npos);
+    je_row = opportunity_for(dx, "JA2ABC");
+    assert(je_row.find("\"workedCountry\":false") != std::string::npos);
+    assert(je_row.find("\"reason\":\"NEW ENTITY IN LOGBOOK\"") != std::string::npos);
+    const int unworked_score = score_of(je_row);
+
+    assert(rw_feature_begin_worked_sync(features) == 1);
+    assert(rw_feature_add_worked_qso(features, "JA2ABC", "Japan", "20m", "FT8", "", 1719999900, 0) == 1);
+    assert(rw_feature_end_worked_sync(features) == 1);
+    assert(rw_feature_dx_snapshot_json(features, dx_json, sizeof(dx_json), 1720000001) > 0);
+    dx = dx_json;
+    je_row = opportunity_for(dx, "JA2ABC");
+    for (const char *flag : {"\"workedCountry\":true", "\"workedCall\":true",
+                             "\"workedBand\":true", "\"workedMode\":true",
+                             "\"workedBandMode\":true", "\"recentDupe\":true"})
+        assert(je_row.find(flag) != std::string::npos);
+    assert(je_row.find("NEW ENTITY IN LOGBOOK") == std::string::npos);
+    assert(score_of(je_row) == unworked_score - 22);
+
     char worked_json[1024]{};
     assert(rw_feature_worked_json(features, worked_json, sizeof(worked_json),
-        "JA1XYZ", "Japan", "20m", "FT8", "", 1720000001) > 0);
+        "JA2ABC", "Japan", "20m", "FT8", "", 1720000001) > 0);
     assert(std::string(worked_json).find("\"callWorked\":true") != std::string::npos);
+
+    assert(rw_feature_begin_worked_sync(features) == 1);
+    assert(rw_feature_end_worked_sync(features) == 1);
+    assert(rw_feature_dx_snapshot_json(features, dx_json, sizeof(dx_json), 1720000001) > 0);
+    je_row = opportunity_for(dx_json, "JA2ABC");
+    assert(je_row.find("\"workedCountry\":false") != std::string::npos);
+    assert(je_row.find("NEW ENTITY IN LOGBOOK") != std::string::npos);
+
+    assert(rw_feature_begin_worked_sync(features) == 1);
+    assert(rw_feature_add_worked_qso(features, "INVALID", "", "20m", "FT8", "",
+                                     1719999999, 0) == 0);
+    assert(rw_feature_end_worked_sync(features) == 1);
+    assert(rw_feature_dx_snapshot_json(features, dx_json, sizeof(dx_json), 1720000001) > 0);
+    dx = dx_json;
+    assert(dx.find("\"complete\":false") != std::string::npos);
+    assert(dx.find("\"rejected\":1") != std::string::npos);
+    assert(dx.find("\"truncated\":0") != std::string::npos);
+    je_row = opportunity_for(dx, "JA2ABC");
+    assert(je_row.find("\"workedIndexComplete\":false") != std::string::npos);
+    assert(je_row.find("NEW ENTITY IN LOGBOOK") == std::string::npos);
 
     char propagation[2048]{};
     assert(rw_feature_propagation_json(propagation, sizeof(propagation),

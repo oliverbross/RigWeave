@@ -28,6 +28,7 @@ final class QSOStore: ObservableObject {
     @Published private(set) var records: [QSO] = []
     @Published private(set) var message = ""
     private var database: OpaquePointer?
+    var onWorkedLogChanged: (() -> Void)?
 
     init() {
         let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -89,7 +90,7 @@ final class QSOStore: ObservableObject {
                 createdAt: Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(statement, 6))),
                 name: text(statement, 7), qth: text(statement, 8), country: text(statement, 9), notes: text(statement, 10)))
         }
-        sqlite3_finalize(statement); records = loaded
+        sqlite3_finalize(statement); records = loaded; onWorkedLogChanged?()
     }
 
     func exportADIF(using serialize: (QSO) -> String) -> URL? {
@@ -159,6 +160,8 @@ final class QSOStore: ObservableObject {
         }
         sqlite3_finalize(statement); return loaded
     }
+
+    func workedLogRecords() -> [QSO] { allRecords() }
 
     private func bind(_ value: String, to statement: OpaquePointer?, at index: Int32) {
         sqlite3_bind_text(statement, index, (value as NSString).utf8String, -1, nil)
