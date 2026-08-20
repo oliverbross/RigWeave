@@ -7,6 +7,9 @@
 
 namespace kx3 {
 
+constexpr std::uint64_t kDxMinimumFrequencyHz = 1'000'000ULL;
+constexpr std::uint64_t kDxMaximumFrequencyHz = 10'500'000'000ULL;
+
 struct ClusterSpot {
     std::uint64_t frequency_hz{};
     std::string callsign;

@@ -1,4 +1,5 @@
 #include "kx3/dx_analysis.hpp"
+#include "kx3/spot.hpp"
 
 #include <algorithm>
 #include <array>
@@ -13,7 +14,8 @@ namespace kx3 {
 namespace {
 
 constexpr std::array<const char*, kDxBandCount> kBands{{
-    "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"}};
+    "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m",
+    "4m", "2m", "70cm", "23cm", "3cm"}};
 constexpr std::array<const char*, kDxRegionCount> kRegions{{"AF", "AN", "AS", "EU", "NA", "OC", "SA"}};
 
 std::string upper_trim(std::string_view value) {
@@ -142,8 +144,9 @@ bool DxInsightEngine::ingest(DxSpot spot) {
     spot.spotter = upper_trim(spot.spotter);
     spot.country = upper_trim(spot.country);
     spot.continent = upper_trim(spot.continent);
-    if (spot.callsign.empty() || spot.frequency_hz < 1000000ULL ||
-        spot.frequency_hz > 54000000ULL || spot.received_epoch <= 0) return false;
+    if (spot.callsign.empty() || spot.frequency_hz < kDxMinimumFrequencyHz ||
+        spot.frequency_hz > kDxMaximumFrequencyHz || spot.received_epoch <= 0 ||
+        band_index(spot.band) >= kBands.size()) return false;
     const std::size_t recent = std::min<std::size_t>(spots_.size(), 80U);
     for (std::size_t offset = 0; offset < recent; ++offset) {
         const auto& candidate = spots_[spots_.size() - 1U - offset];
@@ -233,7 +236,7 @@ DxInsightSnapshot DxInsightEngine::evaluate(std::int64_t now_epoch,
         output.spots_60m += band.spots_60m;
         const unsigned baseline_5m = std::max(1U, (band.spots_60m - band.spots_5m + 10U) / 11U);
         band.surge_percent = std::min(999U, band.spots_5m * 100U / baseline_5m);
-        const unsigned minimum = band.band == "6m" ? 4U : 3U;
+        const unsigned minimum = i >= 10U ? 4U : 3U;
         band.surge = band.spots_5m >= minimum && band.surge_percent >= 180U;
         if (band.surge) ++output.surging_bands;
     }
@@ -350,8 +353,8 @@ std::string serialize_dx_watchlist(const std::vector<std::string>& callsigns) {
 bool dx_live_filter_matches(std::string_view band, std::string_view mode, bool worked_entity,
                             std::uint32_t band_mask, std::uint32_t mode_mask,
                             std::uint32_t entity_mask) {
-    constexpr std::array<std::string_view, 11> bands{{"160m", "80m", "60m", "40m", "30m",
-        "20m", "17m", "15m", "12m", "10m", "6m"}};
+    constexpr std::array<std::string_view, kDxBandCount> bands{{"160m", "80m", "60m", "40m", "30m",
+        "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m", "70cm", "23cm", "3cm"}};
     constexpr std::array<std::string_view, 8> modes{{"CW", "SSB", "FT8", "FT4", "DATA",
         "RTTY", "AM", "FM"}};
     if (band_mask != 0U) {

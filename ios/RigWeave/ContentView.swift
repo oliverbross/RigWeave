@@ -562,10 +562,11 @@ struct SpotsView: View {
                 }
                 ForEach(features.dx.liveSpots) { spot in
                     VStack(alignment: .leading, spacing: 5) {
-                        HStack { Text(spot.callsign).font(.headline); if spot.watchlisted { Image(systemName: "star.fill").foregroundStyle(RigTheme.amber) }; Spacer(); Text(spot.band) }
+                        HStack { Text(spot.callsign).font(.headline); if spot.watchlisted { Image(systemName: "star.fill").foregroundStyle(RigTheme.amber) }; Spacer(); Text(spot.displayBand) }
                         Text(String(format: "%.3f MHz · %@ · %@", Double(spot.frequencyHz) / 1_000_000, spot.mode, spot.country)).foregroundStyle(.secondary)
                         if !spot.comment.isEmpty { Text(spot.comment).font(.caption) }
-                        HStack { Text("via \(spot.spotter)").font(.caption2).foregroundStyle(.secondary); Spacer(); Button("Tune") { radio.sendCAT(String(format: "FA%011llu;", spot.frequencyHz)) } }
+                        HStack { Text("via \(spot.spotter)").font(.caption2).foregroundStyle(.secondary); Spacer(); Button("Tune") { if dxDirectTuneAvailable(spot.frequencyHz) { radio.sendCAT(String(format: "FA%011llu;", spot.frequencyHz)) } }.disabled(!dxDirectTuneAvailable(spot.frequencyHz)) }
+                        if !dxDirectTuneAvailable(spot.frequencyHz) { Text("Observation only above 6 m · configure a supported radio/transverter path before direct CAT tuning.").font(.caption2).foregroundStyle(.secondary) }
                     }.padding(.vertical, 5)
                 }
             }
@@ -629,7 +630,7 @@ struct DXView: View {
                 Button { selected = row } label: {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 4) {
-                            HStack { Text(row.callsign).font(.headline); if row.watchlisted { Image(systemName: "star.fill").foregroundStyle(RigTheme.amber) }; Text(row.band).font(.caption.monospaced()).foregroundStyle(.secondary) }
+                            HStack { Text(row.callsign).font(.headline); if row.watchlisted { Image(systemName: "star.fill").foregroundStyle(RigTheme.amber) }; Text(row.displayBand).font(.caption.monospaced()).foregroundStyle(.secondary) }
                             Text(String(format: "%.3f MHz · %@ · %@", Double(row.frequencyHz) / 1_000_000, row.mode, row.country)).foregroundStyle(.secondary)
                             Text(row.safeReason).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                         }
@@ -641,7 +642,10 @@ struct DXView: View {
         }
     }
 
-    private func tune(_ row: DXOpportunity) { radio.sendCAT(String(format: "FA%011llu;", row.frequencyHz)) }
+    private func tune(_ row: DXOpportunity) {
+        guard dxDirectTuneAvailable(row.frequencyHz) else { return }
+        radio.sendCAT(String(format: "FA%011llu;", row.frequencyHz))
+    }
 }
 
 private struct DXBandmap: View {
@@ -730,7 +734,7 @@ private struct DXOpportunityDetail: View {
                 Section("Target") {
                     LabeledContent("Callsign", value: opportunity.callsign)
                     LabeledContent("Frequency", value: String(format: "%.3f MHz", Double(opportunity.frequencyHz) / 1_000_000))
-                    LabeledContent("Mode / band", value: "\(opportunity.mode) · \(opportunity.band)")
+                    LabeledContent("Mode / band", value: "\(opportunity.mode) · \(opportunity.displayBand)")
                     LabeledContent("Entity", value: opportunity.country)
                     LabeledContent("Path", value: opportunity.pathState.isEmpty ? "Unknown" : opportunity.pathState)
                     LabeledContent("Bearing / distance", value: "\(opportunity.bearingDegrees)° · \(opportunity.distanceKm) km")
@@ -741,7 +745,11 @@ private struct DXOpportunityDetail: View {
                     LabeledContent("Confidence", value: "\(opportunity.confidence)%")
                     LabeledContent("Worked", value: [opportunity.workedCountry ? "entity" : nil, opportunity.workedCall ? "call" : nil, opportunity.workedBand ? "band" : nil, opportunity.workedMode ? "mode" : nil, opportunity.workedBandMode ? "band+mode" : nil].compactMap { $0 }.joined(separator: ", ").ifEmpty("No match"))
                 }
+                if !dxDirectTuneAvailable(opportunity.frequencyHz) {
+                    Text("Observation only above 6 m · configure a supported radio/transverter path before direct CAT tuning.").font(.caption).foregroundStyle(.secondary)
+                }
                 Button("Tune VFO A") { tune(opportunity); dismiss() }.buttonStyle(.borderedProminent)
+                    .disabled(!dxDirectTuneAvailable(opportunity.frequencyHz))
             }.navigationTitle(opportunity.callsign).toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
         }
     }

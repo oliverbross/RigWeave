@@ -15,7 +15,7 @@ by in-process controllers, encrypted preferences, SQLite, and Compose UI.
 
 ## Operator surfaces
 
-- **Cockpit:** live DX feed; HF/VHF/UHF, band, mode, watchlist, and new-DXCC
+- **Cockpit:** live DX feed; HF through 3 cm observation-band, mode, watchlist, and new-DXCC
   filters; active-band rates and surge warnings; ranked opportunities; solar
   SFI/A/Kp; watchlist tracking and expiry; manual cluster spot; My Signal from
   PSK Reporter; deterministic current opportunities with explicit priority and evidence support; LoTW/local
@@ -62,6 +62,15 @@ by in-process controllers, encrypted preferences, SQLite, and Compose UI.
 - All callsign, spot, current-opportunity, map, and satellite actions remain receive-only
   until the operator explicitly confirms an existing RigWeave CAT tune or
   cluster-post action.
+- Shared cluster observation uses the fixed ADIF-compatible order `160m`, `80m`,
+  `60m`, `40m`, `30m`, `20m`, `17m`, `15m`, `12m`, `10m`, `6m`, `4m`, `2m`,
+  `70cm`, `23cm`, `3cm`; unsupported frequency gaps are rejected.
+- QO-100 observations retain canonical `3cm` identity, with an optional secondary
+  display annotation. Neural DX direct CAT tuning remains disabled above 6 m;
+  higher-band observations, detail, activity, history, and scoring remain available.
+- Android and iOS consume the same shared observation snapshot and canonical
+  worked-band mappings. The Android seven-page workspace is not ported to iOS,
+  and desktop Neural DX remains unimplemented.
 - QRZ/HamQTH/CTY enrichment remains QRZ.com first, then HamQTH, then CTY.DAT.
 - The earlier explicit **no WSJT-X yet** constraint remains in force. My Signal
   and weather correlation use PSK Reporter/WSPR sources; no UDP listener is

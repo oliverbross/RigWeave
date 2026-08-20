@@ -10,6 +10,30 @@ import org.maplibre.android.geometry.LatLng
 import java.time.Instant
 
 class NeuralDxRulesTest {
+    @Test fun unifiedObservationBandsMapCanonicallyAndDirectTuneStopsAtSixMetres() {
+        assertEquals(
+            listOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m",
+                "4m", "2m", "70cm", "23cm", "3cm"),
+            insightBands,
+        )
+        assertEquals("4m", bandForFrequency(70_200_000))
+        assertEquals("2m", bandForFrequency(144_300_000))
+        assertEquals("70cm", bandForFrequency(432_200_000))
+        assertEquals("23cm", bandForFrequency(1_296_200_000))
+        assertEquals("3cm", bandForFrequency(10_489_860_000))
+        listOf(71_000_000L, 100_000_000L, 148_000_000L, 222_000_000L, 450_000_000L,
+            902_000_000L, 1_300_000_000L, 2_300_000_000L, 10_500_000_000L).forEach {
+            assertTrue(bandForFrequency(it).isBlank())
+        }
+        assertTrue(dxDirectTuneAvailable(54_000_000))
+        assertFalse(dxDirectTuneAvailable(70_200_000))
+        assertFalse(dxDirectTuneAvailable(144_300_000))
+        assertFalse(dxDirectTuneAvailable(10_489_860_000))
+        assertEquals("3cm · QO-100", dxDisplayBand("3cm", 10_489_860_000, ""))
+        assertEquals("3cm · QO-100", dxDisplayBand("3cm", 10_200_000_000, "QO100 beacon"))
+        assertEquals("3cm", dxDisplayBand("3cm", 10_200_000_000, "ordinary activity"))
+    }
+
     @Test fun currentOpportunitiesAreRankedEvidenceNotPredictions() {
         fun spot(id: String, call: String, score: Int, confidence: Int, epoch: Long, band: String = "20m", mode: String = "FT8") = AndroidDXSpot(
             id, call, "W1AW", 14_074_000, epoch, band, mode, "Test Country", "EU",
@@ -34,6 +58,13 @@ class NeuralDxRulesTest {
         assertEquals(opportunities.map { it.priority }.sortedDescending(), opportunities.map { it.priority })
         val fields = NeuralCurrentOpportunity::class.java.declaredFields.map { it.name }.toSet()
         assertFalse(fields.any { it in setOf("probability", "model", "startEpoch", "endEpoch", "measuredReliability") })
+
+        val highBand = buildCurrentOpportunities(
+            listOf(spot("3cm", "SAT1", 80, 70, 4_000, band = "3cm", mode = "FT4").copy(frequencyHz = 10_489_860_000))
+        ).single()
+        assertEquals("3cm", highBand.band)
+        assertEquals(80, highBand.priority)
+        assertEquals(70, highBand.evidenceScore)
     }
 
     @Test fun maidenheadUsesCellCentreAndRejectsInvalidInput() {

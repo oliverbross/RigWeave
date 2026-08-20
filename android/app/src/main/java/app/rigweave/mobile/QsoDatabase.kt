@@ -60,7 +60,8 @@ data class WorkedLogQso(
     val submode: String, val epoch: Long, val fromWavelog: Boolean,
 )
 
-val insightBands = listOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m")
+val insightBands = listOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m",
+    "4m", "2m", "70cm", "23cm", "3cm")
 val insightModes = listOf("CW", "FT8", "RTTY", "SSB", "LSB", "USB")
 
 internal fun insightMode(mode: String, submode: String = ""): String {
@@ -78,7 +79,10 @@ fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
     in 10_100_000L..10_150_000L -> "30m"; in 14_000_000L..14_350_000L -> "20m"
     in 18_068_000L..18_168_000L -> "17m"; in 21_000_000L..21_450_000L -> "15m"
     in 24_890_000L..24_990_000L -> "12m"; in 28_000_000L..29_700_000L -> "10m"
-    in 50_000_000L..54_000_000L -> "6m"; else -> ""
+    in 50_000_000L..54_000_000L -> "6m"
+    in 70_000_000L..70_999_999L -> "4m"; in 144_000_000L..147_999_999L -> "2m"
+    in 420_000_000L..449_999_999L -> "70cm"; in 1_240_000_000L..1_299_999_999L -> "23cm"
+    in 10_000_000_000L..10_499_999_999L -> "3cm"; else -> ""
 }
 
 class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 7) {

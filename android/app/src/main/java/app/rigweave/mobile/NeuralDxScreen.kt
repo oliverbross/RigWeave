@@ -60,7 +60,7 @@ private val DxGreen = Color(0xFF42C77B)
 private val DxRed = Color(0xFFE4544D)
 private val DxCyan = Color(0xFF43C7D9)
 private val DxYellow = Color(0xFFF4C94E)
-private val DxBands = listOf("ALL", "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m", "70cm", "23cm", "QO-100")
+private val DxBands = listOf("ALL", "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m", "70cm", "23cm", "3cm")
 
 @Composable
 fun NeuralDxScreen(
@@ -230,7 +230,10 @@ fun NeuralDxScreen(
         } else if (mode == "SMART") DxSmartFeed(rows, statuses, distances, cty, { selected = it }, previousQsos, Modifier.weight(1f))
         else DxSpotTable(rows, statuses, distances, cty, { selected = it }, previousQsos, Modifier.weight(1f))
     }
-    selected?.let { DxSpotDialog(it, cty, statuses[it.id], { selected = null }, { tune("FA%011d;".format(it.frequencyHz)); selected = null }) }
+    selected?.let { DxSpotDialog(it, cty, statuses[it.id], { selected = null }, {
+        if (dxDirectTuneAvailable(it.frequencyHz)) tune("FA%011d;".format(it.frequencyHz))
+        selected = null
+    }) }
     if (manual) ManualSpotDialog(features) { manual = false }
 }
 
@@ -312,7 +315,10 @@ fun NeuralDxScreen(
             }
         }
     }
-    selected?.let{DxSpotDialog(it,cty,null,{selected=null},{tune("FA%011d;".format(it.frequencyHz));selected=null})}
+    selected?.let{DxSpotDialog(it,cty,null,{selected=null},{
+        if(dxDirectTuneAvailable(it.frequencyHz))tune("FA%011d;".format(it.frequencyHz))
+        selected=null
+    })}
 }
 
 @Composable private fun DxInsightPage(controller: NeuralDxController, features: FeatureController, modifier: Modifier){
@@ -434,7 +440,7 @@ private val briefingImageCache=object:LruCache<String,ImageBitmap>(12*1024*1024)
 @Composable private fun DxBriefImage(url:String,title:String,modifier:Modifier){val bitmap by produceState<ImageBitmap?>(null,url){value=null;if(url.startsWith("https://",true))value=withContext(Dispatchers.IO){briefingImageCache.get(url)?:runCatching{val c=URL(url).openConnection() as HttpURLConnection;c.connectTimeout=6000;c.readTimeout=9000;c.instanceFollowRedirects=true;try{val bytes=c.inputStream.use{it.readNBytes(2*1024*1024)};val b=BitmapFactory.Options().apply{inJustDecodeBounds=true};BitmapFactory.decodeByteArray(bytes,0,bytes.size,b);var s=1;while(b.outWidth/s>360||b.outHeight/s>240)s*=2;BitmapFactory.decodeByteArray(bytes,0,bytes.size,BitmapFactory.Options().apply{inSampleSize=s})?.asImageBitmap()?.also{briefingImageCache.put(url,it)}}finally{c.disconnect()}}.getOrNull()}}
     Surface(color=DxRaised,shape=RoundedCornerShape(6.dp),modifier=modifier){if(bitmap!=null)Image(bitmap!!,contentDescription="Briefing image for $title",contentScale=ContentScale.Crop,modifier=Modifier.fillMaxSize())else Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){Icon(Icons.Outlined.Newspaper,null,tint=DxMuted)}}}
 
-@Composable private fun DxSpotDialog(spot:AndroidDXSpot,cty:CtyController,status:SpotLogStatus?,dismiss:()->Unit,tune:()->Unit){val e=cty.lookup(spot.callsign);AlertDialog(onDismissRequest=dismiss,title={Text(spot.callsign)},text={Column(verticalArrangement=Arrangement.spacedBy(6.dp)){Text("${formatMHz(spot.frequencyHz)} MHz · ${spot.band} · ${spot.mode}",color=DxAmber,fontWeight=FontWeight.Bold);Text(e?.country.orEmpty().ifBlank{spot.country}.ifBlank{"Unknown DXCC"});Text("CQ ${e?.cqZone.orEmpty().ifBlank{spot.cqZone.toString()}} · ITU ${e?.ituZone.orEmpty().ifBlank{spot.ituZone.toString()}} · ${e?.continent.orEmpty().ifBlank{spot.continent}}",color=DxMuted);Text("Call ${status?.callStatus?:"—"} · DXCC ${status?.dxccStatus?:"—"}",color=DxYellow);Text("Score ${spot.score} · confidence ${spot.confidence} · ${spot.samples} samples");Text(spot.reason.ifBlank{spot.comment}.ifBlank{"No additional analysis"},color=DxMuted)}},confirmButton={Button(tune){Text("Tune VFO A")}},dismissButton={TextButton(dismiss){Text("Close")}})}
+@Composable private fun DxSpotDialog(spot:AndroidDXSpot,cty:CtyController,status:SpotLogStatus?,dismiss:()->Unit,tune:()->Unit){val e=cty.lookup(spot.callsign);val directTune=dxDirectTuneAvailable(spot.frequencyHz);AlertDialog(onDismissRequest=dismiss,title={Text(spot.callsign)},text={Column(verticalArrangement=Arrangement.spacedBy(6.dp)){Text("${formatMHz(spot.frequencyHz)} MHz · ${dxDisplayBand(spot.band,spot.frequencyHz,spot.comment)} · ${spot.mode}",color=DxAmber,fontWeight=FontWeight.Bold);Text(e?.country.orEmpty().ifBlank{spot.country}.ifBlank{"Unknown DXCC"});Text("CQ ${e?.cqZone.orEmpty().ifBlank{spot.cqZone.toString()}} · ITU ${e?.ituZone.orEmpty().ifBlank{spot.ituZone.toString()}} · ${e?.continent.orEmpty().ifBlank{spot.continent}}",color=DxMuted);Text("Call ${status?.callStatus?:"—"} · DXCC ${status?.dxccStatus?:"—"}",color=DxYellow);Text("Score ${spot.score} · confidence ${spot.confidence} · ${spot.samples} samples");Text(spot.reason.ifBlank{spot.comment}.ifBlank{"No additional analysis"},color=DxMuted);if(!directTune)Text("Observation only above 6 m · configure a supported radio/transverter path before direct CAT tuning.",color=DxMuted)}},confirmButton={Button(tune,enabled=directTune){Text("Tune VFO A")}},dismissButton={TextButton(dismiss){Text("Close")}})}
 @Composable private fun ManualSpotDialog(features:FeatureController,dismiss:()->Unit){var call by remember{mutableStateOf("")};var freq by remember{mutableStateOf("")};var comment by remember{mutableStateOf("")};AlertDialog(onDismissRequest=dismiss,title={Text("Send DX cluster spot")},text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(call,{call=it.uppercase()},label={Text("Callsign")},singleLine=true);OutlinedTextField(freq,{freq=it.filter{c->c.isDigit()||c=='.'}},label={Text("Frequency kHz")},singleLine=true);OutlinedTextField(comment,{comment=it},label={Text("Comment")},singleLine=true);Text("Posts to the currently connected cluster only.",color=DxMuted)}},confirmButton={Button({features.postSpot(call,freq.toDoubleOrNull()?:0.0,comment);dismiss()},enabled=call.isNotBlank()&&freq.toDoubleOrNull()!=null){Text("Send spot")}},dismissButton={TextButton(dismiss){Text("Cancel")}})}
 
 private fun dxPageIcon(page:NeuralDxPage)=when(page){NeuralDxPage.COCKPIT->Icons.Outlined.SpaceDashboard;NeuralDxPage.MAP->Icons.Outlined.Map;NeuralDxPage.INSIGHT->Icons.Outlined.Psychology;NeuralDxPage.WORLD->Icons.Outlined.Public;NeuralDxPage.BRIEFING->Icons.Outlined.Newspaper;NeuralDxPage.SATELLITES->Icons.Outlined.SatelliteAlt;NeuralDxPage.WEATHER->Icons.Outlined.Thunderstorm}
