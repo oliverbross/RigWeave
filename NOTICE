@@ -59,3 +59,12 @@ does not embed its React/Express application, source files, artwork, server,
 deployment controls, or runtime dependencies. The native Compose implementation
 reuses RigWeave data controllers and design language. See
 docs/OPENHAMCLOCK_INTEGRATION.md for the recorded integration boundary.
+
+The Neural DX workspace uses F1SMV/Neural-DX-Watcher
+(https://github.com/F1SMV/Neural-DX-Watcher) as a behavioural reference. The
+available upstream v12.1 commit inspected was
+fe3cba8ed9c0502f5dabdb2f64ebd990de986559; the different hash named by the
+authorised remediation brief does not resolve. No upstream licence or permission
+grant was found, and no upstream source or assets are bundled by this remediation.
+Earlier provenance/permission requires owner confirmation. See
+docs/NEURAL_DX_WATCHER_INTEGRATION.md.

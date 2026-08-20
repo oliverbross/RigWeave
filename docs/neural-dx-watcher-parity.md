@@ -1,9 +1,11 @@
-# Neural DX Watcher parity contract
+# Neural DX Watcher behavioural coverage contract
 
-> **Status and coverage.** This is an active Android implementation/design contract for the Neural DX workspace, not proof of Apple parity or authenticated live success for every provider. Android source under NeuralDxController.kt, NeuralDxScreen.kt, and NeuralDxMap.kt implements the listed local stores, views, maps, and provider adapters to differing depths. Shared CTY/DX/operator-intelligence primitives live in the C++ core. Apple currently exposes a smaller DX/cluster/solar feature set and does not implement these Android pages. Provider credentials, terms, network availability, and physical-device proof remain separate gates; see [phase-0/ACTUAL_FEATURE_INVENTORY.md](phase-0/ACTUAL_FEATURE_INVENTORY.md).
+> **Status and coverage.** This is an active Android behavioural coverage/design contract, not a claim of exact, complete, licensed, or Apple parity and not proof of authenticated live success for every provider. Android source under NeuralDxController.kt, NeuralDxScreen.kt, and NeuralDxMap.kt implements the listed local stores, views, maps, and provider adapters to differing depths. Shared CTY/DX/operator-intelligence primitives live in the C++ core. Apple currently exposes a smaller DX/cluster/solar feature set and does not implement these Android pages. Provider credentials, terms, network availability, and physical-device proof remain separate gates; see [NEURAL_DX_WATCHER_INTEGRATION.md](NEURAL_DX_WATCHER_INTEGRATION.md) and [phase-0/ACTUAL_FEATURE_INVENTORY.md](phase-0/ACTUAL_FEATURE_INVENTORY.md).
 
-Canonical source: `F1SMV/Neural-DX-Watcher` v12.1, commit
-`fe3cba8ed9c0502f5dabdb2f64ebd990de986559` (2026-08-16).
+Behavioural reference reviewed: `F1SMV/Neural-DX-Watcher` v12.1. The available upstream
+commit is `fe3cba8ed9c0502f5dabdb2f64ebd990de986559` (2026-08-16); the separately authorised
+hash does not resolve and the upstream licence/permission is unresolved. Neither reference
+establishes exact parity or permission. See the integration record.
 
 RigWeave implements the project as an Android-native DX workspace inside the
 existing Flightline interface. Flask, nginx, browser themes, and local web API
@@ -64,7 +66,9 @@ by in-process controllers, encrypted preferences, SQLite, and Compose UI.
   and weather correlation use PSK Reporter/WSPR sources; no UDP listener is
   introduced.
 
-## Acceptance
+## Historical target expectations
+
+The following points are targets from the earlier coverage programme, not evidence that every item is complete:
 
 - Every surface above has real data, loading, empty, stale, error, refresh, and
   offline-cache states.
