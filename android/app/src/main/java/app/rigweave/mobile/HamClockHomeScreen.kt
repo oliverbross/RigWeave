@@ -338,7 +338,7 @@ internal fun HamClockHomeScreen(
     var previousTransmitting by remember { mutableStateOf(radio.transmitting) }
     LaunchedEffect(radio.transmitting, settingsDocument.settings.idReminder.startOnVerifiedTx) {
         val reminder = settingsDocument.settings.idReminder
-        if (radio.transmitting && !previousTransmitting && reminder.enabled && reminder.startOnVerifiedTx) {
+        if (radio.transmitting && !previousTransmitting && reminder.enabled && reminder.startOnVerifiedTx && !reminder.running) {
             settingsCoordinator.updateSettings { it.copy(idReminder = it.idReminder.copy(
                 running = true, paused = false, lastResetEpochSeconds = Instant.now().epochSecond)) }
         }
@@ -761,10 +761,12 @@ internal fun HamClockHomeScreen(
         if (showShackDisplay) HamClockShackDisplay(
             stationCall, stationGrid, radio, pathPrediction, nativeStatus, finishLineWeather,
             features.solar, features.sunspotNumber, celestialFeed?.value?.xray ?: HamClockXraySeries(), finishLineAurora,
-            solarImage, contests, selectedContestId, contestQsos, operations.satellites.hamClockPositions,
+            solarImage, contests, selectedContestId, contestQsos, settingsDocument.profiles, operations.satellites.hamClockPositions,
             operations.satellites.hamClockTracks, settingsDocument.settings,
             { transform -> settingsCoordinator.updateSettings(transform) },
             { selectedContestId = it },
+            { id -> applyDashboardProfile(id); settingsCoordinator.updateSettings { it.copy(
+                shackDisplay = it.shackDisplay.copy(selectedProfileId = id)) } },
             { channel, force -> solarImageRequest = channel to force }, openExactQso,
             { showShackDisplay = false },
         )

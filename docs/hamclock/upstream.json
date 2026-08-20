@@ -181,19 +181,23 @@
     }
   ],
   "last_stable_comparison": {
-    "checked_at": "2026-08-20",
+    "checked_at": "2026-08-21",
     "outcome": "UNCHANGED",
     "observed_sha": "d4a50eaaa61d3432a1de5f80cbe61790739930a5",
     "observed_package_version": "26.5.0",
     "observed_licence_sha256": "93d70a638444f963c10c1e4c67324bcdb4617952b2cf0c74f1bd483570ef6877"
   },
   "last_preview_comparison": {
-    "checked_at": "2026-08-20",
-    "outcome": "UNCHANGED",
-    "observed_sha": "36e5c1262dfde2057b2b4e6483be8c2215c70ad4",
+    "checked_at": "2026-08-21",
+    "outcome": "REVIEW_REQUIRED_NOT_ABSORBED",
+    "observed_sha": "99913f2df574b8588ddaff703581b8f341f46761",
     "relationship_to_stable": "diverged",
     "merge_base": "1f3d8f77eba8627e36162b78a417d4c235ef2436",
-    "ahead_by": 36,
-    "behind_by": 51
+    "ahead_by": 2,
+    "behind_by": 0,
+    "changed_paths": [
+      "src/plugins/layers/useSatelliteLayer.js",
+      "src/utils/satelliteTelemetry.test.js"
+    ]
   }
 }

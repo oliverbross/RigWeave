@@ -91,3 +91,17 @@ permission grant was found, and no upstream source or assets are bundled by this
 remediation. Earlier provenance cannot be proven from current source inspection
 alone. See
 docs/NEURAL_DX_WATCHER_INTEGRATION.md.
+
+HamClock finish-line space-weather and aurora presentation consumes official
+public products from the U.S. NOAA Space Weather Prediction Center, including
+GOES and OVATION outputs. Solar imagery is attributed to NASA Solar Dynamics
+Observatory AIA/HMI. Those names, measurements, images, and data remain the
+property of their respective agencies and contributors; no endorsement is
+implied.
+
+ITU-R-HF v14.3 at commit cd172be56dc04b154e5d2fa91cbaa6ecf5284305
+was reviewed for P.533/P.372 interoperability. No ITU source, data, binary, or
+report is incorporated because the reviewed headers contain conflicting use
+and reproduction language and no unambiguous redistribution permission was
+established. RigWeave's adapter boundary is independently written and does not
+claim ITU validation or scientific parity.

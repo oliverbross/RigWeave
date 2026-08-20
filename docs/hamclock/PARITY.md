@@ -108,3 +108,13 @@ Task 2B2B makes the RBN map point the skimmer receiver and the path heard/DX sta
 ## Closure rule
 
 Future reviews must compare this inventory to the pinned stable source. A model or provider changes status only after an operator-visible native outcome exists and is validated at the appropriate software/device/service boundary.
+
+## Finish-line broad Phase 1 update
+
+The baseline ledger counted panels as `NATIVE 19 / PARTIAL 3 / MISSING 8 / DELEGATED 5 / EXCLUDED 2` and map plugins as `NATIVE 7 / PARTIAL 3 / MISSING 12 / EXCLUDED 2`.
+
+Source-complete Android outcomes change the effective counts to panels `NATIVE 23 / PARTIAL 2 / MISSING 6 / DELEGATED 5 / EXCLUDED 2` and maps `NATIVE 10 / PARTIAL 1 / MISSING 11 / EXCLUDED 2`. The added native outcome is the explicit Home-owned shack display. Solar imagery, the ID reminder, NOAA OVATION aurora, contest-specific QSO mapping, and authoritative Satellite Operations tracks/footprints are now native. The satellite status is `NATIVE` because the same Operations controller supplies capped positions, four tracks and four radio-horizon footprints, and Home consumes the saved show/selection preferences.
+
+Propagation remains `PARTIAL`: the current-band bars and cache are useful, but the local P.533 engine, 24-hour matrix, scientific reference comparison, coverage heatmap, and MUF layer are blocked. Official ITU-R-HF v14.3 headers contain conflicting permission statements, so no source/data was copied. The independently written native boundary reports `LICENSE_BLOCKED`; it is not counted as an engine. The 383,264,044-byte compressed candidate data/source inventory would also exceed the 180 MB APK ceiling.
+
+Exact mappings added by this phase: `SolarPanel` and space-weather detail to the native full-screen presentation; `useAurora` to bounded NOAA OVATION fills; `useSatelliteLayer` to the existing local SGP4 owner; `useContestQsos` to the indexed `qso_projection`; `IDTimerPanel`/`useIDTimer` to the reminder-only persisted timer; and themes/layouts to the explicit, escapable Compose shack dialog. `PropagationPanel`, `usePropagation`, P.533 services, VOACAP heatmap, and MUF map remain at the truthful partial/missing boundary above.

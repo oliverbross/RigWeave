@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.os.SystemClock
+import android.os.Build
+import android.content.pm.PackageManager
 import android.view.WindowManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -88,11 +90,13 @@ internal fun HamClockShackDisplay(
     contests: List<HamClockContest>,
     selectedContestId: String,
     contestQsos: List<HamClockContestQso>,
+    profiles: List<HamClockNamedProfile>,
     satellitePositions: List<HamClockSatellitePosition>,
     satelliteTracks: List<HamClockSatelliteTrack>,
     settings: HamClockUserSettings,
     updateSettings: ((HamClockUserSettings) -> HamClockUserSettings) -> Unit,
     selectContest: (String) -> Unit,
+    applyProfile: (String) -> Unit,
     refreshSolarImage: (HamClockSolarChannel, Boolean) -> Unit,
     openExactQso: (String) -> Unit,
     exit: () -> Unit,
@@ -152,6 +156,11 @@ internal fun HamClockShackDisplay(
             notifiedResetEpoch = settings.idReminder.lastResetEpochSeconds
         }
     }
+    LaunchedEffect(timer.clockChanged) {
+        if (timer.clockChanged && settings.idReminder.running) {
+            updateSettings { it.copy(idReminder = it.idReminder.copy(lastResetEpochSeconds = Instant.now().epochSecond)) }
+        }
+    }
     Dialog(exit, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Column(Modifier.fillMaxSize().background(palette.background).padding(WindowInsets.safeDrawing.asPaddingValues())
             .clickable { lastTouchElapsed = SystemClock.elapsedRealtime() }) {
@@ -182,7 +191,7 @@ internal fun HamClockShackDisplay(
                     }
                     2 -> ShackSpaceWeather(spaceWeather, solarMetrics, sunspotNumber, xray, aurora, solarImage, palette, refreshSolarImage)
                     else -> ShackOperations(contests, selectedContestId, contestQsos, satellitePositions, satelliteTracks,
-                        settings.shackDisplay, settings.satellites, palette, selectContest, openExactQso,
+                        profiles, settings.shackDisplay, settings.satellites, palette, selectContest, applyProfile, openExactQso,
                         { value -> updateSettings { it.copy(shackDisplay = value) } },
                         { value -> updateSettings { it.copy(satellites = value) } })
                 }
@@ -308,9 +317,10 @@ private data class ShackPalette(val background: Color, val panel: Color, val ink
 }
 
 @Composable private fun ShackOperations(contests: List<HamClockContest>, selected: String, qsos: List<HamClockContestQso>,
-    satellites: List<HamClockSatellitePosition>, tracks: List<HamClockSatelliteTrack>, display: HamClockShackDisplayPreference,
+    satellites: List<HamClockSatellitePosition>, tracks: List<HamClockSatelliteTrack>, profiles: List<HamClockNamedProfile>,
+    display: HamClockShackDisplayPreference,
     satellitePreference: HamClockSatellitePreference, palette: ShackPalette, selectContest: (String) -> Unit,
-    openQso: (String) -> Unit, updateDisplay: (HamClockShackDisplayPreference) -> Unit,
+    applyProfile: (String) -> Unit, openQso: (String) -> Unit, updateDisplay: (HamClockShackDisplayPreference) -> Unit,
     updateSatellite: (HamClockSatellitePreference) -> Unit) {
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
@@ -329,6 +339,9 @@ private data class ShackPalette(val background: Color, val panel: Color, val ink
                 FilterChip(satellitePreference.showFootprints, { updateSatellite(satellitePreference.copy(showFootprints = !satellitePreference.showFootprints)) }, { Text("FOOTPRINTS ≤4") })
             }
             Text("DISPLAY", color = palette.accent, fontWeight = FontWeight.Black, modifier = Modifier.padding(top = 12.dp))
+            profiles.take(8).forEach { profile -> FilterChip(display.selectedProfileId == profile.id, {
+                applyProfile(profile.id); updateDisplay(display.copy(selectedProfileId = profile.id))
+            }, { Text("PROFILE ${profile.name}") }) }
             HamClockShackTheme.entries.forEach { theme -> FilterChip(display.theme == theme, { updateDisplay(display.copy(theme = theme)) }, { Text(theme.name) }) }
             Row { FilterChip(display.keepScreenOn, { updateDisplay(display.copy(keepScreenOn = !display.keepScreenOn)) }, { Text("KEEP SCREEN ON") }); Spacer(Modifier.width(6.dp)); FilterChip(display.rotationEnabled, { updateDisplay(display.copy(rotationEnabled = !display.rotationEnabled)) }, { Text("ROTATE") }) }
             Row { FilterChip(display.reducedMotion, { updateDisplay(display.copy(reducedMotion = !display.reducedMotion)) }, { Text("REDUCED MOTION") }); Spacer(Modifier.width(6.dp)); listOf(15, 30, 60, 120).forEach { seconds -> FilterChip(display.rotationSeconds == seconds, { updateDisplay(display.copy(rotationSeconds = seconds)) }, { Text("${seconds}s") }) } }
@@ -346,13 +359,14 @@ private data class ShackPalette(val background: Color, val panel: Color, val ink
 
 private fun formatDuration(seconds: Long) = "%02d:%02d".format(seconds / 60, seconds % 60)
 private fun postIdReminder(context: Context) {
+    if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
     val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     val channel = "hamclock_id_reminder"
     manager.createNotificationChannel(NotificationChannel(channel, "HamClock ID reminder", NotificationManager.IMPORTANCE_DEFAULT))
-    manager.notify(0x1d533, NotificationCompat.Builder(context, channel)
+    runCatching { manager.notify(0x1d533, NotificationCompat.Builder(context, channel)
         .setSmallIcon(android.R.drawable.stat_notify_more)
         .setContentTitle("Station ID reminder")
         .setContentText("Identification interval is due. Reminder only; RigWeave will not transmit.")
-        .setAutoCancel(true).build())
+        .setAutoCancel(true).build()) }
 }
 private tailrec fun Context.activity(): Activity? = when (this) { is Activity -> this; is ContextWrapper -> baseContext.activity(); else -> null }

@@ -38,8 +38,8 @@ class HamClockFinishLineTest {
 
     @Test fun noaaSpaceWeatherParserKeepsIndependentMeasurements() {
         val root = JSONObject()
-            .put("plasma", JSONArray().put(JSONArray(listOf("time_tag", "speed"))).put(JSONArray(listOf("2026-08-21 01:00:00.000", "512.5"))))
-            .put("magnetic", JSONArray().put(JSONArray(listOf("time_tag", "bz_gsm"))).put(JSONArray(listOf("2026-08-21 01:00:00.000", "-4.2"))))
+            .put("plasma", JSONArray().put(JSONObject().put("time_tag", "2026-08-21T01:00:00Z").put("proton_speed", 512.5)))
+            .put("magnetic", JSONArray().put(JSONObject().put("time_tag", "2026-08-21T01:00:00Z").put("bz_gsm", -4.2)))
             .put("protons", JSONArray().put(JSONObject().put("time_tag", "2026-08-21T01:00:00Z").put("energy", ">=10 MeV").put("flux", 12.0)))
             .put("alerts", JSONArray().put(JSONObject().put("message", "Space Weather Message\nDetails")))
         val result = parseSpaceWeather(root, 1_700_000_000)

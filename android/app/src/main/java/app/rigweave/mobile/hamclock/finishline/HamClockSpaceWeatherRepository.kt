@@ -95,8 +95,8 @@ internal class HamClockSpaceWeatherRepository(
     } ?: HamClockAuroraSnapshot()
 
     private companion object {
-        const val PLASMA_URL = "https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json"
-        const val MAG_URL = "https://services.swpc.noaa.gov/products/solar-wind/mag-1-day.json"
+        const val PLASMA_URL = "https://services.swpc.noaa.gov/products/summary/solar-wind-speed.json"
+        const val MAG_URL = "https://services.swpc.noaa.gov/products/summary/solar-wind-mag-field.json"
         const val PROTON_URL = "https://services.swpc.noaa.gov/json/goes/primary/integral-protons-3-day.json"
         const val ALERTS_URL = "https://services.swpc.noaa.gov/products/alerts.json"
         const val AURORA_URL = "https://services.swpc.noaa.gov/json/ovation_aurora_latest.json"
@@ -106,22 +106,19 @@ internal class HamClockSpaceWeatherRepository(
 }
 
 internal fun parseSpaceWeather(root: JSONObject, fetchedAtEpoch: Long): HamClockSpaceWeatherSnapshot {
-    fun latestTable(rows: JSONArray, field: String): Pair<Long, Double>? {
-        require(rows.length() in 2..20_000) { "NOAA table size is invalid" }
-        val headers = rows.getJSONArray(0)
-        val timeIndex = (0 until headers.length()).firstOrNull { headers.optString(it) == "time_tag" } ?: 0
-        val valueIndex = (0 until headers.length()).firstOrNull { headers.optString(it).equals(field, true) }
-            ?: error("NOAA table omitted $field")
-        return (1 until rows.length()).asSequence().mapNotNull { index ->
-            val row = rows.optJSONArray(index) ?: return@mapNotNull null
-            val value = row.optString(valueIndex).toDoubleOrNull()?.takeIf(Double::isFinite) ?: return@mapNotNull null
-            val epoch = runCatching { Instant.parse(row.optString(timeIndex).replace(' ', 'T') + if (row.optString(timeIndex).endsWith("Z")) "" else "Z").epochSecond }.getOrNull()
+    fun latestSummary(rows: JSONArray, field: String): Pair<Long, Double>? {
+        require(rows.length() in 1..120) { "NOAA summary size is invalid" }
+        return (0 until rows.length()).asSequence().mapNotNull { index ->
+            val row = rows.optJSONObject(index) ?: return@mapNotNull null
+            val value = row.optDouble(field).takeIf(Double::isFinite) ?: return@mapNotNull null
+            val time = row.optString("time_tag")
+            val epoch = runCatching { Instant.parse(time.replace(' ', 'T') + if (time.endsWith("Z")) "" else "Z").epochSecond }.getOrNull()
                 ?: return@mapNotNull null
             epoch to value
         }.maxByOrNull(Pair<Long, Double>::first)
     }
-    val plasma = latestTable(root.getJSONArray("plasma"), "speed")
-    val magnetic = latestTable(root.getJSONArray("magnetic"), "bz_gsm")
+    val plasma = latestSummary(root.getJSONArray("plasma"), "proton_speed")
+    val magnetic = latestSummary(root.getJSONArray("magnetic"), "bz_gsm")
     val protonRows = root.getJSONArray("protons")
     require(protonRows.length() <= 20_000) { "NOAA proton response is too large" }
     val proton = (0 until protonRows.length()).asSequence().mapNotNull { index ->

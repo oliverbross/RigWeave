@@ -78,3 +78,12 @@ Every map layer declares a maximum object count. DX points cap at 160, great-cir
 - Station-grid changes reproject retained PSK and personal-WSPR geometry locally with zero HTTP requests. Direction truth has an explicit combined `DEGRADED` state.
 - Band Health is computed once into an application-scoped immutable snapshot. Exact contributing IDs are capped, and historical comparison is a compact grouped `qso_projection` query bounded to 128 rows and one year, keyed by station/filter/database revision.
 - Home provider loops and Neural DX/lightning starts are foreground-guarded. No RF-evidence action bypasses receive-only review or starts CAT/PTT/TUNE/TX.
+
+# HamClock finish-line safeguards
+
+- The native propagation adapter accepts at most 64 frequencies and crosses JNI only as bounded structured JSON. It retains no report text. The unavailable licensed engine performs validation only.
+- The reviewed ITU candidate is 564,856,257 bytes installed and 383,264,044 bytes gzip-compressed, so it is neither bundled nor downloaded. The debug APK ceiling remains 180 MB.
+- NOAA weather inputs cap at 1.5-3 MB; OVATION caps at 5 MB, 720 parsed cells and 180 rendered fills. Solar images cap at 4 MB, validate MIME/dimensions and downsample to 2,048 pixels.
+- Satellite map work stays in one existing controller job. Output is at most 40 positions, four 28-sample-or-smaller ground-track segments, and four 49-point footprints.
+- Contest-QSO map/list work uses the indexed projection and a hard 200-row cap. No canonical JSON or full log is loaded.
+- Shack rotation does not refresh a provider, change radio state, or remove the persistent exit control. Lifecycle stop/dispose restores system bars and clears the keep-screen-on flag.

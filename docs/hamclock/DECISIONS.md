@@ -79,3 +79,14 @@ Task 2B2B makes the RBN point the skimmer receiver, uses the current station ide
 ## Provenance and licence
 
 The audited upstream is `accius/openhamclock` at immutable stable commit `d4a50eaaa61d3432a1de5f80cbe61790739930a5`, MIT, Copyright 2024-2026 OpenHamClock Contributors. Repository attribution is retained in `NOTICE`. No upstream implementation code is copied by this phase.
+
+## Finish-line Phase 1 decisions
+
+- Do not vendor ITU-R-HF v14.3. Its headers both permit implementer use free from copyright assertions and prohibit reproduction without written ITU permission. That conflict is not an unambiguous redistribution grant.
+- Keep the independently written C++/JNI adapter truthful: it validates the complete bounded input contract and returns `LICENSE_BLOCKED`, never heuristic P.533 output.
+- Keep the reviewed OpenHamClock REST current-band adapter as fallback and label it as remote/current-hour only. Do not present it as a native 24-hour matrix or scientific reference.
+- Reuse the authoritative Satellite Operations controller. Home adds rendering only; it does not create a second element cache or propagator.
+- Use official NOAA/NASA endpoints with byte, row, geometry, cadence and last-good bounds. Missing measurements remain missing.
+- Query contest QSOs from the indexed projection and selected contest window. Geometry-free QSOs stay in the list and are never assigned a fabricated point.
+- The ID timer is a local reminder driven by explicit start or a verified CAT TX transition. `ID SENT` is an operator assertion; the app neither decodes an ID nor transmits one.
+- Shack display is a full-window Compose dialog with a persistent exit, lifecycle-restored system bars, optional keep-screen-on, reduced motion, and touch-paused rotation. It reuses Home state and providers.

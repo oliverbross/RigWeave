@@ -31,7 +31,9 @@ internal class HamClockSolarImageRepository(cacheDirectory: File) {
         val cached = cached(channel, nowEpoch)
         if (lowData) return cached.copy(bitmap = null, truth = HamClockProviderTruth.UNAVAILABLE,
             error = "Solar imagery disabled in low-data mode")
-        if (!force && cached.bitmap != null && nowEpoch - cached.fetchedAtEpoch < REFRESH_COOLDOWN_SECONDS) return cached
+        if (cached.bitmap != null && nowEpoch - cached.fetchedAtEpoch < REFRESH_COOLDOWN_SECONDS) {
+            return cached.copy(error = if (force) "Manual refresh cooldown active" else cached.error)
+        }
         return runCatching {
             val connection = URL(channel.url).openConnection() as HttpURLConnection
             try {

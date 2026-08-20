@@ -44,3 +44,18 @@ Home exposes bounded operator refresh actions for the existing controller lifecy
 Task 2B2A completes the shared future before exact `(key, future)` removal. RBN stays on the configured retail cluster, retains line and receipt time, batches publication and is not also ingested as a generic cluster spot. Personal WSPR shares PSK Reporter; local filters and station geometry reproject without requests. Regional WSPR.live remains `UNAVAILABLE_POLICY`. IBP scheduled reference and matching observed cluster/RBN evidence are separate. OpenFreeMap public MapLibre styles provide Home geography with the existing Map Data fallback on provider failure.
 
 Task 2B2B adds a two-second non-overlapping RBN maintenance publication so quiet feeds expire without unrelated cluster traffic. Typed RBN freshness uses only the latest RBN epoch and reports endpoint, bounded raw/filtered counts and sanitized errors. The skimmer is the selectable point; geometry prefers stream, current-station and cached callbook grids before approximate CTY fallback. PSK and personal WSPR retain reports during zero-request station-grid reprojection and use one combined direction-state reducer. DX News always refreshes the shared TTL/coalesced NG3K authority on direct DX launch. Home, DX and Log Intelligence consume the same Band Health snapshot and compact projection history.
+
+## Finish-line providers
+
+| Outcome | Exact contract | Bounds, cadence and cache | Truth and attribution |
+|---|---|---|---|
+| Solar wind | `services.swpc.noaa.gov/products/summary/solar-wind-speed.json` | 1.5 MB; Home foreground refresh no faster than 15 minutes; combined atomic last-good cache | NOAA SWPC; speed remains missing when absent |
+| IMF Bz | `services.swpc.noaa.gov/products/summary/solar-wind-mag-field.json` | 1.5 MB; same shared 15-minute refresh/cache | NOAA SWPC; no derived substitute |
+| Proton/radiation state | `services.swpc.noaa.gov/json/goes/primary/integral-protons-3-day.json` | 3 MB; at most 20,000 rows; exact >=10 MeV channel | NOAA SWPC GOES; S-scale is derived only from the measured proton flux thresholds |
+| Active alerts | `services.swpc.noaa.gov/products/alerts.json` | 1.5 MB; at most 2,000 input rows and eight bounded first-line messages | NOAA SWPC |
+| Aurora | `services.swpc.noaa.gov/json/ovation_aurora_latest.json` | 5 MB; validated timestamp/coordinates; at most 720 parsed cells and 180 rendered fills; 30-minute cache cadence | NOAA SWPC OVATION Aurora Forecast; no fabricated oval |
+| Solar imagery | NASA SDO latest AIA 171/193/304 and HMI continuum/magnetogram JPEGs | 4 MB, 8,192-pixel input guard, downsampled to at most 2,048 pixels, one last-good image per channel, 15-minute manual cooldown; disabled in low-data mode | NASA SDO/AIA and SDO/HMI |
+| Contest QSOs | Local `qso_projection` using `qso_projection_contest_idx` and the selected contest time window | 200 projected rows; exact station/contest/band/mode/confirmation predicates; no full-log load | RigWeave local/Wavelog revision truth |
+| Satellite tracks/footprints | Existing `SatelliteOperationsController` and pinned `NativeSatellite` SGP4 | Same 45-second foreground job; at most four tracks and four 49-point footprints; no second provider/controller | CelesTrak/SatNOGS element age plus local SGP4 generation age |
+
+The official ITU-R-HF repository is not a runtime provider. No source or data is downloaded because redistribution permission is unresolved; downloaded executable code is prohibited.
