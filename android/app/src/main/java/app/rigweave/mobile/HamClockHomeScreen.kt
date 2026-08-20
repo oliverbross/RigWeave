@@ -10,6 +10,7 @@ FORM: Wide screens use a fixed three-column console; compact screens preserve th
 
 import android.content.Context
 import app.rigweave.mobile.hamclock.*
+import app.rigweave.mobile.hamclock.finishline.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -85,6 +86,7 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.io.File
 import kotlin.math.roundToInt
 
 private val HcBg = Color(0xFF081015)
@@ -162,6 +164,18 @@ internal fun HamClockHomeScreen(
         ?: app.stationCallsign.ifBlank { features.clusterCallsign }
     val hamClockPrefs = remember(context) { context.getSharedPreferences("rigweave-hamclock-layout", Context.MODE_PRIVATE) }
     val settingsDocument = settingsCoordinator.document
+    val finishLineCache = remember(context) { File(context.cacheDir, "hamclock-finishline").apply(File::mkdirs) }
+    val spaceWeatherRepository = remember(context) { HamClockSpaceWeatherRepository(finishLineCache) }
+    val solarImageRepository = remember(context) { HamClockSolarImageRepository(finishLineCache) }
+    val cachedFinishLine = remember { spaceWeatherRepository.cached() }
+    var finishLineWeather by remember { mutableStateOf(cachedFinishLine.first) }
+    var finishLineAurora by remember { mutableStateOf(cachedFinishLine.second) }
+    var solarImage by remember { mutableStateOf(solarImageRepository.cached(HamClockSolarChannel.AIA_193)) }
+    var solarImageRequest by remember { mutableStateOf(HamClockSolarChannel.AIA_193 to false) }
+    var showShackDisplay by rememberSaveable { mutableStateOf(false) }
+    var selectedContestId by rememberSaveable { mutableStateOf("") }
+    var contestQsos by remember { mutableStateOf<List<HamClockContestQso>>(emptyList()) }
+    var nativeStatus by remember { mutableStateOf<HamClockNativeStatus?>(null) }
     var contestFeed by remember { mutableStateOf<HamClockFeed<List<HamClockContest>>?>(null) }
     var dxpeditionFeed by remember { mutableStateOf<HamClockFeed<List<HamClockDxpedition>>?>(null) }
     var celestialFeed by remember { mutableStateOf<HamClockFeed<HamClockSolarCelestialSnapshot>?>(null) }
@@ -281,6 +295,22 @@ internal fun HamClockHomeScreen(
             delay(5 * 60_000L)
         }
     }
+    LaunchedEffect(homeForeground) {
+        if (!homeForeground) return@LaunchedEffect
+        while (true) {
+            val refreshed = withContext(Dispatchers.IO) { spaceWeatherRepository.refresh() }
+            finishLineWeather = refreshed.first
+            finishLineAurora = refreshed.second
+            delay(15 * 60_000L)
+        }
+    }
+    LaunchedEffect(solarImageRequest, settingsDocument.settings.display.lowDataMode) {
+        val request = solarImageRequest
+        solarImage = withContext(Dispatchers.IO) {
+            solarImageRepository.load(request.first, settingsDocument.settings.display.lowDataMode, request.second)
+        }
+        if (request.second) solarImageRequest = request.first to false
+    }
     LaunchedEffect(stationPoint, targetPoint, radio.mode, radio.powerW) {
         if (stationPoint == null || targetPoint == null) {
             pathPrediction = HamClockPropagationSnapshot(error = "Station or target geometry unavailable")
@@ -290,6 +320,30 @@ internal fun HamClockHomeScreen(
             delay(10 * 60_000L)
         }
     }
+    LaunchedEffect(stationPoint, targetPoint, settingsDocument.settings.propagation, features.sunspotNumber) {
+        val de = stationPoint ?: run { nativeStatus = null; return@LaunchedEffect }
+        val dx = targetPoint ?: run { nativeStatus = null; return@LaunchedEffect }
+        val now = Instant.now().atZone(ZoneOffset.UTC)
+        val preference = settingsDocument.settings.propagation
+        nativeStatus = withContext(Dispatchers.Default) {
+            HamClockNativePropagation.evaluate(HamClockPropagationInput(
+                de.latitude, de.longitude, dx.latitude, dx.longitude, now.year, now.monthValue, now.hour,
+                features.sunspotNumber?.roundToInt()?.coerceIn(0, 400) ?: 0,
+                preference.txPowerWatts.toDouble(), preference.txGainDb, preference.rxGainDb,
+                preference.selectedFrequenciesMHz, preference.noiseEnvironment, preference.requiredReliability,
+                preference.requiredSnrDb, preference.bandwidthHz.toDouble(), preference.digital, preference.longPath,
+            ))
+        }
+    }
+    var previousTransmitting by remember { mutableStateOf(radio.transmitting) }
+    LaunchedEffect(radio.transmitting, settingsDocument.settings.idReminder.startOnVerifiedTx) {
+        val reminder = settingsDocument.settings.idReminder
+        if (radio.transmitting && !previousTransmitting && reminder.enabled && reminder.startOnVerifiedTx) {
+            settingsCoordinator.updateSettings { it.copy(idReminder = it.idReminder.copy(
+                running = true, paused = false, lastResetEpochSeconds = Instant.now().epochSecond)) }
+        }
+        previousTransmitting = radio.transmitting
+    }
     LaunchedEffect(database) {
         var observedRevision = Long.MIN_VALUE
         while (true) {
@@ -297,6 +351,28 @@ internal fun HamClockHomeScreen(
             if (revision != observedRevision) {
                 recentQsos = withContext(Dispatchers.IO) { database.recentHamClockProjection(120) }
                 recentQsoRevision = revision
+                observedRevision = revision
+            }
+            delay(5_000)
+        }
+    }
+    val contests = contestFeed?.value.orEmpty()
+    val selectedContest = contests.firstOrNull { it.id == selectedContestId }
+        ?: contests.firstOrNull { it.status == HamClockContestStatus.ACTIVE }
+        ?: contests.firstOrNull()
+    LaunchedEffect(contests, selectedContest?.id) {
+        if (selectedContest != null && selectedContestId != selectedContest.id) selectedContestId = selectedContest.id
+    }
+    LaunchedEffect(database, selectedContest, stationId) {
+        val contest = selectedContest ?: run { contestQsos = emptyList(); return@LaunchedEffect }
+        var observedRevision = Long.MIN_VALUE
+        while (true) {
+            val revision = database.changeToken()
+            if (revision != observedRevision) {
+                contestQsos = withContext(Dispatchers.IO) { database.contestHamClockProjection(HamClockContestQsoFilter(
+                    contestId = contest.id, startEpoch = contest.startEpoch, endEpoch = contest.endEpoch,
+                    stationProfileId = stationId, maximumRows = 200,
+                )) }
                 observedRevision = revision
             }
             delay(5_000)
@@ -324,7 +400,7 @@ internal fun HamClockHomeScreen(
         recentQsos, recentQsoRevision, neuralDx.mySignal, neuralDx.lightning, mapInstant, stationPoint, resolvedDxTarget,
         portableMapStatuses, features.clusterConnection, operations.satellites.elements.metadata,
         settingsDocument.settings.pskReporter, settingsDocument.settings.rbn, settingsDocument.settings.wspr,
-        features.rbnObservations, neuralDx.wsprPersonal, ibpSchedule) {
+        features.rbnObservations, neuralDx.wsprPersonal, ibpSchedule, finishLineAurora, contestQsos, selectedContest) {
         fun state(rows: Int) = if (rows > 0) HamClockMapSourceState.CURRENT else HamClockMapSourceState.EMPTY
         fun safe(value: String) = value.replace(Regex("https?://\\S+|(?i)(token|key|password)=[^\\s]+"), "[redacted]").take(160)
         val portableStatuses = portableMapStatuses
@@ -420,6 +496,18 @@ internal fun HamClockHomeScreen(
                     satelliteMetadata.lastError).filter(String::isNotBlank).joinToString(" · "))),
             HamClockMapLayerId.LOGGED_QSOS to HamClockMapSourceStatus(state(recentQsos.size), mapInstant.epochSecond,
                 "RigWeave QSO compact projection", "bounded 120 · revision $recentQsoRevision"),
+            HamClockMapLayerId.CONTEST_QSOS to HamClockMapSourceStatus(
+                if (selectedContest == null) HamClockMapSourceState.EMPTY else state(contestQsos.size), mapInstant.epochSecond,
+                "RigWeave indexed QSO projection", "${selectedContest?.name ?: "No selected contest"} · bounded ${contestQsos.size}/200 · revision $recentQsoRevision"),
+            HamClockMapLayerId.AURORA to HamClockMapSourceStatus(
+                when (finishLineAurora.truth) {
+                    HamClockProviderTruth.CURRENT -> HamClockMapSourceState.CURRENT
+                    HamClockProviderTruth.CACHED -> HamClockMapSourceState.CACHED
+                    HamClockProviderTruth.STALE -> HamClockMapSourceState.STALE
+                    HamClockProviderTruth.ERROR -> HamClockMapSourceState.ERROR
+                    HamClockProviderTruth.UNAVAILABLE -> HamClockMapSourceState.UNAVAILABLE
+                }, finishLineAurora.forecastAtEpoch, finishLineAurora.source,
+                "${finishLineAurora.cells.size} bounded cells · ${finishLineAurora.error}"),
             HamClockMapLayerId.GRAYLINE to HamClockMapSourceStatus(HamClockMapSourceState.CURRENT, mapInstant.epochSecond, "Local UTC astronomy"),
             HamClockMapLayerId.SUN to HamClockMapSourceStatus(HamClockMapSourceState.CURRENT, mapInstant.epochSecond, "Local UTC astronomy"),
             HamClockMapLayerId.GRID to HamClockMapSourceStatus(HamClockMapSourceState.CURRENT, mapInstant.epochSecond, "Local Maidenhead geometry"),
@@ -438,12 +526,26 @@ internal fun HamClockHomeScreen(
         recentQsos, neuralDx.lightning, resolvedDxTarget, stationCall, stationGrid, mapInstant,
         settingsDocument.settings.display.unitSystem, mapSourceStatus, rbnMapRows, neuralDx.wsprPersonal,
         ibpSchedule, settingsDocument.settings.rbn.showPaths, settingsDocument.settings.wspr.showPaths,
-        settingsDocument.settings.ibp) {
+        settingsDocument.settings.ibp, operations.satellites.hamClockTracks, operations.satellites.hamClockFootprints,
+        contestQsos, finishLineAurora, settingsDocument.settings.satellites) {
+        val satelliteIds = settingsDocument.settings.satellites.trackedNoradIds
+        val satellitePositions = operations.satellites.hamClockPositions.filter {
+            satelliteIds.isEmpty() || it.noradId.toInt() in satelliteIds
+        }
+        val satelliteTracks = if (settingsDocument.settings.satellites.showTracks) operations.satellites.hamClockTracks.filter {
+            satelliteIds.isEmpty() || it.noradId.toInt() in satelliteIds
+        } else emptyList()
+        val satelliteFootprints = if (settingsDocument.settings.satellites.showFootprints) operations.satellites.hamClockFootprints.filter {
+            satelliteIds.isEmpty() || it.noradId.toInt() in satelliteIds
+        } else emptyList()
         buildHamClockMapSnapshot(stationCall, stationGrid, visibleMapSpots, neuralDx.mySignal,
-            portableMapSpots, operations.satellites.hamClockPositions, recentQsos, neuralDx.lightning,
+            portableMapSpots, satellitePositions, recentQsos, neuralDx.lightning,
             resolvedDxTarget, mapInstant, settingsDocument.settings.display.unitSystem, mapSourceStatus,
             rbnMapRows, neuralDx.wsprPersonal, ibpSchedule, settingsDocument.settings.rbn.showPaths,
-            settingsDocument.settings.wspr.showPaths, settingsDocument.settings.ibp)
+            settingsDocument.settings.wspr.showPaths, settingsDocument.settings.ibp,
+            satelliteTracks = satelliteTracks,
+            satelliteFootprints = satelliteFootprints,
+            contestQsos = contestQsos, aurora = finishLineAurora)
     }
     fun updateMapPreference(value: HamClockMapPreference) = settingsCoordinator.updateSettings { it.copy(map = value) }
     fun openMapSelection(reference: HamClockMapFeatureRef) {
@@ -594,7 +696,7 @@ internal fun HamClockHomeScreen(
                     settingsDocument.settings.display, neuralDx.weather, {
                     neuralDx.refresh(stationCall, stationGrid, stationId, visibleMapSpots, true, NeuralDxRefreshScope.HOME)
                     features.refreshSolar(); portable.refreshAll()
-                }) { configureDashboard = true }
+                }, { showShackDisplay = true }) { configureDashboard = true }
                 if (!settingsDocument.settings.display.immersive) OperationsHomeSummary(operations, openOperations)
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(panelGap)) {
                     if (leftPanels.isNotEmpty()) LazyColumn(Modifier.widthIn(min = 300.dp, max = 350.dp).weight(.26f), verticalArrangement = Arrangement.spacedBy(panelGap)) {
@@ -626,7 +728,7 @@ internal fun HamClockHomeScreen(
                     settingsDocument.settings.display, neuralDx.weather, {
                     neuralDx.refresh(stationCall, stationGrid, stationId, features.liveSpots, true, NeuralDxRefreshScope.HOME)
                     features.refreshSolar(); portable.refreshAll()
-                }) { configureDashboard = true } }
+                }, { showShackDisplay = true }) { configureDashboard = true } }
                 if (!settingsDocument.settings.display.immersive) item { OperationsHomeSummary(operations, openOperations) }
                 items(compactPanels, key = HamClockPanelPreference::id) { panel ->
                     val height = if (panel.id == HamClockPanelId.MAP) {
@@ -656,6 +758,16 @@ internal fun HamClockHomeScreen(
                 (spotModeOptions + mapSpots.map { canonicalSpotMode(it.mode) }).distinct().sorted(),
                 { activeSpotFilter = null }, { updateSpotFilters(it); activeSpotFilter = null }, Modifier.fillMaxSize())
         }
+        if (showShackDisplay) HamClockShackDisplay(
+            stationCall, stationGrid, radio, pathPrediction, nativeStatus, finishLineWeather,
+            features.solar, features.sunspotNumber, celestialFeed?.value?.xray ?: HamClockXraySeries(), finishLineAurora,
+            solarImage, contests, selectedContestId, contestQsos, operations.satellites.hamClockPositions,
+            operations.satellites.hamClockTracks, settingsDocument.settings,
+            { transform -> settingsCoordinator.updateSettings(transform) },
+            { selectedContestId = it },
+            { channel, force -> solarImageRequest = channel to force }, openExactQso,
+            { showShackDisplay = false },
+        )
     }
 }
 
@@ -718,7 +830,7 @@ private fun OperationsHomeSummary(operations: OperationsController, open: () -> 
 @Composable
 private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: AppController,
     features: FeatureController, neuralDx: NeuralDxController, display: HamClockDisplayPreference,
-    weather: NeuralWeather, refresh: () -> Unit, configure: () -> Unit) {
+    weather: NeuralWeather, refresh: () -> Unit, shack: () -> Unit, configure: () -> Unit) {
     var now by remember { mutableStateOf(Instant.now()) }
     LaunchedEffect(Unit) { while (true) { now = Instant.now(); delay(1_000) } }
     val utc = now.atZone(ZoneOffset.UTC)
@@ -737,7 +849,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                     HeaderIdentity(call, grid, Modifier.weight(1f))
                     StatusPill(if (radio.connected) "CAT LIVE" else "CAT OFFLINE", radio.connected)
                     StatusPill(if (app.transmitArmed) "TX ARMED" else "SAFE / RX", !app.transmitArmed)
-                    ConfigButton(configure); SyncButton(neuralDx.refreshing, refresh)
+                    ShackButton(shack); ConfigButton(configure); SyncButton(neuralDx.refreshing, refresh)
                 }
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -755,12 +867,16 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 Text(weatherText, color = HcCyan, fontFamily = FontFamily.Monospace, fontSize = 16.sp)
                 StatusPill(if (radio.connected) "CAT LIVE" else "CAT OFFLINE", radio.connected)
                 StatusPill(if (app.transmitArmed) "TX ARMED" else "SAFE / RX", !app.transmitArmed)
-                ConfigButton(configure); SyncButton(neuralDx.refreshing, refresh)
+                ShackButton(shack); ConfigButton(configure); SyncButton(neuralDx.refreshing, refresh)
             }
             Text("RigWeave ${BuildConfig.VERSION_NAME} · OHC reviewed v26.5.0 · d4a50ea · checked 2026-08-20",
                 color = HcMuted, fontSize = 12.sp, modifier = Modifier.align(Alignment.BottomStart))
         }
     }
+}
+
+@Composable private fun ShackButton(open: () -> Unit) {
+    Button(open, modifier = Modifier.heightIn(min = 48.dp)) { Text("SHACK") }
 }
 
 @Composable private fun ConfigButton(configure: () -> Unit) {
