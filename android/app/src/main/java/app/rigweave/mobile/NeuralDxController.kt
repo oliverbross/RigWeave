@@ -212,6 +212,16 @@ internal fun tropoIndex(surface: Double?, at850: Double?, humidity: Int?, cape: 
     return index to when { index >= 7 -> "HIGH"; index >= 4 -> "MODERATE"; else -> "LOW" }
 }
 
+internal fun dxDirectTuneAvailable(frequencyHz: Long): Boolean =
+    frequencyHz in 1_000_000L..54_000_000L
+
+internal fun dxDisplayBand(band: String, frequencyHz: Long, comment: String): String {
+    if (band != "3cm") return band
+    val qo100 = frequencyHz in 10_489_500_000L..10_490_000_000L ||
+        comment.contains("QO-100", ignoreCase = true) || comment.contains("QO100", ignoreCase = true)
+    return if (qo100) "3cm · QO-100" else band
+}
+
 internal fun extractCallsigns(text: String): List<String> = Regex("(?<![A-Z0-9/])(?:[A-Z]{1,2}|[0-9][A-Z])[0-9][A-Z0-9]{1,4}(?:/[A-Z0-9]+)?(?![A-Z0-9])")
     .findAll(text.uppercase(Locale.US)).map { it.value }.filterNot { it in setOf("2024", "2025", "2026") }.distinct().take(24).toList()
 
@@ -936,7 +946,7 @@ class NeuralDxController(private val context: Context, private val database: Qso
     }.getOrDefault("")
     private fun decodeIds(raw:String?)=raw?.split(',')?.mapNotNull(String::toIntOrNull)?.distinct()?.take(24)?.takeIf(List<Int>::isNotEmpty)?:listOf(25544,39444,43017,27607,44909,24278,43678)
     private fun frequencyLabel(hz:Long)=if(hz<=0)"—" else "%.6f MHz".format(Locale.US,hz/1_000_000.0)
-    private fun frequencyBand(hz:Long):String=when(hz){in 1_800_000..2_000_000->"160m";in 3_500_000..4_000_000->"80m";in 5_000_000..5_500_000->"60m";in 7_000_000..7_300_000->"40m";in 10_100_000..10_150_000->"30m";in 14_000_000..14_350_000->"20m";in 18_068_000..18_168_000->"17m";in 21_000_000..21_450_000->"15m";in 24_890_000..24_990_000->"12m";in 28_000_000..29_700_000->"10m";in 50_000_000..54_000_000->"6m";in 70_000_000..71_000_000->"4m";in 144_000_000..148_000_000->"2m";in 430_000_000..440_000_000->"70cm";else->"—"}
+    private fun frequencyBand(hz:Long)=bandForFrequency(hz).ifBlank{"—"}
     private fun greatCircleKm(a:GeoPoint,b:GeoPoint):Double{val p1=Math.toRadians(a.latitude);val p2=Math.toRadians(b.latitude);val dp=p2-p1;val dl=Math.toRadians(b.longitude-a.longitude);val h=sin(dp/2).pow(2)+cos(p1)*cos(p2)*sin(dl/2).pow(2);return 6371.0*2*atan2(sqrt(h),sqrt(1-h))}
     private fun initialBearing(a:GeoPoint,b:GeoPoint):Double{val p1=Math.toRadians(a.latitude);val p2=Math.toRadians(b.latitude);val dl=Math.toRadians(b.longitude-a.longitude);return(Math.toDegrees(atan2(sin(dl)*cos(p2),cos(p1)*sin(p2)-sin(p1)*cos(p2)*cos(dl)))+360)%360}
     private fun compass(degrees:Double)=listOf("N","NE","E","SE","S","SW","W","NW")[((degrees+22.5)/45).toInt()%8]

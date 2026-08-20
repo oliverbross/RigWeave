@@ -1,4 +1,6 @@
 #include "rigweave/core.h"
+#include "kx3/dx_analysis.hpp"
+#include "kx3/spot.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -83,6 +85,19 @@ int main() {
     assert(std::string(adif).find("<APP_RIGWEAVE_UUID:19>rw-") != std::string::npos);
     assert(std::string(adif).find("<EOR>") != std::string::npos);
 
+    assert(kx3::spot_band(70'200'000ULL) == "4m");
+    assert(kx3::spot_band(144'300'000ULL) == "2m");
+    assert(kx3::spot_band(432'200'000ULL) == "70cm");
+    assert(kx3::spot_band(1'296'200'000ULL) == "23cm");
+    assert(kx3::spot_band(10'489'860'000ULL) == "3cm");
+    for (const auto frequency : {100'000'000ULL, 222'000'000ULL, 902'000'000ULL,
+                                 2'300'000'000ULL, 5'700'000'000ULL})
+        assert(kx3::spot_band(frequency) == "other");
+    static_assert(kx3::kDxBandCount == 16U);
+    assert(kx3::dx_live_filter_matches("6m", "FT8", false, 1U << 10U, 1U << 2U, 2U));
+    assert(kx3::dx_live_filter_matches("3cm", "FT8", false, 1U << 15U, 1U << 2U, 2U));
+    assert(!kx3::dx_live_filter_matches("3cm", "FT8", false, 1U << 14U, 1U << 2U, 2U));
+
     rw_feature_context *features = rw_feature_context_create();
     assert(features != nullptr);
     assert(rw_feature_load_cty_text(features,
@@ -92,8 +107,20 @@ int main() {
     assert(rw_feature_ingest_cluster_line(features,
         "DX de VK3ABC:  14074.0  JA1XYZ  FT8 -10 dB", 1720000000) == 1);
     assert(rw_feature_ingest_cluster_line(features,
-        "DX de VK3ABC:  14075.0  JA2ABC  FT8 -08 dB", 1720000000) == 1);
-    char dx_json[16384]{};
+        "DX de VK3ABC:  144300.0  JA2ABC  FT8 -08 dB", 1720000000) == 1);
+    assert(rw_feature_ingest_cluster_line(features,
+        "DX de VK3ABC:  70200.0  JA3FOUR  FT8 -12 dB", 1720000000) == 1);
+    assert(rw_feature_ingest_cluster_line(features,
+        "DX de VK3ABC:  432200.0  JA4UHF  FM simplex", 1720000000) == 1);
+    assert(rw_feature_ingest_cluster_line(features,
+        "DX de VK3ABC:  1296200.0  JA5L  SSB", 1720000000) == 1);
+    assert(rw_feature_ingest_cluster_line(features,
+        "DX de VK3ABC:  10489860.0  JA6SAT  FT4 QO-100", 1720000000) == 1);
+    assert(rw_feature_ingest_cluster_line(features,
+        "DX de VK3ABC:  100000.0  JA7BAD  FM", 1720000000) == 0);
+    assert(rw_feature_ingest_cluster_line(features,
+        "DX de VK3ABC:  222000.0  JA8BAD  FM", 1720000000) == 0);
+    char dx_json[32768]{};
     assert(rw_feature_dx_snapshot_json(features, dx_json, sizeof(dx_json), 1720000001) > 0);
     std::string dx(dx_json);
     const auto opportunity_for = [](const std::string& json, const std::string& callsign) {
@@ -115,6 +142,38 @@ int main() {
     assert(dx.find("]],\"opportunities\":[") != std::string::npos);
     assert(dx.find("\"liveSpots\":[") != std::string::npos);
     assert(dx.find("\"workedLog\":{\"loaded\":false,\"complete\":false") != std::string::npos);
+    const auto bands_start = dx.find("\"bands\":[");
+    const auto timeline_start = dx.find("\"bandTimeline\":[");
+    const auto regions_start = dx.find("\"regions\":[");
+    assert(bands_start != std::string::npos && timeline_start != std::string::npos &&
+           regions_start != std::string::npos);
+    const std::string bands_json = dx.substr(bands_start, timeline_start - bands_start);
+    std::size_t band_rows{};
+    for (std::size_t at = 0; (at = bands_json.find("\"band\":", at)) != std::string::npos;
+         at += 7U) ++band_rows;
+    assert(band_rows == 16U);
+    std::size_t ordered_at{};
+    for (const char *band : {"160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m",
+                             "12m", "10m", "6m", "4m", "2m", "70cm", "23cm", "3cm"}) {
+        ordered_at = bands_json.find(std::string("\"band\":\"") + band + '"', ordered_at);
+        assert(ordered_at != std::string::npos);
+        ++ordered_at;
+    }
+    const std::string timeline_json = dx.substr(timeline_start, regions_start - timeline_start);
+    assert(static_cast<std::size_t>(std::count(timeline_json.begin(), timeline_json.end(), '[')) == 17U);
+    for (const auto& expected : {
+             std::pair{"JA3FOUR", "\"frequencyHz\":70200000"},
+             std::pair{"JA2ABC", "\"frequencyHz\":144300000"},
+             std::pair{"JA4UHF", "\"frequencyHz\":432200000"},
+             std::pair{"JA5L", "\"frequencyHz\":1296200000"},
+             std::pair{"JA6SAT", "\"frequencyHz\":10489860000"}}) {
+        const auto row = opportunity_for(dx, expected.first);
+        assert(row.find(expected.second) != std::string::npos);
+    }
+    assert(opportunity_for(dx, "JA3FOUR").find("\"band\":\"4m\"") != std::string::npos);
+    assert(opportunity_for(dx, "JA4UHF").find("\"mode\":\"FM\"") != std::string::npos);
+    assert(opportunity_for(dx, "JA6SAT").find("\"band\":\"3cm\"") != std::string::npos);
+    assert(opportunity_for(dx, "JA6SAT").find("\"mode\":\"FT4\"") != std::string::npos);
     auto je_row = opportunity_for(dx, "JA2ABC");
     assert(je_row.find("\"workedIndexComplete\":false") != std::string::npos);
     assert(je_row.find("NEW ENTITY IN LOGBOOK") == std::string::npos);
@@ -130,7 +189,7 @@ int main() {
     const int unworked_score = score_of(je_row);
 
     assert(rw_feature_begin_worked_sync(features) == 1);
-    assert(rw_feature_add_worked_qso(features, "JA2ABC", "Japan", "20m", "FT8", "", 1719999900, 0) == 1);
+    assert(rw_feature_add_worked_qso(features, "JA2ABC", "Japan", "2m", "FT8", "", 1719999900, 0) == 1);
     assert(rw_feature_end_worked_sync(features) == 1);
     assert(rw_feature_dx_snapshot_json(features, dx_json, sizeof(dx_json), 1720000001) > 0);
     dx = dx_json;
@@ -140,11 +199,12 @@ int main() {
                              "\"workedBandMode\":true", "\"recentDupe\":true"})
         assert(je_row.find(flag) != std::string::npos);
     assert(je_row.find("NEW ENTITY IN LOGBOOK") == std::string::npos);
+    assert(je_row.find("SOLAR SUPPORT") == std::string::npos);
     assert(score_of(je_row) == unworked_score - 22);
 
     char worked_json[1024]{};
     assert(rw_feature_worked_json(features, worked_json, sizeof(worked_json),
-        "JA2ABC", "Japan", "20m", "FT8", "", 1720000001) > 0);
+        "JA2ABC", "Japan", "2m", "FT8", "", 1720000001) > 0);
     assert(std::string(worked_json).find("\"callWorked\":true") != std::string::npos);
 
     assert(rw_feature_begin_worked_sync(features) == 1);

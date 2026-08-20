@@ -207,7 +207,7 @@ class FeatureController(private val context: Context) {
 
     fun postSpot(callsign: String, frequencyKHz: Double, comment: String) {
         val call = callsign.trim().uppercase()
-        if (call.isBlank() || frequencyKHz !in 100.0..1_300_000.0) return
+        if (call.isBlank() || frequencyKHz !in 100.0..10_500_000.0) return
         val safeComment = comment.replace(Regex("[\\r\\n;]"), " ").trim().take(80)
         scope.launch {
             val socket = clusterSocket

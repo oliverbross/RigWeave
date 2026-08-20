@@ -54,14 +54,15 @@ The reload contract is:
 
 `workedLog.loaded` distinguishes never-loaded/loading from an empty log. `complete` is true only after activation with no rejected or truncated rows. An incomplete index may report positive matches it contains, but absence is never treated as proof of a new entity.
 
-Android queries only callsign, stored country, frequency, mode, timestamp, band, and submode under the existing `stationScope()` rule. Current CTY resolution takes precedence over stored country; stored country is the fallback. A valid stored HF/6 m band takes precedence over frequency-derived band. A fingerprint of QSO change token, authority, selected Wavelog station, and CTY revision prevents unchanged periodic rebuilds. For each new CTY revision, the installed bounded `cty.dat` text is loaded through JNI into the same native feature context before the worked-log rebuild is installed under the native lock. Native live spots and historical QSO classification therefore use the same installed CTY authority when available; without CTY, a blank live entity cannot receive the new-entity claim.
+Android queries only callsign, stored country, frequency, mode, timestamp, band, and submode under the existing `stationScope()` rule. Current CTY resolution takes precedence over stored country; stored country is the fallback. A valid stored canonical observation band takes precedence over frequency-derived band. A fingerprint of QSO change token, authority, selected Wavelog station, and CTY revision prevents unchanged periodic rebuilds. For each new CTY revision, the installed bounded `cty.dat` text is loaded through JNI into the same native feature context before the worked-log rebuild is installed under the native lock. Native live spots and historical QSO classification therefore use the same installed CTY authority when available; without CTY, a blank live entity cannot receive the new-entity claim.
 
 iOS loads the bounded installed `cty.dat` text into its existing shared feature context before rebuilding the local `QSOStore` authority. Historical QSO entity classification prefers the current CTY country and falls back to the stored country when CTY is unavailable or has no match. A successful CTY replacement triggers one native CTY load, one complete local WorkedIndex rebuild, and one DX snapshot refresh. ADIF import defers visible-record reload and worked-log notification during per-record inserts, then performs each once for a changed batch. iOS still does not fabricate Wavelog station authority or implement the Android-only seven-page Neural DX workspace.
 
 ## Intentional differences from the behavioural reference
 
 - RigWeave retains one active cluster connection with configured failover, not simultaneous multi-cluster aggregation.
-- Shared native opportunity ingestion remains limited to HF and 6 m; VHF/UHF expansion is not part of this remediation.
+- Shared native observation ingestion covers `160m`, `80m`, `60m`, `40m`, `30m`, `20m`, `17m`, `15m`, `12m`, `10m`, `6m`, `4m`, `2m`, `70cm`, `23cm`, and `3cm`.
+- Direct CAT tuning from Neural DX remains limited through 6 m. Higher-band spots are visible and analysable but show an observation-only state until RigWeave has an explicit supported radio/transverter path.
 - The full Neural DX workspace remains Android-only. iOS has the smaller native DX surface; desktop has none.
 - RigWeave's opportunity score is a deterministic freshness/watchlist/entity/surge/solar heuristic. It is not the upstream `predictor.py` model, prediction database, verification history, or probability calibration.
 - Android uses the selected RigWeave local or cached Wavelog authority. iOS currently uses only its provable local log authority.
@@ -72,6 +73,14 @@ iOS loads the bounded installed `cty.dat` text into its existing shared feature 
 Android labels the ranked live rows as **Current opportunities**. They are derived directly from the shared native spot priority and evidence values: `priority` is the existing opportunity `score`, and `evidenceScore` is the existing `confidence`. Rows below priority 45 are excluded, equal callsign/band/mode rows are deduplicated after ranking, and the list is capped at 12. There is no probability, forecast window, model label, verification history, or measured-reliability claim. Dynamic worked/QSL status remains authoritative in `QsoDatabase` and is not copied into the spot journal.
 
 The Android-only `neural-dx.sqlite` journal is schema version 3. Its spot rows now retain DXCC, confidence, sample count, reason, and last-update time for future historical analysis. The v2 migration preserves existing spot rows and the 90-day retention rule, seeds `updated_at` from the original spot timestamp, adds the DXCC/band/time index, and removes the obsolete `prediction_result` table. Repeated spot IDs update their latest dynamic ranking fields while blank later enrichment cannot erase a useful country, DXCC, continent, coordinate pair, or comment. Only an inserted ID is considered fresh, so an upsert cannot repeat watchlist/New-DXCC alerts.
+
+## Unified observation-band contract
+
+The shared cluster parser, live spots, activity bands, timelines, watch activity, worked-log classification, and deterministic current opportunities now use one fixed 16-band order: `160m`, `80m`, `60m`, `40m`, `30m`, `20m`, `17m`, `15m`, `12m`, `10m`, `6m`, `4m`, `2m`, `70cm`, `23cm`, `3cm`. The five appended bands preserve every existing bit position. Accepted cluster input is bounded by the shared 1 MHz to 10.5 GHz parser/engine contract, and unsupported gaps such as 100 MHz, 222 MHz, 902 MHz, 2.3 GHz, and 5.7 GHz remain rejected rather than entering analysis as `other`.
+
+Canonical band identity follows ADIF frequency semantics. QO-100 downlink observations are stored, filtered, and matched as `3cm`; Android and iOS may display `3cm · QO-100` for the 10489.500–10490.000 MHz narrowband segment or an explicit QO-100 spot comment. Android local/Wavelog worked-log fallback and iOS local worked-log fallback use the same five added ranges. The existing schema-version-3 journal stores these strings without a migration, retains its upsert and 90-day rules, and stores no tune state.
+
+Android manual cluster posting accepts operator-entered frequencies through 10.5 GHz. That cluster message is distinct from radio control. Android and the smaller iOS DX surface block every Neural DX `FA`/direct-tune action above 54 MHz while preserving spot detail and history access. No transverter offset, radio-capability framework, automatic hardware detection, satellite tuning, or QO-100 uplink control was added. The full seven-page workspace remains Android-only and desktop Neural DX remains unimplemented.
 
 ## Android external providers
 
@@ -103,6 +112,15 @@ Current-opportunities Android closure on base `73b2f5e997d90a634dfa141fd41413159
 - Android JNI/CTY instrumentation: the focused test APK assembled. A test-only install on TB373FU could not enter the new JNI path because the preserved installed target app predates `featureLoadCty` (`NoSuchMethodError`). The normal app was not reinstalled and its data was not cleared; runtime JNI scoring proof remains pending.
 - iOS CTY/worked-log closure: the complete generic iOS Simulator build passed. The installed CTY text is loaded before local worked-log rebuild, current CTY country takes precedence with stored-country fallback, and ADIF batches defer the complete rebuild to one final notification for a changed import.
 - No live external provider, authenticated service, physical radio, transmission, or RF validation was required or performed.
+
+Unified observation-band contract on base `76e1e40e8471f142c9349a193c0a62687c79b218`:
+
+- Shared core configure/build passed and CTest `1/1` passed. Coverage includes all five added mappings, 16 band/timeline rows, 64-bit 3 cm frequencies, appended filter bits, explicit high-band modes, unsupported gaps, 2 m worked-log matching, unchanged 22-point new-entity removal, and no HF solar-support reason on 2 m.
+- Android JVM tests passed, including canonical frequency mapping, upper-bound/gap rejection, 16-band order, direct-tune safety, QO-100 display-only annotation, and unchanged current-opportunity priority/evidence semantics.
+- Android debug APK and instrumentation APK assembly passed. No APK was installed and no instrumentation test was run on Oliver's protected operator tablet.
+- The complete generic iOS Simulator build passed for both simulator architectures. The dynamic snapshot decoder and band/pulse views require no static 16-band list.
+- Focused source review found no 54 MHz cap in shared parser or engine, no QO-100 stored/filter band identity, and guards on every Android/iOS Neural DX `FA` path. `git diff --check` passed.
+- No live service, physical UI, physical device, CAT, radio, transmission, RF, or release validation was performed.
 
 Validation commands:
 

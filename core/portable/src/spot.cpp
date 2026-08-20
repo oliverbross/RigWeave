@@ -49,7 +49,7 @@ std::optional<std::uint64_t> frequency_hz(std::string_view token) {
     const double khz = std::strtod(text.c_str(), &end);
     if (end == text.c_str() || *end != '\0' || !std::isfinite(khz)) return std::nullopt;
     const auto hz = static_cast<std::uint64_t>(std::llround(khz * 1000.0));
-    if (hz < 1000000ULL || hz > 54000000ULL) return std::nullopt;
+    if (hz < kDxMinimumFrequencyHz || hz > kDxMaximumFrequencyHz) return std::nullopt;
     return hz;
 }
 
@@ -140,6 +140,11 @@ std::string spot_band(std::uint64_t hz) {
     if (mhz >= 24.89 && mhz < 24.99) return "12m";
     if (mhz >= 28.0 && mhz < 29.7) return "10m";
     if (mhz >= 50.0 && mhz < 54.0) return "6m";
+    if (hz >= 70'000'000ULL && hz < 71'000'000ULL) return "4m";
+    if (hz >= 144'000'000ULL && hz < 148'000'000ULL) return "2m";
+    if (hz >= 420'000'000ULL && hz < 450'000'000ULL) return "70cm";
+    if (hz >= 1'240'000'000ULL && hz < 1'300'000'000ULL) return "23cm";
+    if (hz >= 10'000'000'000ULL && hz < 10'500'000'000ULL) return "3cm";
     return "other";
 }
 
@@ -170,7 +175,9 @@ std::string spot_mode(std::uint64_t hz, std::string_view comment) {
         (band == "20m" && mhz <= 14.10) || (band == "17m" && mhz <= 18.11) ||
         (band == "15m" && mhz <= 21.15) || (band == "12m" && mhz <= 24.93) ||
         (band == "10m" && mhz <= 28.30)) return "CW";
-    if (band != "other" && band != "30m" && band != "60m") return "SSB";
+    if (band == "160m" || band == "80m" || band == "40m" || band == "20m" ||
+        band == "17m" || band == "15m" || band == "12m" || band == "10m" ||
+        band == "6m") return "SSB";
     return "DATA";
 }
 
@@ -215,6 +222,7 @@ std::optional<ClusterSpot> parse_cluster_spot(std::string_view input,
         }
     }
     spot.band = spot_band(spot.frequency_hz);
+    if (spot.band == "other") return std::nullopt;
     spot.mode = spot_mode(spot.frequency_hz, spot.comment);
     return spot;
 }

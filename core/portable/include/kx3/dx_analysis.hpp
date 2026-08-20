@@ -12,7 +12,7 @@
 
 namespace kx3 {
 
-constexpr std::size_t kDxBandCount = 11;
+constexpr std::size_t kDxBandCount = 16;
 constexpr std::size_t kDxOpportunityCount = 40;
 constexpr std::size_t kDxLiveCount = 64;
 constexpr std::size_t kDxTimelineBuckets = 12;

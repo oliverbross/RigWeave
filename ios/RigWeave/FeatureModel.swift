@@ -49,6 +49,13 @@ struct DXOpportunity: Codable, Identifiable {
     var safeReason: String {
         workedIndexComplete != true && reason == "NEW ENTITY IN LOGBOOK" ? "FRESH CLUSTER ACTIVITY" : reason
     }
+    var displayBand: String {
+        guard band == "3cm" else { return band }
+        let qo100 = (10_489_500_000...10_490_000_000).contains(frequencyHz) ||
+            comment.localizedCaseInsensitiveContains("QO-100") ||
+            comment.localizedCaseInsensitiveContains("QO100")
+        return qo100 ? "3cm · QO-100" : band
+    }
 }
 
 struct DXRegion: Codable, Identifiable {
@@ -862,6 +869,10 @@ final class FeatureModel: ObservableObject {
     enum SolarError: LocalizedError { case invalidResponse; var errorDescription: String? { "Unexpected NOAA response" } }
 }
 
+func dxDirectTuneAvailable(_ frequencyHz: UInt64) -> Bool {
+    (1_000_000...54_000_000).contains(frequencyHz)
+}
+
 private func workedBand(for frequencyHz: UInt64) -> String {
     switch frequencyHz {
     case 1_800_000...2_000_000: return "160m"
@@ -875,6 +886,11 @@ private func workedBand(for frequencyHz: UInt64) -> String {
     case 24_890_000...24_990_000: return "12m"
     case 28_000_000...29_700_000: return "10m"
     case 50_000_000...54_000_000: return "6m"
+    case 70_000_000..<71_000_000: return "4m"
+    case 144_000_000..<148_000_000: return "2m"
+    case 420_000_000..<450_000_000: return "70cm"
+    case 1_240_000_000..<1_300_000_000: return "23cm"
+    case 10_000_000_000..<10_500_000_000: return "3cm"
     default: return ""
     }
 }
