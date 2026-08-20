@@ -197,6 +197,13 @@ class CtyController(context: Context) {
     }
 
     fun country(callsign: String): String = lookup(callsign)?.country.orEmpty()
+
+    suspend fun nativeCtyText(): String? = withContext(Dispatchers.IO) {
+        if (!datFile.isFile || datFile.length() !in 1..MAX_CTY_BYTES.toLong()) return@withContext null
+        runCatching { datFile.readText() }.getOrNull()
+            ?.takeIf { it.contains(':') && it.contains(';') }
+    }
+
     fun close() = scope.cancel()
 
     private fun load(): Int {

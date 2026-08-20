@@ -301,6 +301,12 @@ Java_app_rigweave_mobile_NativeCore_featureWatchlist(JNIEnv *env, jobject, jlong
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
+Java_app_rigweave_mobile_NativeCore_featureLoadCty(JNIEnv *env, jobject, jlong handle, jstring value) {
+    const auto text = utf(env, value);
+    return rw_feature_load_cty_text(features(handle), text.c_str()) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
 Java_app_rigweave_mobile_NativeCore_featureClusterLine(JNIEnv *env, jobject, jlong handle, jstring value, jlong epoch) {
     const auto text = utf(env, value);
     return rw_feature_ingest_cluster_line(features(handle), text.c_str(), static_cast<int64_t>(epoch)) ? JNI_TRUE : JNI_FALSE;

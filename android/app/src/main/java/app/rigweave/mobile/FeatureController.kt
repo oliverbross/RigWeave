@@ -248,12 +248,16 @@ class FeatureController(private val context: Context) {
                 val fingerprint = WorkedFingerprint(database.changeToken(), authority, stationId, cty.dataRevision)
                 if (fingerprint != workedFingerprint) {
                     try {
-                        if (authority == LogMode.WAVELOG && stationId.isBlank()) {
-                            synchronized(nativeLock) { NativeCore.featureBeginWorkedSync(handle) }
-                        } else {
-                            val rows = database.workedLog(stationId.takeIf { authority == LogMode.WAVELOG }, cty::country)
-                            synchronized(nativeLock) {
-                                NativeCore.featureBeginWorkedSync(handle)
+                        val ctyText = cty.nativeCtyText()
+                        val hasSelectedAuthority = authority != LogMode.WAVELOG || stationId.isNotBlank()
+                        val rows = if (hasSelectedAuthority) {
+                            database.workedLog(stationId.takeIf { authority == LogMode.WAVELOG }, cty::country)
+                        } else emptyList()
+                        synchronized(nativeLock) {
+                            require(fingerprint.ctyRevision == 0L || ctyText != null)
+                            if (ctyText != null) require(NativeCore.featureLoadCty(handle, ctyText))
+                            NativeCore.featureBeginWorkedSync(handle)
+                            if (hasSelectedAuthority) {
                                 rows.forEach { row ->
                                     NativeCore.featureAddWorkedQso(handle, row.callsign, row.entity, row.band,
                                         row.mode, row.submode, row.epoch, row.fromWavelog)

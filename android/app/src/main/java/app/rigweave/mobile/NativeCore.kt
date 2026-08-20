@@ -66,6 +66,7 @@ object NativeCore {
     external fun featureCreate(): Long
     external fun featureDestroy(handle: Long)
     external fun featureWatchlist(handle: Long, value: String)
+    external fun featureLoadCty(handle: Long, text: String): Boolean
     external fun featureClusterLine(handle: Long, value: String, epoch: Long): Boolean
     external fun featureDxSnapshot(handle: Long, epoch: Long): String
     external fun featureBeginWorkedSync(handle: Long): Boolean

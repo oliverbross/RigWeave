@@ -5,14 +5,13 @@
 - RigWeave repository: https://github.com/oliverbross/RigWeave
 - Reviewed and implemented RigWeave base: `39a2926648bdd98ca3d8e1200eff4892dca5eee9`
 - Behavioural reference: https://github.com/F1SMV/Neural-DX-Watcher
-- Authorised task reference: `fe3cba8d613899fd605255e1ba8b748f42e2357e`
-- Upstream revision actually present on `main` and in the inspected clone: `fe3cba8ed9c0502f5dabdb2f64ebd990de986559` (`version 12.1`). The authorised hash does not resolve in the upstream repository; owner confirmation is required before treating either hash as the approved pin.
+- Approved behavioural baseline: `fe3cba8ed9c0502f5dabdb2f64ebd990de986559` (`version 12.1`). The original remediation brief contained a non-resolving transcription/reference error; no upstream owner confirmation is required merely to identify this corrected pin.
 - Upstream licence status: no `LICENSE`, `LICENCE`, `COPYING`, or `NOTICE` file, SPDX declaration, or licence grant was found in the inspected upstream tree or README. GitHub does not display a detected licence for the repository. Permission is therefore not established.
 - Bundled upstream files or assets: none.
 - This remediation copied no upstream source, comments, text, graphics, or assets. It changes RigWeave's existing native implementation and documentation only.
-- The earlier RigWeave commit history identifies native Neural DX implementation commits, but source inspection alone cannot prove the provenance of every pre-existing line. Earlier provenance/permission requires owner confirmation.
+- The earlier RigWeave commit history identifies native Neural DX implementation commits, but current source inspection alone cannot prove the provenance of every pre-existing line.
 
-> **Release blocker — unresolved upstream provenance and permission.** Do not describe the relationship as licensed parity or distribute material derived from Neural DX Watcher unless the owner confirms the correct immutable revision and the necessary permission/licence. RigWeave's internal worked-log correctness fix is valid independently of that unresolved release decision.
+> **Release blocker — unresolved upstream provenance and permission.** Do not describe the relationship as licensed parity or distribute material derived from Neural DX Watcher without a compatible licence or permission grant. RigWeave's internal worked-log correctness fix is valid independently of that unresolved release decision.
 
 ## Integration boundary
 
@@ -54,7 +53,7 @@ The reload contract is:
 
 `workedLog.loaded` distinguishes never-loaded/loading from an empty log. `complete` is true only after activation with no rejected or truncated rows. An incomplete index may report positive matches it contains, but absence is never treated as proof of a new entity.
 
-Android queries only callsign, stored country, frequency, mode, timestamp, band, and submode under the existing `stationScope()` rule. Current CTY resolution takes precedence over stored country; stored country is the fallback. A valid stored HF/6 m band takes precedence over frequency-derived band. A fingerprint of QSO change token, authority, selected Wavelog station, and CTY revision prevents unchanged periodic rebuilds. Native access is serialized while the complete rebuild is installed.
+Android queries only callsign, stored country, frequency, mode, timestamp, band, and submode under the existing `stationScope()` rule. Current CTY resolution takes precedence over stored country; stored country is the fallback. A valid stored HF/6 m band takes precedence over frequency-derived band. A fingerprint of QSO change token, authority, selected Wavelog station, and CTY revision prevents unchanged periodic rebuilds. For each new CTY revision, the installed bounded `cty.dat` text is loaded through JNI into the same native feature context before the worked-log rebuild is installed under the native lock. Native live spots and historical QSO classification therefore use the same installed CTY authority when available; without CTY, a blank live entity cannot receive the new-entity claim.
 
 ## Intentional differences from the behavioural reference
 
@@ -81,9 +80,10 @@ Current source contains integrations for the configured DX cluster; NOAA SWPC so
 ## Validation record for this remediation
 
 - Shared core: configure/build passed; CTest `1/1` passed. Regression coverage includes unloaded, loaded-empty, matching-QSO, reset, score delta, and incomplete-index safety.
-- Android JVM suite, debug APK, and instrumentation APK assembly passed.
+- Android JVM suite passed `218/218`; debug APK and instrumentation APK assembly passed.
 - Android database instrumentation: the focused authority/station scope, entity/band fallback, and change-token test passed on the connected TB373FU. This is database evidence, not physical UI, RF, or service evidence.
-- iOS generic Simulator build reached and compiled the changed shared core and FeatureModel sources, then failed in pre-existing unrelated `GroupsIoFeature.swift` explicit-`self` errors. The exact final result is recorded in the completion report.
+- Android JNI/CTY instrumentation: the focused test APK assembled. A test-only install on TB373FU could not enter the new JNI path because the preserved installed target app predates `featureLoadCty` (`NoSuchMethodError`). The normal app was not reinstalled and its data was not cleared; runtime JNI scoring proof remains pending.
+- No iOS validation is claimed for this Android-only closure.
 - No live external provider, authenticated service, physical radio, transmission, or RF validation was required or performed.
 
 Validation commands:
@@ -96,7 +96,5 @@ ctest --test-dir /tmp/rigweave-neural-dx-core --output-on-failure
 cd android
 ./gradlew :app:testDebugUnitTest
 ./gradlew :app:assembleDebug
-
-xcodebuild -project ios/RigWeave.xcodeproj -scheme RigWeave \
-  -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+./gradlew :app:assembleDebugAndroidTest
 ```
