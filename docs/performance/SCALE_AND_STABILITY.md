@@ -62,3 +62,11 @@ Every map layer declares a maximum object count. DX points cap at 160, great-cir
 - DX/PSK/Portable/Satellite/QSO routing carries typed exact identities. No marker selection performs CAT; Home DX review confirmation alone may change receive VFO.
 - DX points and paths retain the shared band palette; watchlist is a separate GeoJSON/stroke property. Existing per-source fingerprints still suppress unchanged full-source rewrites.
 - Recent Home QSOs remain the bounded `recentHamClockProjection(120)` path. No canonical QSO JSON decode or `QsoDatabase.all()` was introduced.
+
+# Task 2B1 DX News and PSK safeguards
+
+- DX-World downloads cap at 1 MB, accept at most three HTTPS redirects and publish at most 40 normalized stories. A 30-minute TTL, 10-minute manual limit, conditional validators, last-good cache and in-flight coalescer prevent request storms and invalid replacement.
+- DX News consumes the existing bounded NG3K feed, so Home, Calendar and DX share one schedule fetch. Dedup is linear over the bounded merged list and preserves distinct same-callsign stories.
+- Direct PSK responses cap at 2 MB and 500 rows per direction. Cache keys include direction/callsign/window; automatic/manual cadence cannot be below five minutes and Retry-After extends backoff.
+- PSK filters are applied before Home/map presentation, whose existing map cap remains 60. Direction generations discard late results after disable or provider-affecting changes; clearing PSK cancels the active job and removes displayed rows.
+- Cluster map presentation applies the active window/cap/band/mode/continent/callsign filters to typed controller state. Connected with zero current spots is `EMPTY`, not a transport error.

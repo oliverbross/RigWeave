@@ -54,6 +54,12 @@ Home satellite presentation has one authority: `SatelliteOperationsController`. 
 
 Exact map routing uses distinct DX and PSK identities. Visible layer health counts come from the complete registry status map. Watchlist is a secondary marker property and never replaces band colour. A current-generation late style callback clears timeout state; obsolete callbacks remain ignored. Home unit selection covers distance/altitude surfaces, while density remains partial and is labelled Layout density until typography and controls share one complete metric model.
 
+## One DX News and PSK authority
+
+Task 2B1 uses `DxNewsRepository` and `PskReporterRepository` from `HamClockPublicProviders` as the sole native network authorities. DX News merges DX-World RSS with the already-owned NG3K schedule; it does not create another NG3K request. DXNews.com remains explicitly unavailable until a stable direct structured contract can be verified. PSK Reporter uses its direct public query contract in both sender and receiver directions; mutual is derived locally from the same remote callsign and band within the active window.
+
+Home cards deep-link once to the exact native DX Briefing or My Signal map. News and PSK details may open external articles, show batch log/intelligence context, history and watchlist, or request the established receive-only review. They never tune from a list/article/report click and never issue CAT directly. Disabling PSK cancels work, clears display state and generation-rejects late completions.
+
 The former Immersive Home label was overstated. It is now Minimal Home, hides only the Operations summary and remains `PARTIAL` in settings truth. `RESET PANELS` resets only the panel layout and never deletes named profiles.
 
 ## Provenance and licence
