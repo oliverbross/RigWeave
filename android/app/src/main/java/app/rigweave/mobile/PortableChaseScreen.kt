@@ -67,6 +67,7 @@ internal fun PortableChaseScreen(
     onTune: (PortableSpot) -> Unit,
     onTuneAndLog: (PortableSpot) -> Unit,
     potaActivationActive: Boolean = false,
+    intelligenceNeeds: Map<String, List<String>> = emptyMap(),
     onP2p: (PortableSpot) -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -81,6 +82,14 @@ internal fun PortableChaseScreen(
     var sort by rememberSaveable { mutableStateOf(runCatching { PortableSort.valueOf(prefs.getString("sort", PortableSort.RECOMMENDED.name)!!) }.getOrDefault(PortableSort.RECOMMENDED)) }
     var now by remember { mutableLongStateOf(Instant.now().epochSecond) }
     var pendingTune by remember { mutableStateOf<Pair<PortableSpot, Boolean>?>(null) }
+
+    LaunchedEffect(controller.requestedSpotId, controller.rankedOpportunities) {
+        controller.requestedSpotId?.let { id ->
+            if (controller.rankedOpportunities.any { it.spot.id == id }) {
+                selectedId = id; page = PortablePage.ON_AIR; controller.consumeRequestedSpot()
+            }
+        }
+    }
 
     LaunchedEffect(Unit) { controller.pota.checkParksOncePerForegroundDay(); controller.sotaCatalogue.checkOncePerForegroundDay(); controller.refreshAll() }
     LaunchedEffect(foreground, page) {
@@ -99,7 +108,7 @@ internal fun PortableChaseScreen(
             (program == "ALL" || spot.programs.any { it.label == program }) &&
                 (query.isBlank() || listOf(spot.callsign, spot.comments) .plus(spot.references.flatMap { listOf(it.code, it.name, it.association, it.region) }).any { it.uppercase(Locale.US).contains(query) }) &&
                 (band == "ALL" || spot.band == band) && (mode == "ALL" || modeFamily(spot.mode) == mode) &&
-                (!newOnly || row.worked.values.any { !it.referenceWorked || !it.bandWorked || !it.modeWorked }) && spot.activeAt(now)
+                (!newOnly || row.worked.values.any { !it.referenceWorked || !it.bandWorked || !it.modeWorked } || intelligenceNeeds[spot.id].orEmpty().isNotEmpty()) && spot.activeAt(now)
         }, sort)
     }
     val selected = filtered.firstOrNull { it.spot.id == selectedId } ?: all.firstOrNull { it.spot.id == selectedId }
@@ -126,11 +135,11 @@ internal fun PortableChaseScreen(
             PortablePage.ON_AIR -> BoxWithConstraints(Modifier.weight(1f)) {
                 if (!compact && maxWidth >= 900.dp) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PortableFilters(search, { search = it }, band, { band = it }, mode, { mode = it }, newOnly, { newOnly = it }, sort, { sort = it }, Modifier.width(220.dp).fillMaxHeight())
-                    PortableList(filtered, selectedId, { selectedId = it }, Modifier.weight(1.2f).fillMaxHeight())
-                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) { PortableMap(filtered, selectedId, { selectedId = it }, Modifier.weight(1f)); PortableDetail(selected, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true }, potaActivationActive, onP2p, Modifier.weight(.9f)) }
+                    PortableList(filtered, selectedId, { selectedId = it }, intelligenceNeeds, Modifier.weight(1.2f).fillMaxHeight())
+                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) { PortableMap(filtered, selectedId, { selectedId = it }, Modifier.weight(1f)); PortableDetail(selected, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true }, potaActivationActive, onP2p, intelligenceNeeds, Modifier.weight(.9f)) }
                 } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     PortableCompactFilters(search, { search = it }, band, { band = it }, mode, { mode = it }, newOnly, { newOnly = it }, sort, { sort = it })
-                    PortableList(filtered, selectedId, { selectedId = it }, Modifier.weight(1f)); selected?.let { PortableDetail(it, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true }, potaActivationActive, onP2p, Modifier.heightIn(min = 190.dp, max = 320.dp)) }
+                    PortableList(filtered, selectedId, { selectedId = it }, intelligenceNeeds, Modifier.weight(1f)); selected?.let { PortableDetail(it, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true }, potaActivationActive, onP2p, intelligenceNeeds, Modifier.heightIn(min = 190.dp, max = 320.dp)) }
                 }
             }
         }
@@ -175,25 +184,27 @@ internal fun PortableChaseScreen(
 
 @Composable private fun PortableChoice(label: String, value: String, choices: List<String>, change: (String) -> Unit) { var open by remember { mutableStateOf(false) }; Box { OutlinedButton({ open = true }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp), contentPadding = PaddingValues(horizontal = 7.dp)) { Text("$label · $value", maxLines = 1, overflow = TextOverflow.Ellipsis) }; DropdownMenu(open, { open = false }) { choices.forEach { item -> DropdownMenuItem({ Text(item) }, onClick = { change(item); open = false }, trailingIcon = { if (item == value) Icon(Icons.Outlined.Check, null) }) } } } }
 
-@Composable private fun PortableList(rows: List<PortableOpportunity>, selectedId: String?, select: (String) -> Unit, modifier: Modifier) {
+@Composable private fun PortableList(rows: List<PortableOpportunity>, selectedId: String?, select: (String) -> Unit,
+    intelligenceNeeds: Map<String, List<String>>, modifier: Modifier) {
     if (rows.isEmpty()) Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No matching active portable activity", color = PortableMuted) }
     else LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(5.dp), contentPadding = PaddingValues(bottom = 8.dp)) { items(rows, key = { it.spot.id }) { row -> val spot = row.spot; val selected = selectedId == spot.id
         Row(Modifier.fillMaxWidth().background(if (selected) PortableAmber.copy(alpha = .13f) else PortablePanel, RoundedCornerShape(8.dp)).border(1.dp, if (selected) PortableAmber else PortableRaised, RoundedCornerShape(8.dp)).clickable { select(spot.id) }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(spot.callsign, color = PortableInk, fontWeight = FontWeight.Black, fontSize = 18.sp); Text("${portableMHz(spot.frequencyHz)} · ${spot.mode}", color = PortableAmber, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
                 Text(spot.references.joinToString("  ") { "${it.program.label} ${it.code}" }, color = PortableInk, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(listOf(spot.primary.name.ifBlank { "Name unavailable" }, portableAge(spot.spottedAt), row.distanceKm?.let { "%.0f km · %03d°".format(it, row.bearingDegrees ?: 0) }).filterNotNull().joinToString(" · "), color = PortableMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) { (row.worked.flatMap { (p, w) -> w.labels(p) } + row.reasons.map(String::uppercase)).distinct().take(4).forEach { SuggestionChip({}, { Text(it, fontSize = 9.sp) }) } }
+                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) { (intelligenceNeeds[spot.id].orEmpty() + row.worked.flatMap { (p, w) -> w.labels(p) } + row.reasons.map(String::uppercase)).distinct().take(4).forEach { SuggestionChip({}, { Text(it, fontSize = 9.sp) }) } }
             }; Icon(Icons.Outlined.ChevronRight, null, tint = PortableMuted)
         }
     } }
 }
 
 @Composable private fun PortableDetail(row: PortableOpportunity?, radio: RadioState, tune: (PortableOpportunity) -> Unit, tuneLog: (PortableOpportunity) -> Unit,
-    potaActivationActive: Boolean, onP2p: (PortableSpot) -> Unit, modifier: Modifier) {
+    potaActivationActive: Boolean, onP2p: (PortableSpot) -> Unit, intelligenceNeeds: Map<String, List<String>>, modifier: Modifier) {
     Column(modifier.fillMaxWidth().background(PortablePanel, RoundedCornerShape(10.dp)).border(1.dp, PortableRaised, RoundedCornerShape(10.dp)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         if (row == null) { Text("SELECT AN ACTIVITY", color = PortableAmber, fontWeight = FontWeight.Black); Text("Selection never tunes. Review details, then choose Tune or Tune & Log.", color = PortableMuted); return@Column }
         val spot = row.spot; Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(spot.callsign, color = PortableAmber, fontWeight = FontWeight.Black); Text("SCORE ${row.score}", color = PortableMuted, fontFamily = FontFamily.Monospace) }
         spot.references.forEach { ref -> Text("${ref.program.label} ${ref.code} · ${ref.name.ifBlank { "name unavailable" }}", color = PortableInk, fontWeight = FontWeight.SemiBold); val detail = listOf(ref.association, ref.region, ref.altitudeM?.let { "$it m" }, ref.points?.let { "$it points" }, ref.activeAgenda.takeIf(String::isNotBlank)?.let { "AGENDA · $it" }).filterNotNull().filter(String::isNotBlank).joinToString(" · "); if (detail.isNotBlank()) Text(detail, color = PortableMuted, fontSize = 12.sp) }
         Text("${portableMHz(spot.frequencyHz)} MHz · ${spot.mode.ifBlank { "mode unspecified" }} · ${spot.band} · via ${spot.source}", color = PortableInk, fontFamily = FontFamily.Monospace); if (spot.comments.isNotBlank()) Text(spot.comments, color = PortableMuted, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        intelligenceNeeds[spot.id].orEmpty().takeIf { it.isNotEmpty() }?.let { Text(it.joinToString(" · "), color = PortableAmber, fontWeight = FontWeight.Bold) }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedButton({ tune(row) }, enabled = radio.connected, modifier = Modifier.weight(1f).heightIn(min = 48.dp)) { Text("Tune") }; Button({ tuneLog(row) }, enabled = radio.connected, modifier = Modifier.weight(1.4f).heightIn(min = 48.dp)) { Text("Tune & Log", fontWeight = FontWeight.Black) } }
         if (potaActivationActive && PortableProgram.POTA in spot.programs) Button({ onP2p(spot) }, Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
             Text("P2P LOG · OPEN EDITABLE DRAFT", fontWeight = FontWeight.Black)
@@ -224,7 +235,7 @@ internal fun PortableChaseScreen(
         if (mapped.isNotEmpty()) PortableNativeMap(mapped, selectedId, select, Modifier.fillMaxSize())
         else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No filtered activity has coordinates", color = PortableMuted) }
         Surface(color = Color(0xE6192228), shape = RoundedCornerShape(5.dp), modifier = Modifier.align(Alignment.TopStart).padding(8.dp)) {
-            Text("${mapped.size} of ${valid.size} mapped · ${rows.size - valid.size} without coordinates\n© CARTO · © OpenStreetMap contributors",
+            Text("${mapped.size} of ${valid.size} mapped · ${rows.size - valid.size} without coordinates\nOpenFreeMap © OpenMapTiles · OpenStreetMap",
                 color = PortableMuted, fontSize = 10.sp, modifier = Modifier.padding(6.dp))
         }
     }
@@ -232,12 +243,11 @@ internal fun PortableChaseScreen(
 
 @Composable private fun PortableNativeMap(rows: List<PortableOpportunity>, selectedId: String?, select: (String) -> Unit, modifier: Modifier) {
     val context = LocalContext.current; val lifecycle = LocalLifecycleOwner.current.lifecycle; val currentRows by rememberUpdatedState(rows); val currentSelect by rememberUpdatedState(select); val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null) } }; var map by remember { mutableStateOf<MapLibreMap?>(null) }; var styleReady by remember { mutableStateOf(false) }; var userMoved by remember { mutableStateOf(false) }
-    DisposableEffect(mapView, lifecycle) { val observer = LifecycleEventObserver { _, event -> when (event) { Lifecycle.Event.ON_START -> mapView.onStart(); Lifecycle.Event.ON_RESUME -> mapView.onResume(); Lifecycle.Event.ON_PAUSE -> mapView.onPause(); Lifecycle.Event.ON_STOP -> mapView.onStop(); else -> Unit } }; lifecycle.addObserver(observer); mapView.getMapAsync { ready -> map = ready; ready.uiSettings.isAttributionEnabled = false; ready.uiSettings.isLogoEnabled = false; ready.setStyle(Style.Builder().fromJson(portableMapStyle())) { styleReady = true }; ready.addOnCameraMoveStartedListener { reason -> if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }; ready.setOnMarkerClickListener { marker -> currentRows.firstOrNull { marker.title.startsWith(it.spot.id + "|") }?.let { currentSelect(it.spot.id) }; false } }; onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null } }
+    DisposableEffect(mapView, lifecycle) { val observer = LifecycleEventObserver { _, event -> when (event) { Lifecycle.Event.ON_START -> mapView.onStart(); Lifecycle.Event.ON_RESUME -> mapView.onResume(); Lifecycle.Event.ON_PAUSE -> mapView.onPause(); Lifecycle.Event.ON_STOP -> mapView.onStop(); else -> Unit } }; lifecycle.addObserver(observer); mapView.getMapAsync { ready -> map = ready; ready.uiSettings.isAttributionEnabled = true; ready.uiSettings.isLogoEnabled = true; ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { styleReady = true }; ready.addOnCameraMoveStartedListener { reason -> if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }; ready.setOnMarkerClickListener { marker -> currentRows.firstOrNull { marker.title.startsWith(it.spot.id + "|") }?.let { currentSelect(it.spot.id) }; false } }; onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null } }
     val markerHash = rows.joinToString { it.spot.id }; LaunchedEffect(map, styleReady, markerHash, selectedId) { val ready = map ?: return@LaunchedEffect; if (!styleReady) return@LaunchedEffect; ready.clear(); rows.groupBy { "${floor(it.spot.latitude!! / 3)}:${floor(it.spot.longitude!! / 3)}" }.values.forEach { group -> val chosen = group.firstOrNull { it.spot.id == selectedId } ?: group.first(); val color = when { chosen.spot.id == selectedId -> android.graphics.Color.rgb(233, 167, 43); chosen.spot.programs.size > 1 -> android.graphics.Color.rgb(244, 201, 78); chosen.spot.programs.contains(PortableProgram.POTA) -> android.graphics.Color.rgb(66, 199, 123); chosen.spot.programs.contains(PortableProgram.SOTA) -> android.graphics.Color.rgb(101, 166, 199); else -> android.graphics.Color.rgb(196, 129, 216) }; ready.addMarker(MarkerOptions().position(LatLng(group.map { it.spot.latitude!! }.average(), group.map { it.spot.longitude!! }.average())).title(chosen.spot.id + "|" + if (group.size > 1) "${group.size} portable activities" else "${chosen.spot.callsign} · ${chosen.spot.references.joinToString { it.code }}").snippet(chosen.spot.primary.name).icon(portableMarker(context, color, group.size > 1))) } }
     LaunchedEffect(map, styleReady, markerHash) { val ready = map ?: return@LaunchedEffect; if (!styleReady || rows.isEmpty() || userMoved) return@LaunchedEffect; if (rows.size == 1) ready.cameraPosition = CameraPosition.Builder().target(LatLng(rows[0].spot.latitude!!, rows[0].spot.longitude!!)).zoom(6.0).build() else runCatching { val bounds = LatLngBounds.Builder().also { b -> rows.forEach { b.include(LatLng(it.spot.latitude!!, it.spot.longitude!!)) } }.build(); ready.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, 70), 500) } }; AndroidView({ mapView }, modifier)
 }
 
 private fun portableMarker(context: Context, color: Int, cluster: Boolean): org.maplibre.android.annotations.Icon { val size = (if (cluster) 34 else 24) * context.resources.displayMetrics.density; val bitmap = Bitmap.createBitmap(size.toInt(), size.toInt(), Bitmap.Config.ARGB_8888); val canvas = Canvas(bitmap); val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color }; canvas.drawCircle(size / 2, size / 2, size * .34f, paint); paint.style = Paint.Style.STROKE; paint.strokeWidth = size * .09f; paint.color = android.graphics.Color.WHITE; canvas.drawCircle(size / 2, size / 2, size * .34f, paint); return IconFactory.getInstance(context).fromBitmap(bitmap) }
-private fun portableMapStyle() = """{"version":8,"name":"RigWeave Portable Chase","sources":{"carto":{"type":"raster","tiles":["https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"],"tileSize":256,"maxzoom":20},"labels":{"type":"raster","tiles":["https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png"],"tileSize":256,"maxzoom":20}},"layers":[{"id":"background","type":"background","paint":{"background-color":"#06151c"}},{"id":"carto","type":"raster","source":"carto"},{"id":"labels","type":"raster","source":"labels"}]}"""
 private fun portableMHz(hz: Long) = if (hz > 0) "%.3f".format(Locale.US, hz / 1_000_000.0) else "—.———"
 private fun portableAge(epoch: Long): String { val seconds = (Instant.now().epochSecond - epoch).coerceAtLeast(0); return when { seconds < 60 -> "just now"; seconds < 3600 -> "${seconds / 60}m ago"; else -> "${seconds / 3600}h ago" } }

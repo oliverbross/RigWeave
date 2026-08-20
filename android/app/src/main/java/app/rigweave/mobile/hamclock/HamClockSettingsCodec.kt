@@ -6,7 +6,7 @@ import java.util.Locale
 
 object HamClockSettingsCodec {
     const val SCHEMA = "rigweave.hamclock.settings"
-    const val CURRENT_VERSION = 2
+    const val CURRENT_VERSION = 5
     const val MAX_PROFILES = 24
     const val MAX_JSON_BYTES = 1_048_576
 
@@ -82,10 +82,32 @@ object HamClockSettingsCodec {
                 filter = normalizeFilter(value.cluster.filter),
             ),
             pskReporter = value.pskReporter.copy(
-                windowMinutes = value.pskReporter.windowMinutes.coerceIn(1, 24 * 60),
-                refreshSeconds = value.pskReporter.refreshSeconds.coerceIn(15, 60 * 60),
-                maximumReports = value.pskReporter.maximumReports.coerceIn(1, 5_000),
+                windowMinutes = value.pskReporter.windowMinutes.takeIf { it in setOf(2, 5, 10, 15, 30, 60, 120) } ?: 15,
+                refreshSeconds = value.pskReporter.refreshSeconds.coerceIn(300, 60 * 60),
+                maximumReports = value.pskReporter.maximumReports.coerceIn(1, 500),
                 filter = normalizeFilter(value.pskReporter.filter),
+            ),
+            rbn = value.rbn.copy(
+                windowMinutes = value.rbn.windowMinutes.takeIf { it in setOf(2, 5, 10, 15, 30) } ?: 10,
+                maximumRows = value.rbn.maximumRows.coerceIn(1, 120),
+                bands = cleanTokens(value.rbn.bands, 24),
+                modes = cleanTokens(value.rbn.modes, 8),
+                minimumSnr = value.rbn.minimumSnr?.coerceIn(-100, 100),
+                skimmerCall = value.rbn.skimmerCall.trim().uppercase(Locale.US).take(24),
+                dxCall = value.rbn.dxCall.trim().uppercase(Locale.US).take(24),
+            ),
+            wspr = value.wspr.copy(
+                windowMinutes = value.wspr.windowMinutes.takeIf { it in setOf(2, 5, 10, 15, 30, 60, 120) } ?: 30,
+                band = value.wspr.band.trim().uppercase(Locale.US).take(12).ifBlank { "ALL" },
+                minimumSnr = value.wspr.minimumSnr?.coerceIn(-100, 100),
+                maximumPaths = value.wspr.maximumPaths.coerceIn(1, 100),
+                regionalEnabled = value.wspr.regionalEnabled,
+            ),
+            bandHealth = value.bandHealth.copy(
+                windowMinutes = value.bandHealth.windowMinutes.takeIf { it in setOf(5, 10, 15, 30, 60) } ?: 15,
+                mode = value.bandHealth.mode.trim().uppercase(Locale.US).take(12).ifBlank { "ALL" },
+                enabledSources = cleanTokens(value.bandHealth.enabledSources, 8) - "QSO_HISTORY",
+                visibleBands = cleanTokens(value.bandHealth.visibleBands, 24),
             ),
             portable = value.portable.copy(
                 enabledPrograms = cleanTokens(value.portable.enabledPrograms, 12),
@@ -131,6 +153,11 @@ object HamClockSettingsCodec {
             .put("map", encodeMap(settings.map))
             .put("cluster", encodeCluster(settings.cluster))
             .put("psk_reporter", encodePsk(settings.pskReporter))
+            .put("dx_news", encodeDxNews(settings.dxNews))
+            .put("rbn", encodeRbn(settings.rbn))
+            .put("wspr", encodeWspr(settings.wspr))
+            .put("ibp", encodeIbp(settings.ibp))
+            .put("band_health", encodeBandHealth(settings.bandHealth))
             .put("portable", encodePortable(settings.portable))
             .put("satellites", encodeSatellites(settings.satellites))
             .put("display", encodeDisplay(settings.display))
@@ -142,6 +169,11 @@ object HamClockSettingsCodec {
         map = root.optJSONObject("map")?.let(::decodeMap) ?: HamClockMapPreference(),
         cluster = root.optJSONObject("cluster")?.let(::decodeCluster) ?: HamClockClusterPreference(),
         pskReporter = root.optJSONObject("psk_reporter")?.let(::decodePsk) ?: HamClockPskPreference(),
+        dxNews = root.optJSONObject("dx_news")?.let(::decodeDxNews) ?: HamClockDxNewsPreference(),
+        rbn = root.optJSONObject("rbn")?.let(::decodeRbn) ?: HamClockRbnPreference(),
+        wspr = root.optJSONObject("wspr")?.let(::decodeWspr) ?: HamClockWsprPreference(),
+        ibp = root.optJSONObject("ibp")?.let(::decodeIbp) ?: HamClockIbpPreference(),
+        bandHealth = root.optJSONObject("band_health")?.let(::decodeBandHealth) ?: HamClockBandHealthPreference(),
         portable = root.optJSONObject("portable")?.let(::decodePortable) ?: HamClockPortablePreference(),
         satellites = root.optJSONObject("satellites")?.let(::decodeSatellites) ?: HamClockSatellitePreference(),
         dxTarget = root.optJSONObject("dx_target")?.let(::decodeTarget),
@@ -206,10 +238,72 @@ object HamClockSettingsCodec {
         .put("maximum_reports", value.maximumReports).put("filter", encodeFilter(value.filter))
 
     private fun decodePsk(row: JSONObject) = HamClockPskPreference(
-        enabled = row.optBoolean("enabled", true), direction = row.enum("direction", HamClockPskDirection.BOTH),
-        windowMinutes = row.optInt("window_minutes", 15), refreshSeconds = row.optInt("refresh_seconds", 60),
+        enabled = row.optBoolean("enabled", true), direction = when (row.optString("direction").uppercase(Locale.US)) {
+            "HEARD" -> HamClockPskDirection.BEING_HEARD
+            else -> row.enum("direction", HamClockPskDirection.BOTH)
+        },
+        windowMinutes = row.optInt("window_minutes", 15), refreshSeconds = row.optInt("refresh_seconds", 300),
         maximumReports = row.optInt("maximum_reports", 250),
         filter = row.optJSONObject("filter")?.let(::decodeFilter) ?: HamClockSpotFilter(),
+    )
+
+    private fun encodeDxNews(value: HamClockDxNewsPreference) = JSONObject()
+        .put("source", value.source.name).put("compact_visible", value.compactVisible)
+
+    private fun decodeDxNews(row: JSONObject) = HamClockDxNewsPreference(
+        source = row.enum("source", HamClockDxNewsSource.ALL),
+        compactVisible = row.optBoolean("compact_visible"),
+    )
+
+    private fun encodeRbn(value: HamClockRbnPreference) = JSONObject()
+        .put("enabled", value.enabled).put("source", value.source.name).put("view_mode", value.viewMode.name)
+        .put("window_minutes", value.windowMinutes)
+        .put("maximum_rows", value.maximumRows).put("bands", value.bands.strings()).put("modes", value.modes.strings())
+        .put("minimum_snr", value.minimumSnr).put("skimmer_call", value.skimmerCall).put("dx_call", value.dxCall)
+        .put("watchlist_only", value.watchlistOnly).put("show_paths", value.showPaths)
+
+    private fun decodeRbn(row: JSONObject) = HamClockRbnPreference(
+        enabled = row.optBoolean("enabled", true), source = row.enum("source", HamClockRbnSource.CONFIGURED_RETAIL_CLUSTER),
+        viewMode = row.enum("view_mode", HamClockRbnMode.ALL_RBN),
+        windowMinutes = row.optInt("window_minutes", 10), maximumRows = row.optInt("maximum_rows", 120),
+        bands = row.optJSONArray("bands").stringSet(), modes = row.optJSONArray("modes").stringSet(),
+        minimumSnr = if (row.has("minimum_snr") && !row.isNull("minimum_snr")) row.optInt("minimum_snr") else null,
+        skimmerCall = row.optString("skimmer_call"), dxCall = row.optString("dx_call"),
+        watchlistOnly = row.optBoolean("watchlist_only"), showPaths = row.optBoolean("show_paths", true),
+    )
+
+    private fun encodeWspr(value: HamClockWsprPreference) = JSONObject()
+        .put("personal_enabled", value.personalEnabled).put("direction", value.direction.name)
+        .put("window_minutes", value.windowMinutes).put("band", value.band).put("minimum_snr", value.minimumSnr)
+        .put("maximum_paths", value.maximumPaths).put("regional_enabled", value.regionalEnabled)
+        .put("show_paths", value.showPaths)
+        .put("show_regional_grid", value.showRegionalGrid)
+
+    private fun decodeWspr(row: JSONObject) = HamClockWsprPreference(
+        personalEnabled = row.optBoolean("personal_enabled", true), direction = row.enum("direction", HamClockPskDirection.BOTH),
+        windowMinutes = row.optInt("window_minutes", 30), band = row.optString("band", "ALL"),
+        minimumSnr = if (row.has("minimum_snr") && !row.isNull("minimum_snr")) row.optInt("minimum_snr") else null,
+        maximumPaths = row.optInt("maximum_paths", 100), regionalEnabled = row.optBoolean("regional_enabled"),
+        showPaths = row.optBoolean("show_paths", true),
+        showRegionalGrid = row.optBoolean("show_regional_grid"),
+    )
+
+    private fun encodeIbp(value: HamClockIbpPreference) = JSONObject()
+        .put("show_all_sites", value.showAllSites).put("show_paths", value.showPaths)
+
+    private fun decodeIbp(row: JSONObject) = HamClockIbpPreference(
+        showAllSites = row.optBoolean("show_all_sites", true), showPaths = row.optBoolean("show_paths", true),
+    )
+
+    private fun encodeBandHealth(value: HamClockBandHealthPreference) = JSONObject()
+        .put("window_minutes", value.windowMinutes).put("mode", value.mode)
+        .put("enabled_sources", value.enabledSources.strings()).put("visible_bands", value.visibleBands.strings())
+
+    private fun decodeBandHealth(row: JSONObject) = HamClockBandHealthPreference(
+        windowMinutes = row.optInt("window_minutes", 15), mode = row.optString("mode", "ALL"),
+        enabledSources = row.optJSONArray("enabled_sources")?.stringSet()
+            ?.takeIf(Set<String>::isNotEmpty) ?: HamClockBandHealthPreference().enabledSources,
+        visibleBands = row.optJSONArray("visible_bands").stringSet(),
     )
 
     private fun encodePortable(value: HamClockPortablePreference) = JSONObject()
@@ -238,18 +332,19 @@ object HamClockSettingsCodec {
 
     private fun encodeTarget(value: HamClockDxTarget) = JSONObject()
         .put("callsign", value.callsign).put("grid", value.grid).put("locked", value.locked)
+        .put("source", value.source.name)
         .also { row -> value.latitude?.let { row.put("latitude", it) }; value.longitude?.let { row.put("longitude", it) } }
 
     private fun decodeTarget(row: JSONObject) = HamClockDxTarget(
         callsign = row.optString("callsign"), grid = row.optString("grid"),
         latitude = row.optionalDouble("latitude"), longitude = row.optionalDouble("longitude"),
-        locked = row.optBoolean("locked"),
+        locked = row.optBoolean("locked"), source = row.enum("source", HamClockDxTargetSource.MANUAL),
     )
 
     private fun encodeDisplay(value: HamClockDisplayPreference) = JSONObject()
         .put("density", value.density.name).put("time_zone_mode", value.timeZoneMode.name)
         .put("hour_format", value.hourFormat.name).put("unit_system", value.unitSystem.name)
-        .put("low_data_mode", value.lowDataMode)
+        .put("low_data_mode", value.lowDataMode).put("immersive", value.immersive)
 
     private fun decodeDisplay(row: JSONObject) = HamClockDisplayPreference(
         density = row.enum("density", HamClockDensity.COMPACT),
@@ -257,6 +352,7 @@ object HamClockSettingsCodec {
         hourFormat = row.enum("hour_format", HamClockHourFormat.H24),
         unitSystem = row.enum("unit_system", HamClockUnitSystem.METRIC),
         lowDataMode = row.optBoolean("low_data_mode"),
+        immersive = row.optBoolean("immersive"),
     )
 
     private fun encodeProfile(value: HamClockNamedProfile) = JSONObject()
@@ -279,8 +375,15 @@ object HamClockSettingsCodec {
 
     private fun normalizePanel(value: HamClockPanelPreference): HamClockPanelPreference? {
         val id = cleanId(value.id).takeIf(String::isNotBlank) ?: return null
-        return value.copy(id = id, order = value.order.coerceIn(0, 999), column = value.column.coerceIn(0, 7),
-            columnSpan = value.columnSpan.coerceIn(1, 8), rowSpan = value.rowSpan.coerceIn(1, 12))
+        val spec = hamClockModuleSpec(id)
+        if (spec == null) return value.copy(id = id, order = value.order.coerceIn(0, 999),
+            column = value.column.coerceIn(0, 2), columnSpan = value.columnSpan.coerceIn(1, 3),
+            rowSpan = value.rowSpan.coerceIn(1, 4), collapsed = false)
+        val column = value.column.takeIf { it in spec.allowedColumns } ?: spec.defaultColumn
+        val maximumSpan = if (column == 1) spec.defaultColumnSpan.coerceAtLeast(1) else 1
+        return value.copy(id = id, order = value.order.coerceIn(0, 999), column = column,
+            columnSpan = value.columnSpan.coerceIn(1, maximumSpan), rowSpan = value.rowSpan.coerceIn(1, 4),
+            collapsed = value.collapsed && spec.collapseSupported)
     }
 
     private fun normalizeLayer(value: HamClockMapLayerPreference): HamClockMapLayerPreference? {

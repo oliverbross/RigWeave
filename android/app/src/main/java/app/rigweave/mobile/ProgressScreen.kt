@@ -56,6 +56,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -84,7 +85,10 @@ private val ProgressMuted = Color(0xFF8EA2AA)
 private val ProgressAmber = Color(0xFFE9A72B)
 private val ProgressGreen = Color(0xFF48C78E)
 private val ProgressBlue = Color(0xFF65A6C7)
-private enum class ProgressSection(val label: String) { OVERVIEW("OVERVIEW"), NEEDS("NEEDS"), AWARDS("AWARDS"), PORTABLE("PORTABLE") }
+private enum class ProgressSection(val label: String) {
+    OVERVIEW("OVERVIEW"), ACTIVITY("ACTIVITY"), GEOGRAPHY("GEOGRAPHY"), CONFIRMATIONS("CONFIRMATIONS"),
+    OPERATORS("OPERATORS"), PORTABLE("PORTABLE"), SATELLITE("SATELLITE"), NEEDS("NEEDS"), AWARDS("AWARDS")
+}
 
 @Composable
 internal fun ProgressScreen(
@@ -97,19 +101,19 @@ internal fun ProgressScreen(
     currentCallsign: String,
     compact: Boolean,
     openDx: () -> Unit,
+    openDxEvidence: (String) -> Unit,
     openPortable: () -> Unit,
     openLogbook: () -> Unit,
+    openLogbookFilter: (LogbookFilter) -> Unit,
     openSync: () -> Unit,
 ) {
     var section by rememberSaveable { mutableStateOf(ProgressSection.OVERVIEW) }
-    var period by rememberSaveable { mutableStateOf(ProgressPeriod.ALL) }
-    var allStations by rememberSaveable { mutableStateOf(false) }
-    var selectedProfile by rememberSaveable { mutableStateOf(currentStationId) }
-    var selectedCallsign by rememberSaveable { mutableStateOf(currentCallsign) }
-    var band by rememberSaveable { mutableStateOf("") }
-    var mode by rememberSaveable { mutableStateOf(ProgressMode.ALL) }
     var goalDialog by remember { mutableStateOf(false) }
-    val filters = ProgressFilters(allStations, selectedProfile, selectedCallsign, period, band, mode)
+    val filters = controller.filters
+    LaunchedEffect(currentStationId, currentCallsign) {
+        if (!filters.allStations && filters.stationProfileId.isBlank() && filters.stationCallsign.isBlank())
+            controller.updateFilters(filters.copy(stationProfileId = currentStationId, stationCallsign = currentCallsign))
+    }
     val portableSpots = portable.pota.spots.map(PotaSpot::toPortable) + portable.sotaSpots + portable.wwffSpots
     val deliveredStates = setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED)
     val attention = syncHub.records.count { it.state !in deliveredStates }
@@ -129,8 +133,8 @@ internal fun ProgressScreen(
             item {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("PROGRESS", color = ProgressInk, style = MaterialTheme.typography.headlineMedium)
-                        Text(if (allStations) "ALL LOCAL DATA" else currentCallsign.ifBlank { "CURRENT STATION" },
+                        Text("LOG INTELLIGENCE", color = ProgressInk, style = MaterialTheme.typography.headlineMedium)
+                        Text(if (filters.allStations) "ALL LOCAL DATA" else currentCallsign.ifBlank { "CURRENT STATION" },
                             color = ProgressMuted)
                     }
                     if (controller.busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = ProgressAmber)
@@ -140,41 +144,83 @@ internal fun ProgressScreen(
             item { LocalEstimateBanner() }
             item {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(!allStations && selectedProfile == currentStationId && selectedCallsign == currentCallsign, {
-                        allStations = false; selectedProfile = currentStationId; selectedCallsign = currentCallsign
+                    FilterChip(!filters.allStations && filters.stationProfileId == currentStationId && filters.stationCallsign == currentCallsign, {
+                        controller.updateFilters(filters.copy(allStations = false, stationProfileId = currentStationId, stationCallsign = currentCallsign))
                     }, { Text("Current station") })
-                    FilterChip(allStations, { allStations = true; selectedProfile = ""; selectedCallsign = "" }, { Text("All local data") })
-                    controller.stationProfiles.forEach { profile -> FilterChip(!allStations && selectedProfile == profile, {
-                        allStations = false; selectedProfile = profile; selectedCallsign = ""
+                    FilterChip(filters.allStations, { controller.updateFilters(filters.copy(allStations = true, stationProfileId = "", stationCallsign = "")) }, { Text("All local data") })
+                    controller.stationProfiles.forEach { profile -> FilterChip(!filters.allStations && filters.stationProfileId == profile, {
+                        controller.updateFilters(filters.copy(allStations = false, stationProfileId = profile, stationCallsign = ""))
                     }, { Text("Profile $profile") }) }
-                    controller.stationCallsigns.forEach { call -> FilterChip(!allStations && selectedProfile.isBlank() && selectedCallsign == call, {
-                        allStations = false; selectedProfile = ""; selectedCallsign = call
+                    controller.stationCallsigns.forEach { call -> FilterChip(!filters.allStations && filters.stationProfileId.isBlank() && filters.stationCallsign == call, {
+                        controller.updateFilters(filters.copy(allStations = false, stationProfileId = "", stationCallsign = call))
                     }, { Text(call) }) }
-                    ProgressPeriod.entries.forEach { value -> FilterChip(period == value, { period = value }, { Text(value.label) }) }
+                    ProgressPeriod.entries.forEach { value -> FilterChip(filters.period == value, { controller.updateFilters(filters.copy(period = value)) }, { Text(value.label) }) }
+                }
+            }
+            item {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(filters.operator.isBlank(), { controller.updateFilters(filters.copy(operator = "")) }, { Text("All operators") })
+                    controller.operators.forEach { value -> FilterChip(filters.operator.equals(value, true),
+                        { controller.updateFilters(filters.copy(operator = value)) }, { Text("OP $value") }) }
+                    FilterChip(filters.submode.isBlank(), { controller.updateFilters(filters.copy(submode = "")) }, { Text("All submodes") })
+                    controller.submodes.forEach { value -> FilterChip(filters.submode.equals(value, true),
+                        { controller.updateFilters(filters.copy(submode = value)) }, { Text(value) }) }
+                    listOf("" to "All confirmations", "PAPER" to "Paper QSL", "LOTW" to "LoTW", "EQSL" to "eQSL",
+                        "QRZ" to "QRZ", "CLUBLOG" to "Club Log", "DCL" to "DCL").forEach { (value, label) ->
+                        FilterChip(filters.confirmationSource == value, { controller.updateFilters(filters.copy(confirmationSource = value)) }, { Text(label) })
+                    }
                 }
             }
             item {
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("", "80m", "40m", "20m", "15m", "10m").forEach { value ->
-                        FilterChip(band == value, { band = value }, { Text(value.ifBlank { "All bands" }) })
+                        FilterChip(filters.band == value, { controller.updateFilters(filters.copy(band = value)) }, { Text(value.ifBlank { "All bands" }) })
                     }
-                    ProgressMode.entries.forEach { value -> FilterChip(mode == value, { mode = value }, { Text(value.label) }) }
+                    ProgressMode.entries.forEach { value -> FilterChip(filters.mode == value, { controller.updateFilters(filters.copy(mode = value)) }, { Text(value.label) }) }
+                    listOf("", "POTA", "SOTA", "WWFF").forEach { value -> FilterChip(filters.portableProgram == value,
+                        { controller.updateFilters(filters.copy(portableProgram = value)) }, { Text(value.ifBlank { "All programmes" }) }) }
+                    FilterChip(filters.includeConflicted, { controller.updateFilters(filters.copy(includeConflicted = !filters.includeConflicted)) }, { Text("Conflicts") })
                 }
+                Text("Deleted sync tombstones are not live QSOs and are excluded from Log Intelligence.", color = ProgressMuted, style = MaterialTheme.typography.bodySmall)
             }
             item {
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    ProgressSection.entries.forEachIndexed { index, value ->
-                        SegmentedButton(section == value, { section = value },
-                            SegmentedButtonDefaults.itemShape(index, ProgressSection.entries.size)) { Text(value.label, fontSize = if (compact) 10.sp else 12.sp) }
-                    }
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ProgressSection.entries.forEach { value -> FilterChip(section == value, { section = value }, { Text(value.label, fontSize = 11.sp) }) }
                 }
             }
             if (snapshot.goals.isNotEmpty()) item { GoalsCard(snapshot.goals, controller) }
+            item {
+                val live = controller.bandHealthSnapshot
+                val selected = live.rows.firstOrNull { filters.band.isNotBlank() && it.band.equals(filters.band, true) }
+                    ?: live.rows.firstOrNull()
+                ProgressCard("LIVE RF / BAND HEALTH") {
+                    Text("OPERATIONAL LIVE EVIDENCE · NOT PROPAGATION FORECAST · NOT AWARD CREDIT",
+                        color = ProgressAmber, fontWeight = FontWeight.Bold)
+                    Text(selected?.let { "${it.band} · ${it.state} · confidence ${it.confidence} · ${it.reasons.joinToString(" · ")}" }
+                        ?: "No shared live RF snapshot", color = ProgressInk)
+                    Text("Sources · ${live.sourceStates.entries.joinToString(" · ") { "${it.key} ${it.value}" }}", color = ProgressMuted)
+                    if (live.message.isNotBlank()) Text(live.message, color = ProgressAmber)
+                    val historical = selected?.let { row -> live.historical.filter { it.band.equals(row.band, true) } }.orEmpty()
+                    Text("Historical projection · ${historical.sumOf { it.qsoCount }} QSOs · ${historical.sumOf { it.comparableWindowCount }} comparable UTC-window",
+                        color = ProgressMuted)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton({ openDxEvidence(selected?.band.orEmpty()) }) { Text("DX RF EVIDENCE") }
+                        OutlinedButton({ selected?.let { openLogbookFilter(progressLogbookFilter(filters).copy(band = it.band)) } },
+                            enabled = selected != null) { Text("ADVANCED LOGBOOK") }
+                    }
+                }
+            }
             when (section) {
-                ProgressSection.OVERVIEW -> overviewItems(snapshot, compact, openSync, openLogbook)
-                ProgressSection.NEEDS -> needsItems(snapshot, openDx, openPortable, openLogbook)
-                ProgressSection.AWARDS -> awardsItems(snapshot)
-                ProgressSection.PORTABLE -> portableItems(snapshot, portable, openPortable)
+                ProgressSection.OVERVIEW -> overviewItems(snapshot, compact, openSync, progressLogbookFilter(filters), openLogbookFilter)
+                ProgressSection.ACTIVITY -> activityItems(snapshot, compact)
+                ProgressSection.GEOGRAPHY -> geographyItems(snapshot, compact, progressLogbookFilter(filters), openLogbookFilter)
+                ProgressSection.CONFIRMATIONS -> confirmationItems(snapshot, progressLogbookFilter(filters), openLogbookFilter)
+                ProgressSection.OPERATORS -> operatorItems(snapshot, progressLogbookFilter(filters), openLogbookFilter)
+                ProgressSection.PORTABLE -> portableItems(snapshot, portable, openPortable, progressLogbookFilter(filters), openLogbookFilter)
+                ProgressSection.SATELLITE -> satelliteItems(snapshot, progressLogbookFilter(filters), openLogbookFilter)
+                ProgressSection.NEEDS -> needsItems(snapshot, openDx, openPortable, progressLogbookFilter(filters), openLogbookFilter)
+                ProgressSection.AWARDS -> awardsItems(snapshot, controller.selectedAward, controller::selectAward,
+                    progressLogbookFilter(filters), openLogbookFilter)
             }
             item { Spacer(Modifier.height(12.dp)) }
         }
@@ -182,21 +228,90 @@ internal fun ProgressScreen(
     if (goalDialog) GoalDialog(controller, { goalDialog = false })
 }
 
+private fun androidx.compose.foundation.lazy.LazyListScope.satelliteItems(
+    snapshot: ProgressSnapshot,
+    base: LogbookFilter,
+    openLogbook: (LogbookFilter) -> Unit,
+) {
+    val satellite = snapshot.satellite
+    val satelliteFilter = base.copy(propagation = "SAT")
+    item {
+        ProgressCard("SATELLITE LOG INTELLIGENCE") {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Kpi("QSOs", satellite.qsos.toString(), action = { openLogbook(satelliteFilter) })
+                Kpi("SATELLITES", satellite.satellites.toString(), action = { openLogbook(satelliteFilter.copy(satellite = "*")) })
+                Kpi("CALLS", satellite.uniqueCalls.toString(), action = { openLogbook(satelliteFilter) })
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Kpi("GRIDS", satellite.grids.toString(), action = { openLogbook(satelliteFilter.copy(grid = "*")) })
+                Kpi("CONF GRIDS", satellite.confirmed.toString(), action = { openLogbook(satelliteFilter.copy(grid = "*", confirmationSource = "AWARD")) })
+                Kpi("ROVER GRIDS", satellite.ownGrids.toString(), action = { openLogbook(satelliteFilter) })
+            }
+            Text("Local log estimates only · confirmations use paper QSL or LoTW · official award credit is not claimed", color = ProgressMuted)
+        }
+    }
+    item {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val birds = satellite.bySatellite.map { ProgressBucket(it.key, it.value) }
+            val modes = satellite.byMode.map { ProgressBucket(it.key, it.value) }
+            if (maxWidth > 700.dp) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ChartCard("SATELLITES", birds, Modifier.weight(1f))
+                ChartCard("MODES", modes, Modifier.weight(1f))
+            } else Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ChartCard("SATELLITES", birds, Modifier.fillMaxWidth())
+                ChartCard("MODES", modes, Modifier.fillMaxWidth())
+            }
+        }
+    }
+    item {
+        ProgressCard("WORKED / CONFIRMED GRID MATRIX") {
+            satellite.workedConfirmed.entries.take(20).forEach { (name, count) ->
+                TextButton({ openLogbook(satelliteFilter.copy(satellite = name)) }, Modifier.fillMaxWidth()) {
+                    Row(Modifier.fillMaxWidth()) {
+                        Text(name, modifier = Modifier.weight(1f)); Text("${count.worked} QSOs · ${count.confirmed} confirmed grids")
+                    }
+                }
+            }
+            val favourite = satellite.bySatellite.maxByOrNull { it.value }
+            Text(favourite?.let { "Best local history · ${it.key} · ${it.value} QSOs" } ?: "No satellite history in the current filter", color = ProgressMuted)
+        }
+    }
+    item {
+        ProgressCard("RECENT ACTIVITY & BREAKDOWN") {
+            Text("Bands · ${satellite.byBand.entries.joinToString(" · ") { "${it.key} ${it.value}" }.ifBlank { "none" }}", color = ProgressMuted)
+            Text("Recent · ${satellite.recentActivity.entries.take(12).joinToString(" · ") { "${it.key} ${it.value}" }.ifBlank { "none" }}", color = ProgressMuted)
+            Text("Next Needed is intentionally not inferred from local history; current catalogue/status opportunities remain in Operations → Satellites.", color = ProgressMuted)
+        }
+    }
+    item { OutlinedButton({ openLogbook(satelliteFilter) }, Modifier.fillMaxWidth()) { Text("OPEN SATELLITE LOGBOOK") } }
+}
+
 private fun androidx.compose.foundation.lazy.LazyListScope.overviewItems(
-    snapshot: ProgressSnapshot, compact: Boolean, openSync: () -> Unit, openLogbook: () -> Unit,
+    snapshot: ProgressSnapshot, compact: Boolean, openSync: () -> Unit, baseFilter: LogbookFilter,
+    openLogbook: (LogbookFilter) -> Unit,
 ) {
     item {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Kpi("QSOs", snapshot.totalQsos.toString())
-            Kpi("CALLS", snapshot.uniqueCalls.toString())
-            Kpi("DXCC-STYLE", "${snapshot.dxcc.worked} / ${snapshot.dxcc.confirmed}")
-            Kpi("COUNTRIES", snapshot.countries.toString())
-            Kpi("GRIDS", snapshot.grids.toString())
-            Kpi("LONGEST", snapshot.longestDistanceKm?.let { "%,.0f km".format(it) } ?: "UNKNOWN")
-            Kpi("QRP QSOs", snapshot.qrpQsos.toString())
-            Kpi("SYNC ATTENTION", snapshot.syncAttention.toString(), snapshot.syncAttention > 0, openSync)
+            Kpi("QSOs", snapshot.totalQsos.toString(), action = { openLogbook(baseFilter) })
+            Kpi("UNIQUE CALLS", snapshot.uniqueCalls.toString(), action = { openLogbook(baseFilter) })
+            Kpi("ACTIVE DAYS", snapshot.activeDays.toString(), action = { openLogbook(baseFilter) })
+            Kpi("DXCC WORKED / CONF", "${snapshot.dxcc.worked} / ${snapshot.dxcc.confirmed}", action = { openLogbook(logbookFilterForDimension("dxcc", "*", baseFilter)) })
+            Kpi("COUNTRIES", snapshot.countries.toString(), action = { openLogbook(logbookFilterForDimension("country", "*", baseFilter)) })
+            Kpi("CONTINENTS", snapshot.continents.size.toString(), action = { openLogbook(logbookFilterForDimension("continent", "*", baseFilter)) })
+            Kpi("GRIDS WORKED / CONF", "${snapshot.grids} / ${snapshot.gridsConfirmed}", action = { openLogbook(logbookFilterForDimension("grid", "*", baseFilter)) })
+            Kpi("CQ ZONES", snapshot.cqZones.size.toString(), action = { openLogbook(baseFilter.copy(cqZone = "*")) })
+            Kpi("ITU ZONES", snapshot.ituZones.size.toString(), action = { openLogbook(baseFilter.copy(ituZone = "*")) })
+            Kpi("STATES", snapshot.states.worked.toString(), action = { openLogbook(logbookFilterForDimension("state", "*", baseFilter)) })
+            Kpi("BEST DX", snapshot.longestDistanceKm?.let { "%,.0f km".format(it) } ?: "UNKNOWN", action = { openLogbook(baseFilter.copy(distance = ">0", sort = LogbookSort.DISTANCE)) })
+            Kpi("AVERAGE VALID DX", snapshot.averageDistanceKm?.let { "%,.0f km".format(it) } ?: "UNKNOWN", action = { openLogbook(baseFilter.copy(distance = ">0")) })
+            Kpi("QRP QSOs / DXCC", "${snapshot.qrpQsos} / ${snapshot.qrpDxcc}", action = { openLogbook(baseFilter.copy(txPower = "1..5")) })
+            Kpi("UNCONFIRMED DXCC", snapshot.unconfirmedDxccCount.toString(), snapshot.unconfirmedDxccCount > 0,
+                { openLogbook(baseFilter.copy(dxcc = "*", confirmationSource = "UNCONFIRMED")) })
+            Kpi("SYNC ATTENTION", snapshot.syncAttention.toString(), snapshot.syncAttention > 0,
+                { openLogbook(baseFilter.copy(syncRelation = "ATTENTION")) })
         }
     }
+    if (snapshot.syncAttention > 0) item { OutlinedButton(openSync, Modifier.fillMaxWidth()) { Text("OPEN SYNC HUB") } }
     item {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             if (!compact && maxWidth > 800.dp) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -205,6 +320,30 @@ private fun androidx.compose.foundation.lazy.LazyListScope.overviewItems(
             } else Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 ChartCard("QSO ACTIVITY · UTC", snapshot.activity, Modifier.fillMaxWidth())
                 ChartCard("BAND DISTRIBUTION", snapshot.bands.map { ProgressBucket(it.key, it.value) }, Modifier.fillMaxWidth())
+            }
+        }
+    }
+    item {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val operatorRows = snapshot.operators.map { ProgressBucket(it.key, it.value) }
+            val confirmationRows = snapshot.confirmations.map { ProgressBucket(it.key, it.value) }
+            if (!compact && maxWidth > 800.dp) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ChartCard("OPERATORS", operatorRows, Modifier.weight(1f))
+                ChartCard("CONFIRMATION SOURCES", confirmationRows, Modifier.weight(1f), "Award confirmation remains LoTW or paper QSL only")
+            } else Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ChartCard("OPERATORS", operatorRows, Modifier.fillMaxWidth())
+                ChartCard("CONFIRMATION SOURCES", confirmationRows, Modifier.fillMaxWidth(), "Award confirmation remains LoTW or paper QSL only")
+            }
+        }
+    }
+    if (snapshot.satellite.qsos > 0 || snapshot.antennas.isNotEmpty()) item {
+        ProgressCard("SATELLITE & ANTENNA ANALYTICS") {
+            if (snapshot.satellite.qsos > 0) {
+                Text("SATELLITE · ${snapshot.satellite.qsos} QSOs · ${snapshot.satellite.satellites} birds · ${snapshot.satellite.grids} grids · ${snapshot.satellite.confirmed} confirmed")
+                Text(snapshot.satellite.bySatellite.entries.sortedByDescending { it.value }.joinToString(" · ") { "${it.key} ${it.value}" }, color = ProgressMuted)
+            }
+            snapshot.antennas.take(8).forEach { antenna ->
+                Text("${antenna.path} · ${antenna.qsos} QSOs · ${antenna.confirmed} confirmed · best ${antenna.bestDistanceKm?.let { "%,.0f km".format(it) } ?: "unknown"}")
             }
         }
     }
@@ -229,11 +368,116 @@ private fun androidx.compose.foundation.lazy.LazyListScope.overviewItems(
             }
         }
     }
-    item { OutlinedButton(openLogbook, Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("OPEN FILTERED LOGBOOK") } }
+    item { OutlinedButton({ openLogbook(baseFilter) }, Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("OPEN FILTERED LOGBOOK") } }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.activityItems(snapshot: ProgressSnapshot, compact: Boolean) {
+    item {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (!compact && maxWidth > 800.dp) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ChartCard("QSOs BY YEAR", snapshot.years.map { ProgressBucket(it.key, it.value) }, Modifier.weight(1f))
+                ChartCard("QSOs BY MONTH", snapshot.months.map { ProgressBucket(it.key, it.value) }, Modifier.weight(1f))
+            } else Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ChartCard("QSOs BY YEAR", snapshot.years.map { ProgressBucket(it.key, it.value) }, Modifier.fillMaxWidth())
+                ChartCard("QSOs BY MONTH", snapshot.months.map { ProgressBucket(it.key, it.value) }, Modifier.fillMaxWidth())
+            }
+        }
+    }
+    item { ChartCard("RECENT DAILY ACTIVITY", snapshot.recentDays.map { ProgressBucket(it.key, it.value) }, Modifier.fillMaxWidth()) }
+    item {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (!compact && maxWidth > 800.dp) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ChartCard("BAND DISTRIBUTION", snapshot.bands.map { ProgressBucket(it.key, it.value) }, Modifier.weight(1f))
+                ChartCard("MODE FAMILY", snapshot.modes.map { ProgressBucket(it.key, it.value) }, Modifier.weight(1f))
+                ChartCard("MODE / SUBMODE", snapshot.submodes.map { ProgressBucket(it.key, it.value) }, Modifier.weight(1f))
+            } else Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ChartCard("BAND DISTRIBUTION", snapshot.bands.map { ProgressBucket(it.key, it.value) }, Modifier.fillMaxWidth())
+                ChartCard("MODE FAMILY", snapshot.modes.map { ProgressBucket(it.key, it.value) }, Modifier.fillMaxWidth())
+                ChartCard("MODE / SUBMODE", snapshot.submodes.map { ProgressBucket(it.key, it.value) }, Modifier.fillMaxWidth())
+            }
+        }
+    }
+    item {
+        var local by rememberSaveable { mutableStateOf(false) }
+        ProgressCard("UTC HOUR × WEEKDAY") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(!local, { local = false }, { Text("UTC") })
+                FilterChip(local, { local = true }, { Text("Device local time") })
+            }
+            ActivityHeatmap(if (local) snapshot.localHeatmap else snapshot.heatmap, Modifier.fillMaxWidth().height(170.dp))
+            Text(if (local) "Derived with the current device timezone." else "All logged QSO timestamps displayed in UTC.", color = ProgressMuted, fontSize = 11.sp)
+        }
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.geographyItems(
+    snapshot: ProgressSnapshot, compact: Boolean, base: LogbookFilter, open: (LogbookFilter) -> Unit,
+) {
+    item { ProgressCard("DXCC / COUNTRY · WORKED VS CONFIRMED") {
+        if (snapshot.geography.isEmpty()) Text("DXCC data is unavailable in this scope.", color = ProgressMuted)
+        snapshot.geography.take(100).forEach { row -> IntelligenceRow("${row.code} · ${row.label}",
+            "${row.count.worked} QSOs · ${row.count.confirmed} locally confirmed") { open(logbookFilterForDimension("dxcc", row.code, base)) } }
+        Text(snapshot.coverage["DXCC"]?.label.orEmpty(), color = ProgressMuted, fontSize = 11.sp)
+    } }
+    item {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (!compact && maxWidth > 800.dp) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                DimensionCard("CONTINENTS", snapshot.continents, "continent", base, open, Modifier.weight(1f))
+                DimensionCard("CQ ZONES", snapshot.cqZones, "cqzone", base, open, Modifier.weight(1f))
+                DimensionCard("ITU ZONES", snapshot.ituZones, "ituzone", base, open, Modifier.weight(1f))
+            } else Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                DimensionCard("CONTINENTS", snapshot.continents, "continent", base, open, Modifier.fillMaxWidth())
+                DimensionCard("CQ ZONES", snapshot.cqZones, "cqzone", base, open, Modifier.fillMaxWidth())
+                DimensionCard("ITU ZONES", snapshot.ituZones, "ituzone", base, open, Modifier.fillMaxWidth())
+            }
+        }
+    }
+    item { ProgressCard("STATES / SUBDIVISIONS") {
+        val was = snapshot.awards[AwardKind.WAS]
+        if (was == null || was.units.isEmpty()) Text("No valid U.S. state data in this scope.", color = ProgressMuted)
+        was?.units?.forEach { unit -> IntelligenceRow(unit.code, "${unit.qsos} QSOs · ${if (unit.confirmed) "confirmed" else "unconfirmed"}") {
+            open(logbookFilterForDimension("state", unit.code, base))
+        } }
+        Text(snapshot.coverage["U.S. state"]?.label.orEmpty(), color = ProgressMuted, fontSize = 11.sp)
+    } }
+    item { ProgressCard("GRIDS & CONTACT MAP") {
+        Text("${snapshot.grids} worked · ${snapshot.gridsConfirmed} locally confirmed", color = ProgressInk)
+        if (snapshot.contacts.isEmpty()) Text("No valid contact grids in this scope.", color = ProgressMuted)
+        else ProgressContactMap(snapshot.contacts, Modifier.fillMaxWidth().height(if (compact) 240.dp else 340.dp))
+    } }
+    item { ProgressCard("BEST DX") {
+        if (snapshot.bestDx.isEmpty()) Text("Distance is unknown for this scope.", color = ProgressMuted)
+        snapshot.bestDx.forEach { row -> IntelligenceRow("${row.callsign} · ${row.country.ifBlank { "Country unavailable" }}",
+            "%,.0f km · %s · %s".format(row.distanceKm, row.band, row.mode)) { open(logbookFilterForDimension("callsign", row.callsign, base)) } }
+    } }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.confirmationItems(
+    snapshot: ProgressSnapshot, base: LogbookFilter, open: (LogbookFilter) -> Unit,
+) {
+    item { ProgressCard("LOCAL CONFIRMATION SOURCES") {
+        if (snapshot.totalQsos == 0) Text("No QSOs in this scope.", color = ProgressMuted)
+        snapshot.confirmationDetails.forEach { (source, progress) ->
+            IntelligenceRow(source, "${progress.confirmed} of ${progress.total} · ${progress.percent?.let { "%.1f%%".format(it) } ?: "unknown"}") {
+                open(base.copy(confirmationSource = source.replace("Paper QSL", "PAPER").replace("Club Log", "CLUBLOG")))
+            }
+        }
+        Text("Upload acceptance is never counted as confirmation. Award estimates use paper QSL or LoTW only.", color = ProgressMuted, fontSize = 11.sp)
+    } }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.operatorItems(
+    snapshot: ProgressSnapshot, base: LogbookFilter, open: (LogbookFilter) -> Unit,
+) {
+    item { OperatorDimensionCard("OPERATORS", snapshot.operators, "operator", base, open) }
+    item { OperatorDimensionCard("LOCAL STATION PROFILES", snapshot.stationProfiles, "stationprofile", base, open) }
+    item { OperatorDimensionCard("STATION CALLSIGNS", snapshot.stationCallsigns, "stationcallsign", base, open) }
+    item { OperatorDimensionCard("RADIO FAMILY / MODEL", snapshot.radios, "radio", base, open) }
 }
 
 private fun androidx.compose.foundation.lazy.LazyListScope.needsItems(
-    snapshot: ProgressSnapshot, openDx: () -> Unit, openPortable: () -> Unit, openLogbook: () -> Unit,
+    snapshot: ProgressSnapshot, openDx: () -> Unit, openPortable: () -> Unit,
+    base: LogbookFilter, openLogbook: (LogbookFilter) -> Unit,
 ) {
     item { ProgressCard("LIVE NOW") {
         if (snapshot.needs.isEmpty()) Text("No resolved live activity currently advances this scope.", color = ProgressMuted)
@@ -259,11 +503,13 @@ private fun androidx.compose.foundation.lazy.LazyListScope.needsItems(
                 if (qsos.any { it.qrzReceived.uppercase(Locale.US) in setOf("Y","V") }) add("QRZ confirmation recorded")
                 if (qsos.any { it.eqslReceived.uppercase(Locale.US) in setOf("Y","V") }) add("eQSL confirmation recorded")
             }
-            Text("$dxcc · ${qsos.size} QSO${if (qsos.size == 1) "" else "s"} · ${qsos.map { it.band }.filter(String::isNotBlank).distinct().joinToString()}",
-                color = ProgressInk)
+            IntelligenceRow("$dxcc · ${qsos.size} QSO${if (qsos.size == 1) "" else "s"}",
+                qsos.map { it.band }.filter(String::isNotBlank).distinct().joinToString()) {
+                openLogbook(logbookFilterForDimension("dxcc", dxcc, base.copy(confirmationSource = "UNCONFIRMED")))
+            }
             if (digital.isNotEmpty()) Text(digital.joinToString(" · "), color = ProgressBlue, fontSize = 11.sp)
         }
-        OutlinedButton(openLogbook, Modifier.fillMaxWidth()) { Text("OPEN LOGBOOK") }
+        OutlinedButton({ openLogbook(base.copy(dxcc = "*", confirmationSource = "UNCONFIRMED")) }, Modifier.fillMaxWidth()) { Text("OPEN LOGBOOK") }
     } }
     item { ProgressCard("BAND / MODE GAPS") {
         CountRows(snapshot.dxccByBand, "band")
@@ -277,35 +523,46 @@ private fun androidx.compose.foundation.lazy.LazyListScope.needsItems(
     } }
 }
 
-private fun androidx.compose.foundation.lazy.LazyListScope.awardsItems(snapshot: ProgressSnapshot) {
-    item { EstimateCard("DXCC-STYLE LOCAL ESTIMATE", snapshot.dxcc, 100) {
-        CountRows(snapshot.dxccByMode, "mode")
-        Text("5-band matrix · 80 / 40 / 20 / 15 / 10 m", color = ProgressMuted)
-        CountRows(snapshot.dxccByBand.filterKeys { it in setOf("80m","40m","20m","15m","10m") }, "band")
+private fun androidx.compose.foundation.lazy.LazyListScope.awardsItems(
+    snapshot: ProgressSnapshot, selected: AwardKind, select: (AwardKind) -> Unit,
+    base: LogbookFilter, open: (LogbookFilter) -> Unit,
+) {
+    item {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            AwardKind.entries.forEach { kind -> FilterChip(selected == kind, { select(kind) }, { Text(kind.label) }) }
+        }
+    }
+    val award = snapshot.awards[selected]
+    item { ProgressCard(selected.label.uppercase(Locale.US)) {
+        Text(selected.rule, color = ProgressInk)
+        Text("WORKED · ${award?.count?.worked ?: 0}${award?.target?.let { " / $it" }.orEmpty()}", color = ProgressInk, style = MaterialTheme.typography.titleLarge)
+        Text("LOCALLY CONFIRMED · ${award?.count?.confirmed ?: 0}${award?.target?.let { " / $it" }.orEmpty()}", color = ProgressGreen)
+        award?.target?.takeIf { it > 0 }?.let { target -> LinearProgressIndicator({ (award.count.worked / target.toFloat()).coerceIn(0f, 1f) }, Modifier.fillMaxWidth(), color = ProgressGreen) }
+        Text(award?.coverage?.label.orEmpty(), color = ProgressMuted, fontSize = 11.sp)
+        if (award?.coverage?.available != award?.coverage?.total) Text("Required ADIF coverage is incomplete; missing values remain unknown, not zero.", color = ProgressAmber, fontSize = 11.sp)
+        if (!award?.warning.isNullOrBlank()) Text(award?.warning.orEmpty(), color = ProgressAmber, fontSize = 11.sp)
     } }
-    item { EstimateCard("WAS-STYLE LOCAL ESTIMATE", snapshot.states, 50) {
-        Text(canonicalUsStates.sorted().chunked(10).joinToString("\n") { row -> row.joinToString("  ") },
-            color = ProgressMuted, fontSize = 12.sp)
-        Text(snapshot.coverage["U.S. state"]?.label.orEmpty(), color = ProgressMuted)
+    item { ProgressCard("BAND / MODE MATRIX") {
+        CountRows(award?.byBand.orEmpty(), "band")
+        HorizontalDivider(color = ProgressRaised)
+        CountRows(award?.byMode.orEmpty(), "mode")
     } }
-    item { EstimateCard("WAZ-STYLE LOCAL ESTIMATE", snapshot.zones, 40) {
-        Text((1..40).chunked(10).joinToString("\n") { row -> row.joinToString("  ") }, color = ProgressMuted, fontSize = 12.sp)
-        Text(snapshot.coverage["CQ zone"]?.label.orEmpty(), color = ProgressMuted)
+    item { ProgressCard("WORKED UNITS") {
+        if (award?.units.isNullOrEmpty()) Text("No qualifying units in this scope.", color = ProgressMuted)
+        award?.units?.take(250)?.forEach { unit -> IntelligenceRow("${unit.code} · ${unit.label}",
+            "${unit.qsos} QSO${if (unit.qsos == 1) "" else "s"} · ${if (unit.confirmed) "locally confirmed" else "unconfirmed"}") {
+            val scoped = if (selected == AwardKind.QRP) base.copy(txPower = "1..5") else base
+            open(logbookFilterForDimension(selected.filterKey, unit.code, scoped))
+        } }
     } }
-    item { ProgressCard("QRP DXCC-STYLE LOCAL ESTIMATE") {
-        Text("${snapshot.qrpDxcc} / 100 unique DXCC identifiers at known power ≤ 5 W", color = ProgressInk)
-        LinearProgressIndicator({ (snapshot.qrpDxcc / 100f).coerceIn(0f, 1f) }, Modifier.fillMaxWidth(), color = ProgressGreen)
-        Text(snapshot.coverage["TX power"]?.label.orEmpty(), color = ProgressMuted)
-    } }
-    item { ProgressCard("POTA LOCAL MILESTONE PREVIEW") {
-        Text("${snapshot.portable.potaHunted.size} hunted · ${snapshot.portable.potaActivated.size} activated", color = ProgressInk)
-        Text("Next standard unique-park milestone · ${snapshot.portable.nextPotaMilestone}", color = ProgressAmber)
-        Text("${snapshot.portable.p2pQsos} P2P QSOs · verify official credit in POTA", color = ProgressMuted)
+    if (!award?.missing.isNullOrEmpty()) item { ProgressCard("MISSING UNITS") {
+        Text(award?.missing?.joinToString(" · ").orEmpty(), color = ProgressMuted)
     } }
 }
 
 private fun androidx.compose.foundation.lazy.LazyListScope.portableItems(
     snapshot: ProgressSnapshot, portable: PortableController, openPortable: () -> Unit,
+    base: LogbookFilter, openLogbook: (LogbookFilter) -> Unit,
 ) {
     item { ProgressCard("HUNTER PROGRESS") {
         Text("POTA · ${snapshot.portable.potaHunted.size} unique parks", color = ProgressInk)
@@ -331,6 +588,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.portableItems(
         Text("WWFF remains list-only without a full directory. No official SOTA points or WWFF credit is calculated.", color = ProgressMuted)
     } }
     item { Button(openPortable, Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("OPEN PORTABLE CHASE") } }
+    item { OutlinedButton({ openLogbook(base.copy(portableProgram = base.portableProgram.ifBlank { "ANY" })) },
+        Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("OPEN PORTABLE QSOs IN LOGBOOK") } }
 }
 
 @Composable private fun LocalEstimateBanner() {
@@ -348,6 +607,56 @@ private fun androidx.compose.foundation.lazy.LazyListScope.portableItems(
             Text(label, color = ProgressMuted, fontSize = 10.sp)
             Text(value, color = if (alert) ProgressAmber else ProgressInk, style = MaterialTheme.typography.titleLarge)
         }
+    }
+}
+
+@Composable private fun IntelligenceRow(title: String, detail: String, open: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = ProgressInk, maxLines = 1)
+            if (detail.isNotBlank()) Text(detail, color = ProgressMuted, fontSize = 11.sp, maxLines = 2)
+        }
+        TextButton(open) { Text("VIEW") }
+    }
+    HorizontalDivider(color = ProgressRaised)
+}
+
+@Composable private fun DimensionCard(
+    title: String, rows: Map<String, ProgressCount>, key: String, base: LogbookFilter,
+    open: (LogbookFilter) -> Unit, modifier: Modifier,
+) {
+    Card(modifier, colors = CardDefaults.cardColors(containerColor = ProgressPanel)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(title, color = ProgressAmber)
+            if (rows.isEmpty()) Text("Data unavailable in this scope.", color = ProgressMuted)
+            rows.forEach { (value, count) -> IntelligenceRow(value, "${count.worked} QSOs · ${count.confirmed} confirmed") {
+                open(logbookFilterForDimension(key, value, base))
+            } }
+        }
+    }
+}
+
+@Composable private fun OperatorDimensionCard(
+    title: String, rows: Map<String, Int>, key: String, base: LogbookFilter, open: (LogbookFilter) -> Unit,
+) {
+    ProgressCard(title) {
+        if (rows.isEmpty()) Text("Data unavailable in this scope.", color = ProgressMuted)
+        rows.toList().sortedByDescending { it.second }.forEach { (value, count) -> IntelligenceRow(value, "$count QSOs") {
+            open(if (value == "UNKNOWN") base else logbookFilterForDimension(key, value, base))
+        } }
+    }
+}
+
+@Composable private fun ActivityHeatmap(rows: List<ProgressHeatCell>, modifier: Modifier) {
+    if (rows.isEmpty()) { Text("No activity in this scope.", color = ProgressMuted); return }
+    val highest = max(1, rows.maxOf(ProgressHeatCell::count))
+    Canvas(modifier) {
+        val cellWidth = size.width / 24f
+        val cellHeight = size.height / 7f
+        rows.forEach { cell -> drawRoundRect(ProgressGreen.copy(alpha = .15f + .85f * cell.count / highest),
+            androidx.compose.ui.geometry.Offset(cell.hour * cellWidth, cell.day * cellHeight),
+            androidx.compose.ui.geometry.Size(cellWidth - 1, cellHeight - 1), CornerRadius(2f)) }
     }
 }
 
@@ -472,7 +781,9 @@ private fun androidx.compose.foundation.lazy.LazyListScope.portableItems(
             map = value
             value.uiSettings.isAttributionEnabled = false
             value.uiSettings.isLogoEnabled = false
-            value.setStyle(Style.Builder().fromJson(progressMapStyle())) { ready = true }
+            value.uiSettings.isAttributionEnabled = true
+            value.uiSettings.isLogoEnabled = true
+            value.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { ready = true }
         }
         onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null }
     }
@@ -496,9 +807,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.portableItems(
     }
     Box(modifier.background(ProgressBackground).border(1.dp,ProgressRaised,RoundedCornerShape(8.dp))) {
         AndroidView({ mapView }, Modifier.fillMaxSize())
-        Text("© CARTO · © OpenStreetMap contributors", color = ProgressMuted, fontSize = 9.sp,
+        Text("OpenFreeMap © OpenMapTiles · OpenStreetMap", color = ProgressMuted, fontSize = 9.sp,
             modifier = Modifier.align(Alignment.BottomEnd).background(ProgressPanel.copy(alpha=.85f)).padding(4.dp))
     }
 }
-
-private fun progressMapStyle() = """{"version":8,"name":"RigWeave Progress","sources":{"carto":{"type":"raster","tiles":["https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"],"tileSize":256,"maxzoom":20},"labels":{"type":"raster","tiles":["https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png"],"tileSize":256,"maxzoom":20}},"layers":[{"id":"background","type":"background","paint":{"background-color":"#091015"}},{"id":"carto","type":"raster","source":"carto"},{"id":"labels","type":"raster","source":"labels"}]}"""

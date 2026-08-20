@@ -1,0 +1,80 @@
+# Scale and stability
+
+## Delivered architecture
+
+The old interactive paths repeatedly decoded the canonical `qso.details_json` record, materialised the complete log, sorted it in memory, and recalculated analytics or calendar history for each consumer. That made memory and latency grow with the log and made Android lifecycle churn a plausible crash trigger.
+
+Database version 12 keeps `qso` as the compatibility authority and adds `qso_projection`, `qso_reference`, and `qso_projection_meta`. The projection contains normalized query dimensions, confirmation flags, Wavelog relation state, station/operator identity, portable references, satellite fields, and a deterministic `(created_at, qso_id)` cursor. Targeted indexes cover time, callsign, frequency, band/mode, station, geography, contest, satellite, activation, sync relation, confirmation, and references.
+
+Projection creation is resumable and batched. Progress and state are committed in metadata, malformed canonical rows are skipped without deleting the source, and normal writes dual-write canonical and projection rows in one transaction. Verification detects missing and orphan rows; repair fills missing rows and removes orphans; rebuild is an explicit recovery action. WAL, `synchronous=NORMAL`, a bounded busy timeout, and the private diagnostic journal reduce lock and crash ambiguity.
+
+Logbook queries now run off-main, debounce changes, cancel the previous coroutine and SQLite `CancellationSignal`, use keyset paging, and cap UI pages at 250. Log Intelligence, Operations, Home, DX/contest history, spot status, and station summaries query compact projection aggregates. Normal interactive paths no longer load a complete `List<Qso>`. Legacy JSON helpers remain only for compatibility/migration or explicit bounded canonical retrieval, not normal filtering or sorting.
+
+ADIF import reads records incrementally, applies bounded mutation batches, reports progress, and permits cancellation between batches. Export streams projection-selected canonical rows to the destination instead of building one giant string. The small string helpers remain for tiny inputs and focused tests.
+
+## Representative host profile
+
+Measured 2026-08-20 with SQLite on a deterministic temporary 100,000-row projection. The database was not committed. Times are wall-clock observations, not tablet guarantees.
+
+| Query category | Elapsed | Peak process RSS | Selected plan/index |
+|---|---:|---:|---|
+| Default first page, 250 rows | 0.00 s | 3.1 MB | `qso_projection_time_idx` |
+| Exact callsign | 0.01 s | 3.2 MB | `qso_projection_call_idx` |
+| DXCC | 0.00 s | 3.1 MB | DXCC/time index family |
+| Band and mode | 0.01 s | 3.2 MB | band/mode index family |
+| Confirmation | 0.00 s | 3.2 MB | confirmation/time index |
+| Contest | 0.01 s | 3.4 MB | contest/time index |
+| Satellite name and mode | 0.00 s | 3.7 MB | `qso_projection_satellite_idx` |
+| Wavelog relation | 0.01 s | 4.3 MB | `qso_projection_sync_idx`; bounded temporary ordering |
+| Keyset next page | 0.00 s | 3.1 MB | time cursor index |
+| Overview aggregates | 0.05 s | 6.0 MB | bounded aggregate scan |
+| Awards aggregates | 0.07 s | 5.5 MB | bounded grouped aggregate |
+| Needs compact sets | 0.00 s | 3.1 MB | compact distinct set |
+| DX Calendar local history | 0.01 s | 5.2 MB | contest index/aggregate |
+| Filtered satellite export stream | 0.01 s | 5.9 MB | satellite index |
+
+Several subsequent keyset pages were also exercised. All measured categories remained below the one-second host guidance and no crash or unbounded memory growth occurred.
+
+## Private diagnostics
+
+The journal stores at most three sanitized crash summaries and twelve slow-query records in app-private storage. It excludes QSO payloads, credentials, URLs, tokens, callsigns, comments, and provider response bodies. Settings can show, copy a sanitized report, or clear the journal. Diagnostic failure never blocks database recovery or logging.
+
+## Task 2A Home and map safeguards
+
+Home no longer owns a screen-wide one-second clock state; the ticking state is isolated inside the header, while celestial/map snapshots advance once per minute. The MapLibre view is remembered across ordinary recomposition and style changes, forwards lifecycle events exactly once, and updates stable GeoJSON sources rather than reconstructing the map.
+
+Every map layer declares a maximum object count. DX points cap at 160, great-circle paths at 80, PSK reports at 60, portable points at 160, satellites at 40, recent QSO projection rows at 120, and lightning at 120. Geometry splits at the dateline. Recent QSOs select eight compact indexed projection columns and never call `QsoDatabase.all()` or decode canonical JSON. Camera persistence is debounced by 600 ms, manual pan disables follow, and low-data mode avoids MapLibre/tile work while retaining the same visibility and selection actions.
+# Task 2A1 Android Home closure (2026-08-20)
+
+- Overlay caps are registry-owned; the visible grid produces exactly its declared 32 lines.
+- Map source updates are fingerprinted per stable GeoJSON source so unchanged snapshots are not rewritten.
+- One MapLibre view is lifecycle-forwarded; style callbacks are generation-guarded and disposal invalidates late callbacks.
+- Low-data and style failure use the bounded Map Data snapshot; low-data makes no style/tile request.
+- Home satellite positions reuse Satellite Operations' validated element cache and pinned SGP4 engine, with a bounded 40-object snapshot calculated off the main thread.
+- QSO projection remains capped at 120 compact rows; no canonical log JSON is materialized.
+- Camera persistence is gesture-only, delayed 600 ms, merges latest non-camera settings and rejects stale writes after profile/new-camera changes.
+
+# Task 2A2 runtime safeguards
+
+- Home satellite propagation is one foreground-only controller job at 45-second cadence. A mutex prevents overlap across lifecycle/reselection restarts; generation checks discard obsolete completion; output is favourites plus selected with a bounded fallback and a hard 40-row cap.
+- Home refresh uses `NeuralDxRefreshScope.HOME`, which excludes the legacy Neural DX satellite download and ticker. The remaining legacy path is limited to the dedicated full-DX workspace refresh.
+- Map source truth covers every registry layer, while header totals count only visible layers across current, degraded, empty and unavailable categories.
+- DX/PSK/Portable/Satellite/QSO routing carries typed exact identities. No marker selection performs CAT; Home DX review confirmation alone may change receive VFO.
+- DX points and paths retain the shared band palette; watchlist is a separate GeoJSON/stroke property. Existing per-source fingerprints still suppress unchanged full-source rewrites.
+- Recent Home QSOs remain the bounded `recentHamClockProjection(120)` path. No canonical QSO JSON decode or `QsoDatabase.all()` was introduced.
+
+# Task 2B1 DX News and PSK safeguards
+
+- DX-World downloads cap at 1 MB, accept at most three HTTPS redirects and publish at most 40 normalized stories. A 30-minute TTL, 10-minute manual limit, conditional validators, last-good cache and in-flight coalescer prevent request storms and invalid replacement.
+- DX News consumes the existing bounded NG3K feed, so Home, Calendar and DX share one schedule fetch. Dedup is linear over the bounded merged list and preserves distinct same-callsign stories.
+- Direct PSK responses cap at 2 MB and 500 rows per direction. Cache keys include direction/callsign/window; automatic/manual cadence cannot be below five minutes and Retry-After extends backoff.
+- PSK filters are applied before Home/map presentation, whose existing map cap remains 60. Direction generations discard late results after disable or provider-affecting changes; clearing PSK cancels the active job and removes displayed rows.
+- Cluster map presentation applies the active window/cap/band/mode/continent/callsign filters to typed controller state. Connected with zero current spots is `EMPTY`, not a transport error.
+
+# Task 2B2B RF evidence safeguards
+
+- RBN retains at most 1,000 raw rows and publishes at most the saved cap. A two-second maintenance cadence filters/sorts off-main, prevents overlap, expires quiet-feed rows and publishes one immutable typed snapshot on Main.
+- RBN geometry performs no per-frame or unbounded callbook work: stream/station/cached-callbook geometry precedes approximate CTY fallback, and unresolved skimmers remain list-only.
+- Station-grid changes reproject retained PSK and personal-WSPR geometry locally with zero HTTP requests. Direction truth has an explicit combined `DEGRADED` state.
+- Band Health is computed once into an application-scoped immutable snapshot. Exact contributing IDs are capped, and historical comparison is a compact grouped `qso_projection` query bounded to 128 rows and one year, keyed by station/filter/database revision.
+- Home provider loops and Neural DX/lightning starts are foreground-guarded. No RF-evidence action bypasses receive-only review or starts CAT/PTT/TUNE/TX.

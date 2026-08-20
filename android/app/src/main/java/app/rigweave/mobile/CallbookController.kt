@@ -143,6 +143,10 @@ class CallbookController(context: Context, private val operatorCallsign: () -> S
         }
     }
 
+    /** Read-only bounded cache access for map geometry; never initiates a provider request. */
+    internal fun cachedRecord(callsign: String): AndroidCallbookRecord? =
+        lookupCache.get(callsign.trim().uppercase())
+
     fun close() = scope.cancel()
 
     private fun enabledSources() = listOfNotNull("QRZ".takeIf { qrzEnabled }, "HamQTH".takeIf { hamQthEnabled })

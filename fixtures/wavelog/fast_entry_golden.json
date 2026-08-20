@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "duplicate_rule": "same normalized callsign, frequency_hz, main mode, and 15-second time bucket",
+  "cases": [
+    {
+      "name": "inherited-time-and-reports",
+      "date": "2026-08-19",
+      "input": "20m SSB\n2134 4W7EST\n6 LA8AJA 47 46",
+      "rows": [
+        {"call":"4W7EST","band":"20m","mode":"SSB","submode":"","rst_sent":"59","utc":"2026-08-19T21:34:00Z"},
+        {"call":"LA8AJA","band":"20m","mode":"SSB","submode":"","rst_sent":"47","utc":"2026-08-19T21:36:00Z"}
+      ],
+      "errors": []
+    },
+    {
+      "name": "timezone-references-contest-satellite-utf8",
+      "date": "2026-08-19",
+      "input": "TIMEZONE +02:00\n14.060 CW <MY_POTA_REF:OM-0002>\n1400 OM0RX/P 599 579 OM-0001 OMFF-0001 ,12.A .34.B <CONTEST_ID:CQ-WW-CW> <SAT_NAME:QO-100> {Žilina portable} [73]",
+      "rows": [
+        {"call":"OM0RX/P","band":"20m","mode":"CW","submode":"","rst_sent":"599","utc":"2026-08-19T12:00:00Z","pota":"OM-0001","wwff":"OMFF-0001","contest":"CQ-WW-CW","satellite":"QO-100","comment":"Žilina portable"}
+      ],
+      "errors": []
+    },
+    {
+      "name": "malformed-line-is-visible",
+      "date": "2026-08-19",
+      "input": "2134 OM0RX",
+      "rows": [],
+      "errors": ["Band or frequency is required", "Mode is required"]
+    }
+  ]
+}

@@ -6,6 +6,7 @@ object HamClockPanelId {
     const val WEATHER = "weather"
     const val BAND_ACTIVITY = "band_activity"
     const val PSK_REPORTER = "psk_reporter"
+    const val DX_NEWS = "dx_news"
     const val DX_EXPEDITIONS = "dxpeditions"
     const val DX_CLUSTER = "dx_cluster"
     const val SOLAR = "solar"
@@ -15,11 +16,18 @@ object HamClockPanelId {
     const val SATELLITES = "satellites"
     const val CONTESTS = "contests"
     const val MAP = "map"
+    const val ANALOG_CLOCK = "analog_clock"
+    const val RBN = "rbn"
+    const val WSPR = "wspr"
+    const val IBP = "ibp"
+    const val BAND_HEALTH = "band_health"
 }
 
 object HamClockMapLayerId {
+    const val DE_STATION = "de_station"
     const val DX_SPOTS = "dx_spots"
     const val DX_PATHS = "dx_paths"
+    const val SELECTED_TARGET = "selected_target"
     const val PSK_REPORTER = "psk_reporter"
     const val PORTABLE = "portable"
     const val SATELLITES = "satellites"
@@ -30,6 +38,13 @@ object HamClockMapLayerId {
     const val AURORA = "aurora"
     const val LOGGED_QSOS = "logged_qsos"
     const val LIGHTNING = "lightning"
+    const val RBN = "rbn"
+    const val WSPR_EXPANDED = "wspr_expanded"
+    const val IBP = "ibp"
+    const val MUF = "muf"
+    const val PROPAGATION_HEATMAP = "propagation_heatmap"
+    const val WEATHER_RADAR = "weather_radar"
+    const val WWBOTA = "wwbota"
 }
 
 enum class HamClockBasemap { DARK, LIGHT, SATELLITE, TERRAIN }
@@ -37,7 +52,11 @@ enum class HamClockDensity { COMPACT, COMFORTABLE, LARGE_TOUCH }
 enum class HamClockTimeZoneMode { UTC, LOCAL, BOTH }
 enum class HamClockHourFormat { H12, H24 }
 enum class HamClockUnitSystem { METRIC, IMPERIAL }
-enum class HamClockPskDirection { HEARD, HEARING, BOTH }
+enum class HamClockPskDirection { BEING_HEARD, HEARING, BOTH, MUTUAL }
+enum class HamClockDxNewsSource { ALL, DX_WORLD, NG3K }
+enum class HamClockRbnSource { CONFIGURED_RETAIL_CLUSTER }
+enum class HamClockRbnMode { WHO_HEARS_ME, SKIMMER_VIEW, WATCHLIST, ALL_RBN }
+enum class HamClockDxTargetSource { MANUAL, AUTOMATIC }
 
 data class HamClockPanelPreference(
     val id: String,
@@ -85,9 +104,53 @@ data class HamClockPskPreference(
     val enabled: Boolean = true,
     val direction: HamClockPskDirection = HamClockPskDirection.BOTH,
     val windowMinutes: Int = 15,
-    val refreshSeconds: Int = 60,
+    val refreshSeconds: Int = 300,
     val maximumReports: Int = 250,
     val filter: HamClockSpotFilter = HamClockSpotFilter(),
+)
+
+data class HamClockDxNewsPreference(
+    val source: HamClockDxNewsSource = HamClockDxNewsSource.ALL,
+    val compactVisible: Boolean = false,
+)
+
+data class HamClockRbnPreference(
+    val enabled: Boolean = true,
+    val source: HamClockRbnSource = HamClockRbnSource.CONFIGURED_RETAIL_CLUSTER,
+    val viewMode: HamClockRbnMode = HamClockRbnMode.ALL_RBN,
+    val windowMinutes: Int = 10,
+    val maximumRows: Int = 120,
+    val bands: Set<String> = emptySet(),
+    val modes: Set<String> = emptySet(),
+    val minimumSnr: Int? = null,
+    val skimmerCall: String = "",
+    val dxCall: String = "",
+    val watchlistOnly: Boolean = false,
+    val showPaths: Boolean = true,
+)
+
+data class HamClockWsprPreference(
+    val personalEnabled: Boolean = true,
+    val direction: HamClockPskDirection = HamClockPskDirection.BOTH,
+    val windowMinutes: Int = 30,
+    val band: String = "ALL",
+    val minimumSnr: Int? = null,
+    val maximumPaths: Int = 100,
+    val regionalEnabled: Boolean = false,
+    val showPaths: Boolean = true,
+    val showRegionalGrid: Boolean = false,
+)
+
+data class HamClockIbpPreference(
+    val showAllSites: Boolean = true,
+    val showPaths: Boolean = true,
+)
+
+data class HamClockBandHealthPreference(
+    val windowMinutes: Int = 15,
+    val mode: String = "ALL",
+    val enabledSources: Set<String> = setOf("CLUSTER", "PSK", "RBN", "WSPR"),
+    val visibleBands: Set<String> = setOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"),
 )
 
 data class HamClockPortablePreference(
@@ -113,6 +176,7 @@ data class HamClockDxTarget(
     val latitude: Double? = null,
     val longitude: Double? = null,
     val locked: Boolean = false,
+    val source: HamClockDxTargetSource = HamClockDxTargetSource.MANUAL,
 )
 
 data class HamClockDisplayPreference(
@@ -121,6 +185,7 @@ data class HamClockDisplayPreference(
     val hourFormat: HamClockHourFormat = HamClockHourFormat.H24,
     val unitSystem: HamClockUnitSystem = HamClockUnitSystem.METRIC,
     val lowDataMode: Boolean = false,
+    val immersive: Boolean = false,
 )
 
 data class HamClockUserSettings(
@@ -128,6 +193,11 @@ data class HamClockUserSettings(
     val map: HamClockMapPreference = HamClockMapPreference(),
     val cluster: HamClockClusterPreference = HamClockClusterPreference(),
     val pskReporter: HamClockPskPreference = HamClockPskPreference(),
+    val dxNews: HamClockDxNewsPreference = HamClockDxNewsPreference(),
+    val rbn: HamClockRbnPreference = HamClockRbnPreference(),
+    val wspr: HamClockWsprPreference = HamClockWsprPreference(),
+    val ibp: HamClockIbpPreference = HamClockIbpPreference(),
+    val bandHealth: HamClockBandHealthPreference = HamClockBandHealthPreference(),
     val portable: HamClockPortablePreference = HamClockPortablePreference(),
     val satellites: HamClockSatellitePreference = HamClockSatellitePreference(),
     val dxTarget: HamClockDxTarget? = null,
@@ -155,33 +225,6 @@ data class HamClockImportResult(
     val activeProfileId: String?,
 )
 
-fun defaultHamClockPanels(): List<HamClockPanelPreference> = listOf(
-    HamClockPanelPreference(HamClockPanelId.STATION, order = 0, column = 0),
-    HamClockPanelPreference(HamClockPanelId.WEATHER, order = 1, column = 0),
-    HamClockPanelPreference(HamClockPanelId.PSK_REPORTER, order = 2, column = 0),
-    HamClockPanelPreference(HamClockPanelId.DX_EXPEDITIONS, order = 3, column = 0),
-    HamClockPanelPreference(HamClockPanelId.MAP, order = 0, column = 1),
-    HamClockPanelPreference(HamClockPanelId.DX_CLUSTER, order = 0, column = 2),
-    HamClockPanelPreference(HamClockPanelId.SOLAR, order = 1, column = 2),
-    HamClockPanelPreference(HamClockPanelId.DX_TARGET, order = 2, column = 2),
-    HamClockPanelPreference(HamClockPanelId.VOACAP, order = 3, column = 2),
-    HamClockPanelPreference(HamClockPanelId.PORTABLE, order = 4, column = 2),
-    HamClockPanelPreference(HamClockPanelId.CONTESTS, order = 5, column = 2),
-    HamClockPanelPreference(HamClockPanelId.BAND_ACTIVITY, visible = false, order = 6, column = 2),
-    HamClockPanelPreference(HamClockPanelId.SATELLITES, visible = false, order = 7, column = 2),
-)
+fun defaultHamClockPanels(): List<HamClockPanelPreference> = defaultPanelsFromRegistry()
 
-fun defaultHamClockMapLayers(): List<HamClockMapLayerPreference> = listOf(
-    HamClockMapLayerPreference(HamClockMapLayerId.DX_SPOTS),
-    HamClockMapLayerPreference(HamClockMapLayerId.DX_PATHS),
-    HamClockMapLayerPreference(HamClockMapLayerId.PSK_REPORTER, visible = false),
-    HamClockMapLayerPreference(HamClockMapLayerId.PORTABLE),
-    HamClockMapLayerPreference(HamClockMapLayerId.SATELLITES, visible = false),
-    HamClockMapLayerPreference(HamClockMapLayerId.GRAYLINE, opacity = 0.72f),
-    HamClockMapLayerPreference(HamClockMapLayerId.SUN),
-    HamClockMapLayerPreference(HamClockMapLayerId.MOON, visible = false),
-    HamClockMapLayerPreference(HamClockMapLayerId.GRID, visible = false, opacity = 0.5f),
-    HamClockMapLayerPreference(HamClockMapLayerId.AURORA, visible = false, opacity = 0.65f),
-    HamClockMapLayerPreference(HamClockMapLayerId.LOGGED_QSOS, visible = false),
-    HamClockMapLayerPreference(HamClockMapLayerId.LIGHTNING, visible = false),
-)
+fun defaultHamClockMapLayers(): List<HamClockMapLayerPreference> = defaultLayersFromRegistry()

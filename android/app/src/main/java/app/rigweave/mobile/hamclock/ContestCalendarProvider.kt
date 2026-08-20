@@ -11,9 +11,9 @@ import java.util.Locale
 internal class ContestCalendarProvider(
     cacheDirectory: File,
     private val http: HamClockHttpClient = HamClockUrlConnectionClient(),
+    private val coalescer: HamClockInFlightCoalescer = HamClockInFlightCoalescer(),
 ) {
     private val cache = HamClockLastGoodCache(cacheDirectory, "contests-wa7bnm")
-    private val flight = HamClockSingleFlight<HamClockFeed<List<HamClockContest>>>()
 
     fun cached(nowEpoch: Long = Instant.now().epochSecond): HamClockFeed<List<HamClockContest>> =
         cache.read()?.let { entry ->
@@ -22,7 +22,8 @@ internal class ContestCalendarProvider(
             }
         } ?: HamClockFeed(emptyList(), HamClockFeedState.UNAVAILABLE, SOURCE, error = "No saved contest calendar")
 
-    fun refresh(force: Boolean = false, nowEpoch: Long = Instant.now().epochSecond): HamClockFeed<List<HamClockContest>> = flight.run {
+    fun refresh(force: Boolean = false, nowEpoch: Long = Instant.now().epochSecond): HamClockFeed<List<HamClockContest>> =
+        coalescer.run("contest-calendar") {
         val saved = cache.read()
         if (!force && saved != null && nowEpoch - saved.fetchedAtEpoch < TTL_SECONDS) {
             val rows = runCatching { contestsFromJson(saved.body, nowEpoch) }.getOrNull()
@@ -48,7 +49,7 @@ internal class ContestCalendarProvider(
             if (fallback != null) HamClockFeed(fallback, HamClockFeedState.STALE, SOURCE, saved.fetchedAtEpoch, providerError(error))
             else HamClockFeed(emptyList(), HamClockFeedState.UNAVAILABLE, SOURCE, error = providerError(error))
         }
-    }
+        }
 
     private fun cacheState(fetched: Long, now: Long) =
         if (now - fetched <= STALE_SECONDS) HamClockFeedState.CACHED else HamClockFeedState.STALE

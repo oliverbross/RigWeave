@@ -32,10 +32,18 @@ class LogbookFiltersTest {
             LogbookFilter(propagation = "F2"), LogbookFilter(county = "zil"), LogbookFilter(dok = "A01"),
             LogbookFilter(sota = "ZA-001"), LogbookFilter(pota = "OM-0001"), LogbookFilter(iota = "EU-001"),
             LogbookFilter(wwff = "OMFF"), LogbookFilter(operator = "OM0RX"), LogbookFilter(contest = "CQ-WW"),
-            LogbookFilter(continent = "EU"), LogbookFilter(comment = "strong signal"),
+            LogbookFilter(continent = "EU"), LogbookFilter(comment = "summit contact"), LogbookFilter(notes = "strong signal"),
             LogbookFilter(distance = ">1000"), LogbookFilter(duration = ">=60"),
         ).forEach(::assertOnlyTarget)
         assertEquals(listOf("other"), filterLogbook(records, LogbookFilter(toEpochSecondsExclusive = 150)).map { it.id })
+    }
+
+    @Test fun commentNotesAndEveryWorkedPotaReferenceRemainDistinct() {
+        val multi = target.copy(potaRefs = listOf("OM-0001", "OM-9999"))
+        assertEquals(listOf("target"), filterLogbook(listOf(other, multi), LogbookFilter(comment = "summit")).map(Qso::id))
+        assertEquals(listOf("target"), filterLogbook(listOf(other, multi), LogbookFilter(notes = "strong")).map(Qso::id))
+        assertTrue(filterLogbook(listOf(other, multi), LogbookFilter(comment = "strong")).isEmpty())
+        assertEquals(listOf("target"), filterLogbook(listOf(other, multi), LogbookFilter(pota = "9999")).map(Qso::id))
     }
 
     @Test fun everyQslFilterIsApplied() {
@@ -68,8 +76,8 @@ class LogbookFiltersTest {
         assertFalse(numericMatches(500.0, "invalid"))
     }
 
-    @Test fun pagingUsesOnlySupportedSizesAndNeverExceedsOneThousand() {
-        assertEquals(listOf(25, 50, 100, 200, 500, 1_000), LOGBOOK_PAGE_SIZES)
+    @Test fun interactivePagingUsesOnlySupportedSizesAndNeverExceedsTwoHundredFifty() {
+        assertEquals(listOf(25, 50, 100, 200, 250), LOGBOOK_PAGE_SIZES)
         assertEquals(50, normalizedLogbookPageSize(65_000))
         assertEquals(50, normalizedLogbookPageSize(50))
         assertEquals(3, logbookPageCount(101, 50))

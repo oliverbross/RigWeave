@@ -1,0 +1,16 @@
+# Task 2B2C pre-acceptance hardening
+
+- Start SHA: `36bc0bdf155d5bc720f8daa873412f1d55a9114f`.
+- Final implementation SHA: `14cc3be29f227039262d3b5b574fa86557bf2882`; the final pushed documentation tip is reported by the post-commit equality check because a commit cannot contain its own SHA.
+- Branch: `feature/openhamclock-parity-v1`.
+- History cache: compact `bandHistory` projection rows are held in a bounded four-entry cache keyed by database change token, station profile, normalized station callsign, UTC-hour bucket, and `one-year-comparable-utc-hour-v1`. The query and reducer remain off-main; live evidence changes reuse the cached rows without full-log materialisation or canonical JSON decoding.
+- Refresh: Band Health now runs one job, retains only the latest pending request, rejects stale-generation publication, clears the job in `finally`, records a sanitized non-fatal error, and permits an identical retry after failure.
+- Degraded sources: `DEGRADED` is distinct from total error. Valid PSK/WSPR direction evidence remains usable with low confidence and a named degraded-source reason; LIVE plus stale/unavailable direction is not presented as fully current.
+- Contributors and drill-through: the reducer returns the exact typed, source-prefixed observations surviving availability, window/mode/band, cross-source deduplication, and repeated-contributor caps. The displayed count is derived from those rows. Log Intelligence requests DX `OBSERVATIONS` with the selected band; contributor rows open the exact existing cluster, RBN, PSK, WSPR, or IBP detail path and retain receive-review-only radio handling.
+- RBN geometry: Home map and DX RF Evidence both use `resolveRbnObservationView`, preserving stream, current-station, cached-callbook, approximate CTY, then unavailable order. The detail receives the same resolved fields and full skimmer identifier; list-only rows remain valid without a marker.
+- Foreground maintenance: the quiet-feed reduction has no loop while RBN is disabled, the cluster is intentionally disabled, or the app is backgrounded. Foreground resume performs an immediate reduction, active maintenance resumes without reopening the cluster, and `close()` cancels it.
+- Validation: upstream watcher exited 0; focused eight-case hardening suite passed; `testDebugUnitTest` passed 302 tests with 0 failures, 0 errors, and 0 skipped; `assembleDebug` passed; `git diff --check` passed.
+- APK: `android/app/build/outputs/apk/debug/app-debug.apk`; 113,655,013 bytes; SHA-256 `e5760b3b8b026d322953ce75697cb3ac537535e4cc2404c53795967d5517a18a`.
+- Safety: no `QsoDatabase.all()`, full canonical-QSO decode, per-card/hot-stream historical SQL, raw RBN firehose, WSPR.live request, provider-authority duplication, app-data/credential change, automatic CAT/PTT/TUNE/TX, or bypass of explicit receive review was added. Existing projection/WAL/paging/ADIF/Wavelog/SGP4/award contracts remain intact.
+- Evidence limits: source wiring, deterministic tests, projection behaviour, and Android build are verified. No device install, physical UI interaction, authenticated Wavelog/live-provider acceptance, RF reception, or radio action is claimed.
+- Repository: the worktree is required to be clean and local/remote tips equal after the documentation commit is pushed; the final post-push check is reported in the task handoff.

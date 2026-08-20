@@ -37,6 +37,7 @@ data class Qso(
     val syncState: String = "local", val remoteId: String = "",
     val activationSessionId: String = "", val activationProgram: String = "",
     val myPotaRefs: List<String> = emptyList(), val potaRefs: List<String> = emptyList(),
+    val extraAdifFields: Map<String, String> = emptyMap(),
 )
 
 enum class QsoOrigin { OPERATOR, IMPORT, REMOTE_SYNC }
@@ -49,6 +50,17 @@ data class CallsignHistory(val rows: List<Qso>, val total: Int)
 data class DxccCell(val worked: Boolean = false, val confirmed: Boolean = false)
 data class DxccSummary(val dxcc: String, val country: String, val cells: Map<String, DxccCell>)
 data class StationInsight(val record: AndroidCallbookRecord, val history: CallsignHistory, val dxcc: DxccSummary)
+data class QsoCatchUpCandidate(val id:String,val stationCallsign:String)
+data class HamClockRecentQso(
+    val id: String,
+    val callsign: String,
+    val frequencyHz: Long,
+    val band: String,
+    val mode: String,
+    val country: String,
+    val grid: String,
+    val createdAt: Long,
+)
 data class NeuralLogSummary(
     val qsos: Int = 0, val calls: Int = 0, val dxccs: Int = 0, val confirmedDxccs: Int = 0,
     val bands: Map<String, Int> = emptyMap(), val modes: Map<String, Int> = emptyMap(),
@@ -78,14 +90,20 @@ fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
     in 10_100_000L..10_150_000L -> "30m"; in 14_000_000L..14_350_000L -> "20m"
     in 18_068_000L..18_168_000L -> "17m"; in 21_000_000L..21_450_000L -> "15m"
     in 24_890_000L..24_990_000L -> "12m"; in 28_000_000L..29_700_000L -> "10m"
-    in 50_000_000L..54_000_000L -> "6m"; else -> ""
+    in 50_000_000L..54_000_000L -> "6m"; in 70_000_000L..70_500_000L -> "4m"
+    in 144_000_000L..148_000_000L -> "2m"; in 219_000_000L..225_000_000L -> "1.25m"
+    in 420_000_000L..450_000_000L -> "70cm"; in 902_000_000L..928_000_000L -> "33cm"
+    in 1_240_000_000L..1_300_000_000L -> "23cm"; else -> ""
 }
 
-class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 7) {
+class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 13) {
     private val changeRevision = AtomicLong(0)
     var operatorSaveHandler: ((Qso) -> Unit)? = null
+    init { setWriteAheadLoggingEnabled(true) }
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
+        db.rawQuery("PRAGMA busy_timeout=3000", null).use { it.moveToFirst() }
+        db.rawQuery("PRAGMA synchronous=NORMAL", null).use { it.moveToFirst() }
     }
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -93,6 +111,8 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         db.execSQL("CREATE TABLE qso(id TEXT PRIMARY KEY, callsign TEXT NOT NULL, frequency_hz INTEGER NOT NULL, mode TEXT NOT NULL, rst_sent TEXT NOT NULL, rst_received TEXT NOT NULL, created_at INTEGER NOT NULL, name TEXT NOT NULL DEFAULT '', qth TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '', details_json TEXT NOT NULL DEFAULT '{}')")
         createPagingIndexes(db)
         createDeliveryTable(db)
+        createWavelogSyncTables(db)
+        QsoProjectionStore.createSchema(db, ProjectionState.READY)
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
@@ -105,13 +125,29 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         if (oldVersion < 5) createPagingIndexes(db)
         if (oldVersion < 6) createSpotStatusIndexes(db)
         if (oldVersion < 7) createDeliveryTable(db)
+        if (oldVersion < 8) createWavelogSyncTables(db)
+        if (oldVersion < 9) migrateWavelogSyncV9(db)
+        if (oldVersion < 10) migrateWavelogSyncV10(db)
+        if (oldVersion < 11) createAdvancedLogbookIndexes(db)
+        if (oldVersion < 12) QsoProjectionStore.createSchema(db, ProjectionState.OPTIMISING)
+        if (oldVersion < 13) QsoProjectionStore.migrateV2(db)
     }
 
     private fun createPagingIndexes(db: SQLiteDatabase) {
         db.execSQL("CREATE INDEX IF NOT EXISTS qso_created_at_idx ON qso(created_at DESC)")
         db.execSQL("CREATE INDEX IF NOT EXISTS qso_station_idx ON qso(json_extract(details_json,'$.stationProfileId'))")
         db.execSQL("CREATE INDEX IF NOT EXISTS qso_sync_state_idx ON qso(json_extract(details_json,'$.syncState'))")
+        createAdvancedLogbookIndexes(db)
         createSpotStatusIndexes(db)
+    }
+
+    private fun createAdvancedLogbookIndexes(db: SQLiteDatabase) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_frequency_idx ON qso(frequency_hz)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_mode_time_idx ON qso(UPPER(mode),created_at DESC)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_name_upper_idx ON qso(UPPER(name))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_qth_upper_idx ON qso(UPPER(qth))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_station_call_idx ON qso(UPPER(COALESCE(json_extract(details_json,'$.stationCallsign'),'')))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS qso_remote_id_idx ON qso(COALESCE(json_extract(details_json,'$.remoteId'),''))")
     }
 
     private fun createSpotStatusIndexes(db: SQLiteDatabase) {
@@ -196,6 +232,31 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     fun changeToken(): Long = changeRevision.get()
     fun list(): List<Qso> = query(" LIMIT 100")
     fun recent(limit: Int = 120): List<Qso> = query(" LIMIT ${limit.coerceIn(1, 500)}")
+    fun recentHamClockProjection(limit: Int = 120): List<HamClockRecentQso> {
+        val size = limit.coerceIn(1, 200)
+        return buildList {
+            readableDatabase.rawQuery(
+                """SELECT qso_id,callsign_norm,frequency_hz,band_norm,mode_norm,country_norm,grid_norm,created_at
+                    FROM qso_projection WHERE is_valid=1
+                    ORDER BY created_at DESC,qso_id LIMIT $size""".trimIndent(),
+                null,
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    add(HamClockRecentQso(
+                        id = cursor.getString(0),
+                        callsign = cursor.getString(1),
+                        frequencyHz = cursor.getLong(2),
+                        band = cursor.getString(3),
+                        mode = cursor.getString(4),
+                        country = cursor.getString(5),
+                        grid = cursor.getString(6),
+                        createdAt = cursor.getLong(7),
+                    ))
+                }
+            }
+        }
+    }
+    // Compatibility/export helper only: interactive screens must use bounded projection queries.
     fun all(): List<Qso> = query("")
     fun workedLog(stationId: String?, resolveEntity: (String) -> String): List<WorkedLogQso> {
         val scope = stationScope(stationId)
@@ -223,24 +284,126 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         }
         return rows
     }
+    fun projectionHealth(): ProjectionHealth {
+        val db = readableDatabase
+        fun count(table: String) = db.rawQuery("SELECT COUNT(*) FROM $table", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        return ProjectionHealth(QsoProjectionStore.state(db), count("qso"), count("qso_projection"), count("qso_reference"),
+            QsoProjectionStore.processed(db), QsoProjectionStore.lastError(db))
+    }
+
+    fun backfillProjectionBatch(batchSize: Int = 500): Boolean {
+        val db = writableDatabase
+        if (QsoProjectionStore.state(db) == ProjectionState.READY) return false
+        return try {
+            val size = batchSize.coerceIn(100, 1_000)
+            val (cursorTime, cursorId) = QsoProjectionStore.cursor(db)
+            val rows = queryWhere("(created_at>? OR (created_at=? AND id>?)) ORDER BY created_at,id LIMIT $size",
+                arrayOf(cursorTime.toString(), cursorTime.toString(), cursorId))
+            if (rows.isEmpty()) {
+                val total = db.rawQuery("SELECT COUNT(*) FROM qso", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+                transaction { QsoProjectionStore.markReady(db, total) }
+                false
+            } else {
+                transaction {
+                    rows.forEach { QsoProjectionStore.write(db, it) }
+                    val last = rows.last()
+                    QsoProjectionStore.markProgress(db, last.createdAt, last.id, QsoProjectionStore.processed(db) + rows.size)
+                }
+                true
+            }
+        } catch (error: Throwable) {
+            QsoProjectionStore.markRepairRequired(db, "BACKFILL_${error.javaClass.simpleName.uppercase().take(80)}")
+            false
+        }
+    }
+
+    fun verifyProjection(): ProjectionHealth {
+        val db = writableDatabase
+        val missing = db.rawQuery("SELECT COUNT(*) FROM qso q LEFT JOIN qso_projection p ON p.qso_id=q.id WHERE p.qso_id IS NULL", null)
+            .use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        val orphan = db.rawQuery("SELECT COUNT(*) FROM qso_projection p LEFT JOIN qso q ON q.id=p.qso_id WHERE q.id IS NULL", null)
+            .use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        val orphanReferences = db.rawQuery("SELECT COUNT(*) FROM qso_reference r LEFT JOIN qso q ON q.id=r.qso_id WHERE q.id IS NULL", null)
+            .use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        if (missing > 0 || orphan > 0 || orphanReferences > 0) QsoProjectionStore.markRepairRequired(db, "missing=$missing orphan=$orphan refs=$orphanReferences")
+        else if (QsoProjectionStore.state(db) != ProjectionState.OPTIMISING) QsoProjectionStore.markReady(db, projectionHealth().canonicalRows)
+        return projectionHealth()
+    }
+
+    fun repairMissingProjectionRows(limit: Int = 500): Int {
+        val ids = readableDatabase.rawQuery("SELECT q.id FROM qso q LEFT JOIN qso_projection p ON p.qso_id=q.id WHERE p.qso_id IS NULL ORDER BY q.created_at,q.id LIMIT ${limit.coerceIn(1,1_000)}", null)
+            .use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+        if (ids.isEmpty()) { QsoProjectionStore.markRepaired(writableDatabase); verifyProjection(); return 0 }
+        val rows = ids.mapNotNull(::findById)
+        transaction { rows.forEach { QsoProjectionStore.write(writableDatabase, it) }; QsoProjectionStore.markRepaired(writableDatabase) }
+        return rows.size
+    }
+
+    fun repairProjectionFully(batchSize: Int = 500): ProjectionHealth {
+        val db = writableDatabase
+        return try {
+            transaction {
+                db.delete("qso_reference", "qso_id NOT IN (SELECT id FROM qso)", null)
+                db.delete("qso_projection", "qso_id NOT IN (SELECT id FROM qso)", null)
+            }
+            while (repairMissingProjectionRows(batchSize) > 0) Unit
+            verifyProjection()
+        } catch (error: Throwable) {
+            QsoProjectionStore.markRepairRequired(db, "REPAIR_${error.javaClass.simpleName.uppercase().take(80)}")
+            projectionHealth()
+        }
+    }
+
+    fun rebuildProjection() = transaction { QsoProjectionStore.reset(writableDatabase) }
+    fun allForProgress(): List<Qso> = buildList {
+        val fields = listOf("band", "grid", "iota", "sotaRef", "wwffRef", "potaRef", "comment", "txPowerW",
+            "operatorCallsign", "stationCallsign", "stationProfileId", "myGrid", "myState", "myIota", "mySotaRef",
+            "myWwffRef", "myPotaRef", "radioModel", "dxcc", "continent", "cqZone", "ituZone", "state",
+            "propagationMode", "antennaPath", "submode", "contestId", "distanceKm", "qslReceived", "lotwReceived",
+            "clublogReceived", "eqslReceived", "dclReceived", "qrzReceived", "syncState", "activationSessionId",
+            "activationProgram", "myPotaRefs", "potaRefs")
+        val projection = fields.joinToString(",") { "json_extract(details_json,'$.${it}')" } +
+            ",json_extract(details_json,'$.extraAdifFields.SAT_NAME')" +
+            ",json_extract(details_json,'$.extraAdifFields.SAT_MODE')" +
+            ",json_extract(details_json,'$.extraAdifFields.ORBIT')"
+        readableDatabase.rawQuery("SELECT id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at,name,notes,country,$projection FROM qso ORDER BY created_at DESC", null).use { cursor ->
+            fun text(index: Int): String = cursor.getString(index)?.takeIf(String::isNotBlank) ?: ""
+            fun list(index: Int): List<String> = text(index).takeIf(String::isNotBlank)?.let { raw ->
+                runCatching { org.json.JSONArray(raw).jsonStringList() }.getOrDefault(emptyList())
+            }.orEmpty()
+            while (cursor.moveToNext()) {
+                val extra = buildMap {
+                    text(49).takeIf(String::isNotBlank)?.let { put("SAT_NAME", it) }
+                    text(50).takeIf(String::isNotBlank)?.let { put("SAT_MODE", it) }
+                    text(51).takeIf(String::isNotBlank)?.let { put("ORBIT", it) }
+                }
+                add(Qso(id=text(0), callsign=text(1), frequencyHz=cursor.getLong(2), mode=text(3), rstSent=text(4), rstReceived=text(5),
+                    createdAt=cursor.getLong(6), name=text(7), notes=text(8), country=text(9), band=text(10), grid=text(11),
+                    iota=text(12), sotaRef=text(13), wwffRef=text(14), potaRef=text(15), comment=text(16), txPowerW=cursor.getInt(17),
+                    operatorCallsign=text(18), stationCallsign=text(19), stationProfileId=text(20), myGrid=text(21), myState=text(22),
+                    myIota=text(23), mySotaRef=text(24), myWwffRef=text(25), myPotaRef=text(26), radioModel=text(27),
+                    dxcc=text(28), continent=text(29), cqZone=text(30), ituZone=text(31), state=text(32), propagationMode=text(33),
+                    antennaPath=text(34), submode=text(35), contestId=text(36), distanceKm=cursor.getDouble(37),
+                    qslReceived=text(38).ifBlank { "N" }, lotwReceived=text(39).ifBlank { "N" },
+                    clublogReceived=text(40).ifBlank { "N" }, eqslReceived=text(41).ifBlank { "N" },
+                    dclReceived=text(42).ifBlank { "N" }, qrzReceived=text(43).ifBlank { "N" },
+                    syncState=text(44).ifBlank { "local" }, activationSessionId=text(45), activationProgram=text(46),
+                    myPotaRefs=list(47), potaRefs=list(48), extraAdifFields=extra))
+            }
+        }
+    }
     fun page(page: Int, pageSize: Int, filter: LogbookFilter = LogbookFilter(), stationId: String? = null): QsoPage {
         val size = normalizedLogbookPageSize(pageSize)
-        val spec = pageQuery(filter, stationId)
-        val total = readableDatabase.rawQuery("SELECT COUNT(*) FROM qso WHERE ${spec.where}", spec.args.toTypedArray()).use {
-            if (it.moveToFirst()) it.getInt(0) else 0
-        }
-        val boundedPage = page.coerceIn(0, logbookPageCount(total, size) - 1)
-        val args = (spec.args + listOf(size.toString(), (boundedPage * size).toString())).toTypedArray()
-        val rows = queryWhere("${spec.where} ORDER BY ${spec.order} LIMIT ? OFFSET ?", args)
-        return QsoPage(rows, total, boundedPage, size)
+        val result = LogbookRepository(this).page(filter, stationId, size, offsetPage = page.coerceAtLeast(0), exactCount = true)
+        val total = result.exactTotal ?: 0
+        return QsoPage(result.rows, total, page.coerceIn(0, logbookPageCount(total,size)-1), size)
     }
 
     fun spotStatuses(spots: List<SpotLogIdentity>, stationId: String? = null): Map<String, SpotLogStatus> {
         if (spots.isEmpty()) return emptyMap()
-        val calls = dimensions("UPPER(callsign)", spots.map { it.callsign }, stationId)
-        val countries = dimensions("UPPER(country)", spots.map { it.country }, stationId)
-        val dxccs = dimensions("UPPER(COALESCE(json_extract(details_json,'$.dxcc'),''))",
-            spots.map { it.dxcc }, stationId)
+        val calls = projectionDimensions("callsign_norm", spots.map { it.callsign }, stationId)
+        val countries = projectionDimensions("country_norm", spots.map { it.country }, stationId)
+        val dxccs = projectionDimensions("dxcc", spots.map { it.dxcc }, stationId)
         return spots.associate { spot ->
             val call = calls[spot.callsign.normalizedStatusKey()] ?: WorkedDimensions()
             val dxcc = spot.dxcc.normalizedStatusKey()
@@ -251,14 +414,18 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     }
 
     fun stationInsight(record: AndroidCallbookRecord, stationId: String?): StationInsight {
-        val scope = stationScope(stationId)
+        val scope = projectionStationScope(stationId = stationId)
         val call = record.callsign.trim().uppercase(java.util.Locale.US)
-        val callWhere = "UPPER(callsign)=? AND ${scope.first}"
+        val callWhere = "p.callsign_norm=? AND ${scope.first}"
         val callArgs = (listOf(call) + scope.second).toTypedArray()
-        val total = readableDatabase.rawQuery("SELECT COUNT(*) FROM qso WHERE $callWhere", callArgs).use {
+        val total = readableDatabase.rawQuery("SELECT COUNT(*) FROM qso_projection p WHERE $callWhere", callArgs).use {
             if (it.moveToFirst()) it.getInt(0) else 0
         }
-        val history = queryWhere("$callWhere ORDER BY created_at DESC LIMIT 20", callArgs)
+        val historyIds = readableDatabase.rawQuery("SELECT p.qso_id FROM qso_projection p WHERE $callWhere ORDER BY p.created_at DESC,p.qso_id LIMIT 20", callArgs).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
+        }
+        val history = if (historyIds.isEmpty()) emptyList() else queryWhere(
+            "id IN (${historyIds.joinToString(",") { "?" }}) ORDER BY created_at DESC,id", historyIds.toTypedArray())
         val resolvedRecord = history.firstOrNull()?.let { latest ->
             record.copy(
                 callsign = call,
@@ -273,18 +440,13 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
 
         val numericDxcc = resolvedRecord.dxcc.trim().uppercase(java.util.Locale.US)
         val country = resolvedRecord.country.trim().uppercase(java.util.Locale.US)
-        val entityExpression = if (numericDxcc.isNotBlank())
-            "UPPER(COALESCE(json_extract(details_json,'$.dxcc'),''))=?"
-        else "UPPER(country)=?"
+        val entityExpression = if (numericDxcc.isNotBlank()) "p.dxcc=?" else "p.country_norm=?"
         val entityValue = numericDxcc.ifBlank { country }
         val cells = mutableMapOf<String, DxccCell>()
         if (entityValue.isNotBlank()) {
-            val confirmed = "(UPPER(COALESCE(json_extract(details_json,'$.qslReceived'),'')) IN ('Y','V') OR " +
-                "UPPER(COALESCE(json_extract(details_json,'$.lotwReceived'),'')) IN ('Y','V'))"
-            val sql = """SELECT UPPER(COALESCE(json_extract(details_json,'$.band'),'')),
-                UPPER(COALESCE(json_extract(details_json,'$.submode'),'')), UPPER(mode),
-                MAX(CASE WHEN $confirmed THEN 1 ELSE 0 END)
-                FROM qso WHERE $entityExpression AND ${scope.first}
+            val sql = """SELECT p.band_norm,p.submode_norm,p.mode_norm,
+                MAX(CASE WHEN p.paper_received=1 OR p.lotw_received=1 THEN 1 ELSE 0 END)
+                FROM qso_projection p WHERE $entityExpression AND ${scope.first}
                 GROUP BY 1,2,3""".trimIndent()
             val args = (listOf(entityValue) + scope.second).toTypedArray()
             readableDatabase.rawQuery(sql, args).use { cursor ->
@@ -304,53 +466,47 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     }
 
     fun neuralLogSummary(stationId: String?): NeuralLogSummary {
-        val scope = stationScope(stationId)
+        val scope = projectionStationScope(stationId = stationId)
         val args = scope.second.toTypedArray()
-        val confirmed = "(UPPER(COALESCE(json_extract(details_json,'$.qslReceived'),'')) IN ('Y','V') OR " +
-            "UPPER(COALESCE(json_extract(details_json,'$.lotwReceived'),'')) IN ('Y','V'))"
         fun scalar(expression: String): Int = readableDatabase.rawQuery(
-            "SELECT $expression FROM qso WHERE ${scope.first}", args).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+            "SELECT $expression FROM qso_projection p WHERE ${scope.first}", args).use { if (it.moveToFirst()) it.getInt(0) else 0 }
         fun grouped(expression: String, limit: Int = 32): Map<String, Int> {
             val output = linkedMapOf<String, Int>()
-            readableDatabase.rawQuery("SELECT $expression AS value, COUNT(*) AS total FROM qso " +
+            readableDatabase.rawQuery("SELECT $expression AS value, COUNT(*) AS total FROM qso_projection p " +
                 "WHERE ${scope.first} AND TRIM($expression)<>'' GROUP BY value ORDER BY total DESC LIMIT $limit", args).use { cursor ->
                 while (cursor.moveToNext()) output[cursor.getString(0).orEmpty()] = cursor.getInt(1)
             }
             return output
         }
         return NeuralLogSummary(
-            qsos = scalar("COUNT(*)"), calls = scalar("COUNT(DISTINCT UPPER(callsign))"),
-            dxccs = scalar("COUNT(DISTINCT NULLIF(UPPER(COALESCE(json_extract(details_json,'$.dxcc'),'')),''))"),
-            confirmedDxccs = scalar("COUNT(DISTINCT CASE WHEN $confirmed THEN NULLIF(UPPER(COALESCE(json_extract(details_json,'$.dxcc'),'')),'') END)"),
-            bands = grouped("LOWER(COALESCE(json_extract(details_json,'$.band'),''))"),
-            modes = grouped("UPPER(CASE WHEN COALESCE(json_extract(details_json,'$.submode'),'')<>'' " +
-                "THEN json_extract(details_json,'$.submode') ELSE mode END)"),
-            continents = grouped("UPPER(COALESCE(json_extract(details_json,'$.continent'),''))"),
-            countries = grouped("country", 12),
+            qsos = scalar("COUNT(*)"), calls = scalar("COUNT(DISTINCT NULLIF(p.callsign_norm,''))"),
+            dxccs = scalar("COUNT(DISTINCT NULLIF(p.dxcc,''))"),
+            confirmedDxccs = scalar("COUNT(DISTINCT CASE WHEN p.paper_received=1 OR p.lotw_received=1 THEN NULLIF(p.dxcc,'') END)"),
+            bands = grouped("p.band_norm"), modes = grouped("COALESCE(NULLIF(p.submode_norm,''),p.mode_norm)"),
+            continents = grouped("p.continent"), countries = grouped("p.country_norm", 12),
         )
     }
+
+    private fun projectionStationScope(alias: String = "p", stationId: String? = null): Pair<String, List<String>> = if (stationId == null)
+        "$alias.station_profile_id=''" to emptyList()
+    else "$alias.station_profile_id=?" to listOf(stationId)
 
     private fun stationScope(stationId: String?): Pair<String, List<String>> = if (stationId == null)
         "COALESCE(json_extract(details_json,'$.stationProfileId'),'')=''" to emptyList()
     else "COALESCE(json_extract(details_json,'$.stationProfileId'),'')=?" to listOf(stationId)
 
-    private fun dimensions(keyExpression: String, rawKeys: List<String>, stationId: String?): Map<String, WorkedDimensions> {
+    private fun projectionDimensions(column: String, rawKeys: List<String>, stationId: String?): Map<String, WorkedDimensions> {
+        require(column in setOf("callsign_norm", "country_norm", "dxcc"))
         val keys = rawKeys.map { it.normalizedStatusKey() }.filter(String::isNotBlank).distinct()
         if (keys.isEmpty()) return emptyMap()
         val placeholders = keys.joinToString(",") { "?" }
-        val stationClause = if (stationId == null)
-            " AND COALESCE(json_extract(details_json,'$.stationProfileId'),'') = ''"
-        else " AND COALESCE(json_extract(details_json,'$.stationProfileId'),'') = ?"
-        val bandExpression = "UPPER(COALESCE(json_extract(details_json,'$.band'),''))"
-        val submodeExpression = "UPPER(COALESCE(json_extract(details_json,'$.submode'),''))"
-        val confirmedExpression = listOf("qslReceived", "lotwReceived")
-            .joinToString(" OR ") { "UPPER(COALESCE(json_extract(details_json,'$.$it'),'')) IN ('Y','V')" }
-        val sql = """SELECT $keyExpression, $bandExpression, $submodeExpression, UPPER(mode),
-            MAX(CASE WHEN $confirmedExpression THEN 1 ELSE 0 END)
-            FROM qso WHERE $keyExpression IN ($placeholders)$stationClause
-            GROUP BY $keyExpression, $bandExpression, $submodeExpression, UPPER(mode)""".trimIndent()
+        val scope = projectionStationScope(stationId = stationId)
+        val sql = """SELECT p.$column,p.band_norm,p.submode_norm,p.mode_norm,
+            MAX(CASE WHEN p.paper_received=1 OR p.lotw_received=1 THEN 1 ELSE 0 END)
+            FROM qso_projection p WHERE p.$column IN ($placeholders) AND ${scope.first}
+            GROUP BY p.$column,p.band_norm,p.submode_norm,p.mode_norm""".trimIndent()
         val mutable = mutableMapOf<String, MutableWorkedDimensions>()
-        val args = (keys + listOfNotNull(stationId)).toTypedArray()
+        val args = (keys + scope.second).toTypedArray()
         readableDatabase.rawQuery(sql, args).use { cursor ->
             while (cursor.moveToNext()) {
                 val key = cursor.getString(0).orEmpty().normalizedStatusKey()
@@ -400,6 +556,30 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     }
     fun exportADIF(): String = all().asReversed().joinToString("") { toADIF(it) }
 
+    fun exportFilteredADIF(filter: LogbookFilter, stationId: String? = null): String {
+        val spec = pageQuery(filter, stationId)
+        return queryWhere("${spec.where} ORDER BY created_at ASC,id ASC", spec.args.toTypedArray()).joinToString("") { toADIF(it) }
+    }
+
+    fun exportSelectedADIF(ids: Collection<String>): String {
+        if (ids.isEmpty()) return ""
+        val placeholders = ids.joinToString(",") { "?" }
+        return queryWhere("id IN ($placeholders) ORDER BY created_at ASC,id ASC", ids.toTypedArray()).joinToString("") { toADIF(it) }
+    }
+
+    fun streamExportADIF(output: java.io.OutputStream, filter: LogbookFilter = LogbookFilter(), stationId: String? = null,
+        selectedIds: Collection<String>? = null, cancelled: () -> Boolean = { false }, progress: (Int) -> Unit = {}) {
+        output.write("Generated by RigWeave <ADIF_VER:5>3.1.4 <PROGRAMID:8>RigWeave <EOH>\n".toByteArray(Charsets.UTF_8))
+        var written=0
+        fun writeRows(rows:List<Qso>){rows.forEach { qso -> if(cancelled())throw java.util.concurrent.CancellationException("ADIF export cancelled");output.write((toADIF(qso)+"\n").toByteArray(Charsets.UTF_8));written++;progress(written)}}
+        if(selectedIds!=null){selectedIds.chunked(250).forEach { writeRows(qsos(it)) }} else {
+            val repository=LogbookRepository(this);var cursor:LogbookCursor?=null;var more:Boolean
+            val exportFilter=filter.copy(sort=LogbookSort.TIME,direction=LogbookSortDirection.ASCENDING,limit=250)
+            do { val page=repository.page(exportFilter,stationId,250,cursor=cursor);writeRows(page.rows);cursor=page.nextCursor;more=page.hasMore } while(more&&!cancelled())
+        }
+        output.flush()
+    }
+
     fun toADIF(qso: Qso): String {
         val at = java.time.Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC)
         var adif = NativeCore.adif(qso.id, qso.callsign, at.format(DateTimeFormatter.ofPattern("yyyyMMdd")),
@@ -431,25 +611,35 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             "APP_RIGWEAVE_QSL_IMAGES" to qso.qslImages)
         fields.forEach { (name, value) -> if (value.isNotBlank())
             adif = adif.replace("<EOR>", "<$name:${value.toByteArray(Charsets.UTF_8).size}>$value<EOR>") }
+        qso.extraAdifFields.toSortedMap().forEach { (rawName, value) ->
+            val name = rawName.uppercase(java.util.Locale.US)
+            if (name !in WavelogCanonicalizer.rigWeaveFields && name !in WavelogCanonicalizer.excludedFields && value.isNotBlank())
+                adif = adif.replace("<EOR>", "<$name:${value.toByteArray(Charsets.UTF_8).size}>$value<EOR>")
+        }
         return adif
     }
 
-    fun importADIF(text: String): Pair<Int, Int> {
-        var added = 0; var skipped = 0
+    fun parseADIF(text: String): Pair<List<Qso>, Int> {
+        val rows = mutableListOf<Qso>(); var skipped = 0
         Regex("(?is)(.*?<EOR>)").findAll(text.substringAfter("<EOH>", text)).forEach { match ->
             val record = match.value
-            fun field(name: String): String {
-                val tag = Regex("(?i)<${Regex.escape(name)}:(\\d+)(?::[^>]*)?>").find(record) ?: return ""
-                val length = tag.groupValues[1].toIntOrNull() ?: return ""
-                return record.substring(tag.range.last + 1).take(length)
-            }
-            val qso = qsoFromFields(::field, "", "")
-            if (qso == null) skipped++ else if (save(qso, QsoOrigin.IMPORT)) added++ else skipped++
+            val parsed = WavelogCanonicalizer.fromAdif(record).fields
+            fun field(name: String) = parsed[name.uppercase(java.util.Locale.US)].orEmpty()
+            val extras = parsed.filterKeys { it !in WavelogCanonicalizer.rigWeaveFields && it !in WavelogCanonicalizer.excludedFields }
+            val qso = qsoFromFields(::field, "", "", extras)
+            if (qso == null) skipped++ else rows += qso
         }
+        return rows to skipped
+    }
+
+    fun importADIF(text: String): Pair<Int, Int> {
+        val (rows, invalid) = parseADIF(text); var added = 0; var skipped = invalid
+        rows.forEach { if (save(it, QsoOrigin.IMPORT)) added++ else skipped++ }
         return added to skipped
     }
 
-    fun qsoFromFields(field: (String) -> String, remoteId: String, stationProfileId: String): Qso? {
+    fun qsoFromFields(field: (String) -> String, remoteId: String, stationProfileId: String,
+        extraAdifFields: Map<String, String> = emptyMap()): Qso? {
         val call = field("CALL").uppercase(); val mode = field("MODE").uppercase()
         val frequency = field("FREQ").toDoubleOrNull(); val date = field("QSO_DATE"); val time = field("TIME_ON")
         val epoch = runCatching { LocalDateTime.parse(date + time.padEnd(6, '0').take(6),
@@ -490,25 +680,63 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             dclSent = field("DCL_QSL_SENT"), dclReceived = field("DCL_QSL_RCVD"),
             qrzSent = field("QRZCOM_QSO_UPLOAD_STATUS"), qrzReceived = field("QRZCOM_QSO_DOWNLOAD_STATUS"),
             qslImages = field("APP_RIGWEAVE_QSL_IMAGES"), syncState = if (remoteId.isBlank()) "local" else "synced",
-            remoteId = remoteId)
+            remoteId = remoteId, extraAdifFields = extraAdifFields)
     }
 
     private fun insert(qso: Qso) {
-        writableDatabase.execSQL("INSERT INTO qso(id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at,name,qth,notes,country,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            arrayOf<Any>(qso.id, qso.callsign, qso.frequencyHz, qso.mode, qso.rstSent, qso.rstReceived,
-                qso.createdAt, qso.name, qso.qth, qso.notes, qso.country, details(qso).toString()))
+        writeAtomically { db ->
+            db.execSQL("INSERT INTO qso(id,callsign,frequency_hz,mode,rst_sent,rst_received,created_at,name,qth,notes,country,details_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                arrayOf<Any>(qso.id, qso.callsign, qso.frequencyHz, qso.mode, qso.rstSent, qso.rstReceived,
+                    qso.createdAt, qso.name, qso.qth, qso.notes, qso.country, details(qso).toString()))
+            QsoProjectionStore.write(db, qso)
+        }
         changeRevision.incrementAndGet()
     }
     private fun update(qso: Qso) {
-        writableDatabase.execSQL("UPDATE qso SET callsign=?,frequency_hz=?,mode=?,rst_sent=?,rst_received=?,created_at=?,name=?,qth=?,notes=?,country=?,details_json=? WHERE id=?",
-            arrayOf<Any>(qso.callsign, qso.frequencyHz, qso.mode, qso.rstSent, qso.rstReceived, qso.createdAt,
-                qso.name, qso.qth, qso.notes, qso.country, details(qso).toString(), qso.id))
+        writeAtomically { db ->
+            db.execSQL("UPDATE qso SET callsign=?,frequency_hz=?,mode=?,rst_sent=?,rst_received=?,created_at=?,name=?,qth=?,notes=?,country=?,details_json=? WHERE id=?",
+                arrayOf<Any>(qso.callsign, qso.frequencyHz, qso.mode, qso.rstSent, qso.rstReceived, qso.createdAt,
+                    qso.name, qso.qth, qso.notes, qso.country, details(qso).toString(), qso.id))
+            QsoProjectionStore.write(db, qso)
+        }
         changeRevision.incrementAndGet()
+    }
+    private inline fun writeAtomically(block: (SQLiteDatabase) -> Unit) {
+        val db = writableDatabase
+        if (db.inTransaction()) { block(db); return }
+        db.beginTransaction()
+        try { block(db); db.setTransactionSuccessful() } finally { db.endTransaction() }
     }
     private fun findNatural(qso: Qso): Qso? = queryWhere("callsign=? AND frequency_hz=? AND mode=? AND created_at BETWEEN ? AND ? LIMIT 1",
         arrayOf(qso.callsign, qso.frequencyHz.toString(), qso.mode, (qso.createdAt - 15).toString(), (qso.createdAt + 15).toString())).firstOrNull()
     private fun findById(id: String): Qso? = queryWhere("id=? LIMIT 1", arrayOf(id)).firstOrNull()
     fun qso(id: String): Qso? = findById(id)
+    fun qsos(ids: Collection<String>): List<Qso> {
+        if (ids.isEmpty()) return emptyList()
+        val ordered = ids.toList(); val placeholders = ordered.joinToString(",") { "?" }
+        val rows = queryWhere("id IN ($placeholders)", ordered.toTypedArray()).associateBy(Qso::id)
+        return ordered.mapNotNull(rows::get)
+    }
+
+    fun stationProfileIds(): List<String> = readableDatabase.rawQuery(
+        "SELECT DISTINCT station_profile_id FROM qso_projection WHERE station_profile_id<>'' ORDER BY station_profile_id", null
+    ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+    fun satelliteObserverProfiles(): List<Pair<String,String>> = readableDatabase.rawQuery(
+        "SELECT station_profile_id,my_grid_norm FROM qso_projection WHERE station_profile_id<>'' AND my_grid_norm<>'' GROUP BY station_profile_id,my_grid_norm ORDER BY COUNT(*) DESC LIMIT 50", null
+    ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0) to cursor.getString(1)) } }
+    fun activationQsos(sessionId:String):List<Qso>{val ids=readableDatabase.rawQuery("SELECT qso_id FROM qso_projection WHERE activation_session_id=? ORDER BY created_at,qso_id",arrayOf(sessionId)).use{c->buildList{while(c.moveToNext())add(c.getString(0))}};return qsos(ids)}
+    fun catchUpCandidates(fromEpoch:Long,toEpochExclusive:Long,station:String=""):List<QsoCatchUpCandidate>{val args=mutableListOf(fromEpoch.toString(),toEpochExclusive.toString());val stationClause=if(station.isBlank())"" else " AND station_callsign_norm=?".also{args+=station.trim().uppercase()};return readableDatabase.rawQuery("SELECT qso_id,station_callsign_norm FROM qso_projection WHERE created_at>=? AND created_at<?$stationClause ORDER BY created_at,qso_id",args.toTypedArray()).use{c->buildList{while(c.moveToNext())add(QsoCatchUpCandidate(c.getString(0),c.getString(1)))}}}
+
+    fun naturalCandidates(qso: Qso): List<Qso> = queryWhere(
+        "UPPER(callsign)=? AND frequency_hz=? AND UPPER(mode)=? AND created_at BETWEEN ? AND ? ORDER BY created_at",
+        arrayOf(qso.callsign.uppercase(), qso.frequencyHz.toString(), qso.mode.uppercase(),
+            (qso.createdAt - 15).toString(), (qso.createdAt + 15).toString()))
+
+    fun insertRemoteDistinct(qso: Qso): Boolean {
+        if (findById(qso.id) != null) return false
+        insert(qso.copy(syncState = "synced"))
+        return true
+    }
 
     fun enqueueDelivery(qsoId: String, provider: SyncProvider, state: DeliveryState = DeliveryState.QUEUED,
         now: Long = System.currentTimeMillis() / 1_000): Boolean {
@@ -602,8 +830,10 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     private fun pageQuery(filter: LogbookFilter, stationId: String?): PageQuery {
         val clauses = mutableListOf<String>(); val args = mutableListOf<String>()
         fun json(key: String) = "COALESCE(json_extract(details_json,'$.${key}'),'')"
+        fun extra(key: String) = "COALESCE(json_extract(details_json,'$.extraAdifFields.${key}'),'')"
         fun text(expression: String, value: String) {
             if (value.isBlank()) return
+            if (value.trim() == "*") { clauses += "TRIM($expression) <> ''"; return }
             clauses += "$expression LIKE ? ESCAPE '\\' COLLATE NOCASE"
             args += "%" + value.trim().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
         }
@@ -638,13 +868,28 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         }
         filter.fromEpochSeconds?.let { clauses += "created_at >= ?"; args += it.toString() }
         filter.toEpochSecondsExclusive?.let { clauses += "created_at < ?"; args += it.toString() }
-        text("callsign", filter.callsign); text(json("dxcc"), filter.dxcc); text(json("state"), filter.state)
-        text(json("grid"), filter.grid); choice("mode", filter.mode); choice(json("band"), filter.band)
+        text("callsign", filter.callsign); text(json("stationProfileId"), filter.stationProfile)
+        text(json("stationCallsign"), filter.stationCallsign); text("name", filter.name); text("qth", filter.qth)
+        text(json("email"), filter.email); text(json("dxcc"), filter.dxcc); text("country", filter.country)
+        text(json("state"), filter.state); text(json("grid"), filter.grid); text(json("cqZone"), filter.cqZone)
+        text(json("ituZone"), filter.ituZone); choice("mode", filter.mode)
+        when (filter.modeFamily.uppercase()) {
+            "CW" -> clauses += "UPPER(COALESCE(NULLIF(${json("submode")},''),mode)) IN ('CW','CW-R','CWR')"
+            "PHONE" -> clauses += "UPPER(COALESCE(NULLIF(${json("submode")},''),mode)) IN ('SSB','USB','LSB','FM','AM')"
+            "DIGITAL" -> clauses += "UPPER(COALESCE(NULLIF(${json("submode")},''),mode)) IN ('FT8','FT4','RTTY','DIGITAL','DATA','PSK31','JS8')"
+        }
+        choice(json("submode"), filter.submode)
+        choice(json("band"), filter.band); numeric("(frequency_hz / 1000000.0)", filter.frequency)
+        numeric("(${json("frequencyRxHz")} / 1000000.0)", filter.frequencyRx); choice(json("bandRx"), filter.bandRx)
         choice(json("propagationMode"), filter.propagation); text(json("county"), filter.county)
-        text(json("dok"), filter.dok); text(json("sotaRef"), filter.sota); text(json("potaRef"), filter.pota)
+        text(json("dok"), filter.dok); text(json("sotaRef"), filter.sota)
+        text("(${json("potaRef")} || ' ' || ${json("potaRefs")})", filter.pota)
         text(json("iota"), filter.iota); text(json("wwffRef"), filter.wwff); text(json("operatorCallsign"), filter.operator)
+        text(json("radioModel"), filter.radioModel)
         text(json("contestId"), filter.contest); choice(json("continent"), filter.continent)
-        text("(COALESCE(json_extract(details_json,'$.comment'),'') || ' ' || notes)", filter.comment)
+        text(extra("SAT_NAME"), filter.satellite); text(extra("SAT_MODE"), filter.satelliteMode)
+        text(extra("ORBIT"), filter.orbit); text("(${json("comment")} || ' ' || notes)", filter.comment)
+        text(json("qslMessage"), filter.qslMessage); text("notes", filter.notes)
         numeric(json("distanceKm"), filter.distance); numeric("(${json("durationSeconds")} / 60.0)", filter.duration)
         status(json("qslSent"), filter.qslSent); status(json("qslReceived"), filter.qslReceived)
         choice(json("qslMethod"), filter.qslSentMethod); choice(json("qslReceivedMethod"), filter.qslReceivedMethod)
@@ -654,13 +899,62 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         status(json("dclSent"), filter.dclSent); status(json("dclReceived"), filter.dclReceived)
         status(json("qrzSent"), filter.qrzSent); status(json("qrzReceived"), filter.qrzReceived)
         text(json("qslVia"), filter.qslVia)
+        if (filter.callsignPrefix.isNotBlank()) { clauses += "UPPER(callsign) LIKE ?"; args += filter.callsignPrefix.uppercase() + "%" }
+        numeric(json("txPowerW"), filter.txPower)
+        when (filter.confirmationSource.uppercase()) {
+            "PAPER", "QSL" -> status(json("qslReceived"), "Y")
+            "LOTW" -> status(json("lotwReceived"), "Y")
+            "EQSL" -> status(json("eqslReceived"), "Y")
+            "QRZ" -> status(json("qrzReceived"), "Y")
+            "CLUBLOG" -> status(json("clublogReceived"), "Y")
+            "DCL" -> status(json("dclReceived"), "Y")
+            "AWARD" -> clauses += "(UPPER(TRIM(${json("qslReceived")})) IN ('Y','V') OR UPPER(TRIM(${json("lotwReceived")})) IN ('Y','V'))"
+            "UNCONFIRMED" -> clauses += "(UPPER(TRIM(${json("qslReceived")})) NOT IN ('Y','V') AND UPPER(TRIM(${json("lotwReceived")})) NOT IN ('Y','V'))"
+        }
+        when (filter.portableProgram.uppercase()) {
+            "POTA" -> clauses += "(${json("potaRef")}<>'' OR ${json("myPotaRef")}<>'' OR json_array_length(CASE WHEN json_valid(${json("potaRefs")}) THEN ${json("potaRefs")} ELSE '[]' END)>0 OR json_array_length(CASE WHEN json_valid(${json("myPotaRefs")}) THEN ${json("myPotaRefs")} ELSE '[]' END)>0)"
+            "SOTA" -> clauses += "(${json("sotaRef")}<>'' OR ${json("mySotaRef")}<>'')"
+            "WWFF" -> clauses += "(${json("wwffRef")}<>'' OR ${json("myWwffRef")}<>'')"
+            "IOTA" -> clauses += "(${json("iota")}<>'' OR ${json("myIota")}<>'')"
+            "ANY" -> clauses += "(${json("potaRef")}<>'' OR ${json("myPotaRef")}<>'' OR ${json("sotaRef")}<>'' OR ${json("mySotaRef")}<>'' OR ${json("wwffRef")}<>'' OR ${json("myWwffRef")}<>'')"
+        }
+        when (filter.recordVisibility.uppercase()) {
+            "ACTIVE" -> clauses += "LOWER(${json("syncState")}) NOT IN ('conflict','tombstone','remote_deleted')"
+            "ACTIVE_AND_CONFLICTS" -> clauses += "LOWER(${json("syncState")}) NOT IN ('tombstone','remote_deleted')"
+            "DELETED" -> clauses += "LOWER(${json("syncState")}) IN ('tombstone','remote_deleted')"
+        }
         if (filter.qslImages.equals("Y", true)) clauses += "${json("qslImages")} <> '' AND UPPER(${json("qslImages")}) NOT IN ('N','NO','0','FALSE')"
         if (filter.qslImages.equals("N", true)) clauses += "(${json("qslImages")} = '' OR UPPER(${json("qslImages")}) IN ('N','NO','0','FALSE'))"
+        when (filter.provenance.uppercase()) {
+            "LOCAL" -> clauses += "${json("remoteId")} = ''"
+            "REMOTE", "LINKED" -> clauses += "${json("remoteId")} <> ''"
+        }
+        val invalid = "(TRIM(callsign)='' OR frequency_hz<=0 OR TRIM(mode)='' OR created_at<=0)"
+        when (filter.recordState.uppercase()) {
+            "INCOMPLETE", "INVALID" -> clauses += invalid
+            "VALID" -> clauses += "NOT $invalid"
+        }
+        if (filter.duplicateState.equals("CANDIDATE", true)) clauses += """EXISTS(
+            SELECT 1 FROM qso duplicate WHERE duplicate.id<>qso.id
+            AND UPPER(duplicate.callsign)=UPPER(qso.callsign) AND duplicate.frequency_hz=qso.frequency_hz
+            AND UPPER(duplicate.mode)=UPPER(qso.mode) AND ABS(duplicate.created_at-qso.created_at)<=15)""".trimIndent()
+        when (filter.syncRelation.uppercase()) {
+            "LOCAL_ONLY" -> clauses += "${json("remoteId")}='' AND NOT EXISTS(SELECT 1 FROM wavelog_remote_link l WHERE l.local_qso_id=qso.id)"
+            "LINKED" -> clauses += "EXISTS(SELECT 1 FROM wavelog_remote_link l WHERE l.local_qso_id=qso.id)"
+            "OUTBOX" -> clauses += "EXISTS(SELECT 1 FROM wavelog_outbox o WHERE o.local_qso_id=qso.id AND o.state<>'ACCEPTED')"
+            "CONFLICT" -> clauses += "EXISTS(SELECT 1 FROM wavelog_conflict c WHERE c.local_qso_id=qso.id AND c.state='OPEN')"
+            "ATTENTION" -> clauses += "(EXISTS(SELECT 1 FROM wavelog_outbox o WHERE o.local_qso_id=qso.id AND o.state<>'ACCEPTED') OR EXISTS(SELECT 1 FROM wavelog_conflict c WHERE c.local_qso_id=qso.id AND c.state='OPEN') OR LOWER(${json("syncState")}) IN ('pending','queued','retry','failed','conflict'))"
+            "TOMBSTONE" -> clauses += "EXISTS(SELECT 1 FROM wavelog_tombstone t WHERE t.local_qso_id=qso.id AND t.acknowledged_at IS NULL)"
+            "REMOTE_DELETED" -> clauses += "(${json("syncState")}='remote_deleted' OR EXISTS(SELECT 1 FROM wavelog_tombstone t WHERE t.local_qso_id=qso.id AND t.acknowledged_at IS NOT NULL))"
+        }
 
         val sortExpression = when (filter.sort) {
             LogbookSort.TIME -> "created_at"; LogbookSort.CALLSIGN -> "callsign COLLATE NOCASE"
+            LogbookSort.NAME -> "name COLLATE NOCASE"; LogbookSort.COUNTRY -> "country COLLATE NOCASE"
             LogbookSort.DXCC -> "${json("dxcc")} COLLATE NOCASE"; LogbookSort.MODE -> "mode COLLATE NOCASE"
+            LogbookSort.SUBMODE -> "${json("submode")} COLLATE NOCASE"
             LogbookSort.BAND -> "frequency_hz"; LogbookSort.FREQUENCY -> "frequency_hz"
+            LogbookSort.GRID -> "${json("grid")} COLLATE NOCASE"
             LogbookSort.DISTANCE -> "CAST(${json("distanceKm")} AS REAL)"
             LogbookSort.DURATION -> "CAST(${json("durationSeconds")} AS INTEGER)"
         }
@@ -705,7 +999,8 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             qrzReceived = value("qrzReceived").ifBlank { "N" }, qslImages = value("qslImages"),
             syncState = value("syncState").ifBlank { "local" }, remoteId = value("remoteId"),
             activationSessionId = value("activationSessionId"), activationProgram = value("activationProgram"),
-            myPotaRefs = row.optJSONArray("myPotaRefs").jsonStringList(), potaRefs = row.optJSONArray("potaRefs").jsonStringList())
+            myPotaRefs = row.optJSONArray("myPotaRefs").jsonStringList(), potaRefs = row.optJSONArray("potaRefs").jsonStringList(),
+            extraAdifFields = row.optJSONObject("extraAdifFields").jsonStringMap())
     }
     private fun details(qso: Qso) = JSONObject().apply {
         put("band", qso.band); put("grid", qso.grid); put("iota", qso.iota); put("sotaRef", qso.sotaRef)
@@ -731,9 +1026,14 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         put("syncState", qso.syncState); put("remoteId", qso.remoteId)
         put("activationSessionId", qso.activationSessionId); put("activationProgram", qso.activationProgram)
         put("myPotaRefs", org.json.JSONArray(qso.myPotaRefs)); put("potaRefs", org.json.JSONArray(qso.potaRefs))
+        put("extraAdifFields", JSONObject(qso.extraAdifFields))
     }
 }
 
 internal fun org.json.JSONArray?.jsonStringList(): List<String> = if (this == null) emptyList() else buildList {
     for (index in 0 until length()) optString(index).takeIf(String::isNotBlank)?.let(::add)
+}
+
+internal fun org.json.JSONObject?.jsonStringMap(): Map<String, String> = if (this == null) emptyMap() else buildMap {
+    keys().forEach { key -> optString(key).takeIf(String::isNotBlank)?.let { put(key, it) } }
 }

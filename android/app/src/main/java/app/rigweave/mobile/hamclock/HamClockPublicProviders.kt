@@ -7,7 +7,11 @@ internal class HamClockPublicProviders(
     cacheDirectory: File,
     http: HamClockHttpClient = HamClockUrlConnectionClient(),
 ) {
-    val contests = ContestCalendarProvider(cacheDirectory, http)
-    val dxpeditions = DxpeditionScheduleProvider(cacheDirectory, http)
-    val solarCelestial = SolarCelestialProvider(cacheDirectory, http)
+    private val coalescer = HamClockInFlightCoalescer()
+    val contests = ContestCalendarProvider(cacheDirectory, http, coalescer)
+    val dxpeditions = DxpeditionScheduleProvider(cacheDirectory, http, coalescer)
+    val dxNews = DxNewsRepository(cacheDirectory, http, coalescer)
+    val pskReporter = PskReporterRepository(cacheDirectory, http, coalescer)
+    val wspr = HamClockWsprRepository(pskReporter)
+    val solarCelestial = SolarCelestialProvider(cacheDirectory, http, coalescer)
 }

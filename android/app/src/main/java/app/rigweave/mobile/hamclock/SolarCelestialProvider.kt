@@ -21,9 +21,9 @@ import kotlin.math.tan
 internal class SolarCelestialProvider(
     cacheDirectory: File,
     private val http: HamClockHttpClient = HamClockUrlConnectionClient(),
+    private val coalescer: HamClockInFlightCoalescer = HamClockInFlightCoalescer(),
 ) {
     private val cache = HamClockLastGoodCache(cacheDirectory, "goes-xray")
-    private val flight = HamClockSingleFlight<HamClockFeed<HamClockSolarCelestialSnapshot>>()
 
     fun cached(
         latitude: Double,
@@ -43,13 +43,28 @@ internal class SolarCelestialProvider(
         longitude: Double,
         force: Boolean = false,
         nowEpoch: Long = Instant.now().epochSecond,
-    ): HamClockFeed<HamClockSolarCelestialSnapshot> = flight.run {
+    ): HamClockFeed<HamClockSolarCelestialSnapshot> {
         require(latitude in -90.0..90.0 && longitude in -180.0..180.0) { "Station coordinates are invalid" }
+        val xray = refreshXray(force, nowEpoch)
+        return HamClockFeed(
+            solarCelestialSnapshot(latitude, longitude, nowEpoch, xray.value),
+            xray.state,
+            xray.source,
+            xray.fetchedAtEpoch,
+            xray.error,
+        )
+    }
+
+    private fun refreshXray(
+        force: Boolean,
+        nowEpoch: Long,
+    ): HamClockFeed<HamClockXraySeries> = coalescer.run("solar-goes-xray") {
         val saved = cache.read()
         if (!force && saved != null && nowEpoch - saved.fetchedAtEpoch < TTL_SECONDS) {
             val xray = runCatching { xrayFromJson(saved.body) }.getOrNull()
-            if (xray != null) return@run HamClockFeed(solarCelestialSnapshot(latitude, longitude, nowEpoch, xray),
-                HamClockFeedState.CACHED, SOURCES, saved.fetchedAtEpoch)
+            if (xray != null) return@run HamClockFeed(
+                xray, HamClockFeedState.CACHED, SOURCES, saved.fetchedAtEpoch
+            )
         }
         try {
             val response = try {
@@ -58,18 +73,20 @@ internal class SolarCelestialProvider(
                 val entry = requireNotNull(saved)
                 val xray = xrayFromJson(entry.body)
                 cache.write(entry.body, nowEpoch, entry.etag, entry.lastModified)
-                return@run HamClockFeed(solarCelestialSnapshot(latitude, longitude, nowEpoch, xray),
-                    HamClockFeedState.LIVE, SOURCES, nowEpoch)
+                return@run HamClockFeed(xray, HamClockFeedState.LIVE, SOURCES, nowEpoch)
             }
             val xray = parseGoesXray(response.body, nowEpoch)
             require(xray.points.isNotEmpty()) { "NOAA returned no usable primary GOES X-ray observations" }
             cache.write(xrayToJson(xray), nowEpoch, response.etag, response.lastModified)
-            HamClockFeed(solarCelestialSnapshot(latitude, longitude, nowEpoch, xray), HamClockFeedState.LIVE, SOURCES, nowEpoch)
+            HamClockFeed(xray, HamClockFeedState.LIVE, SOURCES, nowEpoch)
         } catch (error: Exception) {
             val fallback = saved?.let { runCatching { xrayFromJson(it.body) }.getOrNull() }
-            val value = solarCelestialSnapshot(latitude, longitude, nowEpoch, fallback ?: HamClockXraySeries())
-            if (fallback != null) HamClockFeed(value, HamClockFeedState.STALE, SOURCES, saved.fetchedAtEpoch, providerError(error))
-            else HamClockFeed(value, HamClockFeedState.UNAVAILABLE, SOURCES, error = providerError(error) + "; celestial calculations remain available")
+            if (fallback != null) HamClockFeed(
+                fallback, HamClockFeedState.STALE, SOURCES, saved.fetchedAtEpoch, providerError(error)
+            ) else HamClockFeed(
+                HamClockXraySeries(), HamClockFeedState.UNAVAILABLE, SOURCES,
+                error = providerError(error) + "; celestial calculations remain available"
+            )
         }
     }
 

@@ -1,4 +1,7 @@
 #include "rigweave/core.h"
+#include "rigweave/satellite.h"
+#include "SGP4.h"
+#include "Tle.h"
 
 #include <algorithm>
 #include <cassert>
@@ -294,6 +297,65 @@ int main() {
     assert(rw_wsjtx_parse_json(wsjtx, sizeof(wsjtx), invalid_wsjtx.data(), invalid_wsjtx.size()) > 0);
     assert(std::string(wsjtx).find("\"valid\":false") != std::string::npos);
     rw_feature_context_destroy(features);
+
+    // Pinned upstream verification vector: Vanguard 1 at epoch and T+360 minutes.
+    const std::string vanguard_one =
+        "1 00005U 58002B   00179.78495062  .00000023  00000-0  28098-4 0  4753";
+    const std::string vanguard_two =
+        "2 00005  34.2682 348.7242 1859667 331.7664  19.3264 10.82419157413667";
+    const libsgp4::Tle verification_tle(vanguard_one, vanguard_two);
+    const libsgp4::SGP4 verification_model(verification_tle);
+    const auto epoch_position = verification_model.FindPosition(0.0).Position();
+    assert(std::abs(epoch_position.x - 7022.46529267) < 1e-3);
+    assert(std::abs(epoch_position.y + 1400.08296756) < 1e-3);
+    assert(std::abs(epoch_position.z - 0.03995155) < 1e-3);
+    const auto later_position = verification_model.FindPosition(360.0).Position();
+    assert(std::abs(later_position.x + 7154.03120202) < 1e-3);
+    assert(std::abs(later_position.y + 3783.17682504) < 1e-3);
+    assert(std::abs(later_position.z + 3536.19412294) < 1e-3);
+
+    // C ABI observer output, pass boundaries, no-pass interval, invalid data, and Doppler sign.
+    char satellite_json[65536]{};
+    constexpr int64_t vanguard_epoch = 962131819;
+    assert(rw_satellite_propagate_json(satellite_json, sizeof(satellite_json), "TLE", "VANGUARD 1",
+        vanguard_one.c_str(), vanguard_two.c_str(), vanguard_epoch, 0, 48.15, 17.11, 0.2) > 0);
+    const std::string observer_result(satellite_json);
+    assert(observer_result.find("\"ok\":true") != std::string::npos);
+    assert(observer_result.find("\"azimuth_deg\"") != std::string::npos);
+    assert(observer_result.find("\"elevation_deg\"") != std::string::npos);
+
+    std::memset(satellite_json, 0, sizeof(satellite_json));
+    assert(rw_satellite_passes_json(satellite_json, sizeof(satellite_json), "TLE", "VANGUARD 1",
+        vanguard_one.c_str(), vanguard_two.c_str(), vanguard_epoch, vanguard_epoch + 86400, 0,
+        48.15, 17.11, 0.2, 0.0, 0.0, 30, 24) > 0);
+    const std::string pass_result(satellite_json);
+    assert(pass_result.find("\"aos\"") != std::string::npos);
+    assert(pass_result.find("\"tca\"") != std::string::npos);
+    assert(pass_result.find("\"los\"") != std::string::npos);
+
+    std::memset(satellite_json, 0, sizeof(satellite_json));
+    assert(rw_satellite_passes_json(satellite_json, sizeof(satellite_json), "TLE", "VANGUARD 1",
+        vanguard_one.c_str(), vanguard_two.c_str(), vanguard_epoch, vanguard_epoch + 3600, 0,
+        48.15, 17.11, 0.2, 0.0, 90.0, 30, 24) > 0);
+    assert(std::string(satellite_json).find("\"passes\":[]") != std::string::npos);
+
+    std::memset(satellite_json, 0, sizeof(satellite_json));
+    assert(rw_satellite_propagate_json(satellite_json, sizeof(satellite_json), "TLE", "INVALID",
+        "1 invalid", "2 invalid", vanguard_epoch, 0, 0.0, 0.0, 0.0) > 0);
+    assert(std::string(satellite_json).find("\"ok\":false") != std::string::npos);
+    const std::string celestrak_csv =
+        "OSCAR 7 (AO-7),1974-089B,2026-08-19T00:23:27.496608,12.53699154,.00123316,101.9919,244.9197,13.2706,15.2415,0,U,123456,999,36839,-.5025725E-5,-.47E-6,0";
+    std::memset(satellite_json, 0, sizeof(satellite_json));
+    assert(rw_satellite_inspect_json(satellite_json, sizeof(satellite_json), "CSV", "AO-7",
+        celestrak_csv.c_str(), "") > 0);
+    assert(std::string(satellite_json).find("\"norad_id\":123456") != std::string::npos);
+    assert(std::string(satellite_json).find("\"element_epoch\":1787099007") != std::string::npos);
+    std::memset(satellite_json, 0, sizeof(satellite_json));
+    assert(rw_satellite_propagate_json(satellite_json, sizeof(satellite_json), "CSV", "AO-7",
+        celestrak_csv.c_str(), "", 1787099007, 0, 48.15, 17.11, 0.2) > 0);
+    assert(std::string(satellite_json).find("\"ok\":true") != std::string::npos);
+    assert(rw_satellite_doppler_hz(145800000.0, 1.0) < 145800000.0);
+    assert(rw_satellite_doppler_hz(145800000.0, -1.0) > 145800000.0);
 
     assert(std::string(rw_core_version()) == "0.1.0");
     rw_context_destroy(context);

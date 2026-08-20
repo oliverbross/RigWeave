@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -33,6 +34,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalUriHandler
+import app.rigweave.mobile.hamclock.mergeDxNews
+import app.rigweave.mobile.hamclock.HamClockClusterPreference
+import app.rigweave.mobile.hamclock.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,22 +76,51 @@ fun NeuralDxScreen(
     callbook: CallbookController,
     cty: CtyController,
     app: AppController,
+    clusterPreference: HamClockClusterPreference,
+    dxNewsPreference: HamClockDxNewsPreference,
+    updateDxNewsPreference: (HamClockDxNewsPreference) -> Unit,
     tune: (String) -> Unit,
+    requestReceiveTune: (Long, String?, String, String) -> Unit,
+    intelligenceNeeds: Map<String, List<String>> = emptyMap(),
+    bandHealthPreference: HamClockBandHealthPreference = HamClockBandHealthPreference(),
+    bandHealthSnapshot: HamClockBandHealthSnapshot = HamClockBandHealthSnapshot(),
+    updateBandHealthPreference: (HamClockBandHealthPreference) -> Unit = {},
+    openCallHistory: (String) -> Unit = {},
     previousQsos: (AndroidDXSpot) -> Unit,
 ) {
     var page by remember { mutableStateOf(NeuralDxPage.COCKPIT) }
     val stationId = wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }
     val stationGrid = wavelog.selectedStation?.grid?.ifBlank { null } ?: app.stationGrid
     val stationCall = wavelog.selectedStation?.callsign?.ifBlank { null } ?: app.stationCallsign.ifBlank { features.clusterCallsign }
-
-    LaunchedEffect(features.liveSpots, stationId, cty.dataRevision) {
-        controller.ingest(features.liveSpots, stationId, cty, stationCall)
+    val policySpots = remember(features.liveSpots, clusterPreference, Instant.now().epochSecond / 60) {
+        filterClusterPresentation(features.liveSpots, clusterPreference, Instant.now().epochSecond)
     }
-    LaunchedEffect(stationGrid, stationCall, stationId) {
+    val enrichedPolicySpots = remember(policySpots, controller.enrichedSpots) {
+        policySpots.map { spot -> controller.enrichedSpots.firstOrNull { it.id == spot.id } ?: spot }
+    }
+    LaunchedEffect(controller.requestedSignalReportId) {
+        if (controller.requestedSignalReportId != null) page = NeuralDxPage.MAP
+    }
+    LaunchedEffect(controller.requestedPage) {
+        controller.requestedPage?.let { requested ->
+            page = requested
+            controller.consumeRequestedPage()
+        }
+    }
+
+    LaunchedEffect(policySpots, stationId, cty.dataRevision) {
+        controller.ingest(policySpots, stationId, cty, stationCall)
+    }
+    LaunchedEffect(controller) { controller.ensureDxNews() }
+    LaunchedEffect(stationGrid, stationCall, stationId, page) {
         if (controller.lastRefreshEpoch == 0L || Instant.now().epochSecond - controller.lastRefreshEpoch > 15 * 60) {
-            controller.refresh(stationCall, stationGrid, stationId, features.liveSpots)
+            controller.refresh(stationCall, stationGrid, stationId, policySpots,
+                refreshScope = if (page == NeuralDxPage.SATELLITES) NeuralDxRefreshScope.FULL_DX else NeuralDxRefreshScope.HOME)
             if (!features.solar.valid) features.refreshSolar()
         }
+    }
+    DisposableEffect(page) {
+        onDispose { if (page == NeuralDxPage.SATELLITES) controller.stopLegacySatelliteTicker() }
     }
 
     Box(Modifier.fillMaxSize().background(DxBg).navigationBarsPadding().clipToBounds()) {
@@ -102,13 +136,14 @@ fun NeuralDxScreen(
                     else -> "Log intelligence ready"
                 }, color = DxMuted, fontSize = 11.sp)
             }
-            DxMetric("SPOTS", features.liveSpots.size.toString(), DxCyan)
+            DxMetric("SPOTS", policySpots.size.toString(), DxCyan)
             DxMetric("SFI", features.solar.flux.takeIf { features.solar.valid }?.roundToInt()?.toString() ?: "—", DxAmber)
             DxMetric("A", features.solar.aIndex.takeIf { features.solar.valid }?.roundToInt()?.toString() ?: "—",
                 if (features.solar.aIndex >= 30) DxRed else DxAmber)
             DxMetric("KP", features.solar.kpIndex.takeIf { features.solar.valid }?.let { "%.1f".format(Locale.US, it) } ?: "—",
                 if (features.solar.kpIndex >= 5) DxRed else DxGreen)
-            Button({ controller.refresh(stationCall, stationGrid, stationId, features.liveSpots, true); features.refreshSolar() },
+            Button({ controller.refresh(stationCall, stationGrid, stationId, policySpots, true,
+                if (page == NeuralDxPage.SATELLITES) NeuralDxRefreshScope.FULL_DX else NeuralDxRefreshScope.HOME); features.refreshSolar() },
                 enabled = !controller.refreshing, modifier = Modifier.heightIn(min = 48.dp)) {
                 Icon(Icons.Outlined.Refresh, null); Spacer(Modifier.width(5.dp)); Text(if (controller.refreshing) "REFRESHING" else "REFRESH")
             }
@@ -128,11 +163,17 @@ fun NeuralDxScreen(
         HorizontalDivider(color = Color(0xFF465159))
         val pageModifier = Modifier.fillMaxWidth().weight(1f).clipToBounds().testTag("dx-page-${page.name.lowercase()}")
         when (page) {
-            NeuralDxPage.COCKPIT -> DxCockpit(controller, features, database, wavelog, callbook, cty, stationGrid, tune, previousQsos, pageModifier)
-            NeuralDxPage.MAP -> DxMap(controller,controller.enrichedSpots.ifEmpty { features.liveSpots }, cty, stationGrid, tune, previousQsos, pageModifier)
-            NeuralDxPage.INSIGHT -> DxInsightPage(controller, features, pageModifier)
+            NeuralDxPage.COCKPIT -> DxCockpit(controller, features, policySpots, database, wavelog, callbook, cty, stationGrid, tune,
+                requestReceiveTune, intelligenceNeeds, previousQsos, pageModifier)
+            NeuralDxPage.MAP -> DxMap(controller, enrichedPolicySpots, features, cty, stationGrid,
+                database, wavelog, requestReceiveTune, previousQsos, pageModifier)
+            NeuralDxPage.INSIGHT -> DxInsightPage(controller, policySpots, pageModifier)
             NeuralDxPage.WORLD -> DxWorldPage(controller, features, pageModifier)
-            NeuralDxPage.BRIEFING -> DxBriefingPage(controller, features, pageModifier)
+            NeuralDxPage.BRIEFING -> DxBriefingPage(controller, features, policySpots, database, wavelog, cty,
+                requestReceiveTune, intelligenceNeeds, previousQsos, dxNewsPreference, updateDxNewsPreference, pageModifier)
+            NeuralDxPage.OBSERVATIONS -> DxRfEvidencePage(controller, features, policySpots, database, cty,
+                callbook, stationId, stationCall, stationGrid, bandHealthPreference, bandHealthSnapshot, updateBandHealthPreference,
+                openCallHistory, requestReceiveTune, pageModifier)
             NeuralDxPage.SATELLITES -> DxSatellitesPage(controller, stationGrid, pageModifier)
             NeuralDxPage.WEATHER -> DxWeatherPage(controller, features, stationGrid, pageModifier)
         }
@@ -140,25 +181,278 @@ fun NeuralDxScreen(
     }
 }
 
-@Composable private fun DxCockpit(controller: NeuralDxController, features: FeatureController, database: QsoDatabase,
+@Composable private fun DxRfEvidencePage(
+    controller: NeuralDxController,
+    features: FeatureController,
+    cluster: List<AndroidDXSpot>,
+    database: QsoDatabase,
+    cty: CtyController,
+    callbook: CallbookController,
+    stationId: String?,
+    stationCall: String,
+    stationGrid: String,
+    bandHealthPreference: HamClockBandHealthPreference,
+    bandHealthSnapshot: HamClockBandHealthSnapshot,
+    updateBandHealthPreference: (HamClockBandHealthPreference) -> Unit,
+    openCallHistory: (String) -> Unit,
+    requestReceiveTune: (Long, String?, String, String) -> Unit,
+    modifier: Modifier,
+) {
+    val uriHandler = LocalUriHandler.current
+    val stationPoint = remember(stationGrid) { maidenheadCenter(stationGrid) }
+    val rbn = remember(features.rbnObservations, stationCall, stationPoint, cty.dataRevision, callbook.status) {
+        fun ctyPoint(call: String) = cty.lookup(call)?.takeIf { it.latitude != 0.0 || it.longitude != 0.0 }
+            ?.let { GeoPoint(it.latitude, it.longitude) }
+        features.rbnObservations.map { row -> resolveRbnObservationView(row, stationCall, stationPoint,
+            { call -> callbook.cachedRecord(call)?.grid }, ::ctyPoint) }
+    }
+    val wspr = controller.wsprPersonal.reports
+    val psk = controller.mySignal.reports
+    val ibp = remember(Instant.now().epochSecond / 10) { hamClockIbpSchedule() }
+    var selectedRbn by remember { mutableStateOf<HamClockRbnObservation?>(null) }
+    var selectedSignal by remember { mutableStateOf<Pair<String, SignalReport>?>(null) }
+    var selectedCluster by remember { mutableStateOf<AndroidDXSpot?>(null) }
+    var selectedIbp by remember { mutableStateOf<HamClockIbpTransmission?>(null) }
+    var selectedIbpSite by remember { mutableStateOf<HamClockIbpBeacon?>(null) }
+    var selectedIbpObserved by remember { mutableStateOf<HamClockIbpObservedEvidence?>(null) }
+    var selectedBand by rememberSaveable { mutableStateOf(bandHealthPreference.visibleBands.firstOrNull() ?: "20m") }
+    var statuses by remember { mutableStateOf<Map<String, SpotLogStatus>>(emptyMap()) }
+    val watchlist = features.watchlistText.lineSequence().map(String::trim).filter(String::isNotBlank).toSet()
+    fun toggleWatch(call: String) {
+        val current = watchlist.toMutableSet()
+        if (!current.add(call)) current.remove(call)
+        features.setWatchlist(current.sorted().joinToString("\n"))
+    }
+    LaunchedEffect(rbn, psk, wspr, stationId, cty.dataRevision) {
+        val identities = cluster.map { row ->
+            val entity = cty.lookup(row.callsign)
+            SpotLogIdentity(row.id, row.callsign, entity?.dxcc.orEmpty(), entity?.country.orEmpty(), row.band, row.mode)
+        } + rbn.map { row ->
+            val entity = cty.lookup(row.dxCall)
+            SpotLogIdentity(row.id, row.dxCall, entity?.dxcc.orEmpty(), entity?.country.orEmpty(), row.band, row.mode)
+        } + (psk + wspr).map { row ->
+            val entity = cty.lookup(row.callsign)
+            SpotLogIdentity(signalReportReference(row), row.callsign, entity?.dxcc.orEmpty(), entity?.country.orEmpty(), row.band, "WSPR")
+        }
+        statuses = withContext(Dispatchers.IO) { database.spotStatuses(identities, stationId) }
+    }
+    LaunchedEffect(controller.requestedRfEvidenceId, rbn, wspr, ibp) {
+        val id = controller.requestedRfEvidenceId ?: return@LaunchedEffect
+        selectedRbn = rbn.firstOrNull { it.id == id }
+        selectedSignal = wspr.firstOrNull { signalReportReference(it) == id }?.let { "WSPR" to it }
+        selectedIbp = ibp.transmissions.firstOrNull { it.beacon.callsign == id }
+        selectedIbpSite = if (selectedIbp == null) hamClockIbpManifest.firstOrNull { it.callsign == id } else null
+        // A request is a one-shot navigation intent, even if its bounded source aged out.
+        controller.consumeRequestedRfEvidence()
+    }
+    LaunchedEffect(controller.requestedBandEvidence) {
+        controller.requestedBandEvidence?.let { selectedBand = it }
+        controller.consumeRequestedBandEvidence()
+    }
+    val evidence = cluster.map { HamClockBandEvidence("CLUSTER", it.band, it.mode, it.callsign, it.spotter,
+        observedEpoch = it.receivedEpoch, frequencyHz = it.frequencyHz) } +
+        controller.mySignal.reports.map { HamClockBandEvidence("PSK", it.band, it.mode, it.callsign,
+            it.receiverCallsign, it.snr, it.epoch) } +
+        rbn.map { HamClockBandEvidence("RBN", it.band, it.mode, it.dxCall, it.skimmerCall, it.snr, it.observedEpoch, it.frequencyHz) } +
+        wspr.map { HamClockBandEvidence("WSPR", it.band, "WSPR", it.callsign, it.receiverCallsign, it.snr, it.epoch) }
+    val health = bandHealthSnapshot.rows
+    val ibpObserved = observedIbpEvidence(evidence)
+    LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        item { Text("MEASURED RF EVIDENCE", color = DxAmber, fontWeight = FontWeight.Black)
+            Text("RBN uses the configured retail cluster. Personal WSPR reuses PSK Reporter. Regional WSPR.live: ${controller.wsprPersonal.regionalState}.",
+                color = DxMuted, fontSize = 10.sp) }
+        item {
+            Text("SOURCE CONTROLS", color = DxCyan, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                listOf("CLUSTER", "PSK", "RBN", "WSPR").forEach { source ->
+                    FilterChip(source in bandHealthPreference.enabledSources, {
+                        val sources = bandHealthPreference.enabledSources.toMutableSet()
+                        if (!sources.add(source)) sources.remove(source)
+                        updateBandHealthPreference(bandHealthPreference.copy(enabledSources = sources))
+                    }, { Text(source) })
+                }
+            }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                listOf(5, 10, 15, 30, 60).forEach { window -> FilterChip(bandHealthPreference.windowMinutes == window,
+                    { updateBandHealthPreference(bandHealthPreference.copy(windowMinutes = window)) }, { Text("${window}m") }) }
+                listOf("ALL", "CW", "SSB", "FT8", "WSPR", "RTTY").forEach { mode -> FilterChip(bandHealthPreference.mode == mode,
+                    { updateBandHealthPreference(bandHealthPreference.copy(mode = mode)) }, { Text(mode) }) }
+            }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                bandHealthPreference.visibleBands.sorted().forEach { band -> FilterChip(selectedBand == band, { selectedBand = band }, { Text(band) }) }
+            }
+            Text(bandHealthSnapshot.sourceStates.entries.joinToString(" · ") { "${it.key} ${it.value}" }, color = DxMuted, fontSize = 10.sp)
+            if (bandHealthSnapshot.message.isNotBlank()) Text(bandHealthSnapshot.message, color = DxYellow, fontSize = 10.sp)
+        }
+        item { Text("RBN · ${rbn.size}", color = DxCyan, fontWeight = FontWeight.Bold) }
+        items(rbn.take(120), key = { it.id }) { row ->
+            val status = statuses[row.id]
+            Surface(color = DxPanel, shape = RoundedCornerShape(5.dp), modifier = Modifier.fillMaxWidth().clickable { selectedRbn = row }) {
+                Row(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(row.dxCall, color = DxInk, fontWeight = FontWeight.Bold)
+                    Text("${row.band} ${row.mode} · ${row.skimmerCall} · ${row.snr?.let { "$it dB" } ?: "SNR —"}",
+                        color = DxMuted, modifier = Modifier.weight(1f))
+                    Text(status?.callStatus ?: if (row.dxCall in watchlist) "WATCH" else "—", color = DxYellow)
+                }
+            }
+        }
+        item { Text("PERSONAL WSPR · ${wspr.size}", color = DxCyan, fontWeight = FontWeight.Bold) }
+        items(wspr.take(100), key = { signalReportReference(it) }) { row ->
+            val id = signalReportReference(row)
+            Surface(color = DxPanel, shape = RoundedCornerShape(5.dp), modifier = Modifier.fillMaxWidth().clickable { selectedSignal = "WSPR" to row }) {
+                Row(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(row.callsign, color = DxInk, fontWeight = FontWeight.Bold)
+                    Text("${row.direction.name.replace('_', ' ')} · ${row.band} · ${row.snr?.let { "$it dB" } ?: "SNR —"}",
+                        color = DxMuted, modifier = Modifier.weight(1f))
+                    Text(statuses[id]?.callStatus ?: if (row.callsign in watchlist) "WATCH" else "—", color = DxYellow)
+                }
+            }
+        }
+        item { Text("IBP SCHEDULE · slot ${ibp.slot + 1}/18", color = DxCyan, fontWeight = FontWeight.Bold)
+            Text("Schedule reference only — never presented as heard evidence.", color = DxMuted, fontSize = 10.sp) }
+        items(ibp.transmissions, key = { it.band }) { row ->
+            Surface(color = DxPanel, shape = RoundedCornerShape(5.dp), modifier = Modifier.fillMaxWidth().clickable { selectedIbp = row }) {
+                Text("${row.band} · ${row.beacon.callsign} ${row.beacon.grid} · ${formatMHz(row.frequencyHz)} MHz",
+                    color = DxInk, modifier = Modifier.padding(8.dp))
+            }
+        }
+        item { Text("IBP OBSERVED EVIDENCE · ${ibpObserved.size}", color = DxCyan, fontWeight = FontWeight.Bold)
+            Text("Cluster/RBN observations are listed separately from the schedule.", color = DxMuted, fontSize = 10.sp) }
+        items(ibpObserved, key = { "${it.source}|${it.beacon.callsign}|${it.observedEpoch}|${it.receiver}" }) { row ->
+            Surface(color = DxPanel, shape = RoundedCornerShape(5.dp), modifier = Modifier.fillMaxWidth().clickable { selectedIbpObserved = row }) {
+                Text("${row.source} · ${row.beacon.callsign} · ${row.band} ${row.mode} · heard by ${row.receiver.ifBlank { "unknown" }}",
+                    color = DxInk, modifier = Modifier.padding(8.dp))
+            }
+        }
+        item { Text("BAND HEALTH MATRIX · ${bandHealthPreference.windowMinutes}m · ${bandHealthPreference.mode}", color = DxCyan, fontWeight = FontWeight.Bold) }
+        items(health, key = { it.band }) { row ->
+            Text("${row.band.padEnd(5)} ${row.state} · n=${row.observations} · ${row.trend} · ${row.confidence}",
+                color = if (row.state == "ACTIVE") DxGreen else DxMuted, fontFamily = FontFamily.Monospace)
+            Text(row.reasons.joinToString(" · "), color = DxMuted, fontSize = 9.sp)
+        }
+        item {
+            val selected = health.firstOrNull { it.band == selectedBand }
+            val historical = bandHealthSnapshot.historical.filter { it.band == selectedBand &&
+                (bandHealthPreference.mode == "ALL" || it.modeFamily == bandHealthPreference.mode) }
+            Text("SELECTED BAND · $selectedBand", color = DxCyan, fontWeight = FontWeight.Bold)
+            Text(selected?.let { "${it.state} · ${it.confidence} · ${it.observations} live observations" } ?: "No live row", color = DxInk)
+            Text("HISTORICAL PROJECTION · ${historical.sumOf { it.qsoCount }} QSOs · ${historical.sumOf { it.uniqueCalls }} unique · ${historical.sumOf { it.comparableWindowCount }} comparable UTC-window",
+                color = DxMuted, fontSize = 10.sp)
+            Text("CONTRIBUTING OBSERVATIONS · ${bandHealthSnapshot.contributors[selectedBand].orEmpty().size}", color = DxMuted)
+        }
+        items(bandHealthSnapshot.contributors[selectedBand].orEmpty().take(24), key = { it.id }) { contributor ->
+            Surface(color = DxPanel, shape = RoundedCornerShape(5.dp), modifier = Modifier.fillMaxWidth().clickable {
+                when (contributor.source) {
+                    "RBN" -> selectedRbn = rbn.firstOrNull { it.id == contributor.sourceReferenceId }
+                    "PSK" -> selectedSignal = controller.mySignal.reports.firstOrNull {
+                        signalReportReference(it) == contributor.sourceReferenceId }?.let { "PSK" to it }
+                    "WSPR" -> selectedSignal = wspr.firstOrNull {
+                        signalReportReference(it) == contributor.sourceReferenceId }?.let { "WSPR" to it }
+                    "CLUSTER" -> selectedCluster = cluster.firstOrNull { it.id == contributor.sourceReferenceId }
+                    "IBP" -> selectedIbp = ibp.transmissions.firstOrNull { it.beacon.callsign == contributor.sourceReferenceId }
+                }
+            }) {
+                Row(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(contributor.source, color = DxCyan, fontWeight = FontWeight.Bold)
+                    Text(contributor.callsign, color = DxInk, fontWeight = FontWeight.Bold)
+                    Text("${contributor.band} ${contributor.mode} · ${contributor.receiver.ifBlank { "receiver —" }} · ${contributor.snr?.let { "$it dB" } ?: "SNR —"}",
+                        color = DxMuted, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+    selectedRbn?.let { row ->
+        AlertDialog(onDismissRequest = { selectedRbn = null }, title = { Text("${row.skimmerCall} heard ${row.dxCall}") },
+            text = { Text("${row.band} ${row.mode} · ${formatMHz(row.frequencyHz)} MHz · ${row.snr?.let { "$it dB" } ?: "SNR unavailable"} · ${row.wpm?.let { "$it WPM" } ?: row.bps?.let { "$it BPS" } ?: "speed unavailable"}\n" +
+                "Observed ${utcSeconds(row.observedEpoch)} UTC · received ${utcSeconds(row.receivedEpoch)} UTC\n" +
+                "DX geometry ${row.dxGeometry} · skimmer geometry ${row.skimmerGeometry}\n" +
+                "Call ${statuses[row.id]?.callStatus ?: "—"} · DXCC ${statuses[row.id]?.dxccStatus ?: "—"} · ${if (row.dxCall in watchlist) "WATCHLISTED" else "not watched"}\n${row.rawComment}") },
+            confirmButton = { Button({ requestReceiveTune(row.frequencyHz, row.mode, "RBN observation",
+                "Review receive-only frequency change"); selectedRbn = null }) { Text("Review receive") } },
+            dismissButton = { Row { TextButton({ openCallHistory(row.dxCall); selectedRbn = null }) { Text("Logbook history") }
+                TextButton({ toggleWatch(row.dxCall) }) { Text(if (row.dxCall in watchlist) "Unwatch" else "Watch") }
+                TextButton({ selectedRbn = null }) { Text("Close") } } })
+    }
+    selectedSignal?.let { (source, row) ->
+        AlertDialog(onDismissRequest = { selectedSignal = null }, title = { Text(row.callsign) },
+            text = { Text("$source · ${row.direction.name.replace('_', ' ')} · ${row.band} · ${row.snr?.let { "$it dB" } ?: "SNR unavailable"}\n" +
+                "Call ${statuses[signalReportReference(row)]?.callStatus ?: "—"} · DXCC ${statuses[signalReportReference(row)]?.dxccStatus ?: "—"} · ${if (row.callsign in watchlist) "WATCHLISTED" else "not watched"}") },
+            confirmButton = { Button({ requestReceiveTune(row.frequencyHz, row.mode, "$source observation",
+                "Review receive-only frequency change"); selectedSignal = null }) { Text("Review receive") } },
+            dismissButton = { Row { TextButton({ openCallHistory(row.callsign); selectedSignal = null }) { Text("Logbook history") }
+                TextButton({ toggleWatch(row.callsign) }) { Text(if (row.callsign in watchlist) "Unwatch" else "Watch") }
+                TextButton({ selectedSignal = null }) { Text("Close") } } })
+    }
+    selectedCluster?.let { row ->
+        DxSpotDialog(row, cty, statuses[row.id], { selectedCluster = null },
+            { requestReceiveTune(row.frequencyHz, row.mode, "Cluster observation", "Review receive-only frequency change"); selectedCluster = null },
+            { openCallHistory(row.callsign); selectedCluster = null }, { toggleWatch(row.callsign) })
+    }
+    selectedIbp?.let { row ->
+        val station = maidenheadCenter(stationGrid)
+        val distance = station?.let { distanceKm(it, row.beacon.point).roundToInt() }
+        val bearing = station?.let { initialBearingDegrees(it, row.beacon.point) }
+        val observed = ibpObserved.filter { it.beacon.callsign == row.beacon.callsign }
+        AlertDialog(onDismissRequest = { selectedIbp = null }, title = { Text("IBP · ${row.beacon.callsign}") },
+            text = { Text("${row.band} · ${row.beacon.grid} · ${row.beacon.locationLabel}\n${distance?.let { "$it km · %03d°".format(bearing) } ?: "Bearing/distance unavailable"}\nScheduled ${utcSeconds(row.slotStartEpoch)}–${utcSeconds(row.slotEndEpoch)} UTC · ${((row.slotEndEpoch - Instant.now().epochSecond).coerceAtLeast(0))}s remaining.\n${observed.take(3).joinToString(" · ") { "${it.source} ${it.band} ${ageLabel(it.observedEpoch)}" }.ifBlank { "No recent cluster/RBN reception evidence" }}\nSchedule reference remains separate from observed reception.\n${HAMCLOCK_IBP_MANIFEST_VERSION} · ${HAMCLOCK_IBP_MANIFEST_HASH.take(12)}…") },
+            confirmButton = { Button({ requestReceiveTune(row.frequencyHz, "CW", "IBP scheduled beacon",
+                "Review receive-only frequency change"); selectedIbp = null }) { Text("Review receive") } },
+            dismissButton = { Row { TextButton({ openCallHistory(row.beacon.callsign); selectedIbp = null }) { Text("Logbook history") }
+                TextButton({ toggleWatch(row.beacon.callsign) }) { Text(if (row.beacon.callsign in watchlist) "Unwatch" else "Watch") }
+                TextButton({ uriHandler.openUri(HAMCLOCK_IBP_MANIFEST_SOURCE) }) { Text("NCDXF source") }
+                TextButton({ selectedIbp = null }) { Text("Close") } } })
+    }
+    selectedIbpSite?.takeIf { site -> selectedIbp?.beacon?.callsign != site.callsign }?.let { site ->
+        val next = nextHamClockIbpTransmission(site.callsign)
+        AlertDialog(onDismissRequest = { selectedIbpSite = null }, title = { Text("IBP · ${site.callsign}") },
+            text = { Text("${site.grid} · ${site.locationLabel}\n${next?.let { "Next ${it.band} ${formatMHz(it.frequencyHz)} MHz at ${utcSeconds(it.slotStartEpoch)} UTC" } ?: "Next schedule unavailable"}\nNCDXF/IARU schedule site reference; no reception is claimed.\nReviewed $HAMCLOCK_IBP_MANIFEST_REVIEW_DATE") },
+            confirmButton = { TextButton({ uriHandler.openUri(HAMCLOCK_IBP_MANIFEST_SOURCE) }) { Text("NCDXF source") } },
+            dismissButton = { Row { TextButton({ openCallHistory(site.callsign); selectedIbpSite = null }) { Text("Logbook history") }
+                TextButton({ toggleWatch(site.callsign) }) { Text(if (site.callsign in watchlist) "Unwatch" else "Watch") }
+                TextButton({ selectedIbpSite = null }) { Text("Close") } } })
+    }
+    selectedIbpObserved?.let { row ->
+        AlertDialog(onDismissRequest = { selectedIbpObserved = null }, title = { Text("Observed IBP · ${row.beacon.callsign}") },
+            text = { Text("${row.source} observation · ${row.band} ${row.mode} · heard by ${row.receiver.ifBlank { "unknown" }}\n" +
+                "${row.snr?.let { "$it dB" } ?: "SNR unavailable"} · ${row.beacon.grid} ${row.beacon.locationLabel}\nThis is observed evidence, not the schedule projection.") },
+            confirmButton = { Button({ requestReceiveTune(row.frequencyHz, row.mode, "Observed IBP evidence",
+                "Review receive-only frequency change"); selectedIbpObserved = null }, enabled = row.frequencyHz > 0) { Text("Review receive") } },
+            dismissButton = { Row { TextButton({ openCallHistory(row.beacon.callsign); selectedIbpObserved = null }) { Text("Logbook history") }
+                TextButton({ toggleWatch(row.beacon.callsign); selectedIbpObserved = null }) {
+                    Text(if (row.beacon.callsign in watchlist) "Unwatch" else "Watch") } } })
+    }
+}
+
+@Composable private fun DxCockpit(controller: NeuralDxController, features: FeatureController, policySpots: List<AndroidDXSpot>, database: QsoDatabase,
     wavelog: WavelogController, callbook: CallbookController, cty: CtyController, stationGrid: String,
-    tune: (String) -> Unit, previousQsos: (AndroidDXSpot) -> Unit,
+    tune: (String) -> Unit, requestReceiveTune: (Long, String?, String, String) -> Unit,
+    intelligenceNeeds: Map<String, List<String>>, previousQsos: (AndroidDXSpot) -> Unit,
     modifier: Modifier) {
     var mode by remember { mutableStateOf("COCKPIT") }; var band by remember { mutableStateOf("ALL") }
     var radioMode by remember { mutableStateOf("ALL") }; var watchOnly by remember { mutableStateOf(false) }
     var newOnly by remember { mutableStateOf(false) }; var selected by remember { mutableStateOf<AndroidDXSpot?>(null) }
+    var selectedRequiresReview by remember { mutableStateOf(false) }
     var watchSearch by remember { mutableStateOf("") }
     var manual by remember { mutableStateOf(false) }; var statuses by remember { mutableStateOf(emptyMap<String, SpotLogStatus>()) }
     val distances = remember(stationGrid) { mutableStateMapOf<String, Int>() }
     val distanceLookups = remember(stationGrid) { mutableStateMapOf<String, Boolean>() }
     val stationId = wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }
-    LaunchedEffect(features.liveSpots, stationId, wavelog.logMode, wavelog.configured, cty.dataRevision) {
-        if (features.liveSpots.isEmpty() ||
+    LaunchedEffect(features.requestedSpotId, policySpots) {
+        features.requestedSpotId?.let { id ->
+            policySpots.firstOrNull { it.id == id }?.let {
+                selected = it
+                selectedRequiresReview = features.requestedSpotRequiresReceiveReview
+                features.consumeRequestedSpot()
+            }
+        }
+    }
+    LaunchedEffect(policySpots, stationId, wavelog.logMode, wavelog.configured, cty.dataRevision) {
+        if (policySpots.isEmpty() ||
             (wavelog.logMode == LogMode.WAVELOG && (!wavelog.configured || stationId.isNullOrBlank()))) {
             statuses = emptyMap()
             return@LaunchedEffect
         }
-        val identities = features.liveSpots.map { it.toSpotLogIdentity(cty.lookup(it.callsign)) }
+        val identities = policySpots.map { it.toSpotLogIdentity(cty.lookup(it.callsign)) }
         var observedRevision = Long.MIN_VALUE
         while (true) {
             val revision = database.changeToken()
@@ -169,9 +463,9 @@ fun NeuralDxScreen(
             delay(2_000)
         }
     }
-    val rows = features.liveSpots.filter { spot ->
+    val rows = policySpots.filter { spot ->
         (band == "ALL" || spot.band == band) && (radioMode == "ALL" || spot.mode == radioMode) &&
-            (!watchOnly || spot.watchlisted) && (!newOnly || statuses[spot.id]?.dxccStatus in setOf("ATNO", "W/NB", "C/NB"))
+            (!watchOnly || spot.watchlisted) && (!newOnly || statuses[spot.id]?.dxccStatus in setOf("ATNO", "W/NB", "C/NB") || intelligenceNeeds[spot.id].orEmpty().isNotEmpty())
     }
     LaunchedEffect(stationGrid, rows.map { it.callsign }, callbook.configured) {
         if (maidenheadCenter(stationGrid) == null) return@LaunchedEffect
@@ -193,14 +487,14 @@ fun NeuralDxScreen(
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             listOf("CLASSIC", "SMART", "COCKPIT").forEach { FilterChip(mode == it, { mode = it }, { Text(it) }) }
             DxSelect("BAND", band, DxBands) { band = it }
-            DxSelect("MODE", radioMode, listOf("ALL") + features.liveSpots.map { it.mode }.filter(String::isNotBlank).distinct()) { radioMode = it }
+            DxSelect("MODE", radioMode, listOf("ALL") + policySpots.map { it.mode }.filter(String::isNotBlank).distinct()) { radioMode = it }
             FilterChip(watchOnly, { watchOnly = !watchOnly }, { Text("★ WATCHLIST") })
             FilterChip(newOnly, { newOnly = !newOnly }, { Text("NEW DXCC") })
             OutlinedButton({ manual = true }, modifier = Modifier.heightIn(min = 48.dp)) { Icon(Icons.Outlined.Podcasts, null); Spacer(Modifier.width(5.dp)); Text("SEND SPOT") }
             Text("${rows.size} LIVE", color = DxCyan, fontWeight = FontWeight.Black)
         }
         if (mode == "COCKPIT") Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            DxSpotFeed(rows, statuses, distances, cty, selected = { selected = it }, previousQsos, Modifier.weight(1.55f).fillMaxHeight())
+            DxSpotFeed(rows, statuses, distances, cty, intelligenceNeeds, { selected = it; selectedRequiresReview = false }, previousQsos, Modifier.weight(1.55f).fillMaxHeight())
             LazyColumn(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 item { DxSection("ACTIVE BANDS · 24H") { controller.bandActivity.entries.take(12).forEach { DxBar(it.key, it.value, controller.bandActivity.values.maxOrNull() ?: 1) } } }
                 item { DxSection("CURRENT OPPORTUNITIES") {
@@ -227,39 +521,48 @@ fun NeuralDxScreen(
                 } }
                 item { DxHeatmap(controller.heatmap6m) }
             }
-        } else if (mode == "SMART") DxSmartFeed(rows, statuses, distances, cty, { selected = it }, previousQsos, Modifier.weight(1f))
-        else DxSpotTable(rows, statuses, distances, cty, { selected = it }, previousQsos, Modifier.weight(1f))
+        } else if (mode == "SMART") DxSmartFeed(rows, statuses, distances, cty, intelligenceNeeds, { selected = it; selectedRequiresReview = false }, previousQsos, Modifier.weight(1f))
+        else DxSpotTable(rows, statuses, distances, cty, intelligenceNeeds, { selected = it; selectedRequiresReview = false }, previousQsos, Modifier.weight(1f))
     }
-    selected?.let { DxSpotDialog(it, cty, statuses[it.id], { selected = null }, { tune("FA%011d;".format(it.frequencyHz)); selected = null }) }
+    selected?.let { spot -> DxSpotDialog(spot, cty, statuses[spot.id], { selected = null }, {
+        if (selectedRequiresReview) requestReceiveTune(spot.frequencyHz, spot.mode, "Home DX spot ${spot.callsign}",
+            "Review receive-only frequency change") else tune("FA%011d;".format(spot.frequencyHz))
+        selected = null
+    }, { previousQsos(spot); selected = null }, {
+        val calls = features.watchlistText.lineSequence().map(String::trim).filter(String::isNotBlank).toMutableSet()
+        if (spot.watchlisted) calls.remove(spot.callsign.uppercase(Locale.US)) else calls.add(spot.callsign.uppercase(Locale.US))
+        features.setWatchlist(calls.joinToString("\n")); selected = null
+    }) }
     if (manual) ManualSpotDialog(features) { manual = false }
 }
 
 @Composable private fun DxSpotFeed(rows: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>, distances: Map<String, Int>, cty: CtyController,
-    selected: (AndroidDXSpot) -> Unit, previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
+    intelligenceNeeds: Map<String, List<String>> = emptyMap(), selected: (AndroidDXSpot) -> Unit, previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
     DxSection("DX FEED · WORKED STATUS · DISTANCE · SCORE", modifier) {
         DxSpotHeader()
         LazyColumn(Modifier.fillMaxSize()) { items(rows, key = { it.id }) { spot ->
-            DxSpotRow(spot, statuses[spot.id], distances[spot.callsign.uppercase(Locale.US)], cty, selected, previous)
+            DxSpotRow(spot, statuses[spot.id], distances[spot.callsign.uppercase(Locale.US)], cty, selected, previous, intelligenceNeeds[spot.id].orEmpty())
         } }
     }
 }
 
 @Composable private fun DxSmartFeed(rows: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>, distances: Map<String, Int>, cty: CtyController,
-    selected: (AndroidDXSpot) -> Unit, previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
+    intelligenceNeeds: Map<String, List<String>>, selected: (AndroidDXSpot) -> Unit, previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
     DxSection("SMART PRIORITY · HIGHEST OPPORTUNITY FIRST", modifier) {
         DxSpotHeader()
-        LazyColumn(Modifier.fillMaxSize()) { items(rows.sortedByDescending { it.score }, key = { it.id }) { spot ->
-            DxSpotRow(spot, statuses[spot.id], distances[spot.callsign.uppercase(Locale.US)], cty, selected, previous, smart = true)
+        LazyColumn(Modifier.fillMaxSize()) { items(rows.sortedByDescending { intelligenceNeeds[it.id].orEmpty().size * 100 + it.score }, key = { it.id }) { spot ->
+            DxSpotRow(spot, statuses[spot.id], distances[spot.callsign.uppercase(Locale.US)], cty, selected, previous,
+                intelligenceNeeds[spot.id].orEmpty(), smart = true)
         } }
     }
 }
 
 @Composable private fun DxSpotTable(rows: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>, distances: Map<String, Int>, cty: CtyController,
-    selected: (AndroidDXSpot) -> Unit, previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
+    intelligenceNeeds: Map<String, List<String>>, selected: (AndroidDXSpot) -> Unit, previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
     DxSection("CLASSIC CLUSTER TABLE · ${rows.size} LIVE", modifier) {
         DxSpotHeader()
         LazyColumn(Modifier.fillMaxSize()) { items(rows, key = { it.id }) { spot ->
-            DxSpotRow(spot, statuses[spot.id], distances[spot.callsign.uppercase(Locale.US)], cty, selected, previous)
+            DxSpotRow(spot, statuses[spot.id], distances[spot.callsign.uppercase(Locale.US)], cty, selected, previous, intelligenceNeeds[spot.id].orEmpty())
         } }
     }
 }
@@ -272,7 +575,7 @@ fun NeuralDxScreen(
 }
 
 @Composable private fun DxSpotRow(spot:AndroidDXSpot,status:SpotLogStatus?,calculatedDistanceKm:Int?,cty:CtyController,selected:(AndroidDXSpot)->Unit,
-    previous:(AndroidDXSpot)->Unit,smart:Boolean=false){
+    previous:(AndroidDXSpot)->Unit,intelligenceNeeds:List<String> = emptyList(),smart:Boolean=false){
     val entity=cty.lookup(spot.callsign);val country=entity?.country.orEmpty().ifBlank{spot.country}.ifBlank{"Unknown"}
     Row(Modifier.fillMaxWidth().height(48.dp).clickable(role=Role.Button){selected(spot)}
         .background(if(smart&&spot.score>=75)DxGreen.copy(alpha=.08f) else if(spot.receivedEpoch%2L==0L)DxPanel else DxBg).padding(horizontal=6.dp),verticalAlignment=Alignment.CenterVertically){
@@ -281,41 +584,108 @@ fun NeuralDxScreen(
         DxFlexCell(country,1.42f,OperationalCountry);DxFlexCell(entity?.cqZone.orEmpty().ifBlank{spot.cqZone.takeIf{it>0}?.toString().orEmpty()},.36f,DxInk)
         DxFlexCell(spot.spotter,.82f,DxMuted);DxFlexCell(status?.callStatus.orEmpty(),.34f,DxGreen,true);DxFlexCell(status?.dxccStatus.orEmpty(),.46f,if(status?.dxccStatus=="ATNO")DxRed else DxYellow,true)
         DxFlexCell(spot.distanceKm.takeIf{it>0}?.toString() ?: calculatedDistanceKm?.toString().orEmpty(),.52f,DxMuted);DxFlexCell(spot.score.toString(),.48f,scoreColor(spot.score),true)
-        DxFlexCell(spot.reason.ifBlank{spot.comment},1.72f,DxMuted)
+        DxFlexCell(intelligenceNeeds.joinToString(" · ").ifBlank { spot.reason.ifBlank{spot.comment} },1.72f,if(intelligenceNeeds.isEmpty())DxMuted else DxYellow,true)
     };HorizontalDivider(color=Color(0xFF303940))
 }
 
 @Composable private fun RowScope.DxFlexCell(text:String,weight:Float,color:Color,bold:Boolean=false){Text(text,color=color,fontWeight=if(bold)FontWeight.Black else FontWeight.Medium,fontFamily=FontFamily.Monospace,fontSize=12.sp,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(weight).padding(horizontal=3.dp))}
 
-@Composable private fun DxMap(controller:NeuralDxController,rows: List<AndroidDXSpot>, cty: CtyController, stationGrid: String, tune: (String) -> Unit,
+@Composable private fun DxMap(controller:NeuralDxController,rows: List<AndroidDXSpot>, features: FeatureController, cty: CtyController, stationGrid: String,
+    database: QsoDatabase, wavelog: WavelogController, requestReceiveTune: (Long, String?, String, String) -> Unit,
     previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
     var minutes by remember { mutableIntStateOf(60) }; var limit by remember { mutableIntStateOf(250) }
     var band by remember { mutableStateOf("ALL") }; var mode by remember { mutableStateOf("ALL") }; var hearsMe by remember { mutableStateOf(false) }
+    var pskView by remember { mutableStateOf("BOTH") }
     var showPaths by remember { mutableStateOf(true) }
-    var selected by remember { mutableStateOf<AndroidDXSpot?>(null) }; val now=Instant.now().epochSecond
+    var selected by remember { mutableStateOf<AndroidDXSpot?>(null) }
+    var selectedReport by remember { mutableStateOf<SignalReport?>(null) }
+    var reportStatuses by remember { mutableStateOf(emptyMap<String, SpotLogStatus>()) }
+    val stationId = wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }
+    val now=Instant.now().epochSecond
+    val pskRows = controller.mySignal.reports.filter { report -> when (pskView) {
+        "BEING HEARD" -> report.direction == SignalDirection.BEING_HEARD
+        "HEARING" -> report.direction == SignalDirection.HEARING
+        "MUTUAL" -> report.mutual
+        else -> true
+    } }
+    LaunchedEffect(controller.mySignal.reports, stationId, cty.dataRevision) {
+        val identities = controller.mySignal.reports.map { report ->
+            val entity = cty.lookup(report.callsign)
+            SpotLogIdentity(signalReportReference(report), report.callsign, entity?.dxcc.orEmpty(),
+                entity?.country.orEmpty(), report.band, report.mode)
+        }
+        reportStatuses = withContext(Dispatchers.IO) { database.spotStatuses(identities, stationId) }
+    }
+    LaunchedEffect(controller.requestedSignalReportId, controller.mySignal.reports) {
+        controller.requestedSignalReportId?.let { id ->
+            hearsMe = true
+            pskView = "BOTH"
+            val consumed = consumeSignalRequest(id, controller.mySignal.reports)
+            selectedReport = consumed.report
+            controller.consumeRequestedSignalReport(consumed.message)
+        }
+    }
     val filtered=rows.filter{now-it.receivedEpoch<=minutes*60&&(band=="ALL"||it.band==band)&&(mode=="ALL"||it.mode==mode)}.take(limit)
     Column(modifier,verticalArrangement=Arrangement.spacedBy(8.dp)){
         Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(7.dp),verticalAlignment=Alignment.CenterVertically){
             DxSelect("WINDOW","${minutes}m",listOf("15m","30m","60m","180m","360m")){minutes=it.removeSuffix("m").toInt()}
             DxSelect("LIMIT",limit.toString(),listOf("50","100","250","500","1000")){limit=it.toInt()}
             DxSelect("BAND",band,DxBands){band=it};DxSelect("MODE",mode,listOf("ALL")+rows.map{it.mode}.distinct()){mode=it}
-            FilterChip(hearsMe,{hearsMe=!hearsMe},{Text("WHO HEARS ME")})
+            FilterChip(hearsMe,{hearsMe=!hearsMe},{Text("PSK SIGNALS")})
+            if (hearsMe) listOf("BEING HEARD", "HEARING", "BOTH", "MUTUAL").forEach { value ->
+                FilterChip(pskView == value, { pskView = value }, { Text(value) })
+            }
             if(!hearsMe)FilterChip(showPaths,{showPaths=!showPaths},{Text("SPOT PATHS")})
             Text("${filtered.size} OBSERVATIONS",color=DxCyan,fontWeight=FontWeight.Black)
         }
         Row(Modifier.fillMaxSize(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
-            if(hearsMe)DxReceiverMap(controller.mySignal.reports,stationGrid,Modifier.weight(2.2f).fillMaxHeight())else DxWorldCanvas(filtered,stationGrid,false,cty,showPaths,Modifier.weight(2.2f).fillMaxHeight())
+            if(hearsMe)DxReceiverMap(pskRows,stationGrid,Modifier.weight(2.2f).fillMaxHeight())else DxWorldCanvas(filtered,stationGrid,false,cty,showPaths,Modifier.weight(2.2f).fillMaxHeight())
             DxSection(if(hearsMe)"RECEIVERS / SPOTTERS" else "MAP OBSERVATIONS",Modifier.weight(1f).fillMaxHeight()){
                 Row(Modifier.fillMaxWidth().height(34.dp).background(DxRaised).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){DxFlexCell(if(hearsMe)"RX CALL" else "DX",.8f,DxInk,true);DxFlexCell("BAND / MODE",.9f,DxInk,true);DxFlexCell(if(hearsMe)"SNR / KM" else "MHz / COUNTRY",1.2f,DxInk,true)}
-                if(hearsMe)LazyColumn(Modifier.fillMaxSize()){items(controller.mySignal.reports,key={it.callsign}){r->Row(Modifier.fillMaxWidth().height(44.dp).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){DxFlexCell("${r.callsign} ${r.locator}",.8f,DxGreen,true);DxFlexCell("${r.band} ${r.mode}",.9f,DxInk);DxFlexCell("${r.snr?.let{"$it dB"}?:"—"} · ${r.distanceKm?.let{"$it km"}?:"—"}",1.2f,DxAmber)};HorizontalDivider(color=Color(0xFF303940))}}
+                if(hearsMe)LazyColumn(Modifier.fillMaxSize()){items(pskRows,key={signalReportReference(it)}){r->val exact=selectedReport?.let(::signalReportReference)==signalReportReference(r);Row(Modifier.fillMaxWidth().height(44.dp).clickable{selectedReport=r}.background(if(exact)DxGreen.copy(alpha=.16f) else Color.Transparent).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){DxFlexCell("${if(exact)"SELECTED · " else ""}${r.callsign} ${r.locator}",.8f,DxGreen,true);DxFlexCell("${r.band} ${r.mode}${if(r.mutual)" · MUTUAL" else ""}",.9f,DxInk);DxFlexCell("${r.snr?.let{"$it dB"}?:"—"} · ${r.distanceKm?.let{"$it km"}?:"—"}",1.2f,DxAmber)};HorizontalDivider(color=Color(0xFF303940))}}
                 else LazyColumn(Modifier.fillMaxSize()){items(filtered,key={it.id}){spot->Row(Modifier.fillMaxWidth().height(44.dp).clickable{selected=spot}.padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){Box(Modifier.weight(.8f).fillMaxHeight().clickable{previous(spot)},contentAlignment=Alignment.CenterStart){Text(spot.callsign,color=DxCyan,fontWeight=FontWeight.Black,maxLines=1)};DxFlexCell("${spot.band} ${spot.mode}",.9f,DxInk);DxFlexCell("${formatMHz(spot.frequencyHz)} · ${cty.lookup(spot.callsign)?.country.orEmpty().ifBlank{spot.country}}",1.2f,DxAmber)};HorizontalDivider(color=Color(0xFF303940))}}
             }
         }
     }
-    selected?.let{DxSpotDialog(it,cty,null,{selected=null},{tune("FA%011d;".format(it.frequencyHz));selected=null})}
+    selected?.let{spot->DxSpotDialog(spot,cty,null,{selected=null},{requestReceiveTune(spot.frequencyHz, spot.mode,
+        "DX map · ${spot.callsign}", "Review receive-only frequency change");selected=null},
+        {previous(spot);selected=null},{val calls=features.watchlistText.lineSequence().map(String::trim).filter(String::isNotBlank).toMutableSet();if(spot.watchlisted)calls.remove(spot.callsign.uppercase(Locale.US))else calls.add(spot.callsign.uppercase(Locale.US));features.setWatchlist(calls.joinToString("\n"));selected=null})}
+    selectedReport?.let { report ->
+        val reference = signalReportReference(report)
+        val status = reportStatuses[reference]
+        val watched = features.watchlistText.lineSequence().any { it.equals(report.callsign, true) }
+        AlertDialog(onDismissRequest = { selectedReport = null }, title = { Text("${report.callsign} · ${report.direction.name.replace('_',' ')}") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("${report.senderCallsign} ${report.senderLocator} → ${report.receiverCallsign} ${report.receiverLocator}")
+                Text("${formatMHz(report.frequencyHz)} MHz · ${report.band} ${report.mode} · ${report.snr?.let { "$it dB" } ?: "SNR unavailable"}")
+                Text("Worked ${status?.callStatus ?: "—"} · DXCC ${status?.dxccStatus ?: "—"}${if(report.mutual)" · MUTUAL" else ""}", color = DxMuted)
+                if (controller.signalSelectionMessage.isNotBlank()) Text(controller.signalSelectionMessage, color = DxYellow)
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    TextButton({ previous(signalReportSpot(report, cty)); selectedReport = null }) { Text("LOG HISTORY") }
+                    TextButton({
+                        val calls = features.watchlistText.lineSequence().map(String::trim).filter(String::isNotBlank).toMutableSet()
+                        if (watched) calls.removeAll { it.equals(report.callsign, true) } else calls.add(report.callsign.uppercase(Locale.US))
+                        features.setWatchlist(calls.joinToString("\n")); selectedReport = null
+                    }) { Text(if (watched) "UNWATCH" else "WATCH") }
+                }
+            } },
+            confirmButton = { TextButton({ requestReceiveTune(report.frequencyHz, report.mode,
+                "PSK Reporter · ${report.callsign}", "Review receive-only frequency from exact ${report.direction.name.lowercase().replace('_',' ')} report"); selectedReport = null }) { Text("REVIEW RECEIVE") } },
+            dismissButton = { TextButton({ selectedReport = null }) { Text("Close") } })
+    }
 }
 
-@Composable private fun DxInsightPage(controller: NeuralDxController, features: FeatureController, modifier: Modifier){
+private fun signalReportSpot(report: SignalReport, cty: CtyController): AndroidDXSpot {
+    val entity = cty.lookup(report.callsign)
+    return AndroidDXSpot(signalReportReference(report), report.callsign, report.receiverCallsign, report.frequencyHz,
+        report.epoch, report.band, report.mode, entity?.country.orEmpty(), entity?.continent.orEmpty(),
+        entity?.cqZone?.toIntOrNull() ?: 0, entity?.ituZone?.toIntOrNull() ?: 0,
+        report.latitude ?: 0.0, report.longitude ?: 0.0, "PSK Reporter ${report.direction.name}",
+        0, 0, 1, false, false, false, false, false, false, false,
+        report.distanceKm ?: 0, 0, "PSK", "Exact PSK report; no automatic CAT")
+}
+
+@Composable private fun DxInsightPage(controller: NeuralDxController, policySpots: List<AndroidDXSpot>, modifier: Modifier){
     val tactical=controller.insight.recommendations+controller.currentOpportunities.map{"${it.callsign} · ${it.country} · priority ${it.priority} · ${it.reason}"}
     Row(modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
         Column(Modifier.weight(1.1f).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(8.dp)){
@@ -323,12 +693,12 @@ fun NeuralDxScreen(
             DxSection("LOG PERFORMANCE",Modifier.weight(.75f)){Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceAround){DxMiniValue("QSOs",controller.insight.log.qsos.toString());DxMiniValue("CALLS",controller.insight.log.calls.toString());DxMiniValue("DXCC",controller.insight.log.dxccs.toString());DxMiniValue("CONF",controller.insight.log.confirmedDxccs.toString())};HorizontalDivider(color=Color(0xFF374047));Text("Measured only from ${controller.insight.source.lowercase()} log scope · QSL/LoTW confirmation",color=DxMuted,fontSize=12.sp)}
         }
         DxSection("TACTICAL OPPORTUNITIES · NOW",Modifier.weight(1.15f).fillMaxHeight()){
-            LazyColumn(Modifier.fillMaxSize()){items(tactical.ifEmpty{listOf("No current recommendation")}){v->val idx=tactical.indexOf(v);Row(Modifier.fillMaxWidth().heightIn(min=48.dp).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){Text("${idx+1}",color=scoreColor(features.liveSpots.getOrNull(idx)?.score?:0),fontSize=22.sp,fontWeight=FontWeight.Black,modifier=Modifier.width(34.dp));Text(v,color=if(tactical.isNotEmpty())DxInk else DxMuted,modifier=Modifier.weight(1f),maxLines=2)};HorizontalDivider(color=Color(0xFF303940))}}
+            LazyColumn(Modifier.fillMaxSize()){items(tactical.ifEmpty{listOf("No current recommendation")}){v->val idx=tactical.indexOf(v);Row(Modifier.fillMaxWidth().heightIn(min=48.dp).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){Text("${idx+1}",color=scoreColor(policySpots.getOrNull(idx)?.score?:0),fontSize=22.sp,fontWeight=FontWeight.Black,modifier=Modifier.width(34.dp));Text(v,color=if(tactical.isNotEmpty())DxInk else DxMuted,modifier=Modifier.weight(1f),maxLines=2)};HorizontalDivider(color=Color(0xFF303940))}}
         }
         Column(Modifier.weight(1f).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(8.dp)){
             DxSection("BAND ANALYZER",Modifier.weight(1f)){controller.insight.log.bands.entries.take(10).forEach{DxBar(it.key,it.value,controller.insight.log.bands.values.maxOrNull()?:1)};if(controller.insight.log.bands.isEmpty())DxEmpty("No log distribution yet")}
             DxSection("MODE ANALYZER",Modifier.weight(.72f)){controller.insight.log.modes.entries.take(7).forEach{DxBar(it.key,it.value,controller.insight.log.modes.values.maxOrNull()?:1)}}
-            DxSection("MODEL / DATA HONESTY",Modifier.weight(.55f)){DxLine("Current opportunities",controller.currentOpportunities.size.toString(),DxCyan);DxLine("Live samples",features.liveSpots.size.toString(),DxGreen);Text("Current opportunities are a deterministic live heuristic, not a probability or forecast. Missing measurements stay unavailable; optional AI never replaces local evidence.",color=DxMuted,fontSize=12.sp)}
+            DxSection("MODEL / DATA HONESTY",Modifier.weight(.55f)){DxLine("Current opportunities",controller.currentOpportunities.size.toString(),DxCyan);DxLine("Policy samples",policySpots.size.toString(),DxGreen);Text("Current opportunities are a deterministic live heuristic, not a probability or forecast. Missing measurements stay unavailable; optional AI never replaces local evidence.",color=DxMuted,fontSize=12.sp)}
         }
     }
 }
@@ -353,23 +723,115 @@ fun NeuralDxScreen(
     }
 }
 
-@Composable private fun DxBriefingPage(controller:NeuralDxController,features:FeatureController,modifier:Modifier){
-    var expanded by remember{mutableStateOf<String?>(null)}
-    Column(modifier,verticalArrangement=Arrangement.spacedBy(8.dp)){
-        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text("LIVE DX INTELLIGENCE · 12-HOUR RESILIENT CACHE · ${controller.briefing.sumOf{it.items.size}} STORIES",color=DxMuted,modifier=Modifier.weight(1f),maxLines=1);FilterChip(controller.briefingDxMode,{controller.saveSettings(controller.notificationsEnabled,controller.ntfyUrl,controller.ntfyToken,controller.perplexityKey,!controller.briefingDxMode)},{Text("DX CALL EXTRACTION")})}
-        Row(Modifier.fillMaxSize(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
-            Column(Modifier.weight(1f).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(8.dp)){controller.briefing.filterIndexed{i,_->i%2==0}.forEach{source->DxBriefSource(source,controller,features,expanded,{expanded=it},Modifier.weight(1f))}}
-            Column(Modifier.weight(1f).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(8.dp)){controller.briefing.filterIndexed{i,_->i%2==1}.forEach{source->DxBriefSource(source,controller,features,expanded,{expanded=it},Modifier.weight(1f))}}
+@Composable private fun DxBriefingPage(controller: NeuralDxController, features: FeatureController, policySpots: List<AndroidDXSpot>, database: QsoDatabase,
+    wavelog: WavelogController, cty: CtyController, requestReceiveTune: (Long, String?, String, String) -> Unit,
+    intelligenceNeeds: Map<String, List<String>>, previous: (AndroidDXSpot) -> Unit,
+    dxNewsPreference: HamClockDxNewsPreference, updateDxNewsPreference: (HamClockDxNewsPreference) -> Unit,
+    modifier: Modifier) {
+    val sourceFilter = when (dxNewsPreference.source) {
+        HamClockDxNewsSource.ALL -> "ALL"
+        HamClockDxNewsSource.DX_WORLD -> "dxworld"
+        HamClockDxNewsSource.NG3K -> "ng3k"
+    }
+    var view by remember { mutableStateOf("CURRENT") }
+    var query by remember { mutableStateOf("") }
+    var selected by remember { mutableStateOf<BriefingItem?>(null) }
+    var statuses by remember { mutableStateOf(emptyMap<String, SpotLogStatus>()) }
+    val uriHandler = LocalUriHandler.current
+    val now = Instant.now().epochSecond
+    val merged = remember(controller.briefing, now / 60) { mergeDxNews(controller.briefing.flatMap(BriefingSource::items), now) }
+    val watched = features.watchlistText.lineSequence().map { it.trim().uppercase(Locale.US) }.filter(String::isNotBlank).toSet()
+    val rows = merged.filter { item ->
+        (sourceFilter == "ALL" || item.sourceId == sourceFilter) &&
+            (query.isBlank() || item.title.contains(query, true) || item.entity.contains(query, true) ||
+                item.callsigns.any { it.contains(query, true) }) && when (view) {
+            "UPCOMING" -> item.sourceId == "ng3k" && item.publishedEpoch > now
+            "SAVED" -> item.callsigns.any { it in watched }
+            else -> item.sourceId != "ng3k" || item.publishedEpoch <= now
         }
+    }
+    val stationId = wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }
+    LaunchedEffect(merged, stationId, cty.dataRevision) {
+        val calls = merged.flatMap(BriefingItem::callsigns).distinct().take(80)
+        val identities = calls.map { call -> val entity = cty.lookup(call); SpotLogIdentity("news:$call", call,
+            entity?.dxcc.orEmpty(), entity?.country.orEmpty(), "", "") }
+        statuses = withContext(Dispatchers.IO) { database.spotStatuses(identities, stationId) }
+    }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            listOf("CURRENT", "UPCOMING", "SAVED").forEach { FilterChip(view == it, { view = it }, { Text(it) }) }
+            (listOf("ALL") + controller.briefing.map(BriefingSource::id)).forEach { id ->
+                FilterChip(sourceFilter == id, {
+                    updateDxNewsPreference(dxNewsPreference.copy(source = when (id) {
+                        "dxworld" -> HamClockDxNewsSource.DX_WORLD
+                        "ng3k" -> HamClockDxNewsSource.NG3K
+                        else -> HamClockDxNewsSource.ALL
+                    }))
+                }, { Text(if (id == "ALL") id else controller.briefing.firstOrNull { it.id == id }?.name ?: id) })
+            }
+            Text("${rows.size} / ${merged.size}", color = DxCyan, fontWeight = FontWeight.Black)
+        }
+        OutlinedTextField(query, { query = it.take(48) }, label = { Text("Callsign, entity or headline") },
+            singleLine = true, modifier = Modifier.fillMaxWidth())
+        Text(controller.briefing.joinToString(" · ") { "${it.name} ${it.state.name} ${it.items.size}${it.error.takeIf(String::isNotBlank)?.let { error -> ": $error" }.orEmpty()}" },
+            color = DxMuted, fontSize = 10.sp, maxLines = 2)
+        LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            items(rows, key = { it.id.ifBlank { "${it.sourceId}:${it.link}" } }) { item ->
+                val call = item.callsigns.firstOrNull()
+                val status = call?.let { statuses["news:$it"] }
+                Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable { selected = item }.padding(5.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DxBriefImage(item.imageUrl, item.title, Modifier.width(82.dp).height(50.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(item.title, color = DxCyan, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(listOf(item.sourceLabel, item.published.take(22), item.callsigns.joinToString(), item.entity,
+                            status?.let { "${it.callStatus}/${it.dxccStatus}" }).filterNotNull().filter(String::isNotBlank).joinToString(" · "),
+                            color = DxMuted, fontSize = 11.sp, maxLines = 1)
+                    }
+                    if (call != null && call in watched) Text("★", color = DxYellow)
+                }
+                HorizontalDivider(color = Color(0xFF303940))
+            }
+        }
+    }
+    selected?.let { item ->
+        val call = item.callsigns.firstOrNull().orEmpty()
+        val status = statuses["news:$call"]
+        val live = policySpots.firstOrNull { it.callsign.equals(call, true) }
+        val calendar = controller.briefing.firstOrNull { it.id == "ng3k" }?.items?.firstOrNull { it.callsigns.any { c -> c.equals(call, true) } }
+        AlertDialog(onDismissRequest = { selected = null }, title = { Text(item.title) }, text = {
+            Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("${item.sourceLabel} · ${item.published.ifBlank { ageLabel(item.publishedEpoch) }}", color = DxMuted)
+                Text(item.summary.ifBlank { "No source summary" })
+                Text("Calls ${item.callsigns.joinToString().ifBlank { "none extracted" }} · Worked ${status?.callStatus ?: "—"} · DXCC ${status?.dxccStatus ?: "—"}")
+                calendar?.let { Text("Calendar match · ${it.published} · ${it.summary}", color = DxYellow) }
+                live?.let { Text("Live cluster · ${formatMHz(it.frequencyHz)} MHz ${it.mode} · ${intelligenceNeeds[it.id].orEmpty().joinToString().ifBlank { it.reason }}", color = DxGreen) }
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton({ if (item.sourceHomeUrl.startsWith("https://")) uriHandler.openUri(item.sourceHomeUrl) }) { Text("SOURCE") }
+                    TextButton({ if (item.link.startsWith("https://")) uriHandler.openUri(item.link) }) { Text("ARTICLE") }
+                    if (call.isNotBlank()) TextButton({
+                        val calls = watched.toMutableSet(); if (!calls.add(call)) calls.remove(call)
+                        features.setWatchlist(calls.joinToString("\n")); selected = null
+                    }) { Text(if (call in watched) "UNWATCH" else "WATCH") }
+                    if (call.isNotBlank()) TextButton({ previous(live ?: newsItemSpot(item, cty)); selected = null }) { Text("LOG HISTORY") }
+                }
+            }
+        }, confirmButton = {
+            if (live != null) TextButton({ requestReceiveTune(live.frequencyHz, live.mode, "Live cluster match · ${live.callsign}",
+                "Review receive-only frequency; news article itself cannot tune"); selected = null }) { Text("REVIEW LIVE SPOT") }
+            else TextButton({ selected = null }) { Text("Close") }
+        }, dismissButton = { if (live != null) TextButton({ selected = null }) { Text("Close") } })
     }
 }
 
-@Composable private fun DxBriefSource(source:BriefingSource,controller:NeuralDxController,features:FeatureController,expanded:String?,setExpanded:(String?)->Unit,modifier:Modifier){
-    DxSection("${source.name.uppercase()} · ${source.items.size} ITEMS",modifier){Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text("${source.site} · ${if(source.stale)"STALE CACHE" else ageLabel(source.updatedEpoch)}",color=if(source.stale)DxYellow else DxMuted,modifier=Modifier.weight(1f),maxLines=1);IconButton({controller.moveBriefingSource(source.id,-1)},Modifier.size(48.dp)){Icon(Icons.Outlined.KeyboardArrowUp,"Move source up")};IconButton({controller.moveBriefingSource(source.id,1)},Modifier.size(48.dp)){Icon(Icons.Outlined.KeyboardArrowDown,"Move source down")}}
-        if(source.error.isNotBlank())Text(source.error,color=DxYellow)
-        LazyColumn(Modifier.fillMaxSize()){items(source.items.take(12).withIndex().toList(),key={"${source.id}:${it.index}:${it.value.link}"}){indexed->val item=indexed.value;Row(Modifier.fillMaxWidth().heightIn(min=58.dp).clickable{setExpanded(if(expanded==item.link)null else item.link)}.padding(vertical=4.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)){DxBriefImage(item.imageUrl,item.title,Modifier.width(82.dp).height(50.dp));Column(Modifier.weight(1f)){Text(item.title,color=DxCyan,fontWeight=FontWeight.Bold,maxLines=if(expanded==item.link)3 else 1,overflow=TextOverflow.Ellipsis);Text(listOf(item.published.take(22),item.callsigns.joinToString()).filter{it.isNotBlank()}.joinToString(" · "),color=DxMuted,fontSize=11.sp,maxLines=1);if(expanded==item.link)Text(item.summary,color=DxInk,fontSize=12.sp,maxLines=3)};if(controller.briefingDxMode&&item.callsigns.isNotEmpty())TextButton({features.setWatchlist(features.watchlistText+"\n"+item.callsigns.first())},modifier=Modifier.heightIn(min=48.dp)){Text("★ ${item.callsigns.first()}")}};HorizontalDivider(color=Color(0xFF303940))}}
-        if(source.items.isEmpty())DxEmpty("No cached items; refresh when online")
-    }
+private fun newsItemSpot(item: BriefingItem, cty: CtyController): AndroidDXSpot {
+    val call = item.callsigns.firstOrNull().orEmpty(); val entity = cty.lookup(call)
+    return AndroidDXSpot("news:${item.id}", call, item.sourceLabel, 0, item.publishedEpoch,
+        item.bands.firstOrNull().orEmpty(), item.modes.firstOrNull().orEmpty(), item.entity.ifBlank { entity?.country.orEmpty() },
+        entity?.continent.orEmpty(), entity?.cqZone?.toIntOrNull() ?: 0, entity?.ituZone?.toIntOrNull() ?: 0,
+        entity?.latitude ?: 0.0, entity?.longitude ?: 0.0, "DX News history context", 0, 0, 1,
+        call in emptySet<String>(), false, false, false, false, false, false, 0, 0, "NEWS", "News item; no automatic CAT")
 }
 
 @Composable private fun DxSatellitesPage(controller:NeuralDxController,stationGrid:String,modifier:Modifier){
@@ -434,10 +896,10 @@ private val briefingImageCache=object:LruCache<String,ImageBitmap>(12*1024*1024)
 @Composable private fun DxBriefImage(url:String,title:String,modifier:Modifier){val bitmap by produceState<ImageBitmap?>(null,url){value=null;if(url.startsWith("https://",true))value=withContext(Dispatchers.IO){briefingImageCache.get(url)?:runCatching{val c=URL(url).openConnection() as HttpURLConnection;c.connectTimeout=6000;c.readTimeout=9000;c.instanceFollowRedirects=true;try{val bytes=c.inputStream.use{it.readNBytes(2*1024*1024)};val b=BitmapFactory.Options().apply{inJustDecodeBounds=true};BitmapFactory.decodeByteArray(bytes,0,bytes.size,b);var s=1;while(b.outWidth/s>360||b.outHeight/s>240)s*=2;BitmapFactory.decodeByteArray(bytes,0,bytes.size,BitmapFactory.Options().apply{inSampleSize=s})?.asImageBitmap()?.also{briefingImageCache.put(url,it)}}finally{c.disconnect()}}.getOrNull()}}
     Surface(color=DxRaised,shape=RoundedCornerShape(6.dp),modifier=modifier){if(bitmap!=null)Image(bitmap!!,contentDescription="Briefing image for $title",contentScale=ContentScale.Crop,modifier=Modifier.fillMaxSize())else Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){Icon(Icons.Outlined.Newspaper,null,tint=DxMuted)}}}
 
-@Composable private fun DxSpotDialog(spot:AndroidDXSpot,cty:CtyController,status:SpotLogStatus?,dismiss:()->Unit,tune:()->Unit){val e=cty.lookup(spot.callsign);AlertDialog(onDismissRequest=dismiss,title={Text(spot.callsign)},text={Column(verticalArrangement=Arrangement.spacedBy(6.dp)){Text("${formatMHz(spot.frequencyHz)} MHz · ${spot.band} · ${spot.mode}",color=DxAmber,fontWeight=FontWeight.Bold);Text(e?.country.orEmpty().ifBlank{spot.country}.ifBlank{"Unknown DXCC"});Text("CQ ${e?.cqZone.orEmpty().ifBlank{spot.cqZone.toString()}} · ITU ${e?.ituZone.orEmpty().ifBlank{spot.ituZone.toString()}} · ${e?.continent.orEmpty().ifBlank{spot.continent}}",color=DxMuted);Text("Call ${status?.callStatus?:"—"} · DXCC ${status?.dxccStatus?:"—"}",color=DxYellow);Text("Score ${spot.score} · confidence ${spot.confidence} · ${spot.samples} samples");Text(spot.reason.ifBlank{spot.comment}.ifBlank{"No additional analysis"},color=DxMuted)}},confirmButton={Button(tune){Text("Tune VFO A")}},dismissButton={TextButton(dismiss){Text("Close")}})}
+@Composable private fun DxSpotDialog(spot:AndroidDXSpot,cty:CtyController,status:SpotLogStatus?,dismiss:()->Unit,tune:()->Unit,history:()->Unit,toggleWatch:()->Unit){val e=cty.lookup(spot.callsign);AlertDialog(onDismissRequest=dismiss,title={Text(spot.callsign)},text={Column(verticalArrangement=Arrangement.spacedBy(6.dp)){Text("${formatMHz(spot.frequencyHz)} MHz · ${spot.band} · ${spot.mode}",color=DxAmber,fontWeight=FontWeight.Bold);Text(e?.country.orEmpty().ifBlank{spot.country}.ifBlank{"Unknown DXCC"});Text("CQ ${e?.cqZone.orEmpty().ifBlank{spot.cqZone.toString()}} · ITU ${e?.ituZone.orEmpty().ifBlank{spot.ituZone.toString()}} · ${e?.continent.orEmpty().ifBlank{spot.continent}}",color=DxMuted);Text("Call ${status?.callStatus?:"—"} · DXCC ${status?.dxccStatus?:"—"}",color=DxYellow);Text("Score ${spot.score} · confidence ${spot.confidence} · ${spot.samples} samples");Text(spot.reason.ifBlank{spot.comment}.ifBlank{"No additional analysis"},color=DxMuted)}},confirmButton={Button(tune){Text("Tune VFO A")}},dismissButton={Row{TextButton(history){Text("Log history")};TextButton(toggleWatch){Text(if(spot.watchlisted)"Unwatch" else "Watch")};TextButton(dismiss){Text("Close")}}})}
 @Composable private fun ManualSpotDialog(features:FeatureController,dismiss:()->Unit){var call by remember{mutableStateOf("")};var freq by remember{mutableStateOf("")};var comment by remember{mutableStateOf("")};AlertDialog(onDismissRequest=dismiss,title={Text("Send DX cluster spot")},text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(call,{call=it.uppercase()},label={Text("Callsign")},singleLine=true);OutlinedTextField(freq,{freq=it.filter{c->c.isDigit()||c=='.'}},label={Text("Frequency kHz")},singleLine=true);OutlinedTextField(comment,{comment=it},label={Text("Comment")},singleLine=true);Text("Posts to the currently connected cluster only.",color=DxMuted)}},confirmButton={Button({features.postSpot(call,freq.toDoubleOrNull()?:0.0,comment);dismiss()},enabled=call.isNotBlank()&&freq.toDoubleOrNull()!=null){Text("Send spot")}},dismissButton={TextButton(dismiss){Text("Cancel")}})}
 
-private fun dxPageIcon(page:NeuralDxPage)=when(page){NeuralDxPage.COCKPIT->Icons.Outlined.SpaceDashboard;NeuralDxPage.MAP->Icons.Outlined.Map;NeuralDxPage.INSIGHT->Icons.Outlined.Psychology;NeuralDxPage.WORLD->Icons.Outlined.Public;NeuralDxPage.BRIEFING->Icons.Outlined.Newspaper;NeuralDxPage.SATELLITES->Icons.Outlined.SatelliteAlt;NeuralDxPage.WEATHER->Icons.Outlined.Thunderstorm}
+private fun dxPageIcon(page:NeuralDxPage)=when(page){NeuralDxPage.COCKPIT->Icons.Outlined.SpaceDashboard;NeuralDxPage.MAP->Icons.Outlined.Map;NeuralDxPage.INSIGHT->Icons.Outlined.Psychology;NeuralDxPage.WORLD->Icons.Outlined.Public;NeuralDxPage.BRIEFING->Icons.Outlined.Newspaper;NeuralDxPage.OBSERVATIONS->Icons.Outlined.Radar;NeuralDxPage.SATELLITES->Icons.Outlined.SatelliteAlt;NeuralDxPage.WEATHER->Icons.Outlined.Thunderstorm}
 private fun scoreColor(score:Int)=when{score>=75->DxGreen;score>=55->DxYellow;else->DxMuted}
 private fun formatMHz(hz:Long)="%.3f".format(Locale.US,hz/1_000_000.0)
 private fun ageLabel(epoch:Long):String{val m=((Instant.now().epochSecond-epoch).coerceAtLeast(0)/60).toInt();return if(m<60)"${m}m" else "${m/60}h ${m%60}m"}

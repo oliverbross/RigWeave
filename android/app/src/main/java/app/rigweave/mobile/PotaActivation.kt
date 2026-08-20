@@ -184,6 +184,7 @@ internal class PotaActivationController(context: Context, private val database: 
     var session by mutableStateOf(restoredActive ?: load(finishedFile)); private set
     var recovered by mutableStateOf(restoredActive != null); private set
     var pendingP2p by mutableStateOf<PotaP2pDraft?>(null); private set
+    var pendingPlan by mutableStateOf<PotaActivationSetup?>(null); private set
     var openToken by mutableStateOf(0L); private set
 
     fun start(setup: PotaActivationSetup): Boolean {
@@ -217,6 +218,12 @@ internal class PotaActivationController(context: Context, private val database: 
     }
 
     fun consumeP2p() { pendingP2p = null }
+    fun preparePlan(setup: PotaActivationSetup) {
+        pendingPlan = setup.copy(boundaryAcknowledged = false)
+        openToken = Instant.now().toEpochMilli()
+        message = "Planner details loaded — review the setup and boundary acknowledgement before starting"
+    }
+    fun consumePlan() { pendingPlan = null }
     fun requestOpen() { openToken = Instant.now().toEpochMilli() }
     fun resume() { recovered = false; message = "Activation resumed locally — no radio or transmit action was started" }
 
@@ -228,8 +235,8 @@ internal class PotaActivationController(context: Context, private val database: 
 
     fun abandon() { activeFile.delete(); session = null; recovered = false; message = "Session state removed; saved QSOs were preserved" }
     fun dismissReview() { if (session?.state == PotaActivationState.FINISHED) { finishedFile.delete(); session = null } }
-    fun qsos(): List<Qso> = session?.let { current -> database.all().filter { it.activationSessionId == current.id } }.orEmpty()
-    fun progress(now: Long = Instant.now().epochSecond) = session?.let { activationProgress(it, database.all(), now) }
+    fun qsos(): List<Qso> = session?.let { database.activationQsos(it.id) }.orEmpty()
+    fun progress(now: Long = Instant.now().epochSecond) = session?.let { activationProgress(it, database.activationQsos(it.id), now) }
 
     private fun load(file: AtomicFile): PotaActivationSession? = runCatching {
         if (!file.baseFile.exists()) null else decodePotaSession(file.openRead().bufferedReader().use { it.readText() })
