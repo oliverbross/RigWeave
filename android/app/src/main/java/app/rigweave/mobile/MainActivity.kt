@@ -400,8 +400,9 @@ private fun navIcon(item: Destination) = when (item) {
         progress.refresh(progress.filters, features.liveSpots, intelligencePortableSpots, intelligenceAttention, cty, portable.sotaCatalogue)
     }
     when (destination) {
-        Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, publicProviders,
-            operations, send, openDx, openPortable, openProgress, openOperations)
+        Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, callbook,
+            publicProviders, operations, send, openDx, openPortable, openProgress, openOperations,
+            openLogbook, closeEq, openDigi)
         Destination.RADIO -> Column(Modifier.fillMaxSize()) {
             if (compact) SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                 SegmentedButton(true, {}, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Radio") }

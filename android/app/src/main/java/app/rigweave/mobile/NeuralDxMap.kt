@@ -91,7 +91,7 @@ private data class MapMarker(
 )
 
 private data class MapPath(val points: List<LatLng>, val color: Int, val widthDp: Float = 1.5f)
-private data class MapArea(val points: List<LatLng>, val fill: Int, val stroke: Int)
+internal data class MapArea(val points: List<LatLng>, val fill: Int, val stroke: Int)
 private class RenderedMapAnnotations {
     var markers: Map<MapMarker, Annotation> = emptyMap()
     var paths: Map<MapPath, Annotation> = emptyMap()
@@ -681,7 +681,7 @@ private fun clipPolygonLongitude(points: List<LatLng>, boundary: Double, keepGre
     return result
 }
 
-private fun sunPosition(instant: Instant): Pair<Double, Double> {
+internal fun sunPosition(instant: Instant): Pair<Double, Double> {
     val utc = instant.atZone(java.time.ZoneOffset.UTC)
     val jd = instant.toEpochMilli() / 86_400_000.0 + 2_440_587.5
     val n = jd - 2_451_545.0
@@ -713,7 +713,7 @@ internal fun terminatorPoints(instant: Instant): List<LatLng> {
     }
 }
 
-private fun greylineArea(instant: Instant): MapArea {
+internal fun greylineArea(instant: Instant): MapArea {
     val terminator = terminatorPoints(instant)
     if (kotlin.math.abs(sunPosition(instant).first) < .01) {
         return MapArea(terminator, Color.argb(92, 0, 2, 36), Color.TRANSPARENT)

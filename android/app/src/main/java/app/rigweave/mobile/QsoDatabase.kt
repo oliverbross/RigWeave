@@ -51,6 +51,16 @@ data class DxccCell(val worked: Boolean = false, val confirmed: Boolean = false)
 data class DxccSummary(val dxcc: String, val country: String, val cells: Map<String, DxccCell>)
 data class StationInsight(val record: AndroidCallbookRecord, val history: CallsignHistory, val dxcc: DxccSummary)
 data class QsoCatchUpCandidate(val id:String,val stationCallsign:String)
+data class HamClockRecentQso(
+    val id: String,
+    val callsign: String,
+    val frequencyHz: Long,
+    val band: String,
+    val mode: String,
+    val country: String,
+    val grid: String,
+    val createdAt: Long,
+)
 data class NeuralLogSummary(
     val qsos: Int = 0, val calls: Int = 0, val dxccs: Int = 0, val confirmedDxccs: Int = 0,
     val bands: Map<String, Int> = emptyMap(), val modes: Map<String, Int> = emptyMap(),
@@ -217,6 +227,30 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     fun changeToken(): Long = changeRevision.get()
     fun list(): List<Qso> = query(" LIMIT 100")
     fun recent(limit: Int = 120): List<Qso> = query(" LIMIT ${limit.coerceIn(1, 500)}")
+    fun recentHamClockProjection(limit: Int = 120): List<HamClockRecentQso> {
+        val size = limit.coerceIn(1, 200)
+        return buildList {
+            readableDatabase.rawQuery(
+                """SELECT qso_id,callsign_norm,frequency_hz,band_norm,mode_norm,country_norm,grid_norm,created_at
+                    FROM qso_projection WHERE is_valid=1
+                    ORDER BY created_at DESC,qso_id LIMIT $size""".trimIndent(),
+                null,
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    add(HamClockRecentQso(
+                        id = cursor.getString(0),
+                        callsign = cursor.getString(1),
+                        frequencyHz = cursor.getLong(2),
+                        band = cursor.getString(3),
+                        mode = cursor.getString(4),
+                        country = cursor.getString(5),
+                        grid = cursor.getString(6),
+                        createdAt = cursor.getLong(7),
+                    ))
+                }
+            }
+        }
+    }
     // Compatibility/export helper only: interactive screens must use bounded projection queries.
     fun all(): List<Qso> = query("")
     fun projectionHealth(): ProjectionHealth {

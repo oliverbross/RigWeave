@@ -72,17 +72,21 @@ class OpenHamClockTruthAuditTest {
 
     @Test fun unsupportedSettingsCannotClaimActiveConsumption() {
         val planned = listOf(
-            "panels.columnSpan", "panels.collapsed", "map.basemap", "map.followStation", "map.centerLatitude",
-            "map.centerLongitude", "map.zoom", "map.layers.opacity", "cluster.windowMinutes", "cluster.refreshSeconds",
+            "cluster.windowMinutes", "cluster.refreshSeconds",
             "cluster.maximumSpots", "cluster.filter", "pskReporter.direction", "portable.enabledPrograms",
-            "satellites.trackedNoradIds", "dxTarget.locked", "display.density", "display.timeZoneMode",
-            "display.hourFormat", "display.unitSystem", "display.lowDataMode",
+            "satellites.trackedNoradIds",
         )
         planned.forEach { key ->
             assertEquals(key, HamClockSettingAvailability.PLANNED_NOT_AVAILABLE, hamClockSettingAvailability[key])
         }
-        assertEquals(HamClockSettingAvailability.ACTIVE, hamClockSettingAvailability["panels.rowSpan"])
-        assertEquals(HamClockSettingAvailability.ACTIVE, hamClockSettingAvailability["map.layers.visible"])
+        listOf(
+            "panels.rowSpan", "panels.columnSpan", "panels.collapsed", "map.basemap", "map.followStation",
+            "map.centerLatitude", "map.centerLongitude", "map.zoom", "map.layers.visible", "map.layers.opacity",
+            "dxTarget.locked", "dxTarget.source", "display.density", "display.timeZoneMode", "display.hourFormat",
+            "display.unitSystem", "display.lowDataMode", "display.immersive",
+        ).forEach { key ->
+            assertEquals(key, HamClockSettingAvailability.ACTIVE, hamClockSettingAvailability[key])
+        }
     }
 
     @Test fun keyedCoalescerSharesResultAndPreservesIndependentRequests() {

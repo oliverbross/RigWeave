@@ -32,7 +32,7 @@ class HamClockSettingsStoreTest {
             satellites = HamClockSatellitePreference(setOf(25544, 43017), 48, 20, false, true, true),
             dxTarget = HamClockDxTarget("vk9xy", "QF56ab", -31.0, 159.0, true),
             display = HamClockDisplayPreference(HamClockDensity.LARGE_TOUCH, HamClockTimeZoneMode.UTC,
-                HamClockHourFormat.H12, HamClockUnitSystem.IMPERIAL, true),
+                HamClockHourFormat.H12, HamClockUnitSystem.IMPERIAL, true, true),
         )
         val document = HamClockSettingsDocument(settings = settings, activeProfileId = "travel", profiles = listOf(
             HamClockNamedProfile("travel", "Travel", settings, 100, 200)
@@ -65,6 +65,24 @@ class HamClockSettingsStoreTest {
         reloaded.deleteProfile("field-day")
         assertTrue(reloaded.profiles().isEmpty())
         assertNull(reloaded.snapshot().activeProfileId)
+    }
+
+    @Test
+    fun resetAndClearOperationsArePersisted() {
+        val store = HamClockSettingsStore(FakePersistence(), Clock.systemUTC(), { "profile" })
+        val solar = store.settings().panels.first { it.id == HamClockPanelId.SOLAR }
+        store.setPanel(solar.copy(visible = false, rowSpan = 4))
+        store.saveProfile("Changed")
+        store.clearActiveProfile()
+        assertNull(store.snapshot().activeProfileId)
+        assertFalse(store.settings().panels.first { it.id == HamClockPanelId.SOLAR }.visible)
+
+        store.resetPanel(HamClockPanelId.SOLAR)
+        assertEquals(defaultHamClockPanels().first { it.id == HamClockPanelId.SOLAR },
+            store.settings().panels.first { it.id == HamClockPanelId.SOLAR })
+        store.setPanel(HamClockPanelPreference("future.panel"))
+        store.resetPanel("future.panel")
+        assertFalse(store.settings().panels.any { it.id == "future.panel" })
     }
 
     @Test

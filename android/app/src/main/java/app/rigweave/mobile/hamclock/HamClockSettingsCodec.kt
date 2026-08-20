@@ -6,7 +6,7 @@ import java.util.Locale
 
 object HamClockSettingsCodec {
     const val SCHEMA = "rigweave.hamclock.settings"
-    const val CURRENT_VERSION = 2
+    const val CURRENT_VERSION = 3
     const val MAX_PROFILES = 24
     const val MAX_JSON_BYTES = 1_048_576
 
@@ -238,18 +238,19 @@ object HamClockSettingsCodec {
 
     private fun encodeTarget(value: HamClockDxTarget) = JSONObject()
         .put("callsign", value.callsign).put("grid", value.grid).put("locked", value.locked)
+        .put("source", value.source.name)
         .also { row -> value.latitude?.let { row.put("latitude", it) }; value.longitude?.let { row.put("longitude", it) } }
 
     private fun decodeTarget(row: JSONObject) = HamClockDxTarget(
         callsign = row.optString("callsign"), grid = row.optString("grid"),
         latitude = row.optionalDouble("latitude"), longitude = row.optionalDouble("longitude"),
-        locked = row.optBoolean("locked"),
+        locked = row.optBoolean("locked"), source = row.enum("source", HamClockDxTargetSource.MANUAL),
     )
 
     private fun encodeDisplay(value: HamClockDisplayPreference) = JSONObject()
         .put("density", value.density.name).put("time_zone_mode", value.timeZoneMode.name)
         .put("hour_format", value.hourFormat.name).put("unit_system", value.unitSystem.name)
-        .put("low_data_mode", value.lowDataMode)
+        .put("low_data_mode", value.lowDataMode).put("immersive", value.immersive)
 
     private fun decodeDisplay(row: JSONObject) = HamClockDisplayPreference(
         density = row.enum("density", HamClockDensity.COMPACT),
@@ -257,6 +258,7 @@ object HamClockSettingsCodec {
         hourFormat = row.enum("hour_format", HamClockHourFormat.H24),
         unitSystem = row.enum("unit_system", HamClockUnitSystem.METRIC),
         lowDataMode = row.optBoolean("low_data_mode"),
+        immersive = row.optBoolean("immersive"),
     )
 
     private fun encodeProfile(value: HamClockNamedProfile) = JSONObject()

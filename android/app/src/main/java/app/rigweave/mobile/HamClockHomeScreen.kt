@@ -9,17 +9,7 @@ FORM: Wide screens use a fixed three-column console; compact screens preserve th
 */
 
 import android.content.Context
-import app.rigweave.mobile.hamclock.HamClockContest
-import app.rigweave.mobile.hamclock.HamClockDxpedition
-import app.rigweave.mobile.hamclock.HamClockFeed
-import app.rigweave.mobile.hamclock.HamClockPanelId
-import app.rigweave.mobile.hamclock.HamClockPanelPreference
-import app.rigweave.mobile.hamclock.HamClockMapLayerPreference
-import app.rigweave.mobile.hamclock.HamClockNamedProfile
-import app.rigweave.mobile.hamclock.HamClockPublicProviders
-import app.rigweave.mobile.hamclock.HamClockSettingsStore
-import app.rigweave.mobile.hamclock.HamClockSolarCelestialSnapshot
-import app.rigweave.mobile.hamclock.HamClockUserSettings
+import app.rigweave.mobile.hamclock.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -60,6 +50,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -90,7 +82,6 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
-import java.io.File
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -105,42 +96,10 @@ private val HcGreen = Color(0xFF43D17C)
 private val HcCyan = Color(0xFF42C7D8)
 private val HcRed = Color(0xFFE65B54)
 private val HcYellow = Color(0xFFF3D054)
-private val HcClock = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.US)
 private val HcDate = DateTimeFormatter.ofPattern("EEE dd MMM", Locale.US)
 private val HcLabelSize = 11.sp
 private val HcMetaSize = 11.sp
 private val HcRowSize = 12.sp
-
-private data class HamClockDashboardConfig(
-    val station: Boolean = true, val weather: Boolean = true, val bandActivity: Boolean = false,
-    val signal: Boolean = true, val dxpeditions: Boolean = true, val cluster: Boolean = true,
-    val solar: Boolean = true, val target: Boolean = true, val voacap: Boolean = true,
-    val portable: Boolean = false, val satellites: Boolean = false, val contests: Boolean = true,
-)
-
-private fun HamClockUserSettings.dashboardConfig(): HamClockDashboardConfig {
-    fun value(id: String, fallback: Boolean) = panels.firstOrNull { it.id == id }?.visible ?: fallback
-    return HamClockDashboardConfig(
-        value(HamClockPanelId.STATION, true), value(HamClockPanelId.WEATHER, true),
-        value(HamClockPanelId.BAND_ACTIVITY, false), value(HamClockPanelId.PSK_REPORTER, true),
-        value(HamClockPanelId.DX_EXPEDITIONS, true), value(HamClockPanelId.DX_CLUSTER, true),
-        value(HamClockPanelId.SOLAR, true), value(HamClockPanelId.DX_TARGET, true),
-        value(HamClockPanelId.VOACAP, true), value(HamClockPanelId.PORTABLE, false),
-        value(HamClockPanelId.SATELLITES, false), value(HamClockPanelId.CONTESTS, true),
-    )
-}
-
-private fun HamClockUserSettings.withDashboardConfig(value: HamClockDashboardConfig): HamClockUserSettings {
-    val visibility = mapOf(
-        HamClockPanelId.STATION to value.station, HamClockPanelId.WEATHER to value.weather,
-        HamClockPanelId.BAND_ACTIVITY to value.bandActivity, HamClockPanelId.PSK_REPORTER to value.signal,
-        HamClockPanelId.DX_EXPEDITIONS to value.dxpeditions, HamClockPanelId.DX_CLUSTER to value.cluster,
-        HamClockPanelId.SOLAR to value.solar, HamClockPanelId.DX_TARGET to value.target,
-        HamClockPanelId.VOACAP to value.voacap, HamClockPanelId.PORTABLE to value.portable,
-        HamClockPanelId.SATELLITES to value.satellites, HamClockPanelId.CONTESTS to value.contests,
-    )
-    return copy(panels = panels.map { panel -> visibility[panel.id]?.let { panel.copy(visible = it) } ?: panel })
-}
 
 @Composable
 internal fun HamClockHomeScreen(
@@ -152,6 +111,7 @@ internal fun HamClockHomeScreen(
     database: QsoDatabase,
     wavelog: WavelogController,
     cty: CtyController,
+    callbook: CallbookController,
     publicProviders: HamClockPublicProviders,
     operations: OperationsController,
     send: (String) -> Unit,
@@ -159,6 +119,9 @@ internal fun HamClockHomeScreen(
     openPortable: () -> Unit,
     openProgress: () -> Unit,
     openOperations: () -> Unit,
+    openLogbook: () -> Unit,
+    openRadio: () -> Unit,
+    openDigi: () -> Unit,
 ) {
     val context = LocalContext.current
     val stationId = wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }
@@ -171,54 +134,21 @@ internal fun HamClockHomeScreen(
     var contestFeed by remember { mutableStateOf<HamClockFeed<List<HamClockContest>>?>(null) }
     var dxpeditionFeed by remember { mutableStateOf<HamClockFeed<List<HamClockDxpedition>>?>(null) }
     var celestialFeed by remember { mutableStateOf<HamClockFeed<HamClockSolarCelestialSnapshot>?>(null) }
-    fun mapFlag(id: String, fallback: Boolean) = settingsDocument.settings.map.layers.firstOrNull { it.id == id }?.visible ?: fallback
-    var now by remember { mutableStateOf(Instant.now()) }
-    var showPaths by remember { mutableStateOf(mapFlag("dx_paths", true)) }
-    var showGreyline by remember { mutableStateOf(mapFlag("grayline", true)) }
-    var showSignals by remember { mutableStateOf(mapFlag("psk_reporter", false)) }
-    var showPortable by remember { mutableStateOf(mapFlag("portable", true)) }
-    var showSatellites by remember { mutableStateOf(mapFlag("satellites", false)) }
-    var showLoggedQsos by remember { mutableStateOf(mapFlag("logged_qsos", hamClockPrefs.getBoolean("map_logged_qsos", false))) }
-    var showLightning by remember { mutableStateOf(mapFlag("lightning", hamClockPrefs.getBoolean("map_lightning", false))) }
-    var dashboardConfig by remember { mutableStateOf(settingsDocument.settings.dashboardConfig()) }
+    var mapInstant by remember { mutableStateOf(Instant.now()) }
     var configureDashboard by rememberSaveable { mutableStateOf(false) }
+    var configureTarget by rememberSaveable { mutableStateOf(false) }
     fun decodeFilter(key: String) = hamClockPrefs.getString(key, "").orEmpty().split(',').map(String::trim).filter(String::isNotBlank).toSet()
     var spotFilters by remember { mutableStateOf(SpotFilters(decodeFilter("cluster_bands"), decodeFilter("cluster_modes"),
         decodeFilter("cluster_cs"), decodeFilter("cluster_ds"))) }
     var activeSpotFilter by remember { mutableStateOf<SpotFilterDimension?>(null) }
     var spotStatuses by remember { mutableStateOf<Map<String, SpotLogStatus>>(emptyMap()) }
-    var recentQsos by remember { mutableStateOf<List<Qso>>(emptyList()) }
-    fun updateDashboard(value: HamClockDashboardConfig) {
-        dashboardConfig = value
-        settingsDocument = settingsStore.updateSettings { it.withDashboardConfig(value) }
-    }
-    fun repositionPanel(id: String, column: Int?, orderDelta: Int) {
-        val current = settingsDocument.settings.panels.firstOrNull { it.id == id } ?: return
-        settingsDocument = settingsStore.setPanel(current.copy(
-            column = column ?: current.column,
-            order = (current.order + orderDelta).coerceIn(0, 999),
-        ))
-    }
-    fun saveDashboardProfile() {
-        settingsStore.saveProfile("Layout ${settingsStore.profiles().size + 1}")
+    var recentQsos by remember { mutableStateOf<List<HamClockRecentQso>>(emptyList()) }
+    fun saveDashboardProfile(name: String, replaceProfileId: String? = null) {
+        settingsStore.saveProfile(name, replaceProfileId)
         settingsDocument = settingsStore.snapshot()
     }
     fun applyDashboardProfile(id: String) {
         settingsDocument = settingsStore.applyProfile(id)
-        dashboardConfig = settingsDocument.settings.dashboardConfig()
-        fun visible(layer: String, fallback: Boolean) = settingsDocument.settings.map.layers
-            .firstOrNull { it.id == layer }?.visible ?: fallback
-        showPaths = visible("dx_paths", showPaths); showGreyline = visible("grayline", showGreyline)
-        showSignals = visible("psk_reporter", showSignals); showPortable = visible("portable", showPortable)
-        showSatellites = visible("satellites", showSatellites); showLoggedQsos = visible("logged_qsos", showLoggedQsos)
-        showLightning = visible("lightning", showLightning)
-    }
-    fun updateMapFlag(key: String, layerId: String, value: Boolean, apply: (Boolean) -> Unit) {
-        apply(value)
-        hamClockPrefs.edit().putBoolean(key, value).apply()
-        val old = settingsDocument.settings.map.layers.firstOrNull { it.id == layerId }
-            ?: HamClockMapLayerPreference(layerId, visible = value)
-        settingsDocument = settingsStore.setMapLayer(old.copy(visible = value))
     }
     fun updateSpotFilters(value: SpotFilters) {
         spotFilters = value
@@ -229,7 +159,7 @@ internal fun HamClockHomeScreen(
     }
 
     LaunchedEffect(Unit) {
-        while (true) { now = Instant.now(); delay(1_000) }
+        while (true) { mapInstant = Instant.now(); delay(60_000) }
     }
     LaunchedEffect(features.liveSpots, stationId, cty.dataRevision) {
         neuralDx.ingest(features.liveSpots, stationId, cty, stationCall)
@@ -250,7 +180,7 @@ internal fun HamClockHomeScreen(
     }
     LaunchedEffect(portable.pota.spots.size, portable.wwffSpots.size, portable.sotaSpots.size,
         radio.frequencyHz, stationGrid, portable.lastQsoRevision) {
-        portable.refreshOpportunities(now.epochSecond, radio.frequencyHz, stationGrid)
+        portable.refreshOpportunities(Instant.now().epochSecond, radio.frequencyHz, stationGrid)
     }
 
     val mapSpots = remember(features.liveSpots, neuralDx.enrichedSpots) {
@@ -275,8 +205,25 @@ internal fun HamClockHomeScreen(
     val propagationRepository = remember(context) { HamClockPropagationRepository(context) }
     var pathPrediction by remember { mutableStateOf(HamClockPropagationSnapshot()) }
     val selectedDxTarget = preferredDxTarget(visibleMapSpots)
+    val resolvedDxTarget = resolveHamClockTarget(settingsDocument.settings.dxTarget, selectedDxTarget)
     val stationPoint = maidenheadCenter(stationGrid)
-    val targetPoint = selectedDxTarget?.takeIf { it.latitude != 0.0 || it.longitude != 0.0 }?.let { GeoPoint(it.latitude, it.longitude) }
+    val targetPoint = resolvedDxTarget?.point
+    LaunchedEffect(selectedDxTarget?.id, settingsDocument.settings.dxTarget?.locked) {
+        val automatic = selectedDxTarget ?: return@LaunchedEffect
+        if (settingsDocument.settings.dxTarget?.locked == true) return@LaunchedEffect
+        val current = settingsDocument.settings.dxTarget
+        if (current?.source != HamClockDxTargetSource.AUTOMATIC || current.callsign != automatic.callsign ||
+            current.latitude != automatic.latitude || current.longitude != automatic.longitude) {
+            settingsDocument = settingsStore.updateSettings { settings ->
+                settings.copy(dxTarget = HamClockDxTarget(
+                    callsign = automatic.callsign,
+                    latitude = automatic.latitude,
+                    longitude = automatic.longitude,
+                    source = HamClockDxTargetSource.AUTOMATIC,
+                ))
+            }
+        }
+    }
     LaunchedEffect(stationPoint) {
         while (true) {
             val latitude = stationPoint?.latitude ?: 0.0
@@ -305,130 +252,179 @@ internal fun HamClockHomeScreen(
         while (true) {
             val revision = database.changeToken()
             if (revision != observedRevision) {
-                recentQsos = withContext(Dispatchers.IO) { database.recent(120) }
+                recentQsos = withContext(Dispatchers.IO) { database.recentHamClockProjection(120) }
                 observedRevision = revision
             }
             delay(5_000)
         }
     }
-    val portableMinute = now.epochSecond / 60
+    val portableMinute = mapInstant.epochSecond / 60
     val portableMapSpots = remember(portable.rankedOpportunities, portableMinute) {
         portable.rankedOpportunities.asSequence().map { it.spot }
             .filter { it.activeAt(portableMinute * 60) && it.latitude != null && it.longitude != null }
             .take(160).toList()
     }
-    val sidePanels = settingsDocument.settings.panels.filter { it.visible && it.id != HamClockPanelId.MAP }
-    val leftPanels = sidePanels.filter { it.column <= 0 }.sortedBy(HamClockPanelPreference::order)
-    val rightPanels = sidePanels.filter { it.column > 0 }.sortedBy(HamClockPanelPreference::order)
-
-    @Composable fun SidePanel(panel: HamClockPanelPreference, modifier: Modifier) {
-        when (panel.id) {
-            HamClockPanelId.STATION -> StationPanel(stationCall, stationGrid, radio, wavelog, app, send, modifier)
-            HamClockPanelId.WEATHER -> WeatherPanel(neuralDx.weather, modifier)
-            HamClockPanelId.PSK_REPORTER -> SignalPanel(neuralDx.mySignal, openDx, modifier)
-            HamClockPanelId.DX_EXPEDITIONS -> DxpeditionPanel(dxpeditionFeed, openDx, modifier)
-            HamClockPanelId.BAND_ACTIVITY -> BandConditionsPanel(neuralDx.bandActivity, openProgress, modifier)
-            HamClockPanelId.DX_CLUSTER -> DxPanel(visibleMapSpots, mapSpots.size, features.clusterStatus,
-                spotFilters, { activeSpotFilter = it }, openDx, modifier)
-            HamClockPanelId.SOLAR -> SolarPanel(features, celestialFeed, modifier)
-            HamClockPanelId.DX_TARGET -> DxTargetPanel(visibleMapSpots, stationGrid, modifier)
-            HamClockPanelId.VOACAP -> VoacapPanel(visibleMapSpots, features, pathPrediction, modifier)
-            HamClockPanelId.PORTABLE -> PortablePanel(portable, openPortable, modifier)
-            HamClockPanelId.SATELLITES -> SatellitePanel(operations.satellites, {
-                operations.openSection("SATELLITES"); openOperations()
-            }, modifier)
-            HamClockPanelId.CONTESTS -> ContestsPanel(contestFeed, modifier)
+    val mapSnapshot = remember(visibleMapSpots, neuralDx.mySignal, portableMapSpots, neuralDx.satellites,
+        recentQsos, neuralDx.lightning, resolvedDxTarget, stationCall, stationGrid, mapInstant) {
+        buildHamClockMapSnapshot(stationCall, stationGrid, visibleMapSpots, neuralDx.mySignal,
+            portableMapSpots, neuralDx.satellites, recentQsos, neuralDx.lightning, resolvedDxTarget, mapInstant)
+    }
+    fun updateMapPreference(value: HamClockMapPreference) {
+        settingsDocument = settingsStore.updateSettings { it.copy(map = value) }
+    }
+    fun openMapSelection(selection: HamClockMapSelection) {
+        when (selection) {
+            HamClockMapSelection.DX, HamClockMapSelection.TARGET -> openDx()
+            HamClockMapSelection.PORTABLE -> openPortable()
+            HamClockMapSelection.SATELLITE -> { operations.openSection("SATELLITES"); openOperations() }
+            HamClockMapSelection.QSO -> openLogbook()
+            HamClockMapSelection.WEATHER -> openDx()
+            HamClockMapSelection.NONE -> Unit
         }
     }
-    fun sidePanelHeight(id: String) = when (id) {
-        HamClockPanelId.STATION -> 260.dp; HamClockPanelId.WEATHER -> 220.dp
-        HamClockPanelId.PSK_REPORTER -> 190.dp; HamClockPanelId.DX_EXPEDITIONS -> 210.dp
-        HamClockPanelId.BAND_ACTIVITY -> 260.dp; HamClockPanelId.DX_CLUSTER -> 350.dp
-        HamClockPanelId.SOLAR -> 190.dp; HamClockPanelId.DX_TARGET -> 190.dp
-        HamClockPanelId.VOACAP -> 240.dp; HamClockPanelId.PORTABLE -> 240.dp
-        HamClockPanelId.SATELLITES, HamClockPanelId.CONTESTS -> 220.dp
-        else -> 200.dp
+    fun openDeepLink(link: HamClockDeepLink) {
+        when (link) {
+            HamClockDeepLink.DX -> openDx()
+            HamClockDeepLink.PORTABLE -> openPortable()
+            HamClockDeepLink.OPERATIONS -> openOperations()
+            HamClockDeepLink.LOGBOOK -> openLogbook()
+            HamClockDeepLink.LOG_INTELLIGENCE -> openProgress()
+            HamClockDeepLink.RADIO -> openRadio()
+            HamClockDeepLink.DIGI -> openDigi()
+            HamClockDeepLink.NONE -> Unit
+        }
+    }
+    val visiblePanels = settingsDocument.settings.panels.filter(HamClockPanelPreference::visible)
+    val leftPanels = visiblePanels.filter { it.id != HamClockPanelId.MAP && it.column <= 0 && it.columnSpan == 1 }
+        .sortedBy(HamClockPanelPreference::order)
+    val centerPanels = visiblePanels.filter { it.id != HamClockPanelId.MAP && it.columnSpan > 1 }
+        .sortedBy(HamClockPanelPreference::order)
+    val rightPanels = visiblePanels.filter { it.id != HamClockPanelId.MAP && it.column > 0 && it.columnSpan == 1 }
+        .sortedBy(HamClockPanelPreference::order)
+
+    @Composable fun SidePanel(panel: HamClockPanelPreference, modifier: Modifier) {
+        val spec = hamClockModuleSpec(panel.id)
+        if (spec == null) {
+            Module("Legacy module", "UNAVAILABLE", modifier = modifier) {
+                EmptyLine("Unknown module ID ‘${panel.id}’ was preserved. Remove or reset it in Layout.")
+            }
+            return
+        }
+        if (panel.collapsed && spec.collapseSupported) {
+            Module(spec.title, "COLLAPSED · ${spec.sourceLabel}", modifier = modifier) {
+                Text(spec.lowDataRepresentation, color = HcMuted, fontSize = 10.sp)
+            }
+            return
+        }
+        val open = { openDeepLink(spec.deepLink) }
+        when (spec.renderer) {
+            HamClockModuleRenderer.MAP -> HamClockHomeMap(mapSnapshot, settingsDocument.settings.map,
+                stationPoint, settingsDocument.settings.display.lowDataMode, ::updateMapPreference,
+                ::openMapSelection, modifier)
+            HamClockModuleRenderer.STATION -> StationPanel(stationCall, stationGrid, radio, wavelog, app, send, open, modifier)
+            HamClockModuleRenderer.WEATHER -> WeatherPanel(neuralDx.weather, settingsDocument.settings.display.unitSystem, modifier)
+            HamClockModuleRenderer.PSK_REPORTER -> SignalPanel(neuralDx.mySignal, open, modifier)
+            HamClockModuleRenderer.DX_EXPEDITIONS -> DxpeditionPanel(dxpeditionFeed, open, modifier)
+            HamClockModuleRenderer.BAND_ACTIVITY -> BandConditionsPanel(neuralDx.bandActivity, open, modifier)
+            HamClockModuleRenderer.DX_CLUSTER -> DxPanel(visibleMapSpots, mapSpots.size, features.clusterStatus,
+                spotFilters, { activeSpotFilter = it }, open, modifier)
+            HamClockModuleRenderer.SOLAR -> SolarPanel(features, celestialFeed, modifier)
+            HamClockModuleRenderer.DX_TARGET -> DxTargetPanel(resolvedDxTarget, stationGrid, { configureTarget = true }, modifier)
+            HamClockModuleRenderer.PROPAGATION -> VoacapPanel(resolvedDxTarget, features, pathPrediction, modifier)
+            HamClockModuleRenderer.PORTABLE -> PortablePanel(portable, open, modifier)
+            HamClockModuleRenderer.SATELLITES -> SatellitePanel(operations.satellites, {
+                operations.openSection("SATELLITES"); open()
+            }, modifier)
+            HamClockModuleRenderer.CONTESTS -> ContestsPanel(contestFeed, open, modifier)
+            HamClockModuleRenderer.ANALOG_CLOCK -> AnalogClockPanel(settingsDocument.settings.display, modifier)
+            HamClockModuleRenderer.LEGACY -> Module(spec.title, "UNAVAILABLE", modifier = modifier) {
+                EmptyLine(spec.unavailableReason.ifBlank { "This module is not connected" })
+            }
+        }
+    }
+    fun sidePanelHeight(panel: HamClockPanelPreference) = when {
+        panel.collapsed -> 82.dp
+        else -> ((hamClockModuleSpec(panel.id)?.preferredHeightDp ?: 200) * panel.rowSpan).dp
+    }
+    val mapPanel = visiblePanels.firstOrNull { it.id == HamClockPanelId.MAP }
+        ?: defaultHamClockPanels().first { it.id == HamClockPanelId.MAP }
+    val compactPanels = visiblePanels.sortedWith(compareBy<HamClockPanelPreference> {
+        if (it.id == HamClockPanelId.MAP) -1 else it.column
+    }.thenBy(HamClockPanelPreference::order))
+    val outerPadding = when (settingsDocument.settings.display.density) {
+        HamClockDensity.COMPACT -> 6.dp
+        HamClockDensity.COMFORTABLE -> 10.dp
+        HamClockDensity.LARGE_TOUCH -> 14.dp
+    }
+    fun mutatePanel(value: HamClockPanelPreference) { settingsDocument = settingsStore.setPanel(value) }
+    fun mutateLayer(value: HamClockMapLayerPreference) { settingsDocument = settingsStore.setMapLayer(value) }
+    fun mutateDisplay(value: HamClockDisplayPreference) {
+        settingsDocument = settingsStore.updateSettings { it.copy(display = value) }
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(HcBg).windowInsetsPadding(WindowInsets.safeDrawing).testTag("openhamclock-home")) {
         val wide = maxWidth >= 960.dp && maxHeight >= 700.dp
         if (wide) {
-            Column(Modifier.fillMaxSize().padding(10.dp).testTag("openhamclock-safe-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                HamClockHeader(now, stationCall, stationGrid, radio, features, neuralDx, {
+            Column(Modifier.fillMaxSize().padding(outerPadding).testTag("openhamclock-safe-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                HamClockHeader(stationCall, stationGrid, radio, app, features, neuralDx,
+                    settingsDocument.settings.display, neuralDx.weather, {
                     neuralDx.refresh(stationCall, stationGrid, stationId, features.liveSpots, true)
                     features.refreshSolar(); portable.refreshAll()
                 }) { configureDashboard = true }
-                OperationsHomeSummary(operations, openOperations)
+                if (!settingsDocument.settings.display.immersive) OperationsHomeSummary(operations, openOperations)
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     LazyColumn(Modifier.widthIn(min = 208.dp, max = 250.dp).weight(.22f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(leftPanels, key = HamClockPanelPreference::id) { panel ->
-                            SidePanel(panel, Modifier.fillMaxWidth().height(sidePanelHeight(panel.id) * panel.rowSpan))
+                            SidePanel(panel, Modifier.fillMaxWidth().height(sidePanelHeight(panel)))
                         }
                     }
-                    Column(Modifier.weight(.56f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        MapPanel(visibleMapSpots, stationGrid, cty, neuralDx.mySignal.reports, portableMapSpots,
-                            recentQsos, neuralDx.lightning.strikes,
-                            neuralDx.satellites, showPaths, { updateMapFlag("map_paths", "dx_paths", it) { showPaths = it } },
-                            showGreyline, { updateMapFlag("map_greyline", "grayline", it) { showGreyline = it } },
-                            showSignals, { updateMapFlag("map_psk", "psk_reporter", it) { showSignals = it } },
-                            showPortable, { updateMapFlag("map_portable", "portable", it) { showPortable = it } },
-                            showSatellites, { updateMapFlag("map_satellites", "satellites", it) { showSatellites = it } },
-                            showLoggedQsos, { updateMapFlag("map_logged_qsos", "logged_qsos", it) { showLoggedQsos = it } },
-                            showLightning, { updateMapFlag("map_lightning", "lightning", it) { showLightning = it } }, openDx, Modifier.weight(1f))
-                        PropagationStrip(neuralDx, Modifier.heightIn(min = 98.dp, max = 118.dp))
+                    LazyColumn(Modifier.weight(when (mapPanel.columnSpan) { 1 -> .34f; 2 -> .56f; else -> .75f }),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item(key = HamClockPanelId.MAP) {
+                            SidePanel(mapPanel, Modifier.fillMaxWidth().height((390 * mapPanel.rowSpan).dp))
+                        }
+                        items(centerPanels, key = HamClockPanelPreference::id) { panel ->
+                            SidePanel(panel, Modifier.fillMaxWidth().height(sidePanelHeight(panel)))
+                        }
                     }
                     LazyColumn(Modifier.widthIn(min = 250.dp, max = 310.dp).weight(.25f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(rightPanels, key = HamClockPanelPreference::id) { panel ->
-                            SidePanel(panel, Modifier.fillMaxWidth().height(sidePanelHeight(panel.id) * panel.rowSpan))
+                            SidePanel(panel, Modifier.fillMaxWidth().height(sidePanelHeight(panel)))
                         }
                     }
                 }
             }
         } else {
-            LazyColumn(Modifier.fillMaxSize().padding(8.dp).testTag("openhamclock-safe-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                item { HamClockHeader(now, stationCall, stationGrid, radio, features, neuralDx, {
+            LazyColumn(Modifier.fillMaxSize().padding(outerPadding).testTag("openhamclock-safe-content"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                item { HamClockHeader(stationCall, stationGrid, radio, app, features, neuralDx,
+                    settingsDocument.settings.display, neuralDx.weather, {
                     neuralDx.refresh(stationCall, stationGrid, stationId, features.liveSpots, true)
                     features.refreshSolar(); portable.refreshAll()
                 }) { configureDashboard = true } }
-                item { OperationsHomeSummary(operations, openOperations) }
-                item { MapPanel(visibleMapSpots, stationGrid, cty, neuralDx.mySignal.reports, portableMapSpots,
-                    recentQsos, neuralDx.lightning.strikes,
-                    neuralDx.satellites, showPaths, { updateMapFlag("map_paths", "dx_paths", it) { showPaths = it } },
-                    showGreyline, { updateMapFlag("map_greyline", "grayline", it) { showGreyline = it } },
-                    showSignals, { updateMapFlag("map_psk", "psk_reporter", it) { showSignals = it } },
-                    showPortable, { updateMapFlag("map_portable", "portable", it) { showPortable = it } },
-                    showSatellites, { updateMapFlag("map_satellites", "satellites", it) { showSatellites = it } },
-                    showLoggedQsos, { updateMapFlag("map_logged_qsos", "logged_qsos", it) { showLoggedQsos = it } },
-                    showLightning, { updateMapFlag("map_lightning", "lightning", it) { showLightning = it } }, openDx,
-                    Modifier.height(if (maxWidth < 500.dp) 290.dp else 390.dp)) }
-                if (maxWidth < 600.dp) {
-                    if (dashboardConfig.station) item { StationPanel(stationCall, stationGrid, radio, wavelog, app, send, Modifier.fillMaxWidth()) }
-                    if (dashboardConfig.weather) item { WeatherPanel(neuralDx.weather, Modifier.fillMaxWidth()) }
-                } else if (dashboardConfig.station || dashboardConfig.weather) item {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (dashboardConfig.station) StationPanel(stationCall, stationGrid, radio, wavelog, app, send, Modifier.weight(1f))
-                        if (dashboardConfig.weather) WeatherPanel(neuralDx.weather, Modifier.weight(1f))
-                    }
+                if (!settingsDocument.settings.display.immersive) item { OperationsHomeSummary(operations, openOperations) }
+                items(compactPanels, key = HamClockPanelPreference::id) { panel ->
+                    val height = if (panel.id == HamClockPanelId.MAP) {
+                        if (maxWidth < 500.dp) (290 * panel.rowSpan).dp else (390 * panel.rowSpan).dp
+                    } else sidePanelHeight(panel)
+                    SidePanel(panel, Modifier.fillMaxWidth().height(height))
                 }
-                if (dashboardConfig.cluster) item { DxPanel(visibleMapSpots, mapSpots.size, features.clusterStatus,
-                    spotFilters, { activeSpotFilter = it }, openDx, Modifier.fillMaxWidth()) }
-                if (dashboardConfig.signal) item { SignalPanel(neuralDx.mySignal, openDx, Modifier.fillMaxWidth()) }
-                if (dashboardConfig.dxpeditions) item { DxpeditionPanel(dxpeditionFeed, openDx, Modifier.fillMaxWidth()) }
-                if (dashboardConfig.solar) item { SolarPanel(features, celestialFeed, Modifier.fillMaxWidth()) }
-                if (dashboardConfig.target) item { DxTargetPanel(visibleMapSpots, stationGrid, Modifier.fillMaxWidth()) }
-                if (dashboardConfig.voacap) item { VoacapPanel(visibleMapSpots, features, pathPrediction, Modifier.fillMaxWidth()) }
-                if (dashboardConfig.portable) item { PortablePanel(portable, openPortable, Modifier.fillMaxWidth()) }
-                if (dashboardConfig.bandActivity) item { BandConditionsPanel(neuralDx.bandActivity, openProgress, Modifier.fillMaxWidth()) }
-                if (dashboardConfig.satellites) item { SatellitePanel(operations.satellites, {
-                    operations.openSection("SATELLITES"); openOperations()
-                }, Modifier.fillMaxWidth()) }
-                if (dashboardConfig.contests) item { ContestsPanel(contestFeed, Modifier.fillMaxWidth()) }
-                item { PropagationStrip(neuralDx, Modifier.fillMaxWidth()) }
             }
         }
-        if (configureDashboard) HamClockConfigDialog(dashboardConfig, settingsDocument.settings,
-            settingsDocument.profiles, settingsDocument.activeProfileId, ::updateDashboard, ::repositionPanel,
-            ::saveDashboardProfile, ::applyDashboardProfile) { configureDashboard = false }
+        if (configureDashboard) HamClockConfigDialog(settingsDocument, ::mutatePanel,
+            { id -> settingsDocument = settingsStore.resetPanel(id) },
+            { settingsDocument = settingsStore.resetLayout() }, ::mutateLayer, ::updateMapPreference,
+            ::mutateDisplay, ::saveDashboardProfile, ::applyDashboardProfile,
+            { id, name -> settingsStore.renameProfile(id, name); settingsDocument = settingsStore.snapshot() },
+            { id -> settingsDocument = settingsStore.deleteProfile(id) },
+            { settingsDocument = settingsStore.clearActiveProfile() },
+            { settingsStore.exportJson(true) },
+            { json -> settingsStore.importJson(json); settingsDocument = settingsStore.snapshot() },
+            { configureTarget = true },
+        ) { configureDashboard = false }
+        if (configureTarget) HamClockTargetDialog(settingsDocument.settings.dxTarget, callbook, cty,
+            { target -> settingsDocument = settingsStore.updateSettings { it.copy(dxTarget = target) }; configureTarget = false },
+            { settingsDocument = settingsStore.updateSettings { it.copy(dxTarget = null) }; configureTarget = false },
+            { configureTarget = false })
         activeSpotFilter?.let { dimension ->
             SpotFilterOverlay(dimension, spotFilters,
                 (spotModeOptions + mapSpots.map { canonicalSpotMode(it.mode) }).distinct().sorted(),
@@ -456,28 +452,49 @@ private fun OperationsHomeSummary(operations: OperationsController, open: () -> 
 }
 
 @Composable
-private fun HamClockHeader(now: Instant, call: String, grid: String, radio: RadioState,
-    features: FeatureController, neuralDx: NeuralDxController, refresh: () -> Unit, configure: () -> Unit) {
+private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: AppController,
+    features: FeatureController, neuralDx: NeuralDxController, display: HamClockDisplayPreference,
+    weather: NeuralWeather, refresh: () -> Unit, configure: () -> Unit) {
+    var now by remember { mutableStateOf(Instant.now()) }
+    LaunchedEffect(Unit) { while (true) { now = Instant.now(); delay(1_000) } }
     val utc = now.atZone(ZoneOffset.UTC)
     val local = now.atZone(ZoneId.systemDefault())
+    val clock = remember(display.hourFormat) {
+        DateTimeFormatter.ofPattern(if (display.hourFormat == HamClockHourFormat.H24) "HH:mm:ss" else "hh:mm:ss a", Locale.US)
+    }
+    val weatherText = if (!weather.available) "WX —" else when (display.unitSystem) {
+        HamClockUnitSystem.METRIC -> weather.temperatureC?.let { "WX %.1f°C".format(Locale.US, it) } ?: "WX —"
+        HamClockUnitSystem.IMPERIAL -> weather.temperatureC?.let { "WX %.1f°F".format(Locale.US, it * 9 / 5 + 32) } ?: "WX —"
+    }
     Surface(color = HcPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth().border(1.dp, HcLine, RoundedCornerShape(8.dp))) {
         BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
             if (maxWidth < 760.dp) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     HeaderIdentity(call, grid, Modifier.weight(1f))
                     StatusPill(if (radio.connected) "CAT LIVE" else "CAT OFFLINE", radio.connected)
+                    StatusPill(if (app.transmitArmed) "TX ARMED" else "SAFE / RX", !app.transmitArmed)
                     ConfigButton(configure); SyncButton(neuralDx.refreshing, refresh)
                 }
-                HeaderReadouts(utc.format(HcClock), utc.format(HcDate), local.format(HcClock), local.format(HcDate), features)
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (display.timeZoneMode != HamClockTimeZoneMode.LOCAL) ClockReadout("UTC", utc.format(clock), utc.format(HcDate))
+                    if (display.timeZoneMode != HamClockTimeZoneMode.UTC) ClockReadout("LOCAL", local.format(clock), local.format(HcDate))
+                    SolarMetrics(features)
+                    Text(weatherText, color = HcCyan, fontFamily = FontFamily.Monospace)
+                }
             } else Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 HeaderIdentity(call, grid, Modifier.weight(1f))
-                ClockReadout("UTC", utc.format(HcClock), utc.format(HcDate))
-                ClockReadout("LOCAL", local.format(HcClock), local.format(HcDate))
+                if (display.timeZoneMode != HamClockTimeZoneMode.LOCAL) ClockReadout("UTC", utc.format(clock), utc.format(HcDate))
+                if (display.timeZoneMode != HamClockTimeZoneMode.UTC) ClockReadout("LOCAL", local.format(clock), local.format(HcDate))
                 SolarMetrics(features)
+                Text(weatherText, color = HcCyan, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                 StatusPill(if (radio.connected) "CAT LIVE" else "CAT OFFLINE", radio.connected)
+                StatusPill(if (app.transmitArmed) "TX ARMED" else "SAFE / RX", !app.transmitArmed)
                 ConfigButton(configure); SyncButton(neuralDx.refreshing, refresh)
             }
+            Text("RigWeave ${BuildConfig.VERSION_NAME} · OHC d4a50ea · watcher enabled",
+                color = HcMuted, fontSize = 8.sp, modifier = Modifier.align(Alignment.BottomStart))
         }
     }
 }
@@ -488,79 +505,245 @@ private fun HamClockHeader(now: Instant, call: String, grid: String, radio: Radi
     }
 }
 
-@Composable private fun HamClockConfigDialog(config: HamClockDashboardConfig, settings: HamClockUserSettings,
-    profiles: List<HamClockNamedProfile>, activeProfileId: String?, update: (HamClockDashboardConfig) -> Unit,
-    reposition: (String, Int?, Int) -> Unit, saveProfile: () -> Unit, applyProfile: (String) -> Unit,
-    dismiss: () -> Unit) {
-    val moduleIds = listOf(HamClockPanelId.STATION, HamClockPanelId.WEATHER, HamClockPanelId.BAND_ACTIVITY,
-        HamClockPanelId.PSK_REPORTER, HamClockPanelId.DX_EXPEDITIONS, HamClockPanelId.DX_CLUSTER,
-        HamClockPanelId.SOLAR, HamClockPanelId.DX_TARGET, HamClockPanelId.VOACAP, HamClockPanelId.PORTABLE,
-        HamClockPanelId.SATELLITES, HamClockPanelId.CONTESTS)
-    val modules = listOf(
-        Triple("DE station", config.station) { value: Boolean -> config.copy(station = value) },
-        Triple("Local weather", config.weather) { value: Boolean -> config.copy(weather = value) },
-        Triple("Band activity", config.bandActivity) { value: Boolean -> config.copy(bandActivity = value) },
-        Triple("PSK Reporter", config.signal) { value: Boolean -> config.copy(signal = value) },
-        Triple("DXpeditions", config.dxpeditions) { value: Boolean -> config.copy(dxpeditions = value) },
-        Triple("DX cluster", config.cluster) { value: Boolean -> config.copy(cluster = value) },
-        Triple("Solar conditions", config.solar) { value: Boolean -> config.copy(solar = value) },
-        Triple("DX target", config.target) { value: Boolean -> config.copy(target = value) },
-        Triple("VOACAP estimate", config.voacap) { value: Boolean -> config.copy(voacap = value) },
-        Triple("Portable activators", config.portable) { value: Boolean -> config.copy(portable = value) },
-        Triple("Satellite passes", config.satellites) { value: Boolean -> config.copy(satellites = value) },
-        Triple("Contest calendar", config.contests) { value: Boolean -> config.copy(contests = value) },
-    )
+@Composable private fun HamClockConfigDialog(
+    document: HamClockSettingsDocument,
+    updatePanel: (HamClockPanelPreference) -> Unit,
+    resetPanel: (String) -> Unit,
+    resetLayout: () -> Unit,
+    updateLayer: (HamClockMapLayerPreference) -> Unit,
+    updateMap: (HamClockMapPreference) -> Unit,
+    updateDisplay: (HamClockDisplayPreference) -> Unit,
+    saveProfile: (String, String?) -> Unit,
+    applyProfile: (String) -> Unit,
+    renameProfile: (String, String) -> Unit,
+    deleteProfile: (String) -> Unit,
+    clearProfile: () -> Unit,
+    exportJson: () -> String,
+    importJson: (String) -> Unit,
+    editTarget: () -> Unit,
+    dismiss: () -> Unit,
+) {
+    val settings = document.settings
+    var profileName by remember { mutableStateOf("Layout ${document.profiles.size + 1}") }
+    var transferJson by remember { mutableStateOf("") }
+    var message by remember { mutableStateOf("") }
+    val panelRows = hamClockModuleRegistry.map { spec ->
+        settings.panels.firstOrNull { it.id == spec.id } ?: defaultHamClockPanels().first { it.id == spec.id }
+    } + settings.panels.filter { hamClockModuleSpec(it.id) == null }
     AlertDialog(onDismissRequest = dismiss, title = { Text("Configure Open Ham Clock") }, text = {
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            item { Text("Choose modules, place them left or right, and change their order. Layout profiles and all view state are saved locally and survive app upgrades.", color = HcMuted) }
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
             item {
-                Column(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text("SETTINGS TRUTH", color = HcAmber, fontSize = 10.sp, fontWeight = FontWeight.Black)
-                    Text("Active: panel visibility, order, column and row span; map-layer visibility.", color = HcInk, fontSize = 10.sp)
-                    Text("Planned, not currently available: column span/collapse; basemap, follow, centre, zoom and opacity; cluster/PSK timing and filters; portable programme/WWBOTA preferences; satellite preferences; manual or locked DX target; density, time-zone/hour format, units and low-data mode.", color = HcMuted, fontSize = 10.sp)
-                    Text("Imported values for planned settings are preserved but do not appear active.", color = HcMuted, fontSize = 10.sp)
-                    HorizontalDivider(color = HcLine)
+                Text("Every control below is live and persisted locally. Unknown imported IDs remain visible as unavailable and can be removed.",
+                    color = HcMuted, fontSize = 10.sp)
+            }
+            item {
+                Text("DISPLAY", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 10.sp)
+                EnumChips(HamClockDensity.entries, settings.display.density) {
+                    updateDisplay(settings.display.copy(density = it))
+                }
+                EnumChips(HamClockTimeZoneMode.entries, settings.display.timeZoneMode) {
+                    updateDisplay(settings.display.copy(timeZoneMode = it))
+                }
+                EnumChips(HamClockHourFormat.entries, settings.display.hourFormat) {
+                    updateDisplay(settings.display.copy(hourFormat = it))
+                }
+                EnumChips(HamClockUnitSystem.entries, settings.display.unitSystem) {
+                    updateDisplay(settings.display.copy(unitSystem = it))
+                }
+                ToggleRow("Low-data Map Data view", settings.display.lowDataMode) {
+                    updateDisplay(settings.display.copy(lowDataMode = it))
+                }
+                ToggleRow("Immersive Home", settings.display.immersive) {
+                    updateDisplay(settings.display.copy(immersive = it))
+                }
+                OutlinedButton(editTarget, modifier = Modifier.heightIn(min = 48.dp)) { Text("MANUAL DX TARGET") }
+                HorizontalDivider(color = HcLine)
+            }
+            item {
+                Text("LAYOUT PROFILES", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 10.sp)
+                OutlinedTextField(profileName, { profileName = it.take(64) }, label = { Text("Profile name") },
+                    modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton({ runCatching { saveProfile(profileName, null) }.onFailure { message = it.message.orEmpty() } },
+                        modifier = Modifier.heightIn(min = 48.dp)) { Text("SAVE NEW") }
+                    if (document.activeProfileId != null) OutlinedButton({
+                        runCatching { saveProfile(profileName, document.activeProfileId) }.onFailure { message = it.message.orEmpty() }
+                    }, modifier = Modifier.heightIn(min = 48.dp)) { Text("OVERWRITE") }
+                    TextButton(clearProfile) { Text("CLEAR ACTIVE") }
+                }
+            }
+            items(document.profiles.sortedBy(HamClockNamedProfile::name), key = HamClockNamedProfile::id) { profile ->
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FilterChip(profile.id == document.activeProfileId, { applyProfile(profile.id) }, { Text(profile.name) },
+                        modifier = Modifier.weight(1f))
+                    TextButton({ renameProfile(profile.id, profileName) }) { Text("RENAME") }
+                    TextButton({ deleteProfile(profile.id) }) { Text("DELETE") }
                 }
             }
             item {
-                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("LAYOUT PROFILES", color = HcAmber, fontSize = 10.sp, fontWeight = FontWeight.Black,
-                            modifier = Modifier.weight(1f))
-                        OutlinedButton(saveProfile, modifier = Modifier.heightIn(min = 48.dp)) { Text("SAVE CURRENT") }
-                    }
-                    if (profiles.isEmpty()) Text("No saved profile yet", color = HcMuted, fontSize = 10.sp)
-                    else Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        profiles.sortedBy(HamClockNamedProfile::name).forEach { profile ->
-                            FilterChip(profile.id == activeProfileId, { applyProfile(profile.id) }, { Text(profile.name) })
-                        }
-                    }
-                    HorizontalDivider(color = HcLine)
+                OutlinedTextField(transferJson, { transferJson = it }, label = { Text("Profile JSON import/export") },
+                    minLines = 3, maxLines = 7, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextButton({ transferJson = exportJson(); message = "Export ready" }) { Text("EXPORT") }
+                    TextButton({
+                        runCatching { importJson(transferJson) }
+                            .onSuccess { message = "Import applied" }.onFailure { message = it.message.orEmpty() }
+                    }) { Text("IMPORT") }
+                }
+                if (message.isNotBlank()) Text(message, color = HcAmber, fontSize = 10.sp)
+                HorizontalDivider(color = HcLine)
+            }
+            item {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("MODULE REGISTRY", color = HcAmber, fontWeight = FontWeight.Black,
+                        fontSize = 10.sp, modifier = Modifier.weight(1f))
+                    TextButton(resetLayout) { Text("RESET ALL") }
                 }
             }
-            items(modules.size) { index ->
-                val (label, checked, change) = modules[index]
-                val id = moduleIds[index]
-                val preference = settings.panels.firstOrNull { it.id == id }
-                Column(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { update(change(!checked)) },
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Text(label, color = HcInk, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                        Switch(checked, { update(change(it)) })
-                    }
+            items(panelRows, key = HamClockPanelPreference::id) { panel ->
+                val spec = hamClockModuleSpec(panel.id)
+                Column(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    ToggleRow(spec?.title ?: "Legacy ${panel.id}", panel.visible) { updatePanel(panel.copy(visible = it)) }
+                    Text(spec?.let { "${it.category.name} · ${it.sourceLabel} · ${it.visualRole}" }
+                        ?: "Unavailable · unknown imported module ID", color = HcMuted, fontSize = 9.sp)
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("POSITION", color = HcMuted, fontSize = 9.sp, modifier = Modifier.width(56.dp))
-                        FilterChip(preference?.column == 0, { reposition(id, 0, 0) }, { Text("LEFT") })
-                        FilterChip(preference?.column != 0, { reposition(id, 2, 0) }, { Text("RIGHT") })
-                        OutlinedButton({ reposition(id, null, -10) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("↑ UP") }
-                        OutlinedButton({ reposition(id, null, 10) }, modifier = Modifier.heightIn(min = 48.dp)) { Text("↓ DOWN") }
+                        horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                        (spec?.allowedColumns ?: setOf(0, 2)).sorted().forEach { column ->
+                            FilterChip(panel.column == column, { updatePanel(panel.copy(column = column)) },
+                                { Text(if (column == 0) "LEFT" else if (column == 1) "CENTRE" else "RIGHT") })
+                        }
+                        OutlinedButton({ updatePanel(panel.copy(order = (panel.order - 1).coerceAtLeast(0))) },
+                            modifier = Modifier.heightIn(min = 48.dp)) { Text("↑") }
+                        OutlinedButton({ updatePanel(panel.copy(order = (panel.order + 1).coerceAtMost(999))) },
+                            modifier = Modifier.heightIn(min = 48.dp)) { Text("↓") }
+                        OutlinedButton({ updatePanel(panel.copy(rowSpan = (panel.rowSpan - 1).coerceAtLeast(1))) },
+                            modifier = Modifier.heightIn(min = 48.dp)) { Text("ROW−") }
+                        Text("${panel.rowSpan}×${panel.columnSpan}", color = HcInk)
+                        OutlinedButton({ updatePanel(panel.copy(rowSpan = (panel.rowSpan + 1).coerceAtMost(4))) },
+                            modifier = Modifier.heightIn(min = 48.dp)) { Text("ROW+") }
+                        OutlinedButton({ updatePanel(panel.copy(columnSpan = (panel.columnSpan - 1).coerceAtLeast(1))) },
+                            modifier = Modifier.heightIn(min = 48.dp)) { Text("COL−") }
+                        OutlinedButton({ updatePanel(panel.copy(columnSpan = (panel.columnSpan + 1).coerceAtMost(3))) },
+                            modifier = Modifier.heightIn(min = 48.dp)) { Text("COL+") }
+                    }
+                    if (spec?.collapseSupported != false) ToggleRow("Collapsed", panel.collapsed) {
+                        updatePanel(panel.copy(collapsed = it))
+                    }
+                    TextButton({ resetPanel(panel.id) }) { Text(if (spec == null) "REMOVE UNKNOWN" else "RESET MODULE") }
+                    HorizontalDivider(color = HcLine)
+                }
+            }
+            item {
+                Text("MAP", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 10.sp)
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    HamClockBasemap.entries.forEach { basemap ->
+                        val lawful = basemap == HamClockBasemap.DARK || basemap == HamClockBasemap.LIGHT
+                        FilterChip(settings.map.basemap == basemap, { if (lawful) updateMap(settings.map.copy(basemap = basemap)) },
+                            { Text(basemap.name) }, enabled = lawful)
+                    }
+                }
+                Text("Satellite and terrain unavailable: no lawful configured tile source.", color = HcMuted, fontSize = 9.sp)
+                ToggleRow("Follow DE station", settings.map.followStation) { updateMap(settings.map.copy(followStation = it)) }
+                TextButton({ updateMap(settings.map.copy(followStation = true, centerLatitude = 0.0,
+                    centerLongitude = 0.0, zoom = 1.2)) }) { Text("RESET CAMERA") }
+            }
+            items(hamClockMapLayerRegistry, key = HamClockMapLayerSpec::id) { spec ->
+                val pref = settings.map.layers.firstOrNull { it.id == spec.id }
+                    ?: HamClockMapLayerPreference(spec.id, spec.defaultVisible, spec.defaultOpacity)
+                Column(Modifier.fillMaxWidth()) {
+                    ToggleRow(spec.title, pref.visible, spec.availability != HamClockMapLayerAvailability.UNAVAILABLE) {
+                        updateLayer(pref.copy(visible = it))
+                    }
+                    Text("${spec.sourceLabel} · ${spec.lowDataRepresentation}", color = HcMuted, fontSize = 9.sp)
+                    if (spec.availability == HamClockMapLayerAvailability.UNAVAILABLE) {
+                        Text("Unavailable · ${spec.unavailableReason}", color = HcAmber, fontSize = 9.sp)
+                    } else {
+                        Slider(pref.opacity, { updateLayer(pref.copy(opacity = it)) }, valueRange = 0.1f..1f)
                     }
                 }
             }
         }
     }, confirmButton = { TextButton(dismiss) { Text("Done") } })
+}
+
+@Composable private fun <T : Enum<T>> EnumChips(values: List<T>, selected: T, update: (T) -> Unit) {
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        values.forEach { value -> FilterChip(value == selected, { update(value) }, { Text(value.name.replace('_', ' ')) }) }
+    }
+}
+
+@Composable private fun ToggleRow(label: String, checked: Boolean, enabled: Boolean = true, update: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = if (enabled) HcInk else HcMuted, modifier = Modifier.weight(1f))
+        Switch(checked, update, enabled = enabled)
+    }
+}
+
+@Composable private fun HamClockTargetDialog(
+    current: HamClockDxTarget?,
+    callbook: CallbookController,
+    cty: CtyController,
+    save: (HamClockDxTarget) -> Unit,
+    clear: () -> Unit,
+    dismiss: () -> Unit,
+) {
+    var callsign by remember(current) { mutableStateOf(current?.callsign.orEmpty()) }
+    var grid by remember(current) { mutableStateOf(current?.grid.orEmpty()) }
+    var latitude by remember(current) { mutableStateOf(current?.latitude) }
+    var longitude by remember(current) { mutableStateOf(current?.longitude) }
+    var locked by remember(current) { mutableStateOf(current?.locked ?: true) }
+    var status by remember { mutableStateOf("") }
+    fun lookup() {
+        val call = callsign.trim().uppercase(Locale.US)
+        if (call.isBlank()) { status = "Enter a callsign"; return }
+        status = "Resolving through configured callbook…"
+        callbook.lookup(call) { record ->
+            val ctyRecord = cty.lookup(call)
+            grid = record?.grid?.ifBlank { grid } ?: grid
+            val gridPoint = maidenheadCenter(grid)
+            latitude = record?.latitude?.toDoubleOrNull() ?: gridPoint?.latitude
+                ?: ctyRecord?.latitude?.takeUnless { it == 0.0 }
+            longitude = record?.longitude?.toDoubleOrNull() ?: gridPoint?.longitude
+                ?: ctyRecord?.longitude?.takeUnless { it == 0.0 }
+            status = when {
+                record != null -> "Resolved by ${record.source.ifBlank { "callbook" }}"
+                ctyRecord != null && (latitude != null || longitude != null) -> "Resolved by CTY.DAT fallback"
+                gridPoint != null -> "Resolved from Maidenhead grid"
+                else -> "No coordinate available; enter a valid grid"
+            }
+        }
+    }
+    AlertDialog(onDismissRequest = dismiss, title = { Text("Manual DX target") }, text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("A locked manual target blocks automatic cluster target replacement. This control never tunes the radio.",
+                color = HcMuted, fontSize = 10.sp)
+            OutlinedTextField(callsign, { callsign = it.uppercase(Locale.US).take(16) },
+                label = { Text("Callsign") }, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(grid, {
+                grid = it.uppercase(Locale.US).take(8)
+                maidenheadCenter(grid)?.let { point -> latitude = point.latitude; longitude = point.longitude }
+            }, label = { Text("Maidenhead grid") }, modifier = Modifier.fillMaxWidth())
+            ToggleRow("Lock manual target", locked) { locked = it }
+            OutlinedButton(::lookup, modifier = Modifier.heightIn(min = 48.dp)) { Text("LOOK UP") }
+            Text(status.ifBlank {
+                listOfNotNull(latitude?.let { "%.4f".format(Locale.US, it) },
+                    longitude?.let { "%.4f".format(Locale.US, it) }).joinToString(", ").ifBlank { "Coordinate not resolved" }
+            }, color = HcMuted, fontSize = 10.sp)
+        }
+    }, confirmButton = {
+        TextButton(onClick = {
+            val point = latitude?.let { lat -> longitude?.let { lon -> GeoPoint(lat, lon) } } ?: maidenheadCenter(grid)
+            if (point == null) { status = "A valid grid or resolved coordinate is required"; return@TextButton }
+            save(HamClockDxTarget(callsign.trim(), grid.trim(), point.latitude, point.longitude,
+                locked, HamClockDxTargetSource.MANUAL))
+        }) { Text("Save") }
+    }, dismissButton = {
+        Row {
+            TextButton(clear) { Text("Clear") }
+            TextButton(dismiss) { Text("Cancel") }
+        }
+    })
 }
 
 @Composable private fun HeaderIdentity(call: String, grid: String, modifier: Modifier) = Column(modifier) {
@@ -570,19 +753,13 @@ private fun HamClockHeader(now: Instant, call: String, grid: String, radio: Radi
         fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
-@Composable private fun HeaderReadouts(utc: String, utcDate: String, local: String, localDate: String, features: FeatureController) {
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        ClockReadout("UTC", utc, utcDate); ClockReadout("LOCAL", local, localDate); SolarMetrics(features)
-    }
-}
-
 @Composable private fun SolarMetrics(features: FeatureController) {
     Metric("SFI", features.solar.flux.takeIf { features.solar.valid }?.roundToInt()?.toString() ?: "—", HcAmber)
     Metric("A", features.solar.aIndex.takeIf { features.solar.valid }?.roundToInt()?.toString() ?: "—",
         if (features.solar.aIndex >= 30) HcRed else HcYellow)
     Metric("KP", features.solar.kpIndex.takeIf { features.solar.valid }?.let { "%.1f".format(Locale.US, it) } ?: "—",
         if (features.solar.kpIndex >= 5) HcRed else HcGreen)
+    Metric("SSN", "—", HcMuted)
 }
 
 @Composable private fun SyncButton(refreshing: Boolean, refresh: () -> Unit) {
@@ -624,37 +801,6 @@ private fun HamClockHeader(now: Instant, call: String, grid: String, radio: Radi
     }
 }
 
-@Composable private fun MapPanel(rows: List<AndroidDXSpot>, stationGrid: String, cty: CtyController,
-    signalReports: List<SignalReport>, portableSpots: List<PortableSpot>, loggedQsos: List<Qso>, lightning: List<LightningStrike>,
-    satellites: List<SatellitePosition>,
-    showPaths: Boolean, setPaths: (Boolean) -> Unit, showGreyline: Boolean, setGreyline: (Boolean) -> Unit,
-    showSignals: Boolean, setSignals: (Boolean) -> Unit, showPortable: Boolean, setPortable: (Boolean) -> Unit,
-    showSatellites: Boolean, setSatellites: (Boolean) -> Unit, showLoggedQsos: Boolean, setLoggedQsos: (Boolean) -> Unit,
-    showLightning: Boolean, setLightning: (Boolean) -> Unit, openDx: () -> Unit, modifier: Modifier) {
-    Module("World activity", "${rows.size} SPOTS", openDx, modifier) {
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            FilterChip(showPaths, { setPaths(!showPaths) }, { Text("REPORTING PATHS") }, Modifier.heightIn(min = 48.dp))
-            FilterChip(showGreyline, { setGreyline(!showGreyline) }, { Text("SUN / GRAYLINE") }, Modifier.heightIn(min = 48.dp))
-            FilterChip(showSignals, { setSignals(!showSignals) }, { Text("PSK REPORTER") }, Modifier.heightIn(min = 48.dp))
-            FilterChip(showPortable, { setPortable(!showPortable) }, { Text("PORTABLE") }, Modifier.heightIn(min = 48.dp))
-            FilterChip(showSatellites, { setSatellites(!showSatellites) }, { Text("SATELLITES") }, Modifier.heightIn(min = 48.dp))
-            FilterChip(showLoggedQsos, { setLoggedQsos(!showLoggedQsos) }, { Text("LOGGED QSOS") }, Modifier.heightIn(min = 48.dp))
-            FilterChip(showLightning, { setLightning(!showLightning) }, { Text("LIGHTNING") }, Modifier.heightIn(min = 48.dp))
-        }
-        Box(Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(4.dp)).background(HcRaised)) {
-            DxWorldCanvas(rows, stationGrid, false, cty, showPaths, Modifier.fillMaxSize(),
-                showGreyline, if (showSignals) signalReports else emptyList(),
-                if (showPortable) portableSpots else emptyList(), if (showSatellites) satellites else emptyList(),
-                if (showLoggedQsos) loggedQsos else emptyList(), if (showLightning) lightning else emptyList())
-            if (rows.isEmpty() && (!showSignals || signalReports.isEmpty()) &&
-                (!showPortable || portableSpots.isEmpty()) && (!showSatellites || satellites.isEmpty()) &&
-                (!showLoggedQsos || loggedQsos.isEmpty()) && (!showLightning || lightning.isEmpty())) {
-                Text("Waiting for live map activity", color = HcMuted, modifier = Modifier.align(Alignment.Center))
-            }
-        }
-    }
-}
-
 internal fun mergeEnrichedSpots(live: List<AndroidDXSpot>, enriched: List<AndroidDXSpot>): List<AndroidDXSpot> {
     if (live.isEmpty() || enriched.isEmpty()) return live
     val enrichedById = enriched.associateBy(AndroidDXSpot::id)
@@ -669,8 +815,8 @@ internal fun mergeEnrichedSpots(live: List<AndroidDXSpot>, enriched: List<Androi
 }
 
 @Composable private fun StationPanel(call: String, grid: String, radio: RadioState, wavelog: WavelogController,
-    app: AppController, send: (String) -> Unit, modifier: Modifier) {
-    Module("DE station", if (wavelog.logMode == LogMode.WAVELOG) "WAVELOG" else "LOCAL", modifier = modifier) {
+    app: AppController, send: (String) -> Unit, openRadio: () -> Unit, modifier: Modifier) {
+    Module("DE station", if (wavelog.logMode == LogMode.WAVELOG) "WAVELOG" else "LOCAL", openRadio, modifier) {
         KeyValue("CALL", call.ifBlank { "NOT SET" }, HcCyan)
         KeyValue("GRID", grid.ifBlank { "NOT SET" }, HcInk)
         KeyValue("RADIO", radio.model, if (radio.connected) HcGreen else HcMuted)
@@ -691,13 +837,21 @@ internal fun mergeEnrichedSpots(live: List<AndroidDXSpot>, enriched: List<Androi
     }
 }
 
-@Composable private fun WeatherPanel(weather: NeuralWeather, modifier: Modifier) {
+@Composable private fun WeatherPanel(weather: NeuralWeather, units: HamClockUnitSystem, modifier: Modifier) {
     Module("Local weather", weather.source, modifier = modifier) {
         if (!weather.available) EmptyLine(weather.error.ifBlank { "Weather awaiting station grid and internet" }) else {
-            KeyValue("TEMP", weather.temperatureC?.let { "%.1f °C".format(Locale.US, it) } ?: "—", HcCyan)
+            val temperature = weather.temperatureC?.let {
+                if (units == HamClockUnitSystem.METRIC) "%.1f °C".format(Locale.US, it)
+                else "%.1f °F".format(Locale.US, it * 9 / 5 + 32)
+            } ?: "—"
+            val wind = weather.windKmh?.let {
+                if (units == HamClockUnitSystem.METRIC) "%.0f km/h".format(Locale.US, it)
+                else "%.0f mph".format(Locale.US, it * .621371)
+            } ?: "—"
+            KeyValue("TEMP", temperature, HcCyan)
             KeyValue("HUMIDITY", weather.humidityPercent?.let { "$it%" } ?: "—", HcInk)
             KeyValue("PRESSURE", weather.pressureHpa?.let { "%.0f hPa".format(Locale.US, it) } ?: "—", HcInk)
-            KeyValue("WIND", weather.windKmh?.let { "%.0f km/h".format(Locale.US, it) } ?: "—", HcInk)
+            KeyValue("WIND", wind, HcInk)
             KeyValue("TROPO", weather.tropoIndex?.toString() ?: "—", when ((weather.tropoIndex ?: 0)) { in 6..Int.MAX_VALUE -> HcGreen; else -> HcMuted })
             KeyValue("DUCTING", weather.ductingRisk ?: "—", HcYellow)
         }
@@ -763,32 +917,34 @@ private fun preferredDxTarget(spots: List<AndroidDXSpot>): AndroidDXSpot? = spot
     compareBy<AndroidDXSpot> { it.watchlisted }.thenBy { it.score }.thenBy { it.receivedEpoch }
 )
 
-@Composable private fun DxTargetPanel(spots: List<AndroidDXSpot>, stationGrid: String, modifier: Modifier) {
-    val target = preferredDxTarget(spots)
+@Composable private fun DxTargetPanel(target: HamClockResolvedTarget?, stationGrid: String,
+    editTarget: () -> Unit, modifier: Modifier) {
     val station = maidenheadCenter(stationGrid)
-    val remote = target?.takeIf { it.latitude != 0.0 || it.longitude != 0.0 }?.let { GeoPoint(it.latitude, it.longitude) }
+    val remote = target?.point
     val computedDistance = if (station != null && remote != null) distanceKm(station, remote).roundToInt() else null
     val computedBearing = if (station != null && remote != null) initialBearingDegrees(station, remote) else null
-    Module("DX target", target?.callsign ?: "NO LIVE TARGET", modifier = modifier) {
-        if (target == null) EmptyLine("A live cluster spot will become the target") else {
-            KeyValue("ENTITY", target.country.ifBlank { "Unknown" }, HcCyan)
-            KeyValue("RF", "%.3f MHz · ${target.band} ${target.mode}".format(Locale.US, target.frequencyHz / 1_000_000.0), HcInk)
-            KeyValue("PATH", listOfNotNull((target.distanceKm.takeIf { it > 0 } ?: computedDistance)?.let { "$it km" },
-                (target.bearingDegrees.takeIf { it > 0 } ?: computedBearing)?.let { "%03d°".format(it) }).joinToString(" · ").ifBlank { "Awaiting station geometry" }, HcAmber)
-            Text(target.reason.ifBlank { target.comment }.ifBlank { "Highest-ranked live RigWeave observation" },
-                color = HcMuted, fontSize = HcMetaSize, fontWeight = FontWeight.Medium,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Module("DX target", target?.callsign ?: "NO TARGET", editTarget, modifier) {
+        if (target == null) EmptyLine("Set a manual target or wait for a ranked live DX spot") else {
+            KeyValue("SOURCE", target.source.name, if (target.source == HamClockDxTargetSource.MANUAL) HcAmber else HcCyan)
+            KeyValue("GRID", target.grid.ifBlank { "coordinate resolved" }, HcInk)
+            KeyValue("PATH", listOfNotNull(computedDistance?.let { "$it km" },
+                computedBearing?.let { "%03d°".format(it) }).joinToString(" · ").ifBlank { "Awaiting station geometry" }, HcAmber)
+            Text(target.detail, color = HcMuted, fontSize = HcMetaSize, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
 }
 
-@Composable private fun VoacapPanel(spots: List<AndroidDXSpot>, features: FeatureController,
+@Composable private fun VoacapPanel(target: HamClockResolvedTarget?, features: FeatureController,
     prediction: HamClockPropagationSnapshot, modifier: Modifier) {
-    val target = preferredDxTarget(spots)
-    val zone = when (target?.continent?.uppercase()) { "EU" -> "EUROPE"; "AF" -> "AFRICA"; "AS" -> "ASIA"; "NA", "SA" -> "AMERICAS"; else -> "OCEANIA" }
+    val zone = when (target?.point?.longitude ?: 151.0) {
+        in -170.0..-30.0 -> "AMERICAS"
+        in -30.0..55.0 -> "EUROPE / AFRICA"
+        in 55.0..150.0 -> "ASIA"
+        else -> "OCEANIA"
+    }
     val rows = prediction.bands.takeIf { it.isNotEmpty() }?.take(6)
     val title = if (prediction.authoritative) "DX-target P.533" else "DX path estimate"
-    Module(title, target?.let { "${it.callsign} · ${prediction.model.ifBlank { zone }}" } ?: zone, modifier = modifier) {
+    Module(title, target?.let { "${it.callsign} · ${it.source.name} · ${prediction.model.ifBlank { zone }}" } ?: zone, modifier = modifier) {
         (rows?.map { it.band to it.reliability } ?: listOf("40m", "20m", "15m", "10m").map { band ->
             band to hamClockReliability(band, zone, features.solar.flux, features.solar.kpIndex)
         }).forEach { (band, reliability) ->
@@ -837,9 +993,9 @@ private fun hamClockReliability(band: String, zone: String, sfi: Float, kp: Floa
     }
 }
 
-@Composable private fun ContestsPanel(feed: HamClockFeed<List<HamClockContest>>?, modifier: Modifier) {
+@Composable private fun ContestsPanel(feed: HamClockFeed<List<HamClockContest>>?, openOperations: () -> Unit, modifier: Modifier) {
     val rows = feed?.value.orEmpty()
-    Module("Contests", feed?.let { "WA7BNM · ${it.state.name}" } ?: "WA7BNM", modifier = modifier) {
+    Module("Contests", feed?.let { "WA7BNM · ${it.state.name}" } ?: "WA7BNM", openOperations, modifier) {
         if (rows.isEmpty()) EmptyLine(feed?.error?.ifBlank { "No active or upcoming contests" } ?: "Contest calendar has not refreshed")
         else rows.take(5).forEach { contest ->
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
