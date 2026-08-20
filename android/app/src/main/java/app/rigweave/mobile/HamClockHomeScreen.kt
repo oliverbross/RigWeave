@@ -1543,7 +1543,9 @@ private fun SignalReport.gridOrDash() = locator.ifBlank { "—" }
 
 @Composable private fun DxNewsPanel(rows: List<DxNewsItem>, sources: List<BriefingSource>, openDx: () -> Unit, modifier: Modifier) {
     val current = rows.firstOrNull()
-    val sourceTruth = sources.joinToString(" · ") { "${it.name} ${it.state.name}" }
+    val contributing = rows.mapTo(linkedSetOf(), DxNewsItem::sourceId)
+    val sourceTruth = sources.filter { it.id in contributing }.joinToString(" · ") { "${it.name} ${it.state.name}" }
+        .ifBlank { "NO CURRENT MERGED SOURCE" }
     Module("DX News", sourceTruth, openDx, modifier) {
         if (current == null) EmptyLine(sources.map(DxNewsSource::error).firstOrNull(String::isNotBlank)
             ?: "No current or last-good DX News item") else {

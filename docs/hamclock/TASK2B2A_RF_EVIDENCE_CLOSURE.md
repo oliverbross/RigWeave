@@ -30,7 +30,7 @@ No APK was installed and no app data was cleared. Tablet layout, live providers,
 - Final upstream watcher: exit 0; no pin movement.
 - `testDebugUnitTest`: 291 tests, zero failures/errors/skips.
 - `assembleDebug`: passed after placing the rustup toolchain on `PATH`.
-- APK: `android/app/build/outputs/apk/debug/app-debug.apk`, 113,606,107 bytes, SHA-256 `b4629f5246b11f4bf7c042b033d956c5b636cdf941952cd6e7437aa8da392d2a`.
+- APK: `android/app/build/outputs/apk/debug/app-debug.apk`, 113,607,354 bytes, SHA-256 `43499a2a1364c38cf983cafc30244db78682aa65652c5ee230ab1f6843dee523`.
 - Impeccable mechanical detector: no findings.
 - `git diff --check`, HamClock `upstream.json` parse and added-literal credential scan: passed.
 - Clean worktree and local/remote equality are recorded after commit and push in the delivery report.
