@@ -232,7 +232,7 @@ fun NeuralDxScreen(
             SpotLogIdentity(row.id, row.dxCall, entity?.dxcc.orEmpty(), entity?.country.orEmpty(), row.band, row.mode)
         } + (psk + wspr).map { row ->
             val entity = cty.lookup(row.callsign)
-            SpotLogIdentity(signalReportReference(row), row.callsign, entity?.dxcc.orEmpty(), entity?.country.orEmpty(), row.band, "WSPR")
+            row.toSpotLogIdentity(entity)
         }
         statuses = withContext(Dispatchers.IO) { database.spotStatuses(identities, stationId) }
     }
@@ -348,7 +348,7 @@ fun NeuralDxScreen(
                         signalReportReference(it) == contributor.sourceReferenceId }?.let { "PSK" to it }
                     "WSPR" -> selectedSignal = wspr.firstOrNull {
                         signalReportReference(it) == contributor.sourceReferenceId }?.let { "WSPR" to it }
-                    "CLUSTER" -> selectedCluster = cluster.firstOrNull { it.id == contributor.sourceReferenceId }
+                    "CLUSTER" -> selectedCluster = features.liveSpots.firstOrNull { it.id == contributor.sourceReferenceId }
                     "IBP" -> selectedIbp = ibp.transmissions.firstOrNull { it.beacon.callsign == contributor.sourceReferenceId }
                 }
             }) {

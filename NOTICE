@@ -60,6 +60,28 @@ deployment controls, or runtime dependencies. The native Compose implementation
 reuses RigWeave data controllers and design language. See
 docs/OPENHAMCLOCK_INTEGRATION.md for the recorded integration boundary.
 
+Wavelog 3.1.0 at peeled commit af3256140bd05403b7c4a421746c2ea653a4f04f
+was reviewed under its MIT licence for logbook, synchronization, operations,
+and satellite behaviour. RigWeave does not copy Wavelog PHP, HTML, or
+JavaScript; the native implementations retain their own GPL-3.0-only source.
+
+The native satellite engine incorporates dnwrnr/sgp4 at immutable commit
+661e057a5d369d5ee424676cf1d69cbead95ff2c under Apache-2.0. Its licence is
+retained in core/third_party/sgp4/LICENSE. Satellite transmitter catalogue
+data from SatNOGS DB remains attributable to SatNOGS and its contributors
+under CC-BY-SA-4.0; community observations are not treated as RF authority.
+
+The Android map uses MapLibre Native Android SDK 13.0.2 with OpenFreeMap
+styles and OpenStreetMap contributor data. The in-product MapLibre attribution
+and logo controls remain enabled; OpenFreeMap, MapLibre, and OpenStreetMap
+names, data, styles, and notices retain their applicable attribution and
+licence terms.
+
+Groups.io names and service interfaces are used only for operator-authorized
+interoperability. RigWeave contains its own native client and local database;
+it does not incorporate Groups.io service source, branding assets, or user
+content as a bundled dependency.
+
 The Neural DX workspace uses F1SMV/Neural-DX-Watcher
 (https://github.com/F1SMV/Neural-DX-Watcher) as a behavioural reference. The
 approved upstream v12.1 behavioural baseline is

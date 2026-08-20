@@ -45,4 +45,9 @@ class SpotWorkedStatusTest {
         assertEquals("20m", identity.band)
         assertEquals("CW", identity.mode)
     }
+
+    @Test fun pskReportIdentityKeepsItsActualMode() {
+        val report = SignalReport("OM0RX", "JN88TQ", null, null, 14_074_000, "20m", "FT8", -12, null, 1_000)
+        assertEquals("FT8", report.toSpotLogIdentity(null).mode)
+    }
 }

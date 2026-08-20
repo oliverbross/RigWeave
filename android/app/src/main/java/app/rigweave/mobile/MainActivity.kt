@@ -507,8 +507,12 @@ private fun navIcon(item: Destination) = when (item) {
         intelligenceAttention, cty.dataRevision, progress.goalStore.goals) {
         progress.refresh(progress.filters, features.liveSpots, intelligencePortableSpots, intelligenceAttention, cty, portable.sotaCatalogue)
     }
-    val bandEvidence = remember(features.liveSpots, neuralDx.mySignal, features.rbnObservations, neuralDx.wsprPersonal) {
-        features.liveSpots.map { HamClockBandEvidence("CLUSTER", it.band, it.mode, it.callsign, it.spotter,
+    val clusterBandEvidenceSpots = remember(features.liveSpots, hamClockSettings.document.settings.cluster,
+        Instant.now().epochSecond / 60) {
+        filterClusterPresentation(features.liveSpots, hamClockSettings.document.settings.cluster, Instant.now().epochSecond)
+    }
+    val bandEvidence = remember(clusterBandEvidenceSpots, neuralDx.mySignal, features.rbnObservations, neuralDx.wsprPersonal) {
+        clusterBandEvidenceSpots.map { HamClockBandEvidence("CLUSTER", it.band, it.mode, it.callsign, it.spotter,
             observedEpoch = it.receivedEpoch, frequencyHz = it.frequencyHz, id = "cluster:${it.id}") } +
             neuralDx.mySignal.reports.map { HamClockBandEvidence("PSK", it.band, it.mode, it.callsign,
                 it.receiverCallsign, it.snr, it.epoch, it.frequencyHz, "psk:${signalReportReference(it)}") } +

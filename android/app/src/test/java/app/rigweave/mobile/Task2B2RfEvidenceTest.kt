@@ -49,6 +49,12 @@ class Task2B2RfEvidenceTest {
         assertEquals(setOf("VK9DX", "W1AW"), rows(HamClockRbnMode.ALL_RBN))
     }
 
+    @Test fun rbnWatchlistOnlyNormalizesPortableAndPrefixForms() {
+        val row = requireNotNull(parseRbnClusterLine("DX de K1ABC-#: 14025.3 EA8/OM0RX/P CW 20 dB", 1_000))
+        val preference = HamClockRbnPreference(watchlistOnly = true)
+        assertEquals(listOf(row.id), boundedRbnObservations(listOf(row), preference, setOf("OM0RX"), 1_010).map { it.id })
+    }
+
     @Test fun personalWsprReusesPskTransportWithModeAndNoLocator() {
         val directory = Files.createTempDirectory("wspr-shared").toFile()
         try {

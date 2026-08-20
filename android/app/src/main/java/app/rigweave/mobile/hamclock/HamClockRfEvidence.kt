@@ -162,15 +162,16 @@ internal fun boundedRbnObservations(
     val cutoff = nowEpoch - preference.windowMinutes * 60L
     val bands = preference.bands.map { it.uppercase(Locale.US) }.toSet()
     val modes = preference.modes.map { it.uppercase(Locale.US) }.toSet()
+    val normalizedWatchlist = watchlist.map(::normalizedHamCallIdentity).filter(String::isNotBlank).toSet()
     val deduped = LinkedHashMap<String, HamClockRbnObservation>()
     rows.asSequence().filter { it.observedEpoch >= cutoff }
-        .filter { rbnModeMatches(it, preference, currentStationCall, watchlist) }
+        .filter { rbnModeMatches(it, preference, currentStationCall, normalizedWatchlist) }
         .filter { bands.isEmpty() || it.band.uppercase(Locale.US) in bands }
         .filter { modes.isEmpty() || it.mode.uppercase(Locale.US) in modes }
         .filter { preference.minimumSnr == null || (it.snr != null && it.snr >= preference.minimumSnr) }
         .filter { preference.skimmerCall.isBlank() || it.skimmerCall.contains(preference.skimmerCall, true) }
         .filter { preference.dxCall.isBlank() || it.dxCall.contains(preference.dxCall, true) }
-        .filter { !preference.watchlistOnly || it.dxCall in watchlist }
+        .filter { !preference.watchlistOnly || normalizedHamCallIdentity(it.dxCall) in normalizedWatchlist }
         .sortedByDescending(HamClockRbnObservation::observedEpoch)
         .forEach { row -> deduped.putIfAbsent("${row.skimmerCall}|${row.dxCall}|${row.frequencyHz / 100}|${row.mode}|${row.observedEpoch / 10}", row) }
     return deduped.values.take(preference.maximumRows).toList()
