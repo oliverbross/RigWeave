@@ -1,7 +1,7 @@
 package app.rigweave.mobile.hamclock
 
 /** Provenance and freshness are kept with every public-data payload. */
-internal enum class HamClockFeedState { LIVE, CACHED, STALE, UNAVAILABLE }
+internal enum class HamClockFeedState { LIVE, CACHED, DEGRADED, STALE, UNAVAILABLE }
 
 internal data class HamClockFeed<T>(
     val value: T,

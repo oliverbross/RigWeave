@@ -8,10 +8,28 @@ import app.rigweave.mobile.maidenheadCenter
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+import java.security.MessageDigest
 import java.util.Locale
 import kotlin.math.roundToInt
 
 enum class HamClockRbnSourceKind { RBN }
+enum class HamClockRbnSourceState { DISABLED, DISCONNECTED, CONNECTING, CURRENT, EMPTY, STALE, ERROR }
+
+internal data class HamClockRbnSourceSnapshot(
+    val state: HamClockRbnSourceState = HamClockRbnSourceState.DISABLED,
+    val latestRbnEpoch: Long = 0,
+    val rawBoundedCount: Int = 0,
+    val filteredCount: Int = 0,
+    val sourceEndpoint: String = "",
+    val error: String = "",
+)
+
+internal enum class HamClockGeometryAccuracy { EXACT, APPROXIMATE, UNAVAILABLE }
+internal data class HamClockResolvedEndpoint(
+    val point: GeoPoint? = null,
+    val source: String = "UNAVAILABLE",
+    val accuracy: HamClockGeometryAccuracy = HamClockGeometryAccuracy.UNAVAILABLE,
+)
 
 internal data class HamClockRbnObservation(
     val id: String,
@@ -34,6 +52,52 @@ internal data class HamClockRbnObservation(
     val receivedEpoch: Long = observedEpoch,
     val rawComment: String,
 )
+
+/** Conservative identity used only for same-station RBN matching, never fuzzy substring matching. */
+internal fun normalizedHamCallIdentity(value: String): String {
+    val portable = setOf("P", "M", "MM", "AM", "QRP", "QRPP")
+    val parts = value.trim().uppercase(Locale.US).replace(Regex("-#?$"), "")
+        .split('/').map { it.replace(Regex("[^A-Z0-9]"), "") }.filter(String::isNotBlank)
+    return parts.filterNot { it in portable }.filter { it.any(Char::isDigit) }
+        .maxByOrNull(String::length).orEmpty()
+}
+
+internal fun normalizedSkimmerIdentity(value: String): String = value.trim().uppercase(Locale.US)
+    .removeSuffix("-#").removeSuffix("#").trimEnd('-')
+
+internal fun rbnModeMatches(
+    row: HamClockRbnObservation,
+    preference: HamClockRbnPreference,
+    currentStationCall: String,
+    watchlist: Set<String>,
+): Boolean = when (preference.viewMode) {
+    HamClockRbnMode.WHO_HEARS_ME -> normalizedHamCallIdentity(currentStationCall).let { own ->
+        own.isNotBlank() && normalizedHamCallIdentity(row.dxCall) == own
+    }
+    HamClockRbnMode.SKIMMER_VIEW -> normalizedSkimmerIdentity(preference.skimmerCall).let { selected ->
+        selected.isNotBlank() && normalizedSkimmerIdentity(row.skimmerCall) == selected
+    }
+    HamClockRbnMode.WATCHLIST -> normalizedHamCallIdentity(row.dxCall) in watchlist.map(::normalizedHamCallIdentity)
+    HamClockRbnMode.ALL_RBN -> true
+}
+
+internal fun resolveRbnEndpoint(
+    callsign: String,
+    streamPoint: GeoPoint?,
+    currentStationCall: String,
+    currentStationPoint: GeoPoint?,
+    cachedGrid: String?,
+    ctyPoint: GeoPoint?,
+): HamClockResolvedEndpoint = when {
+    streamPoint != null -> HamClockResolvedEndpoint(streamPoint, "STREAM GRID", HamClockGeometryAccuracy.EXACT)
+    currentStationPoint != null && normalizedHamCallIdentity(callsign) == normalizedHamCallIdentity(currentStationCall) ->
+        HamClockResolvedEndpoint(currentStationPoint, "CURRENT STATION GRID", HamClockGeometryAccuracy.EXACT)
+    !cachedGrid.isNullOrBlank() -> maidenheadCenter(cachedGrid)?.let {
+        HamClockResolvedEndpoint(it, "CACHED CALLBOOK GRID", HamClockGeometryAccuracy.EXACT)
+    } ?: HamClockResolvedEndpoint()
+    ctyPoint != null -> HamClockResolvedEndpoint(ctyPoint, "CTY PREFIX CENTROID", HamClockGeometryAccuracy.APPROXIMATE)
+    else -> HamClockResolvedEndpoint()
+}
 
 internal fun parseRbnClusterLine(line: String, nowEpoch: Long = Instant.now().epochSecond): HamClockRbnObservation? {
     val match = Regex("^DX\\s+de\\s+([^:]+):\\s*([0-9]+(?:\\.[0-9]+)?)\\s+([A-Z0-9/]+)\\s+(.+)$",
@@ -69,6 +133,7 @@ internal fun boundedRbnObservations(
     rows: List<HamClockRbnObservation>,
     preference: HamClockRbnPreference,
     watchlist: Set<String>,
+    currentStationCall: String = "",
     nowEpoch: Long = Instant.now().epochSecond,
 ): List<HamClockRbnObservation> {
     if (!preference.enabled) return emptyList()
@@ -77,14 +142,7 @@ internal fun boundedRbnObservations(
     val modes = preference.modes.map { it.uppercase(Locale.US) }.toSet()
     val deduped = LinkedHashMap<String, HamClockRbnObservation>()
     rows.asSequence().filter { it.observedEpoch >= cutoff }
-        .filter {
-            when (preference.viewMode) {
-                HamClockRbnMode.WHO_HEARS_ME -> preference.dxCall.isNotBlank() && it.dxCall.equals(preference.dxCall, true)
-                HamClockRbnMode.SKIMMER_VIEW -> preference.skimmerCall.isNotBlank() && it.skimmerCall.equals(preference.skimmerCall, true)
-                HamClockRbnMode.WATCHLIST -> it.dxCall in watchlist
-                HamClockRbnMode.ALL_RBN -> true
-            }
-        }
+        .filter { rbnModeMatches(it, preference, currentStationCall, watchlist) }
         .filter { bands.isEmpty() || it.band.uppercase(Locale.US) in bands }
         .filter { modes.isEmpty() || it.mode.uppercase(Locale.US) in modes }
         .filter { preference.minimumSnr == null || (it.snr != null && it.snr >= preference.minimumSnr) }
@@ -96,6 +154,10 @@ internal fun boundedRbnObservations(
     return deduped.values.take(preference.maximumRows).toList()
 }
 
+internal fun boundedRbnObservations(rows: List<HamClockRbnObservation>, preference: HamClockRbnPreference,
+    watchlist: Set<String>, nowEpoch: Long): List<HamClockRbnObservation> =
+    boundedRbnObservations(rows, preference, watchlist, "", nowEpoch)
+
 enum class HamClockWsprRegionalState { DISABLED, UNAVAILABLE_POLICY }
 
 internal data class HamClockWsprSnapshot(
@@ -106,7 +168,18 @@ internal data class HamClockWsprSnapshot(
     val fetchedEpoch: Long = 0,
     val regionalState: HamClockWsprRegionalState = HamClockWsprRegionalState.DISABLED,
     val error: String = "",
+    val sourceState: HamClockFeedState = combinedSignalFeedState(beingHeardState, hearingState),
 )
+
+internal fun combinedSignalFeedState(first: HamClockFeedState, second: HamClockFeedState): HamClockFeedState = when {
+    first == HamClockFeedState.UNAVAILABLE && second == HamClockFeedState.UNAVAILABLE -> HamClockFeedState.UNAVAILABLE
+    first == HamClockFeedState.STALE && second == HamClockFeedState.STALE -> HamClockFeedState.STALE
+    first == HamClockFeedState.DEGRADED || second == HamClockFeedState.DEGRADED -> HamClockFeedState.DEGRADED
+    first == HamClockFeedState.UNAVAILABLE || second == HamClockFeedState.UNAVAILABLE -> HamClockFeedState.DEGRADED
+    first == HamClockFeedState.STALE || second == HamClockFeedState.STALE -> HamClockFeedState.DEGRADED
+    first == HamClockFeedState.LIVE && second == HamClockFeedState.LIVE -> HamClockFeedState.LIVE
+    else -> HamClockFeedState.CACHED
+}
 
 internal class HamClockWsprRepository(private val pskReporter: PskReporterRepository) {
     @Volatile private var lastLoaded = PskReporterSnapshot()
@@ -170,15 +243,15 @@ internal data class HamClockIbpObservedEvidence(
 )
 
 private val ibpManifestRows = listOf(
-    Triple("4U1UN", "FN30AS", "United Nations, New York"), Triple("VE8AT", "CP38GH", "Inuvik, Canada"),
-    Triple("W6WX", "CM97BD", "Mt Umunhum, California"), Triple("KH6RS", "BL10TS", "Maui, Hawaii"),
-    Triple("ZL6B", "RE78TW", "Wellington, New Zealand"), Triple("VK6RBP", "OF87AV", "Perth, Australia"),
-    Triple("JA2IGY", "PM84JK", "Mt Asama, Japan"), Triple("RR9O", "NO14KX", "Novosibirsk, Russia"),
+    Triple("4U1UN", "FN30AS", "New York City"), Triple("VE8AT", "CP38GH", "Inuvik, NT"),
+    Triple("W6WX", "CM97BD", "Mt. Umunhum"), Triple("KH6RS", "BL10TS", "Maui"),
+    Triple("ZL6B", "RE78TW", "Masterton"), Triple("VK6RBP", "OF87AV", "Rolystone"),
+    Triple("JA2IGY", "PM84JK", "Mt. Asama"), Triple("RR9O", "NO14KX", "Novosibirsk"),
     Triple("VR2B", "OL72BG", "Hong Kong"), Triple("4S7B", "MJ96WV", "Colombo, Sri Lanka"),
-    Triple("ZS6DN", "KG33XI", "Pretoria, South Africa"), Triple("5Z4B", "KI88HR", "Nairobi, Kenya"),
-    Triple("4X6TU", "KM72JB", "Tel Aviv, Israel"), Triple("OH2B", "KP20EH", "Lohja, Finland"),
-    Triple("CS3B", "IM12JT", "Madeira"), Triple("LU4AA", "GF05TJ", "Buenos Aires, Argentina"),
-    Triple("OA4B", "FH17MW", "Lima, Peru"), Triple("YV5B", "FK60ND", "Caracas, Venezuela"),
+    Triple("ZS6DN", "KG33XI", "Pretoria"), Triple("5Z4B", "KI88HR", "Kikuyu"),
+    Triple("4X6TU", "KM72JB", "Tel Aviv"), Triple("OH2B", "KP20EH", "Lohja"),
+    Triple("CS3B", "IM12JT", "São Jorge"), Triple("LU4AA", "GF05TJ", "Buenos Aires"),
+    Triple("OA4B", "FH17MW", "Lima"), Triple("YV5B", "FK60ND", "Caracas"),
 )
 internal val hamClockIbpManifest: List<HamClockIbpBeacon> = ibpManifestRows.mapIndexed { index, (call, grid, label) ->
     HamClockIbpBeacon(call, grid, requireNotNull(maidenheadCenter(grid)), label, index)
@@ -187,6 +260,10 @@ internal const val HAMCLOCK_IBP_MANIFEST_VERSION = "NCDXF-2026-08-20"
 internal const val HAMCLOCK_IBP_MANIFEST_HASH = "c5a6333fca305bf35c4e9ded6a3c0885b0b217a6513b263f78923a34931fdc41"
 internal const val HAMCLOCK_IBP_MANIFEST_SOURCE = "https://www.ncdxf.org/beacon/"
 internal const val HAMCLOCK_IBP_MANIFEST_REVIEW_DATE = "2026-08-20"
+
+internal fun hamClockIbpManifestHash(rows: List<HamClockIbpBeacon> = hamClockIbpManifest): String =
+    MessageDigest.getInstance("SHA-256").digest(rows.joinToString("|") { "${it.callsign}:${it.grid}" }.toByteArray())
+        .joinToString("") { "%02x".format(it) }
 
 internal fun hamClockIbpSchedule(nowEpoch: Long = Instant.now().epochSecond): HamClockIbpSchedule {
     val cycleStart = nowEpoch - Math.floorMod(nowEpoch, 180L)
@@ -201,6 +278,10 @@ internal fun hamClockIbpSchedule(nowEpoch: Long = Instant.now().epochSecond): Ha
     return HamClockIbpSchedule(cycleStart, slot, transmissions, HAMCLOCK_IBP_MANIFEST_VERSION, HAMCLOCK_IBP_MANIFEST_HASH)
 }
 
+internal fun nextHamClockIbpTransmission(callsign: String, nowEpoch: Long = Instant.now().epochSecond): HamClockIbpTransmission? =
+    (0..18).asSequence().map { hamClockIbpSchedule(nowEpoch + it * 10L) }
+        .flatMap { it.transmissions.asSequence() }.firstOrNull { it.beacon.callsign.equals(callsign, true) }
+
 internal fun observedIbpEvidence(evidence: List<HamClockBandEvidence>): List<HamClockIbpObservedEvidence> {
     val sites = hamClockIbpManifest.associateBy { it.callsign }
     return evidence.asSequence().filter { it.source in setOf("CLUSTER", "RBN") }
@@ -209,16 +290,25 @@ internal fun observedIbpEvidence(evidence: List<HamClockBandEvidence>): List<Ham
         } }.sortedByDescending(HamClockIbpObservedEvidence::observedEpoch).take(60).toList()
 }
 
-enum class HamClockEvidenceAvailability { CURRENT, STALE, UNAVAILABLE, DISABLED }
+enum class HamClockEvidenceAvailability { CURRENT, STALE, ERROR, UNAVAILABLE, DISABLED }
 data class HamClockBandEvidence(val source: String, val band: String, val mode: String, val callsign: String,
-    val receiver: String = "", val snr: Int? = null, val observedEpoch: Long, val frequencyHz: Long = 0L)
+    val receiver: String = "", val snr: Int? = null, val observedEpoch: Long, val frequencyHz: Long = 0L,
+    val id: String = "$source|$callsign|$receiver|$frequencyHz|$observedEpoch")
+data class HamClockBandHistoricalRow(val band: String, val modeFamily: String, val qsoCount: Int,
+    val uniqueCalls: Int, val confirmedCount: Int, val comparableWindowCount: Int,
+    val periodStartEpoch: Long, val periodEndEpoch: Long)
 data class HamClockBandHealthRow(val band: String, val state: String, val observations: Int, val uniqueCalls: Int,
     val uniqueReceivers: Int, val medianSnr: Int?, val trend: String, val sourceCount: Int,
     val callDiversity: Double, val receiverDiversity: Double, val confidence: String,
-    val historicalObservations: Int = 0, val reasons: List<String>) {
-    @Deprecated("Use sourceCount; source count is not diversity")
-    val diversity: Int get() = sourceCount
-}
+    val historicalObservations: Int = 0, val reasons: List<String>)
+data class HamClockBandHealthSnapshot(
+    val preference: HamClockBandHealthPreference = HamClockBandHealthPreference(),
+    val sourceStates: Map<String, HamClockEvidenceAvailability> = emptyMap(),
+    val rows: List<HamClockBandHealthRow> = emptyList(),
+    val historical: List<HamClockBandHistoricalRow> = emptyList(),
+    val contributingObservationIds: Map<String, List<String>> = emptyMap(),
+    val generatedEpoch: Long = 0,
+)
 
 internal fun computeHamClockBandHealth(
     evidence: List<HamClockBandEvidence>,
@@ -254,16 +344,50 @@ internal fun computeHamClockBandHealth(
         val midpoint = nowEpoch - preference.windowMinutes * 30L
         val older = rows.count { it.observedEpoch < midpoint }; val newer = rows.size - older
         val trend = when { newer > older * 3 / 2 -> "RISING"; older > newer * 3 / 2 -> "FALLING"; else -> "STEADY" }
-        val confidence = when { rows.size >= 12 && sources >= 2 -> "HIGH"; rows.size >= 4 -> "MEDIUM"; rows.isNotEmpty() -> "LOW"; else -> "NONE" }
-        val state = when { rows.size >= 4 -> "ACTIVE"; rows.isNotEmpty() -> "QUIET"; else -> "NO RECENT EVIDENCE" }
-        val reasons = if (rows.isEmpty()) listOf("No selected observations inside the ${preference.windowMinutes} minute window")
+        val selectedStates = preference.enabledSources.mapNotNull(availability::get)
+        val hasCurrent = selectedStates.any { it == HamClockEvidenceAvailability.CURRENT }
+        val hasStale = selectedStates.any { it == HamClockEvidenceAvailability.STALE }
+        val hasError = selectedStates.any { it == HamClockEvidenceAvailability.ERROR }
+        val degraded = hasCurrent && (hasStale || hasError)
+        val confidence = when {
+            !hasCurrent || degraded -> if (rows.isNotEmpty()) "LOW" else "NONE"
+            rows.size >= 12 && sources >= 2 -> "HIGH"
+            rows.size >= 4 -> "MEDIUM"
+            rows.isNotEmpty() -> "LOW"
+            else -> "NONE"
+        }
+        val activity = when { rows.size >= 20 -> "HIGH ACTIVITY"; rows.size >= 8 -> "GOOD ACTIVITY"; rows.size >= 4 -> "ACTIVE"; rows.isNotEmpty() -> "QUIET"; else -> "NO RECENT EVIDENCE" }
+        val state = when { !hasCurrent && hasStale -> "STALE EVIDENCE"; degraded -> "DEGRADED SOURCES"; else -> activity }
+        val sourceReasons = selectedStates.mapIndexedNotNull { index, sourceState ->
+            if (sourceState in setOf(HamClockEvidenceAvailability.CURRENT, HamClockEvidenceAvailability.DISABLED)) null
+            else "${preference.enabledSources.elementAtOrNull(index).orEmpty()} ${sourceState.name.lowercase(Locale.US)}"
+        }
+        val reasons = (if (rows.isEmpty()) listOf("No selected observations inside the ${preference.windowMinutes} minute window")
             else listOf("${rows.size} capped observations from $sources source${if (sources == 1) "" else "s"}",
-                "$calls unique calls · $receivers unique receivers")
+                "$calls unique calls · $receivers unique receivers")) + sourceReasons
         HamClockBandHealthRow(band, state, rows.size, calls, receivers, median, trend, sources,
             if (rows.isEmpty()) 0.0 else calls.toDouble() / rows.size,
             if (rows.isEmpty()) 0.0 else receivers.toDouble() / rows.size,
             confidence, historical, reasons)
     }
+}
+
+internal fun computeHamClockBandHealthSnapshot(
+    evidence: List<HamClockBandEvidence>,
+    availability: Map<String, HamClockEvidenceAvailability>,
+    preference: HamClockBandHealthPreference,
+    historical: List<HamClockBandHistoricalRow>,
+    nowEpoch: Long = Instant.now().epochSecond,
+): HamClockBandHealthSnapshot {
+    val rows = computeHamClockBandHealth(evidence, availability, preference, nowEpoch).map { row ->
+        row.copy(historicalObservations = historical.filter { it.band.equals(row.band, true) &&
+            (preference.mode == "ALL" || it.modeFamily.equals(preference.mode, true)) }.sumOf(HamClockBandHistoricalRow::comparableWindowCount))
+    }
+    val cutoff = nowEpoch - preference.windowMinutes * 60L
+    val contributors = rows.associate { row -> row.band to evidence.asSequence()
+        .filter { it.source in preference.enabledSources && it.band.equals(row.band, true) && it.observedEpoch >= cutoff }
+        .filter { preference.mode == "ALL" || it.mode.equals(preference.mode, true) }.map(HamClockBandEvidence::id).distinct().take(200).toList() }
+    return HamClockBandHealthSnapshot(preference, availability.toMap(), rows, historical, contributors, nowEpoch)
 }
 
 private fun bandSortKey(band: String): Int = listOf("2200m", "630m", "160m", "80m", "60m", "40m", "30m",

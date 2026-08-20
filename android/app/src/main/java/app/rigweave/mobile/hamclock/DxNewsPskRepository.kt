@@ -261,6 +261,7 @@ internal data class PskReporterSnapshot(
     val hearing: PskDirectionFeed = PskDirectionFeed(SignalDirection.HEARING),
 ) {
     val reports: List<SignalReport> get() = markMutual(beingHeard.reports, hearing.reports)
+    val sourceState: HamClockFeedState get() = combinedSignalFeedState(beingHeard.state, hearing.state)
 }
 
 internal class PskReporterRepository(
@@ -270,6 +271,16 @@ internal class PskReporterRepository(
 ) {
     private val lastManual = mutableMapOf<String, Long>()
     private val backoffUntil = mutableMapOf<String, Long>()
+
+    fun reproject(snapshot: PskReporterSnapshot, station: GeoPoint?): PskReporterSnapshot {
+        fun project(feed: PskDirectionFeed) = feed.copy(reports = feed.reports.map { report ->
+            val distance = station?.let { local -> report.latitude?.let { latitude -> report.longitude?.let { longitude ->
+                greatCircleKm(local, GeoPoint(latitude, longitude)).roundToInt()
+            } } }
+            report.copy(distanceKm = distance)
+        })
+        return snapshot.copy(beingHeard = project(snapshot.beingHeard), hearing = project(snapshot.hearing))
+    }
 
     fun refresh(callsign: String, station: GeoPoint?, windowMinutes: Int, force: Boolean = false, mode: String = "",
         nowEpoch: Long = Instant.now().epochSecond): PskReporterSnapshot {

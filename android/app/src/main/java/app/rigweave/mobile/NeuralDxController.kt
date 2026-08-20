@@ -65,6 +65,9 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import kotlin.math.*
 
+internal fun shouldStartForegroundWork(foreground: Boolean, alreadyActive: Boolean = false): Boolean =
+    foreground && !alreadyActive
+
 enum class NeuralDxPage(val label: String) {
     COCKPIT("Cockpit"), MAP("Map"), INSIGHT("AI Insight"), WORLD("World"),
     BRIEFING("Briefing"), OBSERVATIONS("RF Evidence"), SATELLITES("Satellites"), WEATHER("Weather")
@@ -547,6 +550,11 @@ class NeuralDxController internal constructor(private val context: Context, priv
         scope.launch { refreshBriefing(false) }
     }
 
+    internal fun ensureDxNews() {
+        if (!foreground) return
+        scope.launch { refreshBriefing(false) }
+    }
+
     internal fun applyPskPreference(value: HamClockPskPreference) {
         val providerChanged = pskPreference.enabled != value.enabled || pskPreference.windowMinutes != value.windowMinutes
         pskPreference = value
@@ -554,7 +562,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
             pskGeneration++; pskJob?.cancel(); pskJob = null
             pskSnapshot = PskReporterSnapshot(lastPskCall)
             publishPskSnapshot(pskSnapshot)
-        } else if (providerChanged && lastPskCall.isNotBlank()) {
+        } else if (foreground && providerChanged && lastPskCall.isNotBlank()) {
             val generation = ++pskGeneration
             pskJob?.cancel()
             pskJob = scope.launch { runCatching { refreshMySignal(lastPskCall, lastPskPoint, false, generation) } }
@@ -571,15 +579,27 @@ class NeuralDxController internal constructor(private val context: Context, priv
                 regionalState = if (value.regionalEnabled)
                     app.rigweave.mobile.hamclock.HamClockWsprRegionalState.UNAVAILABLE_POLICY
                 else app.rigweave.mobile.hamclock.HamClockWsprRegionalState.DISABLED))
-        } else if (providerChanged && lastWsprCall.isNotBlank()) {
+        } else if (foreground && providerChanged && lastWsprCall.isNotBlank()) {
             lastWsprAttemptEpoch = 0
             refreshWspr(lastWsprCall, "", false)
         } else publishWsprSnapshot(publicProviders.wspr.reprojectPersonal(value, lastWsprPoint))
     }
 
+    /** Reprojects retained PSK/WSPR reports locally; this method never performs HTTP work. */
+    internal fun updateSignalGeometry(stationGrid: String) {
+        val point = maidenheadCenter(stationGrid)
+        lastPskPoint = point
+        lastWsprPoint = point
+        pskSnapshot = publicProviders.pskReporter.reproject(pskSnapshot, point)
+        publishPskSnapshot(pskSnapshot)
+        publishWsprSnapshot(publicProviders.wspr.reprojectPersonal(wsprPreference, point))
+    }
+
     fun refreshWspr(call: String, grid: String, force: Boolean = false) {
+        if (!shouldStartForegroundWork(foreground)) return
         val normalized = call.trim().uppercase(Locale.US)
-        val point = maidenheadCenter(grid) ?: lastWsprPoint
+        updateSignalGeometry(grid)
+        val point = lastWsprPoint
         lastWsprCall = normalized
         lastWsprPoint = point
         if (!wsprPreference.personalEnabled || normalized.isBlank()) {
@@ -618,16 +638,17 @@ class NeuralDxController internal constructor(private val context: Context, priv
     }
 
     fun refreshPsk(call: String, grid: String, force: Boolean = false) {
+        if (!shouldStartForegroundWork(foreground)) return
         val normalized = call.trim().uppercase(Locale.US)
+        updateSignalGeometry(grid)
         if (!pskPreference.enabled || normalized.isBlank()) { publishPskSnapshot(PskReporterSnapshot(normalized)); return }
         val now = Instant.now().epochSecond
         if (!force && now - lastPskAttemptEpoch < pskPreference.refreshSeconds) {
-            lastPskPoint = maidenheadCenter(grid)
             publishPskSnapshot(pskSnapshot)
             return
         }
         lastPskAttemptEpoch = now
-        val point = maidenheadCenter(grid)
+        val point = lastPskPoint
         val generation = ++pskGeneration
         pskJob?.cancel()
         pskJob = scope.launch { runCatching { refreshMySignal(call, point, force, generation) }
@@ -651,8 +672,8 @@ class NeuralDxController internal constructor(private val context: Context, priv
 
     fun refresh(call: String, grid: String, stationId: String?, live: List<AndroidDXSpot>, force: Boolean = false,
         refreshScope: NeuralDxRefreshScope = NeuralDxRefreshScope.FULL_DX) {
+        if (!shouldStartForegroundWork(foreground, refreshJob?.isActive == true)) return
         if (refreshScope.stopsLegacySatelliteTicker()) stopLegacySatelliteTicker()
-        if (refreshJob?.isActive == true) return
         refreshJob = scope.launch {
             withContext(Dispatchers.Main) { refreshing = true; status = "Refreshing Neural DX sources…" }
             val point = maidenheadCenter(grid)
@@ -700,6 +721,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
     }
 
     private fun ensureLightning(point: GeoPoint) {
+        if (!shouldStartForegroundWork(foreground)) return
         if (lightningJob?.isActive == true && lightningPoint?.let { greatCircleKm(it, point) < 5.0 } == true) return
         lightningJob?.cancel(); lightningPoint = point
         lightningJob = scope.launch {
@@ -796,7 +818,9 @@ class NeuralDxController internal constructor(private val context: Context, priv
     }
 
     private fun refreshBriefing(force: Boolean) {
-        val snapshot = publicProviders.dxNews.refresh(dxpeditionFeed, force)
+        val sharedFeed = publicProviders.dxpeditions.refresh(force)
+        dxpeditionFeed = sharedFeed
+        val snapshot = publicProviders.dxNews.refresh(sharedFeed, force)
         val ordered = briefingOrder.mapNotNull { key -> snapshot.sources.firstOrNull { it.id == key } } +
             snapshot.sources.filter { it.id !in briefingOrder }
         scope.launch(Dispatchers.Main) { dxNewsSnapshot = snapshot.copy(sources = ordered); briefing = ordered }

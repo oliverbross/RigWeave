@@ -16,6 +16,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
+import app.rigweave.mobile.hamclock.HamClockBandEvidence
+import app.rigweave.mobile.hamclock.HamClockBandHealthPreference
+import app.rigweave.mobile.hamclock.HamClockBandHealthSnapshot
+import app.rigweave.mobile.hamclock.HamClockEvidenceAvailability
+import app.rigweave.mobile.hamclock.computeHamClockBandHealthSnapshot
 
 internal class ProgressGoalStore(context: Context) {
     private val file = AtomicFile(File(context.filesDir, "progress-goals.json"))
@@ -65,7 +70,10 @@ internal class ProgressController(context: Context, private val database: QsoDat
     private var refreshJob: Job? = null
     private var pendingRefresh: (() -> Unit)? = null
     private var lastKey: Any? = null
+    private var bandHealthJob: Job? = null
+    private var bandHealthKey: Any? = null
     var snapshot by mutableStateOf(ProgressSnapshot()); private set
+    var bandHealthSnapshot by mutableStateOf(HamClockBandHealthSnapshot()); private set
     var busy by mutableStateOf(false); private set
     var stationProfiles by mutableStateOf<List<String>>(emptyList()); private set
     var stationCallsigns by mutableStateOf<List<String>>(emptyList()); private set
@@ -148,6 +156,28 @@ internal class ProgressController(context: Context, private val database: QsoDat
     }
 
     fun goalsChanged() { lastKey = null }
+
+    fun refreshBandHealth(
+        evidence: List<HamClockBandEvidence>,
+        availability: Map<String, HamClockEvidenceAvailability>,
+        preference: HamClockBandHealthPreference,
+        stationProfileId: String?,
+        stationCall: String,
+        nowEpoch: Long = java.time.Instant.now().epochSecond,
+    ) {
+        val identity = evidence.fold(1L) { value, row -> 31L * value + row.id.hashCode() }
+        val key = listOf(database.changeToken(), identity, availability, preference, stationProfileId, stationCall,
+            nowEpoch / 60L)
+        if (key == bandHealthKey || bandHealthJob?.isActive == true) return
+        bandHealthKey = key
+        bandHealthJob = scope.launch {
+            val built = withContext(Dispatchers.IO) {
+                val historical = repository.bandHistory(stationProfileId, stationCall, nowEpoch)
+                computeHamClockBandHealthSnapshot(evidence, availability, preference, historical, nowEpoch)
+            }
+            bandHealthSnapshot = built
+        }
+    }
     fun close() = scope.cancel()
 }
 

@@ -137,7 +137,6 @@ data class HamClockWsprPreference(
     val minimumSnr: Int? = null,
     val maximumPaths: Int = 100,
     val regionalEnabled: Boolean = false,
-    val policyAcknowledged: Boolean = false,
     val showPaths: Boolean = true,
     val showRegionalGrid: Boolean = false,
 )

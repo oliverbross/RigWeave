@@ -1,6 +1,7 @@
 package app.rigweave.mobile
 
 import android.database.sqlite.SQLiteDatabase
+import app.rigweave.mobile.hamclock.HamClockBandHistoricalRow
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -57,6 +58,26 @@ internal class LogIntelligenceRepository(private val database:QsoDatabase){
     }
 
     fun stationProfiles(): List<String> = db.rawQuery("SELECT DISTINCT station_profile_id FROM qso_projection WHERE station_profile_id<>'' ORDER BY 1",null).use{c->buildList{while(c.moveToNext())add(c.getString(0))}}
+
+    /** Compact projection-only historical aggregate; no canonical QSO decode or full-row materialisation. */
+    fun bandHistory(stationProfileId: String?, stationCall: String, nowEpoch: Long = Instant.now().epochSecond): List<HamClockBandHistoricalRow> {
+        val start = nowEpoch - 365L * 86_400L
+        val clauses = mutableListOf("created_at>=?", "sync_state NOT IN ('TOMBSTONE','REMOTE_DELETED')", "band_norm<>''")
+        val args = mutableListOf(start.toString())
+        if (!stationProfileId.isNullOrBlank()) { clauses += "station_profile_id=?"; args += stationProfileId }
+        else if (stationCall.isNotBlank()) { clauses += "station_callsign_norm=?"; args += stationCall.trim().uppercase(Locale.US) }
+        val hour = Instant.ofEpochSecond(nowEpoch).atZone(ZoneOffset.UTC).hour
+        val comparableHours = setOf((hour + 23) % 24, hour, (hour + 1) % 24).joinToString(",")
+        val sql = """SELECT band_norm,mode_family,COUNT(*),COUNT(DISTINCT NULLIF(callsign_norm,'')),
+            SUM(CASE WHEN paper_received=1 OR lotw_received=1 THEN 1 ELSE 0 END),
+            SUM(CASE WHEN CAST(strftime('%H',created_at,'unixepoch') AS INTEGER) IN ($comparableHours) THEN 1 ELSE 0 END)
+            FROM qso_projection WHERE ${clauses.joinToString(" AND ")} GROUP BY band_norm,mode_family
+            ORDER BY band_norm,mode_family LIMIT 128""".trimIndent()
+        return db.rawQuery(sql, args.toTypedArray()).use { cursor -> buildList {
+            while (cursor.moveToNext()) add(HamClockBandHistoricalRow(cursor.getString(0), cursor.getString(1), cursor.getInt(2),
+                cursor.getInt(3), cursor.getInt(4), cursor.getInt(5), start, nowEpoch))
+        } }
+    }
     fun stationCallsigns(): List<String> = db.rawQuery("SELECT DISTINCT station_callsign_norm FROM qso_projection WHERE station_callsign_norm<>'' ORDER BY 1",null).use{c->buildList{while(c.moveToNext())add(c.getString(0))}}
     fun operators(): List<String> = db.rawQuery("SELECT DISTINCT operator_norm FROM qso_projection WHERE operator_norm<>'' ORDER BY 1",null).use{c->buildList{while(c.moveToNext())add(c.getString(0))}}
     fun submodes(): List<String> = db.rawQuery("SELECT DISTINCT COALESCE(NULLIF(submode_norm,''),mode_norm) FROM qso_projection WHERE mode_norm<>'' ORDER BY 1",null).use{c->buildList{while(c.moveToNext())add(c.getString(0))}}

@@ -135,7 +135,7 @@ internal data class HamClockMapSnapshot(
     val sourceStatus: Map<String, HamClockMapSourceStatus> = emptyMap(),
 )
 
-internal enum class HamClockMapSourceState { CURRENT, LIVE, CACHED, STALE, OFFLINE_CACHE, EMPTY, ERROR, UNAVAILABLE }
+internal enum class HamClockMapSourceState { CURRENT, LIVE, CACHED, DEGRADED, STALE, OFFLINE_CACHE, EMPTY, ERROR, UNAVAILABLE }
 
 internal data class HamClockMapSourceStatus(
     val state: HamClockMapSourceState,
@@ -160,7 +160,7 @@ internal fun hamClockVisibleStatusCounts(
     }.toList()
     return HamClockVisibleStatusCounts(
         current = states.count { it in setOf(HamClockMapSourceState.CURRENT, HamClockMapSourceState.LIVE) },
-        degraded = states.count { it in setOf(HamClockMapSourceState.CACHED, HamClockMapSourceState.STALE,
+    degraded = states.count { it in setOf(HamClockMapSourceState.CACHED, HamClockMapSourceState.DEGRADED, HamClockMapSourceState.STALE,
             HamClockMapSourceState.OFFLINE_CACHE, HamClockMapSourceState.ERROR) },
         empty = states.count { it == HamClockMapSourceState.EMPTY },
         unavailable = states.count { it == HamClockMapSourceState.UNAVAILABLE },
@@ -302,18 +302,19 @@ internal fun buildHamClockMapSnapshot(
         }
     }
     rbn.take(120).forEach { (row, location) ->
-        val detail = "${row.skimmerCall} · ${row.band} ${row.mode}" +
+        val relationship = "${row.skimmerCall} heard ${row.dxCall}"
+        val detail = "$relationship · ${row.band} ${row.mode}" +
             row.snr?.let { " · $it dB" }.orEmpty() + row.wpm?.let { " · $it WPM" }.orEmpty()
-        points += HamClockMapPoint(row.id, HamClockMapLayerId.RBN, row.dxCall, detail,
+        points += HamClockMapPoint(row.id, HamClockMapLayerId.RBN, relationship, detail,
             location.latitude, location.longitude, "#4ed9b2", HamClockMapSelection.RBN_OBSERVATION,
-            row.id, row.dxCall, row.frequencyHz, row.mode)
+            row.id, row.skimmerCall, row.frequencyHz, row.mode)
         val endpoints = hamClockRbnPathEndpoints(row)
         if (endpoints != null && rbnShowPaths) {
             val path = greatCirclePath(LatLng(endpoints.first.latitude, endpoints.first.longitude),
                 LatLng(endpoints.second.latitude, endpoints.second.longitude), 20)
-            lines += HamClockMapLine(row.id, HamClockMapLayerId.RBN, row.dxCall, detail,
+            lines += HamClockMapLine(row.id, HamClockMapLayerId.RBN, relationship, detail,
                 splitAtDateline(path).map { segment -> segment.map { GeoPoint(it.latitude, it.longitude) } },
-                hamClockBandColor(row.band), HamClockMapSelection.RBN_OBSERVATION, row.id, row.dxCall,
+                hamClockBandColor(row.band), HamClockMapSelection.RBN_OBSERVATION, row.id, row.skimmerCall,
                 row.frequencyHz, row.mode)
         }
     }
@@ -708,7 +709,7 @@ internal fun HamClockMapDataView(
                         Text("${spec.sourceLabel} · ${spec.lowDataRepresentation}", color = Color(0xFF91A1A9), fontSize = 9.sp)
                         snapshot.sourceStatus[spec.id]?.let { status ->
                             Text("${status.state} · ${status.provenance} · ${status.observedAtEpoch.takeIf { it > 0 }?.let { java.time.Instant.ofEpochSecond(it).toString() } ?: "no observation time"}${status.detail.takeIf(String::isNotBlank)?.let { " · $it" }.orEmpty()}",
-                                color = if (status.state in setOf(HamClockMapSourceState.ERROR, HamClockMapSourceState.STALE, HamClockMapSourceState.OFFLINE_CACHE)) Color(0xFFF0AD35) else Color(0xFF42C7D8), fontSize = 9.sp)
+                                color = if (status.state in setOf(HamClockMapSourceState.ERROR, HamClockMapSourceState.DEGRADED, HamClockMapSourceState.STALE, HamClockMapSourceState.OFFLINE_CACHE)) Color(0xFFF0AD35) else Color(0xFF42C7D8), fontSize = 9.sp)
                         }
                     }
                     Text("${(pref.opacity * 100).toInt()}%", color = Color(0xFF42C7D8), fontSize = 9.sp)

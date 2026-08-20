@@ -6,7 +6,7 @@ import java.util.Locale
 
 object HamClockSettingsCodec {
     const val SCHEMA = "rigweave.hamclock.settings"
-    const val CURRENT_VERSION = 4
+    const val CURRENT_VERSION = 5
     const val MAX_PROFILES = 24
     const val MAX_JSON_BYTES = 1_048_576
 
@@ -276,7 +276,7 @@ object HamClockSettingsCodec {
         .put("personal_enabled", value.personalEnabled).put("direction", value.direction.name)
         .put("window_minutes", value.windowMinutes).put("band", value.band).put("minimum_snr", value.minimumSnr)
         .put("maximum_paths", value.maximumPaths).put("regional_enabled", value.regionalEnabled)
-        .put("policy_acknowledged", value.policyAcknowledged).put("show_paths", value.showPaths)
+        .put("show_paths", value.showPaths)
         .put("show_regional_grid", value.showRegionalGrid)
 
     private fun decodeWspr(row: JSONObject) = HamClockWsprPreference(
@@ -284,7 +284,7 @@ object HamClockSettingsCodec {
         windowMinutes = row.optInt("window_minutes", 30), band = row.optString("band", "ALL"),
         minimumSnr = if (row.has("minimum_snr") && !row.isNull("minimum_snr")) row.optInt("minimum_snr") else null,
         maximumPaths = row.optInt("maximum_paths", 100), regionalEnabled = row.optBoolean("regional_enabled"),
-        policyAcknowledged = row.optBoolean("policy_acknowledged"), showPaths = row.optBoolean("show_paths", true),
+        showPaths = row.optBoolean("show_paths", true),
         showRegionalGrid = row.optBoolean("show_regional_grid"),
     )
 

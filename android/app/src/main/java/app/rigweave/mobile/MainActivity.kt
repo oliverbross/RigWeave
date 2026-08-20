@@ -95,7 +95,7 @@ import java.io.File
 import java.io.InputStream
 import java.util.Locale
 import kotlin.math.abs
-import app.rigweave.mobile.hamclock.HamClockSettingsCoordinator
+import app.rigweave.mobile.hamclock.*
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -278,13 +278,14 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val hamClockStationCall = wavelog.selectedStation?.callsign?.ifBlank { null }
         ?: app.stationCallsign.ifBlank { features.clusterCallsign }
     val hamClockStationGrid = wavelog.selectedStation?.grid?.ifBlank { null } ?: app.stationGrid
-    LaunchedEffect(hamClockSettings.document.settings.cluster.enabled, hamClockSettings.document.settings.rbn, foreground) {
-        features.applyRbnPreference(hamClockSettings.document.settings.rbn)
+    LaunchedEffect(hamClockSettings.document.settings.cluster.enabled, hamClockSettings.document.settings.rbn, foreground, hamClockStationCall) {
+        features.applyRbnPreference(hamClockSettings.document.settings.rbn, hamClockStationCall)
         if (!foreground || !hamClockSettings.document.settings.cluster.enabled) features.disconnectCluster(disabled = true)
         else if (features.clusterConnection.state in setOf(ClusterConnectionState.DISABLED, ClusterConnectionState.DISCONNECTED)) {
             features.connectConfiguredCluster()
         }
     }
+    LaunchedEffect(hamClockStationGrid) { neuralDx.updateSignalGeometry(hamClockStationGrid) }
     LaunchedEffect(hamClockSettings.document.settings.wspr, foreground, hamClockStationCall, hamClockStationGrid) {
         val preference = hamClockSettings.document.settings.wspr
         neuralDx.applyWsprPreference(preference)
@@ -491,9 +492,47 @@ private fun navIcon(item: Destination) = when (item) {
         intelligenceAttention, cty.dataRevision, progress.goalStore.goals) {
         progress.refresh(progress.filters, features.liveSpots, intelligencePortableSpots, intelligenceAttention, cty, portable.sotaCatalogue)
     }
+    val bandEvidence = remember(features.liveSpots, neuralDx.mySignal, features.rbnObservations, neuralDx.wsprPersonal) {
+        features.liveSpots.map { HamClockBandEvidence("CLUSTER", it.band, it.mode, it.callsign, it.spotter,
+            observedEpoch = it.receivedEpoch, frequencyHz = it.frequencyHz, id = "cluster:${it.id}") } +
+            neuralDx.mySignal.reports.map { HamClockBandEvidence("PSK", it.band, it.mode, it.callsign,
+                it.receiverCallsign, it.snr, it.epoch, it.frequencyHz, "psk:${signalReportReference(it)}") } +
+            features.rbnObservations.map { HamClockBandEvidence("RBN", it.band, it.mode, it.dxCall,
+                it.skimmerCall, it.snr, it.observedEpoch, it.frequencyHz, "rbn:${it.id}") } +
+            neuralDx.wsprPersonal.reports.map { HamClockBandEvidence("WSPR", it.band, "WSPR", it.callsign,
+                it.receiverCallsign, it.snr, it.epoch, it.frequencyHz, "wspr:${signalReportReference(it)}") }
+    }
+    fun signalAvailability(state: HamClockFeedState) = when (state) {
+        HamClockFeedState.LIVE, HamClockFeedState.CACHED -> HamClockEvidenceAvailability.CURRENT
+        HamClockFeedState.DEGRADED -> HamClockEvidenceAvailability.ERROR
+        HamClockFeedState.STALE -> HamClockEvidenceAvailability.STALE
+        HamClockFeedState.UNAVAILABLE -> HamClockEvidenceAvailability.UNAVAILABLE
+    }
+    val bandAvailability = remember(features.clusterConnection, features.rbnSourceSnapshot, neuralDx.mySignal,
+        neuralDx.wsprPersonal, hamClockSettings.document.settings) { mapOf(
+        "CLUSTER" to if (features.clusterConnection.state == ClusterConnectionState.CONNECTED) HamClockEvidenceAvailability.CURRENT else HamClockEvidenceAvailability.UNAVAILABLE,
+        "PSK" to if (!hamClockSettings.document.settings.pskReporter.enabled) HamClockEvidenceAvailability.DISABLED else signalAvailability(
+            combinedSignalFeedState(neuralDx.mySignal.beingHeardState, neuralDx.mySignal.hearingState)),
+        "RBN" to when (features.rbnSourceSnapshot.state) {
+            HamClockRbnSourceState.CURRENT, HamClockRbnSourceState.EMPTY -> HamClockEvidenceAvailability.CURRENT
+            HamClockRbnSourceState.STALE -> HamClockEvidenceAvailability.STALE
+            HamClockRbnSourceState.ERROR -> HamClockEvidenceAvailability.ERROR
+            HamClockRbnSourceState.DISABLED -> HamClockEvidenceAvailability.DISABLED
+            else -> HamClockEvidenceAvailability.UNAVAILABLE
+        },
+        "WSPR" to if (!hamClockSettings.document.settings.wspr.personalEnabled) HamClockEvidenceAvailability.DISABLED
+            else signalAvailability(neuralDx.wsprPersonal.sourceState),
+    ) }
+    val bandStationId = wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }
+    val bandStationCall = wavelog.selectedStation?.callsign?.ifBlank { null } ?: app.stationCallsign
+    LaunchedEffect(bandEvidence, bandAvailability, hamClockSettings.document.settings.bandHealth,
+        database.changeToken(), bandStationId, bandStationCall) {
+        progress.refreshBandHealth(bandEvidence, bandAvailability, hamClockSettings.document.settings.bandHealth,
+            bandStationId, bandStationCall)
+    }
     when (destination) {
         Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, callbook,
-            publicProviders, hamClockSettings, operations, send, openDx, openPortable, openProgress, openOperations,
+            publicProviders, hamClockSettings, operations, progress.bandHealthSnapshot, send, openDx, openPortable, openProgress, openOperations,
             openLogbook, closeEq, openDigi, foreground, requestHomeReceiveTune,
             openHomeQso)
         Destination.RADIO -> Column(Modifier.fillMaxSize()) {
@@ -537,8 +576,9 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.PRESETS -> PresetsScreen(radio, app, send)
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app,
             hamClockSettings.document.settings.cluster, hamClockSettings.document.settings.dxNews,
-            hamClockSettings.document.settings.bandHealth,
-            { value -> hamClockSettings.updateSettings { it.copy(dxNews = value) } }, progress.snapshot.needs,
+            hamClockSettings.document.settings.bandHealth, progress.bandHealthSnapshot,
+            { value -> hamClockSettings.updateSettings { it.copy(dxNews = value) } },
+            { value -> hamClockSettings.updateSettings { it.copy(bandHealth = value) } }, progress.snapshot.needs,
             operations, openOperations, send, requestHomeReceiveTune) { callsign ->
             progress.requestLogbook(logbookFilterForDimension("callsign", callsign)); openLogbook()
         }
@@ -3038,7 +3078,9 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
     clusterPreference: app.rigweave.mobile.hamclock.HamClockClusterPreference,
     dxNewsPreference: app.rigweave.mobile.hamclock.HamClockDxNewsPreference,
     bandHealthPreference: app.rigweave.mobile.hamclock.HamClockBandHealthPreference,
+    bandHealthSnapshot: app.rigweave.mobile.hamclock.HamClockBandHealthSnapshot,
     updateDxNewsPreference: (app.rigweave.mobile.hamclock.HamClockDxNewsPreference) -> Unit,
+    updateBandHealthPreference: (app.rigweave.mobile.hamclock.HamClockBandHealthPreference) -> Unit,
     needs: List<ProgressNeed>, operations: OperationsController, openOperations: () -> Unit, send: (String) -> Unit,
     requestReceiveTune: (Long, String?, String, String) -> Unit, openHistory: (String) -> Unit) {
     val calendarByCall = operations.dxItems.associateBy { it.callsign.uppercase(Locale.US) }
@@ -3055,7 +3097,7 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
         Box(Modifier.weight(1f)) {
             NeuralDxScreen(neuralDx, features, database, wavelog, callbook, cty, app, clusterPreference,
                 dxNewsPreference, updateDxNewsPreference, send, requestReceiveTune, dxNeeds,
-                bandHealthPreference, { call -> openHistory(call) }) { spot ->
+                bandHealthPreference, bandHealthSnapshot, updateBandHealthPreference, { call -> openHistory(call) }) { spot ->
                 openHistory(spot.callsign)
             }
         }

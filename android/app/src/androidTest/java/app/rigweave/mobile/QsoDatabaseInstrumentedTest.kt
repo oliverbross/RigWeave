@@ -203,6 +203,20 @@ class QsoDatabaseInstrumentedTest {
         assertEquals("504", insight.record.dxcc)
     }
 
+    @Test fun bandHistoryUsesCompactStationScopedProjectionAggregate() {
+        val now = 1_700_000_000L
+        assertTrue(database.save(Qso(id = "history-aggregate-1", callsign = "VK8AAA", frequencyHz = 14_074_000,
+            mode = "FT8", rstSent = "-10", rstReceived = "-12", createdAt = now - 86_400,
+            band = "20m", stationCallsign = "OM0RX", lotwReceived = "Y")))
+        assertTrue(database.save(Qso(id = "history-aggregate-2", callsign = "VK8BBB", frequencyHz = 14_074_000,
+            mode = "FT8", rstSent = "-08", rstReceived = "-09", createdAt = now - 7 * 86_400,
+            band = "20m", stationCallsign = "OM0RX")))
+        val row = LogIntelligenceRepository(database).bandHistory(null, "OM0RX", now)
+            .single { it.band == "20M" && it.modeFamily == "DIGITAL" }
+        assertEquals(2, row.qsoCount); assertEquals(2, row.uniqueCalls); assertEquals(1, row.confirmedCount)
+        assertTrue(row.comparableWindowCount in 0..row.qsoCount)
+    }
+
     @Test fun deliveryRowsRoundTripIndependentlyAndAcceptanceTouchesOnlyMatchingFlag() {
         val qso = Qso(id = "delivery-qso", callsign = "VK8ABC", frequencyHz = 14_200_000, mode = "SSB",
             rstSent = "59", rstReceived = "59", createdAt = 1_700_000_000, stationCallsign = "OM0RX",

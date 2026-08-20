@@ -56,6 +56,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -187,6 +188,26 @@ internal fun ProgressScreen(
                 }
             }
             if (snapshot.goals.isNotEmpty()) item { GoalsCard(snapshot.goals, controller) }
+            item {
+                val live = controller.bandHealthSnapshot
+                val selected = live.rows.firstOrNull { filters.band.isNotBlank() && it.band.equals(filters.band, true) }
+                    ?: live.rows.firstOrNull()
+                ProgressCard("LIVE RF / BAND HEALTH") {
+                    Text("OPERATIONAL LIVE EVIDENCE · NOT PROPAGATION FORECAST · NOT AWARD CREDIT",
+                        color = ProgressAmber, fontWeight = FontWeight.Bold)
+                    Text(selected?.let { "${it.band} · ${it.state} · confidence ${it.confidence} · ${it.reasons.joinToString(" · ")}" }
+                        ?: "No shared live RF snapshot", color = ProgressInk)
+                    Text("Sources · ${live.sourceStates.entries.joinToString(" · ") { "${it.key} ${it.value}" }}", color = ProgressMuted)
+                    val historical = selected?.let { row -> live.historical.filter { it.band.equals(row.band, true) } }.orEmpty()
+                    Text("Historical projection · ${historical.sumOf { it.qsoCount }} QSOs · ${historical.sumOf { it.comparableWindowCount }} comparable UTC-window",
+                        color = ProgressMuted)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(openDx) { Text("DX RF EVIDENCE") }
+                        OutlinedButton({ selected?.let { openLogbookFilter(progressLogbookFilter(filters).copy(band = it.band)) } },
+                            enabled = selected != null) { Text("ADVANCED LOGBOOK") }
+                    }
+                }
+            }
             when (section) {
                 ProgressSection.OVERVIEW -> overviewItems(snapshot, compact, openSync, progressLogbookFilter(filters), openLogbookFilter)
                 ProgressSection.ACTIVITY -> activityItems(snapshot, compact)

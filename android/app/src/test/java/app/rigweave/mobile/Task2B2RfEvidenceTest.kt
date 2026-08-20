@@ -40,11 +40,11 @@ class Task2B2RfEvidenceTest {
     @Test fun rbnTypedViewsSelectDxSkimmerWatchlistAndAll() {
         val dx = requireNotNull(parseRbnClusterLine("DX de K1ABC-#: 14025.3 VK9DX CW 20 dB", 1_000))
         val other = dx.copy(id = "other", skimmerCall = "W3LPL-#", dxCall = "W1AW")
-        fun rows(mode: HamClockRbnMode, skimmer: String = "", call: String = "") = boundedRbnObservations(
+        fun rows(mode: HamClockRbnMode, skimmer: String = "", call: String = "", stationCall: String = "") = boundedRbnObservations(
             listOf(dx, other), HamClockRbnPreference(viewMode = mode, skimmerCall = skimmer, dxCall = call),
-            setOf("W1AW"), 1_010).map { it.dxCall }.toSet()
-        assertEquals(setOf("VK9DX"), rows(HamClockRbnMode.WHO_HEARS_ME, call = "VK9DX"))
-        assertEquals(setOf("W1AW"), rows(HamClockRbnMode.SKIMMER_VIEW, skimmer = "W3LPL-#"))
+            setOf("W1AW"), stationCall, 1_010).map { it.dxCall }.toSet()
+        assertEquals(setOf("VK9DX"), rows(HamClockRbnMode.WHO_HEARS_ME, stationCall = "EA8/VK9DX/P"))
+        assertEquals(setOf("W1AW"), rows(HamClockRbnMode.SKIMMER_VIEW, skimmer = "W3LPL"))
         assertEquals(setOf("W1AW"), rows(HamClockRbnMode.WATCHLIST))
         assertEquals(setOf("VK9DX", "W1AW"), rows(HamClockRbnMode.ALL_RBN))
     }
@@ -86,6 +86,7 @@ class Task2B2RfEvidenceTest {
             PskDirectionFeed(SignalDirection.BEING_HEARD, state = HamClockFeedState.LIVE),
             PskDirectionFeed(SignalDirection.HEARING, state = HamClockFeedState.UNAVAILABLE, error = "offline"))
         assertEquals(NeuralSignalSourceState.DEGRADED, neuralSignalSourceState(snapshot, hasRows = false))
+        assertEquals(HamClockFeedState.DEGRADED, snapshot.sourceState)
     }
 
     @Test fun personalWsprLocalProjectionChangesNeverFetch() {
@@ -111,10 +112,18 @@ class Task2B2RfEvidenceTest {
     }
 
     @Test fun ibpManifestHasEighteenUniqueOfficialScheduleSitesAndStableHash() {
-        assertEquals(18, hamClockIbpManifest.size)
-        assertEquals(18, hamClockIbpManifest.map { it.callsign }.toSet().size)
-        assertEquals("BL10TS", hamClockIbpManifest.single { it.callsign == "KH6RS" }.grid)
-        assertEquals("c5a6333fca305bf35c4e9ded6a3c0885b0b217a6513b263f78923a34931fdc41", HAMCLOCK_IBP_MANIFEST_HASH)
+        val expected = listOf("4U1UN" to "FN30AS", "VE8AT" to "CP38GH", "W6WX" to "CM97BD", "KH6RS" to "BL10TS",
+            "ZL6B" to "RE78TW", "VK6RBP" to "OF87AV", "JA2IGY" to "PM84JK", "RR9O" to "NO14KX",
+            "VR2B" to "OL72BG", "4S7B" to "MJ96WV", "ZS6DN" to "KG33XI", "5Z4B" to "KI88HR",
+            "4X6TU" to "KM72JB", "OH2B" to "KP20EH", "CS3B" to "IM12JT", "LU4AA" to "GF05TJ",
+            "OA4B" to "FH17MW", "YV5B" to "FK60ND")
+        assertEquals(expected, hamClockIbpManifest.map { it.callsign to it.grid })
+        assertEquals("c5a6333fca305bf35c4e9ded6a3c0885b0b217a6513b263f78923a34931fdc41", hamClockIbpManifestHash())
+        assertEquals(HAMCLOCK_IBP_MANIFEST_HASH, hamClockIbpManifestHash())
+        assertEquals("Masterton", hamClockIbpManifest.single { it.callsign == "ZL6B" }.locationLabel)
+        assertEquals("Rolystone", hamClockIbpManifest.single { it.callsign == "VK6RBP" }.locationLabel)
+        assertEquals("Kikuyu", hamClockIbpManifest.single { it.callsign == "5Z4B" }.locationLabel)
+        assertEquals("São Jorge", hamClockIbpManifest.single { it.callsign == "CS3B" }.locationLabel)
         assertTrue(HAMCLOCK_IBP_MANIFEST_SOURCE.startsWith("https://"))
     }
 
@@ -148,6 +157,13 @@ class Task2B2RfEvidenceTest {
         val row = computeHamClockBandHealth(emptyList(), mapOf("RBN" to HamClockEvidenceAvailability.CURRENT),
             preference, 1_000).single()
         assertEquals("NO RECENT EVIDENCE", row.state)
+    }
+
+    @Test fun staleOnlyBandHealthIsNeverActive() {
+        val evidence = listOf(HamClockBandEvidence("RBN", "20m", "CW", "W1AW", "K1ABC-#", observedEpoch = 995))
+        val row = computeHamClockBandHealth(evidence, mapOf("RBN" to HamClockEvidenceAvailability.STALE),
+            HamClockBandHealthPreference(visibleBands = setOf("20m"), enabledSources = setOf("RBN")), 1_000).single()
+        assertEquals("STALE EVIDENCE", row.state); assertEquals("LOW", row.confidence)
     }
 
     @Test fun qsoHistoryIsComparisonOnlyAndCannotMakeBandLive() {
@@ -207,5 +223,20 @@ class Task2B2RfEvidenceTest {
         val dx = GeoPoint(-10.0, 100.0); val skimmer = GeoPoint(40.0, -75.0)
         val endpoints = requireNotNull(hamClockRbnPathEndpoints(base.copy(dxPoint = dx, skimmerPoint = skimmer)))
         assertEquals(dx, endpoints.first); assertEquals(skimmer, endpoints.second)
+    }
+
+
+    @Test fun rbnEndpointResolverPrefersStationAndCachedGridBeforeCty() {
+        val station = GeoPoint(48.5, 17.5); val cty = GeoPoint(48.0, 19.0)
+        val exact = resolveRbnEndpoint("OM0RX/P", null, "OM0RX", station, null, cty)
+        assertEquals(station, exact.point); assertEquals(HamClockGeometryAccuracy.EXACT, exact.accuracy)
+        val cached = resolveRbnEndpoint("K1ABC", null, "OM0RX", station, "FN31", cty)
+        assertEquals("CACHED CALLBOOK GRID", cached.source)
+    }
+
+    @Test fun backgroundLifecycleGateRejectsProviderAndLightningStarts() {
+        assertFalse(shouldStartForegroundWork(false))
+        assertFalse(shouldStartForegroundWork(true, alreadyActive = true))
+        assertTrue(shouldStartForegroundWork(true))
     }
 }

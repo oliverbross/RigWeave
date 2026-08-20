@@ -24,6 +24,8 @@ import java.time.Instant
 import java.time.YearMonth
 import app.rigweave.mobile.hamclock.HamClockRbnObservation
 import app.rigweave.mobile.hamclock.HamClockRbnPreference
+import app.rigweave.mobile.hamclock.HamClockRbnSourceSnapshot
+import app.rigweave.mobile.hamclock.HamClockRbnSourceState
 import app.rigweave.mobile.hamclock.boundedRbnObservations
 import app.rigweave.mobile.hamclock.parseRbnClusterLine
 
@@ -142,6 +144,9 @@ class FeatureController internal constructor(private val context: Context, priva
     private val rbnBuffer = ArrayDeque<HamClockRbnObservation>()
     private var rbnPreference = HamClockRbnPreference(enabled = false)
     private var rbnPublishJob: Job? = null
+    private var rbnMaintenanceJob: Job? = null
+    private var rbnStationCall = ""
+    private var lastRbnObservedEpoch = 0L
     @Volatile private var rbnDirty = false
 
     var clusterHost by mutableStateOf(prefs.getString("host", RigWeaveDefaults.CLUSTER_HOST) ?: RigWeaveDefaults.CLUSTER_HOST)
@@ -175,6 +180,7 @@ class FeatureController internal constructor(private val context: Context, priva
     var requestedSpotRequiresReceiveReview by mutableStateOf(false); private set
     internal var rbnObservations by mutableStateOf(emptyList<HamClockRbnObservation>()); private set
     var latestRbnEpoch by mutableStateOf(0L); private set
+    internal var rbnSourceSnapshot by mutableStateOf(HamClockRbnSourceSnapshot()); private set
 
     init {
         val defaults = prefs.edit()
@@ -184,6 +190,9 @@ class FeatureController internal constructor(private val context: Context, priva
         defaults.apply()
         NativeCore.featureWatchlist(handle, watchlistText)
         scheduleRbnPublish()
+        rbnMaintenanceJob = scope.launch {
+            while (true) { delay(2_000); scheduleRbnPublish(immediate = true) }
+        }
     }
 
     fun setWatchlist(value: String) {
@@ -200,12 +209,14 @@ class FeatureController internal constructor(private val context: Context, priva
     }
     fun consumeRequestedSpot() { requestedSpotId = null; requestedSpotRequiresReceiveReview = false }
 
-    fun applyRbnPreference(value: HamClockRbnPreference) {
+    fun applyRbnPreference(value: HamClockRbnPreference, currentStationCall: String = "") {
         rbnPreference = value
+        rbnStationCall = currentStationCall.trim().uppercase()
         if (!value.enabled) {
             synchronized(rbnBuffer) { rbnBuffer.clear() }
             rbnObservations = emptyList()
-        } else scheduleRbnPublish(immediate = true)
+        }
+        scheduleRbnPublish(immediate = true)
     }
 
     fun connectConfiguredCluster() {
@@ -258,6 +269,7 @@ class FeatureController internal constructor(private val context: Context, priva
                             if (generation != clusterGeneration) return@useLines
                             val rbn = parseRbnClusterLine(line)
                             rbn?.let {
+                                lastRbnObservedEpoch = maxOf(lastRbnObservedEpoch, it.observedEpoch)
                                 synchronized(rbnBuffer) {
                                     rbnBuffer.addLast(it)
                                     while (rbnBuffer.size > 1_000) rbnBuffer.removeFirst()
@@ -290,6 +302,7 @@ class FeatureController internal constructor(private val context: Context, priva
         clusterStatus = if (disabled) "DX cluster disabled" else "DX cluster disconnected"
         clusterConnection = ClusterConnectionTruth(if (disabled) ClusterConnectionState.DISABLED else ClusterConnectionState.DISCONNECTED,
             stateChangedEpoch = Instant.now().epochSecond, latestSpotEpoch = newestSpotEpoch)
+        scheduleRbnPublish(immediate = true)
     }
 
     fun postSpot(callsign: String, frequencyKHz: Double, comment: String) {
@@ -338,7 +351,7 @@ class FeatureController internal constructor(private val context: Context, priva
     }
 
     fun close() {
-        disconnectCluster(); scope.cancel(); NativeCore.featureDestroy(handle)
+        rbnMaintenanceJob?.cancel(); disconnectCluster(); scope.cancel(); NativeCore.featureDestroy(handle)
     }
 
     private suspend fun refreshDX() {
@@ -418,12 +431,31 @@ class FeatureController internal constructor(private val context: Context, priva
     }
 
     private suspend fun publishRbn() {
+        val now = Instant.now().epochSecond
         val watchlist = watchlistText.lineSequence().map(String::trim).filter(String::isNotBlank).toSet()
-        val buffered = synchronized(rbnBuffer) { rbnBuffer.toList() }
-        val bounded = boundedRbnObservations(buffered, rbnPreference, watchlist)
+        val cutoff = now - rbnPreference.windowMinutes * 60L
+        val buffered = synchronized(rbnBuffer) {
+            val retained = rbnBuffer.filter { it.observedEpoch >= cutoff }
+            rbnBuffer.clear(); rbnBuffer.addAll(retained)
+            rbnBuffer.toList()
+        }
+        val bounded = boundedRbnObservations(buffered, rbnPreference, watchlist, rbnStationCall, now)
+        val sourceState = when {
+            !rbnPreference.enabled || clusterConnection.state == ClusterConnectionState.DISABLED -> HamClockRbnSourceState.DISABLED
+            clusterConnection.state == ClusterConnectionState.CONNECTING || clusterConnection.state == ClusterConnectionState.RETRYING -> HamClockRbnSourceState.CONNECTING
+            clusterConnection.state == ClusterConnectionState.ERROR -> HamClockRbnSourceState.ERROR
+            clusterConnection.state != ClusterConnectionState.CONNECTED -> HamClockRbnSourceState.DISCONNECTED
+            lastRbnObservedEpoch > 0 && lastRbnObservedEpoch < cutoff -> HamClockRbnSourceState.STALE
+            lastRbnObservedEpoch == 0L -> HamClockRbnSourceState.EMPTY
+            else -> HamClockRbnSourceState.CURRENT
+        }
+        val sourceSnapshot = HamClockRbnSourceSnapshot(sourceState, lastRbnObservedEpoch, buffered.size,
+            bounded.size, clusterConnection.activeEndpoint, clusterConnection.error
+                .replace(Regex("https?://\\S+|(?i)(token|key|password)=[^\\s]+"), "[redacted]").take(160))
         withContext(Dispatchers.Main) {
             rbnObservations = bounded
-            latestRbnEpoch = bounded.maxOfOrNull(HamClockRbnObservation::observedEpoch) ?: 0L
+            latestRbnEpoch = lastRbnObservedEpoch
+            rbnSourceSnapshot = sourceSnapshot
         }
     }
 
@@ -438,13 +470,15 @@ class FeatureController internal constructor(private val context: Context, priva
     }
 
     private suspend fun publishCluster(value: String, state: ClusterConnectionState = clusterConnection.state,
-        endpoint: String = clusterConnection.activeEndpoint, error: String = "", connectedSince: Long = clusterConnection.connectedSinceEpoch) =
+        endpoint: String = clusterConnection.activeEndpoint, error: String = "", connectedSince: Long = clusterConnection.connectedSinceEpoch) {
         withContext(Dispatchers.Main) {
             clusterStatus = value
             clusterConnection = ClusterConnectionTruth(state, endpoint,
                 if (state == ClusterConnectionState.CONNECTED) connectedSince else 0,
                 Instant.now().epochSecond, newestSpotEpoch, error.take(160))
         }
+        scheduleRbnPublish(immediate = true)
+    }
 }
 
 private fun safeFeatureError(error: Throwable): String = error.message.orEmpty()

@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -82,6 +83,8 @@ fun NeuralDxScreen(
     requestReceiveTune: (Long, String?, String, String) -> Unit,
     intelligenceNeeds: Map<String, List<String>> = emptyMap(),
     bandHealthPreference: HamClockBandHealthPreference = HamClockBandHealthPreference(),
+    bandHealthSnapshot: HamClockBandHealthSnapshot = HamClockBandHealthSnapshot(),
+    updateBandHealthPreference: (HamClockBandHealthPreference) -> Unit = {},
     openCallHistory: (String) -> Unit = {},
     previousQsos: (AndroidDXSpot) -> Unit,
 ) {
@@ -108,6 +111,7 @@ fun NeuralDxScreen(
     LaunchedEffect(policySpots, stationId, cty.dataRevision) {
         controller.ingest(policySpots, stationId, cty, stationCall)
     }
+    LaunchedEffect(controller) { controller.ensureDxNews() }
     LaunchedEffect(stationGrid, stationCall, stationId, page) {
         if (controller.lastRefreshEpoch == 0L || Instant.now().epochSecond - controller.lastRefreshEpoch > 15 * 60) {
             controller.refresh(stationCall, stationGrid, stationId, policySpots,
@@ -162,7 +166,8 @@ fun NeuralDxScreen(
             NeuralDxPage.BRIEFING -> DxBriefingPage(controller, features, policySpots, database, wavelog, cty,
                 requestReceiveTune, intelligenceNeeds, previousQsos, dxNewsPreference, updateDxNewsPreference, pageModifier)
             NeuralDxPage.OBSERVATIONS -> DxRfEvidencePage(controller, features, policySpots, database, cty,
-                stationId, bandHealthPreference, openCallHistory, requestReceiveTune, pageModifier)
+                stationId, stationGrid, bandHealthPreference, bandHealthSnapshot, updateBandHealthPreference,
+                openCallHistory, requestReceiveTune, pageModifier)
             NeuralDxPage.SATELLITES -> DxSatellitesPage(controller, stationGrid, pageModifier)
             NeuralDxPage.WEATHER -> DxWeatherPage(controller, features, stationGrid, pageModifier)
         }
@@ -177,11 +182,15 @@ fun NeuralDxScreen(
     database: QsoDatabase,
     cty: CtyController,
     stationId: String?,
+    stationGrid: String,
     bandHealthPreference: HamClockBandHealthPreference,
+    bandHealthSnapshot: HamClockBandHealthSnapshot,
+    updateBandHealthPreference: (HamClockBandHealthPreference) -> Unit,
     openCallHistory: (String) -> Unit,
     requestReceiveTune: (Long, String?, String, String) -> Unit,
     modifier: Modifier,
 ) {
+    val uriHandler = LocalUriHandler.current
     val rbn = features.rbnObservations
     val wspr = controller.wsprPersonal.reports
     val ibp = remember(Instant.now().epochSecond / 10) { hamClockIbpSchedule() }
@@ -190,8 +199,8 @@ fun NeuralDxScreen(
     var selectedIbp by remember { mutableStateOf<HamClockIbpTransmission?>(null) }
     var selectedIbpSite by remember { mutableStateOf<HamClockIbpBeacon?>(null) }
     var selectedIbpObserved by remember { mutableStateOf<HamClockIbpObservedEvidence?>(null) }
+    var selectedBand by rememberSaveable { mutableStateOf(bandHealthPreference.visibleBands.firstOrNull() ?: "20m") }
     var statuses by remember { mutableStateOf<Map<String, SpotLogStatus>>(emptyMap()) }
-    var history by remember { mutableStateOf(emptyList<HamClockRecentQso>()) }
     val watchlist = features.watchlistText.lineSequence().map(String::trim).filter(String::isNotBlank).toSet()
     fun toggleWatch(call: String) {
         val current = watchlist.toMutableSet()
@@ -207,7 +216,6 @@ fun NeuralDxScreen(
             SpotLogIdentity(signalReportReference(row), row.callsign, entity?.dxcc.orEmpty(), entity?.country.orEmpty(), row.band, "WSPR")
         }
         statuses = withContext(Dispatchers.IO) { database.spotStatuses(identities, stationId) }
-        history = withContext(Dispatchers.IO) { database.recentHamClockProjection(500) }
     }
     LaunchedEffect(controller.requestedRfEvidenceId, rbn, wspr, ibp) {
         val id = controller.requestedRfEvidenceId ?: return@LaunchedEffect
@@ -223,26 +231,35 @@ fun NeuralDxScreen(
         controller.mySignal.reports.map { HamClockBandEvidence("PSK", it.band, it.mode, it.callsign,
             it.receiverCallsign, it.snr, it.epoch) } +
         rbn.map { HamClockBandEvidence("RBN", it.band, it.mode, it.dxCall, it.skimmerCall, it.snr, it.observedEpoch, it.frequencyHz) } +
-        wspr.map { HamClockBandEvidence("WSPR", it.band, "WSPR", it.callsign, it.receiverCallsign, it.snr, it.epoch) } +
-        history.map { HamClockBandEvidence("QSO_HISTORY", it.band, it.mode, it.callsign, observedEpoch = it.createdAt) }
-    fun feedAvailability(first: HamClockFeedState, second: HamClockFeedState) = when {
-        first == HamClockFeedState.UNAVAILABLE && second == HamClockFeedState.UNAVAILABLE -> HamClockEvidenceAvailability.UNAVAILABLE
-        first == HamClockFeedState.STALE || second == HamClockFeedState.STALE -> HamClockEvidenceAvailability.STALE
-        else -> HamClockEvidenceAvailability.CURRENT
-    }
-    val health = computeHamClockBandHealth(evidence, mapOf(
-        "CLUSTER" to if (features.clusterConnection.state == ClusterConnectionState.CONNECTED)
-            HamClockEvidenceAvailability.CURRENT else HamClockEvidenceAvailability.UNAVAILABLE,
-        "PSK" to feedAvailability(controller.mySignal.beingHeardState, controller.mySignal.hearingState),
-        "RBN" to if (features.clusterConnection.state == ClusterConnectionState.CONNECTED)
-            HamClockEvidenceAvailability.CURRENT else HamClockEvidenceAvailability.UNAVAILABLE,
-        "WSPR" to feedAvailability(controller.wsprPersonal.beingHeardState, controller.wsprPersonal.hearingState),
-    ), bandHealthPreference)
+        wspr.map { HamClockBandEvidence("WSPR", it.band, "WSPR", it.callsign, it.receiverCallsign, it.snr, it.epoch) }
+    val health = bandHealthSnapshot.rows
     val ibpObserved = observedIbpEvidence(evidence)
     LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(7.dp)) {
         item { Text("MEASURED RF EVIDENCE", color = DxAmber, fontWeight = FontWeight.Black)
             Text("RBN uses the configured retail cluster. Personal WSPR reuses PSK Reporter. Regional WSPR.live: ${controller.wsprPersonal.regionalState}.",
                 color = DxMuted, fontSize = 10.sp) }
+        item {
+            Text("SOURCE CONTROLS", color = DxCyan, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                listOf("CLUSTER", "PSK", "RBN", "WSPR").forEach { source ->
+                    FilterChip(source in bandHealthPreference.enabledSources, {
+                        val sources = bandHealthPreference.enabledSources.toMutableSet()
+                        if (!sources.add(source)) sources.remove(source)
+                        updateBandHealthPreference(bandHealthPreference.copy(enabledSources = sources))
+                    }, { Text(source) })
+                }
+            }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                listOf(5, 10, 15, 30, 60).forEach { window -> FilterChip(bandHealthPreference.windowMinutes == window,
+                    { updateBandHealthPreference(bandHealthPreference.copy(windowMinutes = window)) }, { Text("${window}m") }) }
+                listOf("ALL", "CW", "SSB", "FT8", "WSPR", "RTTY").forEach { mode -> FilterChip(bandHealthPreference.mode == mode,
+                    { updateBandHealthPreference(bandHealthPreference.copy(mode = mode)) }, { Text(mode) }) }
+            }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                bandHealthPreference.visibleBands.sorted().forEach { band -> FilterChip(selectedBand == band, { selectedBand = band }, { Text(band) }) }
+            }
+            Text(bandHealthSnapshot.sourceStates.entries.joinToString(" · ") { "${it.key} ${it.value}" }, color = DxMuted, fontSize = 10.sp)
+        }
         item { Text("RBN · ${rbn.size}", color = DxCyan, fontWeight = FontWeight.Bold) }
         items(rbn.take(120), key = { it.id }) { row ->
             val status = statuses[row.id]
@@ -283,16 +300,29 @@ fun NeuralDxScreen(
                     color = DxInk, modifier = Modifier.padding(8.dp))
             }
         }
-        item { Text("BAND HEALTH", color = DxCyan, fontWeight = FontWeight.Bold) }
+        item { Text("BAND HEALTH MATRIX · ${bandHealthPreference.windowMinutes}m · ${bandHealthPreference.mode}", color = DxCyan, fontWeight = FontWeight.Bold) }
         items(health, key = { it.band }) { row ->
             Text("${row.band.padEnd(5)} ${row.state} · n=${row.observations} · ${row.trend} · ${row.confidence}",
                 color = if (row.state == "ACTIVE") DxGreen else DxMuted, fontFamily = FontFamily.Monospace)
             Text(row.reasons.joinToString(" · "), color = DxMuted, fontSize = 9.sp)
         }
+        item {
+            val selected = health.firstOrNull { it.band == selectedBand }
+            val historical = bandHealthSnapshot.historical.filter { it.band == selectedBand &&
+                (bandHealthPreference.mode == "ALL" || it.modeFamily == bandHealthPreference.mode) }
+            Text("SELECTED BAND · $selectedBand", color = DxCyan, fontWeight = FontWeight.Bold)
+            Text(selected?.let { "${it.state} · ${it.confidence} · ${it.observations} live observations" } ?: "No live row", color = DxInk)
+            Text("HISTORICAL PROJECTION · ${historical.sumOf { it.qsoCount }} QSOs · ${historical.sumOf { it.uniqueCalls }} unique · ${historical.sumOf { it.comparableWindowCount }} comparable UTC-window",
+                color = DxMuted, fontSize = 10.sp)
+            Text("CONTRIBUTING OBSERVATIONS · ${bandHealthSnapshot.contributingObservationIds[selectedBand].orEmpty().size}", color = DxMuted)
+            bandHealthSnapshot.contributingObservationIds[selectedBand].orEmpty().take(12).forEach { Text(it, color = DxMuted, fontSize = 9.sp, fontFamily = FontFamily.Monospace) }
+        }
     }
     selectedRbn?.let { row ->
-        AlertDialog(onDismissRequest = { selectedRbn = null }, title = { Text(row.dxCall) },
-            text = { Text("RBN via ${row.skimmerCall} · ${row.band} ${row.mode} · ${row.snr?.let { "$it dB" } ?: "SNR unavailable"}\n" +
+        AlertDialog(onDismissRequest = { selectedRbn = null }, title = { Text("${row.skimmerCall} heard ${row.dxCall}") },
+            text = { Text("${row.band} ${row.mode} · ${formatMHz(row.frequencyHz)} MHz · ${row.snr?.let { "$it dB" } ?: "SNR unavailable"} · ${row.wpm?.let { "$it WPM" } ?: row.bps?.let { "$it BPS" } ?: "speed unavailable"}\n" +
+                "Observed ${utcSeconds(row.observedEpoch)} UTC · received ${utcSeconds(row.receivedEpoch)} UTC\n" +
+                "DX geometry ${row.dxGeometry} · skimmer geometry ${row.skimmerGeometry}\n" +
                 "Call ${statuses[row.id]?.callStatus ?: "—"} · DXCC ${statuses[row.id]?.dxccStatus ?: "—"} · ${if (row.dxCall in watchlist) "WATCHLISTED" else "not watched"}\n${row.rawComment}") },
             confirmButton = { Button({ requestReceiveTune(row.frequencyHz, row.mode, "RBN observation",
                 "Review receive-only frequency change"); selectedRbn = null }) { Text("Review receive") } },
@@ -311,16 +341,27 @@ fun NeuralDxScreen(
                 TextButton({ selectedWspr = null }) { Text("Close") } } })
     }
     selectedIbp?.let { row ->
+        val station = maidenheadCenter(stationGrid)
+        val distance = station?.let { distanceKm(it, row.beacon.point).roundToInt() }
+        val bearing = station?.let { initialBearingDegrees(it, row.beacon.point) }
+        val observed = ibpObserved.filter { it.beacon.callsign == row.beacon.callsign }
         AlertDialog(onDismissRequest = { selectedIbp = null }, title = { Text("IBP · ${row.beacon.callsign}") },
-            text = { Text("${row.band} · ${row.beacon.grid} · ${row.beacon.locationLabel}\nScheduled ${utcSeconds(row.slotStartEpoch)}–${utcSeconds(row.slotEndEpoch)} UTC.\nSchedule reference only; no reception is claimed.\n${HAMCLOCK_IBP_MANIFEST_VERSION} · ${HAMCLOCK_IBP_MANIFEST_HASH.take(12)}…") },
+            text = { Text("${row.band} · ${row.beacon.grid} · ${row.beacon.locationLabel}\n${distance?.let { "$it km · %03d°".format(bearing) } ?: "Bearing/distance unavailable"}\nScheduled ${utcSeconds(row.slotStartEpoch)}–${utcSeconds(row.slotEndEpoch)} UTC · ${((row.slotEndEpoch - Instant.now().epochSecond).coerceAtLeast(0))}s remaining.\n${observed.take(3).joinToString(" · ") { "${it.source} ${it.band} ${ageLabel(it.observedEpoch)}" }.ifBlank { "No recent cluster/RBN reception evidence" }}\nSchedule reference remains separate from observed reception.\n${HAMCLOCK_IBP_MANIFEST_VERSION} · ${HAMCLOCK_IBP_MANIFEST_HASH.take(12)}…") },
             confirmButton = { Button({ requestReceiveTune(row.frequencyHz, "CW", "IBP scheduled beacon",
                 "Review receive-only frequency change"); selectedIbp = null }) { Text("Review receive") } },
-            dismissButton = { TextButton({ selectedIbp = null }) { Text("Close") } })
+            dismissButton = { Row { TextButton({ openCallHistory(row.beacon.callsign); selectedIbp = null }) { Text("Logbook history") }
+                TextButton({ toggleWatch(row.beacon.callsign) }) { Text(if (row.beacon.callsign in watchlist) "Unwatch" else "Watch") }
+                TextButton({ uriHandler.openUri(HAMCLOCK_IBP_MANIFEST_SOURCE) }) { Text("NCDXF source") }
+                TextButton({ selectedIbp = null }) { Text("Close") } } })
     }
     selectedIbpSite?.takeIf { site -> selectedIbp?.beacon?.callsign != site.callsign }?.let { site ->
+        val next = nextHamClockIbpTransmission(site.callsign)
         AlertDialog(onDismissRequest = { selectedIbpSite = null }, title = { Text("IBP · ${site.callsign}") },
-            text = { Text("${site.grid} · ${site.locationLabel}\nNCDXF/IARU schedule site reference. This beacon is not in the current five-band slot, and no reception is claimed.\nReviewed $HAMCLOCK_IBP_MANIFEST_REVIEW_DATE · $HAMCLOCK_IBP_MANIFEST_SOURCE") },
-            confirmButton = { TextButton({ selectedIbpSite = null }) { Text("Close") } })
+            text = { Text("${site.grid} · ${site.locationLabel}\n${next?.let { "Next ${it.band} ${formatMHz(it.frequencyHz)} MHz at ${utcSeconds(it.slotStartEpoch)} UTC" } ?: "Next schedule unavailable"}\nNCDXF/IARU schedule site reference; no reception is claimed.\nReviewed $HAMCLOCK_IBP_MANIFEST_REVIEW_DATE") },
+            confirmButton = { TextButton({ uriHandler.openUri(HAMCLOCK_IBP_MANIFEST_SOURCE) }) { Text("NCDXF source") } },
+            dismissButton = { Row { TextButton({ openCallHistory(site.callsign); selectedIbpSite = null }) { Text("Logbook history") }
+                TextButton({ toggleWatch(site.callsign) }) { Text(if (site.callsign in watchlist) "Unwatch" else "Watch") }
+                TextButton({ selectedIbpSite = null }) { Text("Close") } } })
     }
     selectedIbpObserved?.let { row ->
         AlertDialog(onDismissRequest = { selectedIbpObserved = null }, title = { Text("Observed IBP · ${row.beacon.callsign}") },
