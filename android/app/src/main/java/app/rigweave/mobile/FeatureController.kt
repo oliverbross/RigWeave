@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -29,7 +30,40 @@ data class AndroidDXSpot(
     val workedCountry: Boolean, val workedCall: Boolean, val workedBand: Boolean,
     val workedMode: Boolean, val workedBandMode: Boolean, val recentDupe: Boolean,
     val distanceKm: Int, val bearingDegrees: Int, val pathState: String, val reason: String,
+    val workedIndexComplete: Boolean = false,
 )
+
+data class AndroidWorkedLog(
+    val loaded: Boolean = false, val complete: Boolean = false, val cells: Int = 0,
+    val records: Int = 0, val accepted: Int = 0, val rejected: Int = 0, val truncated: Int = 0,
+)
+
+internal fun decodeWorkedLog(root: JSONObject): AndroidWorkedLog {
+    val row = root.optJSONObject("workedLog") ?: return AndroidWorkedLog()
+    val loaded = row.optBoolean("loaded", false)
+    return AndroidWorkedLog(
+        loaded = loaded, complete = loaded && row.optBoolean("complete", false),
+        cells = row.optInt("cells"), records = row.optInt("records"), accepted = row.optInt("accepted"),
+        rejected = row.optInt("rejected"), truncated = row.optInt("truncated"),
+    )
+}
+
+internal fun decodeDxSpot(row: JSONObject): AndroidDXSpot {
+    val frequency = row.optLong("frequencyHz")
+    val workedIndexComplete = row.optBoolean("workedIndexComplete", false)
+    val reason = row.optString("reason").let {
+        if (!workedIndexComplete && it == "NEW ENTITY IN LOGBOOK") "FRESH CLUSTER ACTIVITY" else it
+    }
+    return AndroidDXSpot("${row.optString("callsign")}-$frequency-${row.optLong("receivedEpoch")}",
+        row.optString("callsign"), row.optString("spotter"), frequency, row.optLong("receivedEpoch"),
+        row.optString("band"), row.optString("mode"), row.optString("country"), row.optString("continent"),
+        row.optInt("cqZone"), row.optInt("ituZone"), row.optDouble("latitude"), row.optDouble("longitude"),
+        row.optString("comment"), row.optInt("score"), row.optInt("confidence"), row.optInt("samples"),
+        row.optBoolean("watchlisted"), row.optBoolean("workedCountry"), row.optBoolean("workedCall"),
+        row.optBoolean("workedBand"), row.optBoolean("workedMode"), row.optBoolean("workedBandMode"),
+        row.optBoolean("recentDupe"), row.optInt("distanceKm"), row.optInt("bearingDegrees"),
+        row.optString("pathState"), reason, workedIndexComplete)
+}
 
 data class AndroidSolar(val valid: Boolean = false, val flux: Float = 0f, val aIndex: Float = 0f,
     val kpIndex: Float = 0f, val observedEpoch: Long = 0L)
@@ -51,7 +85,10 @@ internal fun parseNoaaSummaryValue(text: String, keys: List<String>): Float? {
 
 class FeatureController(private val context: Context) {
     private val handle = NativeCore.featureCreate()
+    private val nativeLock = Any()
     private val scope = CoroutineScope(Job() + Dispatchers.IO)
+    private var workedSyncJob: Job? = null
+    private var workedFingerprint: WorkedFingerprint? = null
     private var clusterSocket: Socket? = null
     private var clusterGeneration = 0
     private val prefs = context.getSharedPreferences("dx_cluster", Context.MODE_PRIVATE)
@@ -78,6 +115,11 @@ class FeatureController(private val context: Context) {
     var learnedSpots by mutableStateOf(0); private set
     var duplicateSpots by mutableStateOf(0); private set
     var newestSpotEpoch by mutableStateOf(0L); private set
+    var workedLog by mutableStateOf(AndroidWorkedLog()); private set
+
+    private data class WorkedFingerprint(
+        val changeToken: Long, val authority: LogMode, val stationId: String, val ctyRevision: Long,
+    )
 
     init {
         val defaults = prefs.edit()
@@ -85,14 +127,14 @@ class FeatureController(private val context: Context) {
         if (!prefs.contains("port")) defaults.putInt("port", clusterPort)
         if (!prefs.contains("callsign")) defaults.putString("callsign", clusterCallsign)
         defaults.apply()
-        NativeCore.featureWatchlist(handle, watchlistText)
+        synchronized(nativeLock) { NativeCore.featureWatchlist(handle, watchlistText) }
     }
 
     fun setWatchlist(value: String) {
         watchlistText = value.lineSequence().flatMap { it.split(',', ' ', ';').asSequence() }
             .map(String::trim).filter(String::isNotBlank).map(String::uppercase).distinct().take(32).joinToString("\n")
         prefs.edit().putString("watchlist", watchlistText).apply()
-        NativeCore.featureWatchlist(handle, watchlistText)
+        synchronized(nativeLock) { NativeCore.featureWatchlist(handle, watchlistText) }
     }
 
     fun connectConfiguredCluster() {
@@ -141,7 +183,9 @@ class FeatureController(private val context: Context) {
                     BufferedReader(InputStreamReader(socket.getInputStream())).useLines { lines ->
                         lines.forEach { line ->
                             if (generation != clusterGeneration) return@useLines
-                            if (NativeCore.featureClusterLine(handle, line, Instant.now().epochSecond)) refreshDX()
+                            if (synchronized(nativeLock) {
+                                NativeCore.featureClusterLine(handle, line, Instant.now().epochSecond)
+                            }) refreshDX()
                         }
                     }
                 } catch (error: Exception) {
@@ -183,31 +227,66 @@ class FeatureController(private val context: Context) {
                 val geomagnetic = summaryText("https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json")
                 val kp = parseNoaaSummaryValue(geomagnetic, listOf("Kp", "kp_index", "KpIndex")) ?: error("Unexpected NOAA Kp response")
                 val a = parseNoaaSummaryValue(geomagnetic, listOf("a_running", "A", "a_index")) ?: error("Unexpected NOAA A response")
-                NativeCore.featureSolar(handle, flux, a, kp, Instant.now().epochSecond); refreshDX()
+                synchronized(nativeLock) {
+                    NativeCore.featureSolar(handle, flux, a, kp, Instant.now().epochSecond)
+                }
+                refreshDX()
             } catch (_: Exception) { publishCluster("NOAA solar data unavailable · retained last values") }
         }
     }
 
     fun close() {
-        disconnectCluster(); scope.cancel(); NativeCore.featureDestroy(handle)
+        disconnectCluster(); scope.cancel(); synchronized(nativeLock) { NativeCore.featureDestroy(handle) }
+    }
+
+    fun startWorkedLogSync(database: QsoDatabase, wavelog: WavelogController, cty: CtyController) {
+        if (workedSyncJob?.isActive == true) return
+        workedSyncJob = scope.launch {
+            while (isActive) {
+                val authority = wavelog.logMode
+                val stationId = if (authority == LogMode.WAVELOG) wavelog.stationId else ""
+                val fingerprint = WorkedFingerprint(database.changeToken(), authority, stationId, cty.dataRevision)
+                if (fingerprint != workedFingerprint) {
+                    try {
+                        val ctyText = cty.nativeCtyText()
+                        val hasSelectedAuthority = authority != LogMode.WAVELOG || stationId.isNotBlank()
+                        val rows = if (hasSelectedAuthority) {
+                            database.workedLog(stationId.takeIf { authority == LogMode.WAVELOG }, cty::country)
+                        } else emptyList()
+                        synchronized(nativeLock) {
+                            require(fingerprint.ctyRevision == 0L || ctyText != null)
+                            if (ctyText != null) require(NativeCore.featureLoadCty(handle, ctyText))
+                            NativeCore.featureBeginWorkedSync(handle)
+                            if (hasSelectedAuthority) {
+                                rows.forEach { row ->
+                                    NativeCore.featureAddWorkedQso(handle, row.callsign, row.entity, row.band,
+                                        row.mode, row.submode, row.epoch, row.fromWavelog)
+                                }
+                                NativeCore.featureEndWorkedSync(handle)
+                            }
+                        }
+                        refreshDX()
+                        workedFingerprint = fingerprint
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        // Retry without accepting the fingerprint; an unselected Wavelog authority stays unloaded.
+                    }
+                }
+                delay(2_000)
+            }
+        }
     }
 
     private suspend fun refreshDX() {
-        val json = NativeCore.featureDxSnapshot(handle, Instant.now().epochSecond)
+        val json = synchronized(nativeLock) {
+            NativeCore.featureDxSnapshot(handle, Instant.now().epochSecond)
+        }
         val root = JSONObject(json)
         fun loadSpots(name: String) = buildList {
             val rows = root.optJSONArray(name)
             if (rows != null) for (index in 0 until rows.length()) {
-                val row = rows.getJSONObject(index); val frequency = row.optLong("frequencyHz")
-                add(AndroidDXSpot("${row.optString("callsign")}-$frequency-${row.optLong("receivedEpoch")}",
-                    row.optString("callsign"), row.optString("spotter"), frequency, row.optLong("receivedEpoch"),
-                    row.optString("band"), row.optString("mode"), row.optString("country"), row.optString("continent"),
-                    row.optInt("cqZone"), row.optInt("ituZone"), row.optDouble("latitude"), row.optDouble("longitude"),
-                    row.optString("comment"),
-                    row.optInt("score"), row.optInt("confidence"), row.optInt("samples"), row.optBoolean("watchlisted"),
-                    row.optBoolean("workedCountry"), row.optBoolean("workedCall"), row.optBoolean("workedBand"),
-                    row.optBoolean("workedMode"), row.optBoolean("workedBandMode"), row.optBoolean("recentDupe"),
-                    row.optInt("distanceKm"), row.optInt("bearingDegrees"), row.optString("pathState"), row.optString("reason")))
+                add(decodeDxSpot(rows.getJSONObject(index)))
             }
         }
         val loaded = loadSpots("opportunities")
@@ -243,6 +322,7 @@ class FeatureController(private val context: Context) {
             dxTimeline = matrix("bandTimeline"); dxWorld = matrix("worldGrid"); dxSummary = summary; solar = parsedSolar
             learnedSpots = root.optInt("learnedSpots"); duplicateSpots = root.optInt("duplicateSpots")
             newestSpotEpoch = root.optLong("newestSpotEpoch")
+            workedLog = decodeWorkedLog(root)
         }
     }
 

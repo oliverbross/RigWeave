@@ -122,7 +122,9 @@ final class CtyDatabase: ObservableObject {
     @Published private(set) var status = "CTY.DAT not installed"
     @Published private(set) var prefixCount = 0
     private var prefixes: [(String, String)] = []
+    private var installedRawText: String?
     private let fileURL: URL
+    var onInstalledDataChanged: (() -> Void)?
 
     init() {
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -137,7 +139,8 @@ final class CtyDatabase: ObservableObject {
         do {
             let (data, response) = try await URLSession.shared.data(from: url)
             guard let http = response as? HTTPURLResponse, 200..<300 ~= http.statusCode,
-                  data.count > 50_000, let text = String(data: data, encoding: .utf8),
+                  data.count > 50_000, data.count <= Self.maximumCtyBytes,
+                  let text = String(data: data, encoding: .utf8),
                   text.contains(":") && text.contains(";") else {
                 status = "CTY.DAT update rejected: invalid content"; return
             }
@@ -149,8 +152,9 @@ final class CtyDatabase: ObservableObject {
             } else {
                 try FileManager.default.moveItem(at: temporary, to: fileURL)
             }
-            load()
+            guard load() else { status = "CTY.DAT update rejected: invalid content"; return }
             status = "CTY.DAT updated · \(prefixCount) prefixes"
+            onInstalledDataChanged?()
         } catch {
             if prefixes.isEmpty { status = "CTY.DAT update failed: \(error.localizedDescription)" }
         }
@@ -161,8 +165,12 @@ final class CtyDatabase: ObservableObject {
         return prefixes.first(where: { call.hasPrefix($0.0) })?.1 ?? ""
     }
 
-    private func load() {
-        guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else { return }
+    func installedText() -> String? { installedRawText }
+
+    @discardableResult private func load() -> Bool {
+        guard let size = try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              size > 0, size <= Self.maximumCtyBytes,
+              let text = try? String(contentsOf: fileURL, encoding: .utf8) else { return false }
         var loaded: [(String, String)] = []
         for record in text.split(separator: ";") {
             let fields = record.split(separator: ":", maxSplits: 8, omittingEmptySubsequences: false)
@@ -175,8 +183,13 @@ final class CtyDatabase: ObservableObject {
                 if !prefix.isEmpty { loaded.append((prefix, country)) }
             }
         }
+        guard !loaded.isEmpty else { return false }
         prefixes = loaded.sorted { $0.0.count > $1.0.count }
+        installedRawText = text
         prefixCount = prefixes.count
         if !prefixes.isEmpty { status = "CTY.DAT ready · \(prefixCount) prefixes" }
+        return true
     }
+
+    private static let maximumCtyBytes = 2 * 1024 * 1024
 }

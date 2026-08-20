@@ -599,6 +599,10 @@ struct DXView: View {
                 Button("Refresh NOAA") { Task { await features.refreshSolar() } }
             }
             Picker("DX view", selection: $surface) { ForEach(DXSurface.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
+            Text(features.dx.safeWorkedLog.loaded ?
+                (features.dx.safeWorkedLog.complete ? "Log intelligence ready" : "Log intelligence partial") :
+                "Log intelligence loading")
+                .font(.caption).foregroundStyle(.secondary)
             dxContent
         }.padding() }.navigationTitle("DX Watcher")
             .sheet(item: $selected) { opportunity in DXOpportunityDetail(opportunity: opportunity, tune: tune) }
@@ -627,7 +631,7 @@ struct DXView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack { Text(row.callsign).font(.headline); if row.watchlisted { Image(systemName: "star.fill").foregroundStyle(RigTheme.amber) }; Text(row.band).font(.caption.monospaced()).foregroundStyle(.secondary) }
                             Text(String(format: "%.3f MHz · %@ · %@", Double(row.frequencyHz) / 1_000_000, row.mode, row.country)).foregroundStyle(.secondary)
-                            Text(row.reason).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            Text(row.safeReason).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                         }
                         Spacer()
                         VStack(alignment: .trailing) { Text("\(row.score)").font(.title3.bold()); Text("\(row.confidence)%").font(.caption).foregroundStyle(.secondary) }
@@ -732,7 +736,7 @@ private struct DXOpportunityDetail: View {
                     LabeledContent("Bearing / distance", value: "\(opportunity.bearingDegrees)° · \(opportunity.distanceKm) km")
                 }
                 Section("Operator interpretation") {
-                    Text(opportunity.reason)
+                    Text(opportunity.safeReason)
                     LabeledContent("Score", value: "\(opportunity.score)")
                     LabeledContent("Confidence", value: "\(opportunity.confidence)%")
                     LabeledContent("Worked", value: [opportunity.workedCountry ? "entity" : nil, opportunity.workedCall ? "call" : nil, opportunity.workedBand ? "band" : nil, opportunity.workedMode ? "mode" : nil, opportunity.workedBandMode ? "band+mode" : nil].compactMap { $0 }.joined(separator: ", ").ifEmpty("No match"))

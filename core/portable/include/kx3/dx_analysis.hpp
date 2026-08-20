@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -52,6 +53,22 @@ struct DxBandActivity {
     bool surge{};
 };
 
+struct DxWorkedState {
+    bool entity_any{};
+    bool entity_band{};
+    bool entity_mode{};
+    bool entity_band_mode{};
+    bool call_any{};
+    bool call_band{};
+    bool call_mode{};
+    bool call_band_mode{};
+    bool recent_dupe{};
+    bool index_loaded{};
+    bool index_complete{};
+};
+
+using DxWorkedClassifier = std::function<DxWorkedState(const DxSpot&)>;
+
 struct DxOpportunity {
     DxSpot spot;
     unsigned score{};
@@ -64,7 +81,7 @@ struct DxOpportunity {
     bool worked_mode{};
     bool worked_band_mode{};
     bool recent_dupe{};
-    bool worked_index_complete{true};
+    bool worked_index_complete{};
     unsigned distance_km{};
     unsigned bearing_degrees{};
     unsigned propagation_context_score{};
@@ -108,16 +125,15 @@ public:
 
     bool ingest(DxSpot spot);
     void set_watchlist(std::vector<std::string> callsigns);
-    void set_worked_countries(std::unordered_set<std::string> countries);
     void update_solar(const SolarReading& reading);
-    DxInsightSnapshot evaluate(std::int64_t now_epoch) const;
+    DxInsightSnapshot evaluate(std::int64_t now_epoch,
+                               const DxWorkedClassifier& classify_worked = {}) const;
     std::size_t size() const { return spots_.size(); }
     unsigned duplicate_count() const { return duplicate_count_; }
 
 private:
     std::deque<DxSpot> spots_;
     std::unordered_set<std::string> watchlist_;
-    std::vector<std::uint64_t> worked_country_hashes_;
     SolarReading solar_{};
     unsigned duplicate_count_{};
 };

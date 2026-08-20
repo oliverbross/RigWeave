@@ -301,6 +301,12 @@ Java_app_rigweave_mobile_NativeCore_featureWatchlist(JNIEnv *env, jobject, jlong
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
+Java_app_rigweave_mobile_NativeCore_featureLoadCty(JNIEnv *env, jobject, jlong handle, jstring value) {
+    const auto text = utf(env, value);
+    return rw_feature_load_cty_text(features(handle), text.c_str()) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
 Java_app_rigweave_mobile_NativeCore_featureClusterLine(JNIEnv *env, jobject, jlong handle, jstring value, jlong epoch) {
     const auto text = utf(env, value);
     return rw_feature_ingest_cluster_line(features(handle), text.c_str(), static_cast<int64_t>(epoch)) ? JNI_TRUE : JNI_FALSE;
@@ -311,6 +317,30 @@ Java_app_rigweave_mobile_NativeCore_featureDxSnapshot(JNIEnv *env, jobject, jlon
     std::string output(131072, '\0');
     const int size = rw_feature_dx_snapshot_json(features(handle), output.data(), output.size(), static_cast<int64_t>(epoch));
     return env->NewStringUTF(size > 0 ? output.c_str() : "{}");
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_app_rigweave_mobile_NativeCore_featureBeginWorkedSync(JNIEnv *, jobject, jlong handle) {
+    return rw_feature_begin_worked_sync(features(handle)) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_app_rigweave_mobile_NativeCore_featureAddWorkedQso(JNIEnv *env, jobject, jlong handle,
+        jstring callsign, jstring entity, jstring band, jstring mode, jstring submode,
+        jlong epoch, jboolean from_wavelog) {
+    const auto call_text = utf(env, callsign);
+    const auto entity_text = utf(env, entity);
+    const auto band_text = utf(env, band);
+    const auto mode_text = utf(env, mode);
+    const auto submode_text = utf(env, submode);
+    return rw_feature_add_worked_qso(features(handle), call_text.c_str(), entity_text.c_str(),
+        band_text.c_str(), mode_text.c_str(), submode_text.c_str(), static_cast<int64_t>(epoch),
+        from_wavelog == JNI_TRUE ? 1 : 0) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_app_rigweave_mobile_NativeCore_featureEndWorkedSync(JNIEnv *, jobject, jlong handle) {
+    return rw_feature_end_worked_sync(features(handle)) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL

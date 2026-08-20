@@ -82,6 +82,10 @@ struct rw_feature_context {
     kx3::DxInsightEngine dx;
     kx3::intel::WorkedIndex worked;
     kx3::PanadapterDsp panadapter;
+    bool worked_loaded{};
+    bool worked_synchronizing{};
+    unsigned worked_records{};
+    unsigned worked_accepted{};
 
     rw_feature_context() : worked(kx3::intel::kDefaultWorkedCells) {
         kx3::PanadapterConfig legacy{};
@@ -172,7 +176,25 @@ int rw_feature_ingest_cluster_line(rw_feature_context *context, const char *line
 int rw_feature_dx_snapshot_json(const rw_feature_context *context, char *output,
                                 size_t output_size, int64_t now_epoch) {
     if (context == nullptr) return 0;
-    const auto snapshot = context->dx.evaluate(now_epoch);
+    const bool worked_complete = context->worked_loaded && context->worked.complete() &&
+                                 context->worked.rejected_count() == 0U;
+    const auto snapshot = context->dx.evaluate(now_epoch, [&](const kx3::DxSpot& spot) {
+        const auto classified = context->worked.classify(spot.callsign, spot.country, spot.band,
+                                                         spot.mode, "", now_epoch);
+        kx3::DxWorkedState state{};
+        state.entity_any = classified.entity_any;
+        state.entity_band = classified.entity_band;
+        state.entity_mode = classified.entity_mode;
+        state.entity_band_mode = classified.entity_band_mode;
+        state.call_any = classified.call_any;
+        state.call_band = classified.call_band;
+        state.call_mode = classified.call_mode;
+        state.call_band_mode = classified.call_band_mode;
+        state.recent_dupe = classified.recent_dupe_band_mode;
+        state.index_loaded = context->worked_loaded;
+        state.index_complete = worked_complete;
+        return state;
+    });
     std::ostringstream json;
     json << "{\"spots5m\":" << snapshot.spots_5m
          << ",\"spots60m\":" << snapshot.spots_60m
@@ -181,6 +203,13 @@ int rw_feature_dx_snapshot_json(const rw_feature_context *context, char *output,
          << ",\"watchlistHits\":" << snapshot.watchlist_hits
          << ",\"surgingBands\":" << snapshot.surging_bands
          << ",\"newestSpotEpoch\":" << snapshot.newest_spot_epoch
+         << ",\"workedLog\":{\"loaded\":" << boolean(context->worked_loaded)
+         << ",\"complete\":" << boolean(worked_complete)
+         << ",\"cells\":" << context->worked.size()
+         << ",\"records\":" << context->worked_records
+         << ",\"accepted\":" << context->worked_accepted
+         << ",\"rejected\":" << context->worked.rejected_count()
+         << ",\"truncated\":" << context->worked.truncated_count() << '}'
          << ",\"solar\":{\"valid\":" << boolean(snapshot.solar.valid)
          << ",\"flux\":" << snapshot.solar.solar_flux
          << ",\"aIndex\":" << snapshot.solar.a_index
@@ -254,9 +283,10 @@ int rw_feature_dx_snapshot_json(const rw_feature_context *context, char *output,
                  << ",\"workedCall\":" << boolean(row.worked_call)
                  << ",\"workedBand\":" << boolean(row.worked_band)
                  << ",\"workedMode\":" << boolean(row.worked_mode)
-                 << ",\"workedBandMode\":" << boolean(row.worked_band_mode)
-                 << ",\"recentDupe\":" << boolean(row.recent_dupe)
-                 << ",\"distanceKm\":" << row.distance_km
+                  << ",\"workedBandMode\":" << boolean(row.worked_band_mode)
+                  << ",\"recentDupe\":" << boolean(row.recent_dupe)
+                  << ",\"workedIndexComplete\":" << boolean(row.worked_index_complete)
+                  << ",\"distanceKm\":" << row.distance_km
                  << ",\"bearingDegrees\":" << row.bearing_degrees
                  << ",\"pathState\":" << quoted(row.path_state)
                  << ",\"reason\":" << quoted(row.reason) << '}';
@@ -270,10 +300,21 @@ int rw_feature_dx_snapshot_json(const rw_feature_context *context, char *output,
     return write_output(output, output_size, json.str());
 }
 
+int rw_feature_begin_worked_sync(rw_feature_context *context) {
+    if (context == nullptr) return 0;
+    context->worked.clear();
+    context->worked_loaded = false;
+    context->worked_synchronizing = true;
+    context->worked_records = 0;
+    context->worked_accepted = 0;
+    return 1;
+}
+
 int rw_feature_add_worked_qso(rw_feature_context *context, const char *callsign,
                               const char *entity, const char *band, const char *mode,
                               const char *submode, int64_t epoch, int from_wavelog) {
     if (context == nullptr || callsign == nullptr) return 0;
+    ++context->worked_records;
     kx3::intel::WorkedRecord record{};
     record.call = callsign;
     record.entity = entity == nullptr ? "" : entity;
@@ -282,7 +323,16 @@ int rw_feature_add_worked_qso(rw_feature_context *context, const char *callsign,
     record.submode = submode == nullptr ? "" : submode;
     record.epoch = epoch;
     record.source = from_wavelog ? kx3::intel::LogSource::Wavelog : kx3::intel::LogSource::Local;
-    return context->worked.add(std::move(record)) ? 1 : 0;
+    if (!context->worked.add(std::move(record))) return 0;
+    ++context->worked_accepted;
+    return 1;
+}
+
+int rw_feature_end_worked_sync(rw_feature_context *context) {
+    if (context == nullptr || !context->worked_synchronizing) return 0;
+    context->worked_synchronizing = false;
+    context->worked_loaded = true;
+    return 1;
 }
 
 int rw_feature_worked_json(const rw_feature_context *context, char *output,
@@ -307,7 +357,9 @@ int rw_feature_worked_json(const rw_feature_context *context, char *output,
          << ",\"foundWavelog\":" << boolean(row.found_wavelog)
          << ",\"matchingQsos\":" << row.matching_qsos
          << ",\"lastQsoEpoch\":" << row.last_qso_epoch
-         << ",\"indexComplete\":" << boolean(row.index_complete) << '}';
+         << ",\"indexLoaded\":" << boolean(context->worked_loaded)
+         << ",\"indexComplete\":" << boolean(context->worked_loaded && row.index_complete &&
+                                                   context->worked.rejected_count() == 0U) << '}';
     return write_output(output, output_size, json.str());
 }
 

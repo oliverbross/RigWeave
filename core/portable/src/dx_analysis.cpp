@@ -26,15 +26,6 @@ std::string upper_trim(std::string_view value) {
     return result;
 }
 
-std::uint64_t stable_text_hash(std::string_view value) {
-    std::uint64_t hash = 1469598103934665603ULL;
-    for (const unsigned char character : value) {
-        hash ^= character;
-        hash *= 1099511628211ULL;
-    }
-    return hash;
-}
-
 bool close_frequency(std::uint64_t left, std::uint64_t right) {
     return left > right ? left - right <= 2000ULL : right - left <= 2000ULL;
 }
@@ -176,25 +167,13 @@ void DxInsightEngine::set_watchlist(std::vector<std::string> callsigns) {
     }
 }
 
-void DxInsightEngine::set_worked_countries(std::unordered_set<std::string> countries) {
-    worked_country_hashes_.clear();
-    worked_country_hashes_.reserve(countries.size());
-    for (const auto& country : countries) {
-        const std::string normalized = upper_trim(country);
-        if (!normalized.empty()) worked_country_hashes_.push_back(stable_text_hash(normalized));
-    }
-    std::sort(worked_country_hashes_.begin(), worked_country_hashes_.end());
-    worked_country_hashes_.erase(std::unique(worked_country_hashes_.begin(),
-                                             worked_country_hashes_.end()),
-                                 worked_country_hashes_.end());
-}
-
 void DxInsightEngine::update_solar(const SolarReading& reading) {
     if (reading.valid && std::isfinite(reading.solar_flux) && std::isfinite(reading.kp_index) &&
         reading.solar_flux >= 0.0F && reading.kp_index >= 0.0F) solar_ = reading;
 }
 
-DxInsightSnapshot DxInsightEngine::evaluate(std::int64_t now_epoch) const {
+DxInsightSnapshot DxInsightEngine::evaluate(std::int64_t now_epoch,
+                                            const DxWorkedClassifier& classify_worked) const {
     DxInsightSnapshot output;
     output.solar = solar_;
     output.learned_spots = static_cast<unsigned>(spots_.size());
@@ -277,13 +256,19 @@ DxInsightSnapshot DxInsightEngine::evaluate(std::int64_t now_epoch) const {
         const auto samples = call_samples.find(spot.callsign);
         opportunity.samples = samples == call_samples.end() ? 1U : samples->second;
         opportunity.watchlisted = watchlist_.count(spot.callsign) != 0U;
-        const auto country_hash = stable_text_hash(spot.country);
-        opportunity.worked_country = !spot.country.empty() &&
-            std::binary_search(worked_country_hashes_.begin(), worked_country_hashes_.end(),
-                               country_hash);
+        const DxWorkedState worked = classify_worked ? classify_worked(spot) : DxWorkedState{};
+        opportunity.worked_country = worked.entity_any;
+        opportunity.worked_call = worked.call_any;
+        opportunity.worked_band = worked.entity_band;
+        opportunity.worked_mode = worked.entity_mode;
+        opportunity.worked_band_mode = worked.entity_band_mode;
+        opportunity.recent_dupe = worked.recent_dupe;
+        opportunity.worked_index_complete = worked.index_loaded && worked.index_complete;
+        const bool new_entity = opportunity.worked_index_complete && !spot.country.empty() &&
+                                !opportunity.worked_country;
         unsigned score = freshness_score(age);
         if (opportunity.watchlisted) score += 35U;
-        if (!spot.country.empty() && !opportunity.worked_country) score += 22U;
+        if (new_entity) score += 22U;
         const unsigned index = band_index(spot.band);
         if (index < output.bands.size() && output.bands[index].surge) score += 13U;
         if (solar_fresh) {
@@ -294,7 +279,7 @@ DxInsightSnapshot DxInsightEngine::evaluate(std::int64_t now_epoch) const {
         opportunity.confidence = std::min(95U, 25U + std::min(30U, opportunity.samples * 5U) +
             (solar_fresh ? 15U : 0U) + (output.spots_60m >= 30U ? 20U : output.spots_60m * 2U / 3U));
         if (opportunity.watchlisted) opportunity.reason = "WATCHLIST";
-        else if (!spot.country.empty() && !opportunity.worked_country) opportunity.reason = "NEW ENTITY IN LOGBOOK";
+        else if (new_entity) opportunity.reason = "NEW ENTITY IN LOGBOOK";
         else if (index < output.bands.size() && output.bands[index].surge) opportunity.reason = "BAND SURGE";
         else if (solar_fresh && high_band(spot.band) && solar_.solar_flux >= 110.0F && solar_.kp_index <= 3.0F)
             opportunity.reason = "SOLAR SUPPORT";

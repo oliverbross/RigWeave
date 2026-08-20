@@ -44,7 +44,11 @@ struct DXOpportunity: Codable, Identifiable {
     let bearingDegrees: UInt
     let pathState: String
     let reason: String
+    let workedIndexComplete: Bool?
     var id: String { "\(callsign)-\(frequencyHz)-\(receivedEpoch)" }
+    var safeReason: String {
+        workedIndexComplete != true && reason == "NEW ENTITY IN LOGBOOK" ? "FRESH CLUSTER ACTIVITY" : reason
+    }
 }
 
 struct DXRegion: Codable, Identifiable {
@@ -64,6 +68,19 @@ struct DXSolar: Codable {
     let kpIndex: Float
 }
 
+struct DXWorkedLog: Codable {
+    let loaded: Bool
+    let complete: Bool
+    let cells: UInt
+    let records: UInt?
+    let accepted: UInt?
+    let rejected: UInt
+    let truncated: UInt
+
+    static let unloaded = DXWorkedLog(loaded: false, complete: false, cells: 0,
+        records: 0, accepted: 0, rejected: 0, truncated: 0)
+}
+
 struct DXSnapshot: Codable {
     let spots5m: UInt
     let spots60m: UInt
@@ -72,6 +89,7 @@ struct DXSnapshot: Codable {
     let watchlistHits: UInt
     let surgingBands: UInt
     let newestSpotEpoch: Int64
+    let workedLog: DXWorkedLog?
     let solar: DXSolar
     let bands: [DXBand]
     let bandTimeline: [[UInt]]
@@ -80,9 +98,11 @@ struct DXSnapshot: Codable {
     let opportunities: [DXOpportunity]
     let liveSpots: [DXOpportunity]
     let watchActivity: [DXOpportunity]
+    var safeWorkedLog: DXWorkedLog { workedLog ?? .unloaded }
 
     static let empty = DXSnapshot(spots5m: 0, spots60m: 0, learnedSpots: 0,
         duplicateSpots: 0, watchlistHits: 0, surgingBands: 0, newestSpotEpoch: 0,
+        workedLog: .unloaded,
         solar: DXSolar(valid: false, flux: 0, aIndex: 0, kpIndex: 0), bands: [],
         bandTimeline: [], regions: [], worldGrid: [], opportunities: [], liveSpots: [], watchActivity: [])
 }
@@ -128,6 +148,11 @@ final class FeatureCore {
         text.withCString { _ = rw_feature_set_watchlist(context, $0) }
     }
 
+    func loadCty(_ text: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return text.withCString { rw_feature_load_cty_text(context, $0) == 1 }
+    }
+
     func setSolar(flux: Float, aIndex: Float, kpIndex: Float, at date: Date) {
         lock.lock(); defer { lock.unlock() }
         _ = rw_feature_set_solar(context, flux, aIndex, kpIndex, Int64(date.timeIntervalSince1970))
@@ -158,6 +183,25 @@ final class FeatureCore {
             print("RIGWEAVE_DX_SNAPSHOT_ERROR decode count=\(count) error=\(error)")
             return .empty
         }
+    }
+
+    func reloadWorkedLog(_ records: [(qso: QSO, country: String)]) {
+        lock.lock(); defer { lock.unlock() }
+        guard rw_feature_begin_worked_sync(context) == 1 else { return }
+        for record in records {
+            let band = workedBand(for: record.qso.frequencyHz)
+            record.qso.callsign.withCString { callsign in
+                record.country.withCString { country in
+                    band.withCString { bandValue in
+                        record.qso.mode.withCString { mode in
+                            _ = rw_feature_add_worked_qso(context, callsign, country, bandValue, mode, "",
+                                Int64(record.qso.createdAt.timeIntervalSince1970), 0)
+                        }
+                    }
+                }
+            }
+        }
+        _ = rw_feature_end_worked_sync(context)
     }
 
     func parseWSJTX(_ data: Data) -> WSJTXMessage? {
@@ -475,6 +519,8 @@ final class FeatureModel: ObservableObject {
     private var audioTapInstalled = false
     private var accumulatedAudioFrames: UInt64 = 0
     private var lastPublishedAudioFrame: UInt64 = 0
+    private var workedLogBound = false
+    private weak var boundLogbook: QSOStore?
 
     init() {
         clusterHost = defaults.string(forKey: "clusterHost") ?? "cluster.om0rx.com"
@@ -499,6 +545,7 @@ final class FeatureModel: ObservableObject {
         cty.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &observations)
+        cty.onInstalledDataChanged = { [weak self] in self?.reloadBoundWorkedLog() }
         core.setWatchlist(watchlist)
         cluster.onStatus = { [weak self] value in Task { @MainActor in self?.clusterStatus = value } }
         cluster.onLine = { [weak self] line in
@@ -522,6 +569,26 @@ final class FeatureModel: ObservableObject {
 
     func enqueueWavelog(id: String, adif: String) {
         wavelog.enqueue(id: id, adif: adif)
+    }
+
+    func bind(logbook: QSOStore) {
+        guard !workedLogBound else { return }
+        workedLogBound = true
+        boundLogbook = logbook
+        logbook.onWorkedLogChanged = { [weak self] in self?.reloadBoundWorkedLog() }
+        reloadBoundWorkedLog()
+    }
+
+    private func reloadBoundWorkedLog() {
+        guard let logbook = boundLogbook else { return }
+        let installedCty = cty.installedText()
+        if let installedCty, !core.loadCty(installedCty) { return }
+        let records = logbook.workedLogRecords().map { qso in
+            let currentCountry = installedCty == nil ? "" : cty.country(for: qso.callsign)
+            return (qso, currentCountry.isEmpty ? qso.country : currentCountry)
+        }
+        core.reloadWorkedLog(records)
+        refreshDX()
     }
 
     deinit { cluster.disconnect(); wsjtx.stop(); audioEngine.stop() }
@@ -793,4 +860,21 @@ final class FeatureModel: ObservableObject {
     }
 
     enum SolarError: LocalizedError { case invalidResponse; var errorDescription: String? { "Unexpected NOAA response" } }
+}
+
+private func workedBand(for frequencyHz: UInt64) -> String {
+    switch frequencyHz {
+    case 1_800_000...2_000_000: return "160m"
+    case 3_500_000...4_000_000: return "80m"
+    case 5_250_000...5_450_000: return "60m"
+    case 7_000_000...7_300_000: return "40m"
+    case 10_100_000...10_150_000: return "30m"
+    case 14_000_000...14_350_000: return "20m"
+    case 18_068_000...18_168_000: return "17m"
+    case 21_000_000...21_450_000: return "15m"
+    case 24_890_000...24_990_000: return "12m"
+    case 28_000_000...29_700_000: return "10m"
+    case 50_000_000...54_000_000: return "6m"
+    default: return ""
+    }
 }

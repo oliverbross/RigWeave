@@ -55,6 +55,11 @@ data class NeuralLogSummary(
     val continents: Map<String, Int> = emptyMap(), val countries: Map<String, Int> = emptyMap(),
 )
 
+data class WorkedLogQso(
+    val callsign: String, val entity: String, val band: String, val mode: String,
+    val submode: String, val epoch: Long, val fromWavelog: Boolean,
+)
+
 val insightBands = listOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m")
 val insightModes = listOf("CW", "FT8", "RTTY", "SSB", "LSB", "USB")
 
@@ -192,6 +197,32 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     fun list(): List<Qso> = query(" LIMIT 100")
     fun recent(limit: Int = 120): List<Qso> = query(" LIMIT ${limit.coerceIn(1, 500)}")
     fun all(): List<Qso> = query("")
+    fun workedLog(stationId: String?, resolveEntity: (String) -> String): List<WorkedLogQso> {
+        val scope = stationScope(stationId)
+        val sql = """SELECT callsign,country,frequency_hz,mode,created_at,
+            COALESCE(json_extract(details_json,'$.band'),''),
+            COALESCE(json_extract(details_json,'$.submode'),'')
+            FROM qso WHERE ${scope.first} ORDER BY created_at""".trimIndent()
+        val rows = mutableListOf<WorkedLogQso>()
+        readableDatabase.rawQuery(sql, scope.second.toTypedArray()).use { cursor ->
+            while (cursor.moveToNext()) {
+                val callsign = cursor.getString(0).orEmpty()
+                val frequency = cursor.getLong(2)
+                val storedBand = cursor.getString(5).orEmpty().trim().lowercase(java.util.Locale.US)
+                rows += WorkedLogQso(
+                    callsign = callsign,
+                    entity = resolveEntity(callsign).ifBlank { cursor.getString(1).orEmpty() },
+                    band = storedBand.takeIf(insightBands::contains).orEmpty()
+                        .ifBlank { bandForFrequency(frequency) },
+                    mode = cursor.getString(3).orEmpty(),
+                    submode = cursor.getString(6).orEmpty(),
+                    epoch = cursor.getLong(4),
+                    fromWavelog = stationId != null,
+                )
+            }
+        }
+        return rows
+    }
     fun page(page: Int, pageSize: Int, filter: LogbookFilter = LogbookFilter(), stationId: String? = null): QsoPage {
         val size = normalizedLogbookPageSize(pageSize)
         val spec = pageQuery(filter, stationId)

@@ -18,6 +18,7 @@ struct RigWeaveApp: App {
                 .environmentObject(features)
                 .environmentObject(groupsIo)
                 .preferredColorScheme(.dark)
+                .task { features.bind(logbook: logbook) }
                 .task {
                     guard !hardwareSelfTestStarted else { return }
                     let arguments = ProcessInfo.processInfo.arguments

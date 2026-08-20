@@ -94,7 +94,13 @@ fun NeuralDxScreen(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Column(Modifier.weight(1f)) {
                 Text("NEURAL DX WATCHER", color = DxInk, fontSize = 24.sp, fontWeight = FontWeight.Black)
-                Text("v12.1 native · ${features.clusterStatus}", color = DxMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("RigWeave native · Neural DX behavioural baseline 12.1 · ${features.clusterStatus}",
+                    color = DxMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(when {
+                    !features.workedLog.loaded -> "Log intelligence loading"
+                    !features.workedLog.complete -> "Log intelligence partial"
+                    else -> "Log intelligence ready"
+                }, color = DxMuted, fontSize = 11.sp)
             }
             DxMetric("SPOTS", features.liveSpots.size.toString(), DxCyan)
             DxMetric("SFI", features.solar.flux.takeIf { features.solar.valid }?.roundToInt()?.toString() ?: "—", DxAmber)

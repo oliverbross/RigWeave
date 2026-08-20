@@ -142,6 +142,28 @@ class QsoDatabaseInstrumentedTest {
         assertEquals(SpotLogStatus("NC", "ATNO"), local["cached-wavelog"])
     }
 
+    @Test fun workedLogUsesAuthorityScopeAndNarrowFallbacks() {
+        val before = database.changeToken()
+        assertTrue(database.save(Qso(id = "local", callsign = "LOCAL1", frequencyHz = 14_074_000,
+            mode = "MFSK", submode = "FT8", rstSent = "-10", rstReceived = "-12", createdAt = 100,
+            country = "Stored Local Entity", band = "", stationProfileId = "", syncState = "local")))
+        assertTrue(database.save(Qso(id = "station-7", callsign = "REMOTE7", frequencyHz = 7_050_000,
+            mode = "SSB", rstSent = "59", rstReceived = "59", createdAt = 200,
+            country = "Stored Remote Entity", band = "invalid", stationProfileId = "7", syncState = "synced")))
+        assertTrue(database.save(Qso(id = "station-8", callsign = "REMOTE8", frequencyHz = 3_600_000,
+            mode = "CW", rstSent = "599", rstReceived = "599", createdAt = 300,
+            country = "Other Station", band = "80m", stationProfileId = "8", syncState = "synced")))
+        assertTrue(database.changeToken() > before)
+
+        val local = database.workedLog(null) { "" }
+        assertEquals(1, local.size)
+        assertEquals(WorkedLogQso("LOCAL1", "Stored Local Entity", "20m", "MFSK", "FT8", 100, false), local.single())
+
+        val selected = database.workedLog("7") { call -> if (call == "REMOTE7") "Current CTY Entity" else "" }
+        assertEquals(1, selected.size)
+        assertEquals(WorkedLogQso("REMOTE7", "Current CTY Entity", "40m", "SSB", "", 200, true), selected.single())
+    }
+
     @Test fun stationInsightScopesHistoryAndConfirmsOnlyPaperQslOrLotw() {
         val base = Qso(id = "local-worked", callsign = "OM0AAO", frequencyHz = 14_200_000, mode = "SSB",
             submode = "USB", rstSent = "59", rstReceived = "57", createdAt = 100, country = "Slovak Republic",

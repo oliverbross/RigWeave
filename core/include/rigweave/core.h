@@ -130,9 +130,11 @@ int rw_feature_ingest_cluster_line(rw_feature_context *context, const char *line
                                    int64_t received_epoch);
 int rw_feature_dx_snapshot_json(const rw_feature_context *context, char *output,
                                 size_t output_size, int64_t now_epoch);
+int rw_feature_begin_worked_sync(rw_feature_context *context);
 int rw_feature_add_worked_qso(rw_feature_context *context, const char *callsign,
                               const char *entity, const char *band, const char *mode,
                               const char *submode, int64_t epoch, int from_wavelog);
+int rw_feature_end_worked_sync(rw_feature_context *context);
 int rw_feature_worked_json(const rw_feature_context *context, char *output,
                            size_t output_size, const char *callsign, const char *entity,
                            const char *band, const char *mode, const char *submode,
