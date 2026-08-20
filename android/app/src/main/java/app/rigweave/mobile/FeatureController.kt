@@ -31,6 +31,7 @@ data class AndroidDXSpot(
     val workedMode: Boolean, val workedBandMode: Boolean, val recentDupe: Boolean,
     val distanceKm: Int, val bearingDegrees: Int, val pathState: String, val reason: String,
     val workedIndexComplete: Boolean = false,
+    val dxcc: String = "",
 )
 
 data class AndroidWorkedLog(

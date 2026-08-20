@@ -893,15 +893,15 @@ private fun hamClockReliability(band: String, zone: String, sfi: Float, kp: Floa
 @Composable private fun PropagationStrip(neuralDx: NeuralDxController, modifier: Modifier) {
     Module("Propagation intelligence", neuralDx.status, modifier = modifier) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Metric("PREDICTIONS", neuralDx.predictions.size.toString(), HcCyan)
+            Metric("OPPORTUNITIES", neuralDx.currentOpportunities.size.toString(), HcCyan)
             Metric("WSPR HF", neuralDx.wspr.hf.size.toString(), HcGreen)
             Metric("WSPR VHF", neuralDx.wspr.vhf.size.toString(), HcGreen)
             Metric("WORLD CELLS", neuralDx.world.size.toString(), HcYellow)
-            val next = neuralDx.predictions.maxByOrNull { it.probability }
+            val next = neuralDx.currentOpportunities.maxByOrNull { it.priority }
             Column(Modifier.weight(1f)) {
-                Text(next?.let { "${it.callsign} · ${it.band} ${it.mode} · ${it.probability}%" } ?: "Learning from live RF and log history",
+                Text(next?.let { "${it.callsign} · ${it.band} ${it.mode} · P ${it.priority} · E ${it.evidenceScore}" } ?: "No current live opportunity",
                     color = HcInk, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(next?.reason ?: "Predictions appear only when measured evidence is available", color = HcMuted, fontSize = 10.sp,
+                Text(next?.reason ?: "Live heuristic ranking only; not a probability or forecast", color = HcMuted, fontSize = 10.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }

@@ -203,11 +203,12 @@ fun NeuralDxScreen(
             DxSpotFeed(rows, statuses, distances, cty, selected = { selected = it }, previousQsos, Modifier.weight(1.55f).fillMaxHeight())
             LazyColumn(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 item { DxSection("ACTIVE BANDS · 24H") { controller.bandActivity.entries.take(12).forEach { DxBar(it.key, it.value, controller.bandActivity.values.maxOrNull() ?: 1) } } }
-                item { DxSection("PERSONALIZED PREDICTIONS") {
-                    val measured=controller.predictions.firstOrNull()?.measuredReliability
-                    Text(measured?.let{"Measured reliability · $it% over verified 30-day windows"}?:"Measured reliability · learning until 5 windows are verified",color=measured?.let{DxGreen}?:DxMuted,fontSize=12.sp)
-                    controller.predictions.take(6).forEach { p -> DxLine("${p.callsign} · ${p.band} ${p.mode}", "${p.probability}%", if (p.probability >= 70) DxGreen else DxYellow) }
-                    if (controller.predictions.isEmpty()) DxEmpty("Learning from live spots…")
+                item { DxSection("CURRENT OPPORTUNITIES") {
+                    Text("Live ranking only · P = priority · E = evidence support · not a probability or forecast",color=DxMuted,fontSize=12.sp)
+                    controller.currentOpportunities.take(6).forEach { opportunity ->
+                        DxLine("${opportunity.callsign} · ${opportunity.band} ${opportunity.mode}", "P ${opportunity.priority} · E ${opportunity.evidenceScore}", if (opportunity.priority >= 70) DxGreen else DxYellow)
+                    }
+                    if (controller.currentOpportunities.isEmpty()) DxEmpty("No current live opportunities")
                 } }
                 item { DxSection("MY SIGNAL · PSK REPORTER") {
                     Text("${controller.mySignal.callsign.ifBlank{"Station callsign"}} · ${controller.mySignal.reports.size} receivers · 5-minute source cache",color=DxMuted,fontSize=12.sp)
@@ -315,10 +316,10 @@ fun NeuralDxScreen(
 }
 
 @Composable private fun DxInsightPage(controller: NeuralDxController, features: FeatureController, modifier: Modifier){
-    val tactical=controller.insight.recommendations+controller.predictions.map{"${it.callsign} · ${it.country} · ${it.probability}% ${it.model} · ${it.reason}"}
+    val tactical=controller.insight.recommendations+controller.currentOpportunities.map{"${it.callsign} · ${it.country} · priority ${it.priority} · ${it.reason}"}
     Row(modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
         Column(Modifier.weight(1.1f).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(8.dp)){
-            DxSection("AI OPERATOR REPORT · ${controller.insight.source}",Modifier.weight(1.25f)){Text(controller.insight.title,color=DxCyan,fontSize=20.sp,fontWeight=FontWeight.Black);Column(Modifier.weight(1f).verticalScroll(rememberScrollState())){Text(controller.insight.report,color=DxInk,fontSize=15.sp,lineHeight=21.sp);if(controller.insight.bullets.isNotEmpty()){Spacer(Modifier.height(12.dp));Text("EVIDENCE / SIGNALS",color=DxAmber,fontWeight=FontWeight.Black);controller.insight.bullets.forEachIndexed{i,v->DxLine("${i+1}",v,DxCyan)}};controller.predictions.take(5).forEach{p->DxLine("${p.callsign} · ${p.band}","${p.probability}%",if(p.probability>=70)DxGreen else DxYellow)}};if(controller.insight.error.isNotBlank())Text(controller.insight.error,color=DxYellow)}
+            DxSection("AI OPERATOR REPORT · ${controller.insight.source}",Modifier.weight(1.25f)){Text(controller.insight.title,color=DxCyan,fontSize=20.sp,fontWeight=FontWeight.Black);Column(Modifier.weight(1f).verticalScroll(rememberScrollState())){Text(controller.insight.report,color=DxInk,fontSize=15.sp,lineHeight=21.sp);if(controller.insight.bullets.isNotEmpty()){Spacer(Modifier.height(12.dp));Text("EVIDENCE / SIGNALS",color=DxAmber,fontWeight=FontWeight.Black);controller.insight.bullets.forEachIndexed{i,v->DxLine("${i+1}",v,DxCyan)}};controller.currentOpportunities.take(5).forEach{opportunity->DxLine("${opportunity.callsign} · ${opportunity.band}","P ${opportunity.priority} · E ${opportunity.evidenceScore}",if(opportunity.priority>=70)DxGreen else DxYellow)}};if(controller.insight.error.isNotBlank())Text(controller.insight.error,color=DxYellow)}
             DxSection("LOG PERFORMANCE",Modifier.weight(.75f)){Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceAround){DxMiniValue("QSOs",controller.insight.log.qsos.toString());DxMiniValue("CALLS",controller.insight.log.calls.toString());DxMiniValue("DXCC",controller.insight.log.dxccs.toString());DxMiniValue("CONF",controller.insight.log.confirmedDxccs.toString())};HorizontalDivider(color=Color(0xFF374047));Text("Measured only from ${controller.insight.source.lowercase()} log scope · QSL/LoTW confirmation",color=DxMuted,fontSize=12.sp)}
         }
         DxSection("TACTICAL OPPORTUNITIES · NOW",Modifier.weight(1.15f).fillMaxHeight()){
@@ -327,7 +328,7 @@ fun NeuralDxScreen(
         Column(Modifier.weight(1f).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(8.dp)){
             DxSection("BAND ANALYZER",Modifier.weight(1f)){controller.insight.log.bands.entries.take(10).forEach{DxBar(it.key,it.value,controller.insight.log.bands.values.maxOrNull()?:1)};if(controller.insight.log.bands.isEmpty())DxEmpty("No log distribution yet")}
             DxSection("MODE ANALYZER",Modifier.weight(.72f)){controller.insight.log.modes.entries.take(7).forEach{DxBar(it.key,it.value,controller.insight.log.modes.values.maxOrNull()?:1)}}
-            DxSection("MODEL / DATA HONESTY",Modifier.weight(.55f)){DxLine("Predictions",controller.predictions.size.toString(),DxCyan);DxLine("Live samples",features.liveSpots.size.toString(),DxGreen);Text("Missing measurements stay unavailable; optional AI never replaces local evidence.",color=DxMuted,fontSize=12.sp)}
+            DxSection("MODEL / DATA HONESTY",Modifier.weight(.55f)){DxLine("Current opportunities",controller.currentOpportunities.size.toString(),DxCyan);DxLine("Live samples",features.liveSpots.size.toString(),DxGreen);Text("Current opportunities are a deterministic live heuristic, not a probability or forecast. Missing measurements stay unavailable; optional AI never replaces local evidence.",color=DxMuted,fontSize=12.sp)}
         }
     }
 }
@@ -344,7 +345,7 @@ fun NeuralDxScreen(
         }
         Row(Modifier.fillMaxSize(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
             DxWorldAnomalyCanvas(rows,greyline,Modifier.weight(2.2f).fillMaxHeight())
-            DxSection("FORECAST / ANOMALIES",Modifier.weight(1f).fillMaxHeight()){
+            DxSection("ACTIVITY / ANOMALIES",Modifier.weight(1f).fillMaxHeight()){
                 Row(Modifier.fillMaxWidth().height(34.dp).background(DxRaised).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){DxFlexCell("CELL",.8f,DxInk,true);DxFlexCell("OBS / EXP",.8f,DxInk,true);DxFlexCell("RATIO",.5f,DxInk,true);DxFlexCell("CALLS",1.2f,DxInk,true)}
                 LazyColumn(Modifier.fillMaxSize()){items(rows){cell->Row(Modifier.fillMaxWidth().height(46.dp).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){DxFlexCell("${hemisphere(cell.latitude,"N","S")} ${hemisphere(cell.longitude,"E","W")}",.8f,DxCyan,true);DxFlexCell("${cell.observed} / ${cell.expected?.let{"%.1f".format(it)}?:"—"}",.8f,DxInk);DxFlexCell(cell.anomalyRatio?.let{"×%.1f".format(it)}?:"LEARN",.5f,if((cell.anomalyRatio?:0.0)>=1.8)DxRed else DxYellow,true);DxFlexCell(cell.calls.joinToString(),1.2f,DxMuted)};HorizontalDivider(color=Color(0xFF303940))}}
             }

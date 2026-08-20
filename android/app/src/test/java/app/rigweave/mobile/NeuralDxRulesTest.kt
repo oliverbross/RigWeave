@@ -1,6 +1,7 @@
 package app.rigweave.mobile
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -9,6 +10,32 @@ import org.maplibre.android.geometry.LatLng
 import java.time.Instant
 
 class NeuralDxRulesTest {
+    @Test fun currentOpportunitiesAreRankedEvidenceNotPredictions() {
+        fun spot(id: String, call: String, score: Int, confidence: Int, epoch: Long, band: String = "20m", mode: String = "FT8") = AndroidDXSpot(
+            id, call, "W1AW", 14_074_000, epoch, band, mode, "Test Country", "EU",
+            14, 28, 48.0, 17.0, "", score, confidence, score + 1, false,
+            false, false, false, false, false, false, 0, 0, "", "Evidence for $call",
+        )
+        val input = (0..13).map { index -> spot("id-$index", "CALL$index", 90 - index, 40 + index, 1_000L + index) } +
+            spot("low", "LOW1", 44, 99, 2_000) +
+            spot("duplicate", "CALL0", 89, 88, 3_000)
+
+        val opportunities = buildCurrentOpportunities(input)
+
+        assertEquals(12, opportunities.size)
+        assertEquals("CALL0", opportunities.first().callsign)
+        assertEquals(90, opportunities.first().priority)
+        assertEquals(40, opportunities.first().evidenceScore)
+        assertEquals(1_000, opportunities.first().observedEpoch)
+        assertEquals("Evidence for CALL0", opportunities.first().reason)
+        assertEquals(91, opportunities.first().samples)
+        assertEquals(1, opportunities.count { it.callsign == "CALL0" && it.band == "20m" && it.mode == "FT8" })
+        assertFalse(opportunities.any { it.callsign == "LOW1" })
+        assertEquals(opportunities.map { it.priority }.sortedDescending(), opportunities.map { it.priority })
+        val fields = NeuralCurrentOpportunity::class.java.declaredFields.map { it.name }.toSet()
+        assertFalse(fields.any { it in setOf("probability", "model", "startEpoch", "endEpoch", "measuredReliability") })
+    }
+
     @Test fun maidenheadUsesCellCentreAndRejectsInvalidInput() {
         val point = maidenheadCenter("JN88wt")
         assertNotNull(point)

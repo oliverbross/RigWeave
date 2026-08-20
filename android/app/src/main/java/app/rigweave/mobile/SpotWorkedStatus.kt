@@ -16,7 +16,7 @@ internal fun spotLogIdentity(id: String, callsign: String, dxcc: String, country
 )
 
 internal fun AndroidDXSpot.toSpotLogIdentity(entity: AndroidCtyRecord?): SpotLogIdentity = spotLogIdentity(
-    id, callsign, entity?.dxcc.orEmpty(), entity?.country.orEmpty().ifBlank { country }, band, mode,
+    id, callsign, entity?.dxcc.orEmpty().ifBlank { dxcc }, entity?.country.orEmpty().ifBlank { country }, band, mode,
 )
 
 data class WorkedDimensions(
