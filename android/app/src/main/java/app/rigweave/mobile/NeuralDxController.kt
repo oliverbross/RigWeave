@@ -183,18 +183,19 @@ internal fun consumeSignalRequest(referenceId: String, reports: List<SignalRepor
 }
 internal enum class NeuralSignalSourceState { CURRENT, DEGRADED, ERROR, EMPTY }
 internal fun neuralSignalSourceState(snapshot: PskReporterSnapshot, hasRows: Boolean): NeuralSignalSourceState {
-    val mixedAvailability = (snapshot.beingHeard.state == HamClockFeedState.UNAVAILABLE) xor
-        (snapshot.hearing.state == HamClockFeedState.UNAVAILABLE)
+    val states = listOf(snapshot.beingHeard.state, snapshot.hearing.state)
+    val unavailable = states.count { it == HamClockFeedState.UNAVAILABLE }
     val error = snapshot.beingHeard.error.isNotBlank() || snapshot.hearing.error.isNotBlank()
     return when {
-        mixedAvailability -> NeuralSignalSourceState.DEGRADED
-        snapshot.beingHeard.state == HamClockFeedState.UNAVAILABLE &&
-            snapshot.hearing.state == HamClockFeedState.UNAVAILABLE && error -> NeuralSignalSourceState.ERROR
-        hasRows || snapshot.beingHeard.state != HamClockFeedState.UNAVAILABLE ||
-            snapshot.hearing.state != HamClockFeedState.UNAVAILABLE -> NeuralSignalSourceState.CURRENT
+        unavailable == 2 && hasRows -> NeuralSignalSourceState.DEGRADED
+        unavailable == 2 && error -> NeuralSignalSourceState.ERROR
+        unavailable == 1 || states.any { it in setOf(HamClockFeedState.DEGRADED, HamClockFeedState.STALE) } -> NeuralSignalSourceState.DEGRADED
+        hasRows || states.any { it in setOf(HamClockFeedState.LIVE, HamClockFeedState.CACHED) } -> NeuralSignalSourceState.CURRENT
         else -> NeuralSignalSourceState.EMPTY
     }
 }
+
+internal fun dxRfEvidenceDestination(): NeuralDxPage = NeuralDxPage.OBSERVATIONS
 internal data class NeuralMySignal(val available:Boolean=false,val callsign:String="",val fetchedEpoch:Long=0,
     val reports:List<SignalReport> = emptyList(),val source:String="PSK Reporter",val error:String="",
     val beingHeardState: HamClockFeedState = HamClockFeedState.UNAVAILABLE,
@@ -457,6 +458,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
     var requestedSignalReportId by mutableStateOf<String?>(null); private set
     var requestedPage by mutableStateOf<NeuralDxPage?>(null); private set
     var requestedRfEvidenceId by mutableStateOf<String?>(null); private set
+    var requestedBandEvidence by mutableStateOf<String?>(null); private set
     var signalSelectionMessage by mutableStateOf(""); private set
     val alerts = mutableStateListOf<String>()
     var status by mutableStateOf("Neural DX cache ready"); private set
@@ -520,9 +522,14 @@ class NeuralDxController internal constructor(private val context: Context, priv
 
     fun requestSignalReport(referenceId: String) { requestedSignalReportId = referenceId }
     fun requestPage(page: NeuralDxPage) { requestedPage = page }
+    fun requestBandEvidence(band: String) {
+        requestedBandEvidence = band.takeIf(String::isNotBlank)
+        requestedPage = dxRfEvidenceDestination()
+    }
     fun requestRfEvidence(referenceId: String) { requestedRfEvidenceId = referenceId }
     fun consumeRequestedRfEvidence() { requestedRfEvidenceId = null }
     fun consumeRequestedPage() { requestedPage = null }
+    fun consumeRequestedBandEvidence() { requestedBandEvidence = null }
     fun consumeRequestedSignalReport(message: String = "") {
         requestedSignalReportId = null
         signalSelectionMessage = message.take(160)

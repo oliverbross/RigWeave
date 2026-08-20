@@ -57,6 +57,12 @@ data class ClusterConnectionTruth(
     val error: String = "",
 )
 
+internal fun shouldRunRbnMaintenance(
+    foreground: Boolean,
+    rbnEnabled: Boolean,
+    clusterState: ClusterConnectionState,
+): Boolean = foreground && rbnEnabled && clusterState != ClusterConnectionState.DISABLED
+
 internal data class FeatureHttpResponse(val status: Int, val body: ByteArray, val contentType: String,
     val effectiveUrl: String)
 internal fun interface FeatureHttpTransport { fun get(url: String, maximumBytes: Int): FeatureHttpResponse }
@@ -146,6 +152,8 @@ class FeatureController internal constructor(private val context: Context, priva
     private var rbnPublishJob: Job? = null
     private var rbnMaintenanceJob: Job? = null
     private var rbnStationCall = ""
+    private var foreground = true
+    private var closed = false
     private var lastRbnObservedEpoch = 0L
     @Volatile private var rbnDirty = false
 
@@ -190,9 +198,6 @@ class FeatureController internal constructor(private val context: Context, priva
         defaults.apply()
         NativeCore.featureWatchlist(handle, watchlistText)
         scheduleRbnPublish()
-        rbnMaintenanceJob = scope.launch {
-            while (true) { delay(2_000); scheduleRbnPublish(immediate = true) }
-        }
     }
 
     fun setWatchlist(value: String) {
@@ -217,6 +222,12 @@ class FeatureController internal constructor(private val context: Context, priva
             rbnObservations = emptyList()
         }
         scheduleRbnPublish(immediate = true)
+        updateRbnMaintenance(runImmediate = value.enabled)
+    }
+
+    fun setForeground(value: Boolean) {
+        foreground = value
+        updateRbnMaintenance(runImmediate = value)
     }
 
     fun connectConfiguredCluster() {
@@ -303,6 +314,7 @@ class FeatureController internal constructor(private val context: Context, priva
         clusterConnection = ClusterConnectionTruth(if (disabled) ClusterConnectionState.DISABLED else ClusterConnectionState.DISCONNECTED,
             stateChangedEpoch = Instant.now().epochSecond, latestSpotEpoch = newestSpotEpoch)
         scheduleRbnPublish(immediate = true)
+        updateRbnMaintenance()
     }
 
     fun postSpot(callsign: String, frequencyKHz: Double, comment: String) {
@@ -351,7 +363,8 @@ class FeatureController internal constructor(private val context: Context, priva
     }
 
     fun close() {
-        rbnMaintenanceJob?.cancel(); disconnectCluster(); scope.cancel(); NativeCore.featureDestroy(handle)
+        closed = true; rbnMaintenanceJob?.cancel(); rbnMaintenanceJob = null
+        disconnectCluster(); scope.cancel(); NativeCore.featureDestroy(handle)
     }
 
     private suspend fun refreshDX() {
@@ -430,6 +443,24 @@ class FeatureController internal constructor(private val context: Context, priva
         }
     }
 
+    @Synchronized private fun updateRbnMaintenance(runImmediate: Boolean = false) {
+        val required = !closed && shouldRunRbnMaintenance(foreground, rbnPreference.enabled, clusterConnection.state)
+        if (!required) {
+            rbnMaintenanceJob?.cancel()
+            rbnMaintenanceJob = null
+            return
+        }
+        if (runImmediate) scheduleRbnPublish(immediate = true)
+        if (rbnMaintenanceJob?.isActive == true) return
+        rbnMaintenanceJob = scope.launch {
+            try {
+                while (true) { delay(2_000); scheduleRbnPublish(immediate = true) }
+            } finally {
+                synchronized(this@FeatureController) { rbnMaintenanceJob = null }
+            }
+        }
+    }
+
     private suspend fun publishRbn() {
         val now = Instant.now().epochSecond
         val watchlist = watchlistText.lineSequence().map(String::trim).filter(String::isNotBlank).toSet()
@@ -477,6 +508,7 @@ class FeatureController internal constructor(private val context: Context, priva
                 if (state == ClusterConnectionState.CONNECTED) connectedSince else 0,
                 Instant.now().epochSecond, newestSpotEpoch, error.take(160))
         }
+        updateRbnMaintenance()
         scheduleRbnPublish(immediate = true)
     }
 }

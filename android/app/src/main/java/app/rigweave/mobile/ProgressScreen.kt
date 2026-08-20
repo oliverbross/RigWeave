@@ -101,6 +101,7 @@ internal fun ProgressScreen(
     currentCallsign: String,
     compact: Boolean,
     openDx: () -> Unit,
+    openDxEvidence: (String) -> Unit,
     openPortable: () -> Unit,
     openLogbook: () -> Unit,
     openLogbookFilter: (LogbookFilter) -> Unit,
@@ -198,11 +199,12 @@ internal fun ProgressScreen(
                     Text(selected?.let { "${it.band} · ${it.state} · confidence ${it.confidence} · ${it.reasons.joinToString(" · ")}" }
                         ?: "No shared live RF snapshot", color = ProgressInk)
                     Text("Sources · ${live.sourceStates.entries.joinToString(" · ") { "${it.key} ${it.value}" }}", color = ProgressMuted)
+                    if (live.message.isNotBlank()) Text(live.message, color = ProgressAmber)
                     val historical = selected?.let { row -> live.historical.filter { it.band.equals(row.band, true) } }.orEmpty()
                     Text("Historical projection · ${historical.sumOf { it.qsoCount }} QSOs · ${historical.sumOf { it.comparableWindowCount }} comparable UTC-window",
                         color = ProgressMuted)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(openDx) { Text("DX RF EVIDENCE") }
+                        OutlinedButton({ openDxEvidence(selected?.band.orEmpty()) }) { Text("DX RF EVIDENCE") }
                         OutlinedButton({ selected?.let { openLogbookFilter(progressLogbookFilter(filters).copy(band = it.band)) } },
                             enabled = selected != null) { Text("ADVANCED LOGBOOK") }
                     }

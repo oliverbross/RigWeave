@@ -313,12 +313,9 @@ internal fun HamClockHomeScreen(
         features.rbnObservations.mapNotNull { row ->
             fun ctyPoint(call: String) = cty.lookup(call)?.takeIf { it.latitude != 0.0 || it.longitude != 0.0 }
                 ?.let { GeoPoint(it.latitude, it.longitude) }
-            fun endpoint(call: String, stream: GeoPoint?) = resolveRbnEndpoint(call, stream, stationCall, stationPoint,
-                callbook.cachedRecord(normalizedHamCallIdentity(call))?.grid, ctyPoint(normalizedHamCallIdentity(call)))
-            val dx = endpoint(row.dxCall, row.dxPoint)
-            val skimmer = endpoint(row.skimmerCall, row.skimmerPoint)
-            skimmer.point?.let { marker -> row.copy(dxPoint = dx.point, skimmerPoint = marker,
-                dxGeometry = "${dx.source} · ${dx.accuracy}", skimmerGeometry = "${skimmer.source} · ${skimmer.accuracy}") to marker }
+            val resolved = resolveRbnObservationView(row, stationCall, stationPoint,
+                { call -> callbook.cachedRecord(call)?.grid }, ::ctyPoint)
+            resolved.skimmerPoint?.let { marker -> resolved to marker }
         }
     }
     val ibpSchedule = remember(mapInstant.epochSecond / 10) { hamClockIbpSchedule(mapInstant.epochSecond) }

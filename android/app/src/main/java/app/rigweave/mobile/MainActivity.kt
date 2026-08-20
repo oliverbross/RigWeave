@@ -279,6 +279,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         ?: app.stationCallsign.ifBlank { features.clusterCallsign }
     val hamClockStationGrid = wavelog.selectedStation?.grid?.ifBlank { null } ?: app.stationGrid
     LaunchedEffect(hamClockSettings.document.settings.cluster.enabled, hamClockSettings.document.settings.rbn, foreground, hamClockStationCall) {
+        features.setForeground(foreground)
         features.applyRbnPreference(hamClockSettings.document.settings.rbn, hamClockStationCall)
         if (!foreground || !hamClockSettings.document.settings.cluster.enabled) features.disconnectCluster(disabled = true)
         else if (features.clusterConnection.state in setOf(ClusterConnectionState.DISABLED, ClusterConnectionState.DISCONNECTED)) {
@@ -333,10 +334,10 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event -> when (event) {
             Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> {
-                foreground = true; syncHub.setForeground(true); neuralDx.setForeground(true); wavelogNative.onForeground()
+                foreground = true; features.setForeground(true); syncHub.setForeground(true); neuralDx.setForeground(true); wavelogNative.onForeground()
             }
             Lifecycle.Event.ON_STOP, Lifecycle.Event.ON_DESTROY -> {
-                foreground = false; syncHub.setForeground(false); neuralDx.setForeground(false); app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
+                foreground = false; features.setForeground(false); syncHub.setForeground(false); neuralDx.setForeground(false); app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
                 digi.stopRx("App left foreground · RX stopped")
                 digi.disarm()
                 voiceTx.stop("App left foreground; defensive RX cleanup requested")
@@ -504,7 +505,7 @@ private fun navIcon(item: Destination) = when (item) {
     }
     fun signalAvailability(state: HamClockFeedState) = when (state) {
         HamClockFeedState.LIVE, HamClockFeedState.CACHED -> HamClockEvidenceAvailability.CURRENT
-        HamClockFeedState.DEGRADED -> HamClockEvidenceAvailability.ERROR
+        HamClockFeedState.DEGRADED -> HamClockEvidenceAvailability.DEGRADED
         HamClockFeedState.STALE -> HamClockEvidenceAvailability.STALE
         HamClockFeedState.UNAVAILABLE -> HamClockEvidenceAvailability.UNAVAILABLE
     }
@@ -570,7 +571,7 @@ private fun navIcon(item: Destination) = when (item) {
         }
         Destination.PROGRESS -> ProgressScreen(progress, features, portable, syncHub, cty,
             wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }.orEmpty(), app.stationCallsign, compact,
-            openDx = openDx, openPortable = openPortable,
+            openDx = openDx, openDxEvidence = { band -> neuralDx.requestBandEvidence(band); openDx() }, openPortable = openPortable,
             openLogbook = openLogbook, openLogbookFilter = { filter -> progress.requestLogbook(filter); openLogbook() }, openSync = openSync)
         Destination.SYNC -> SyncHubScreen(database, mutations, syncHub, wavelog, wavelogNative, openLogbook)
         Destination.PRESETS -> PresetsScreen(radio, app, send)

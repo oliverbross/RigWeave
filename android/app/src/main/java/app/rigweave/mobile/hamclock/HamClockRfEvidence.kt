@@ -99,6 +99,28 @@ internal fun resolveRbnEndpoint(
     else -> HamClockResolvedEndpoint()
 }
 
+/** One resolved observation view shared by Home map rendering and DX evidence details. */
+internal fun resolveRbnObservationView(
+    row: HamClockRbnObservation,
+    currentStationCall: String,
+    currentStationPoint: GeoPoint?,
+    cachedGrid: (String) -> String?,
+    ctyPoint: (String) -> GeoPoint?,
+): HamClockRbnObservation {
+    fun endpoint(callsign: String, streamPoint: GeoPoint?) = resolveRbnEndpoint(
+        callsign, streamPoint, currentStationCall, currentStationPoint,
+        cachedGrid(normalizedHamCallIdentity(callsign)), ctyPoint(normalizedHamCallIdentity(callsign)),
+    )
+    val dx = endpoint(row.dxCall, row.dxPoint)
+    val skimmer = endpoint(row.skimmerCall, row.skimmerPoint)
+    return row.copy(
+        dxPoint = dx.point,
+        skimmerPoint = skimmer.point,
+        dxGeometry = "${dx.source} · ${dx.accuracy}",
+        skimmerGeometry = "${skimmer.source} · ${skimmer.accuracy}",
+    )
+}
+
 internal fun parseRbnClusterLine(line: String, nowEpoch: Long = Instant.now().epochSecond): HamClockRbnObservation? {
     val match = Regex("^DX\\s+de\\s+([^:]+):\\s*([0-9]+(?:\\.[0-9]+)?)\\s+([A-Z0-9/]+)\\s+(.+)$",
         setOf(RegexOption.IGNORE_CASE)).find(line.trim()) ?: return null
@@ -290,7 +312,7 @@ internal fun observedIbpEvidence(evidence: List<HamClockBandEvidence>): List<Ham
         } }.sortedByDescending(HamClockIbpObservedEvidence::observedEpoch).take(60).toList()
 }
 
-enum class HamClockEvidenceAvailability { CURRENT, STALE, ERROR, UNAVAILABLE, DISABLED }
+enum class HamClockEvidenceAvailability { CURRENT, DEGRADED, STALE, ERROR, UNAVAILABLE, DISABLED }
 data class HamClockBandEvidence(val source: String, val band: String, val mode: String, val callsign: String,
     val receiver: String = "", val snr: Int? = null, val observedEpoch: Long, val frequencyHz: Long = 0L,
     val id: String = "$source|$callsign|$receiver|$frequencyHz|$observedEpoch")
@@ -306,25 +328,61 @@ data class HamClockBandHealthSnapshot(
     val sourceStates: Map<String, HamClockEvidenceAvailability> = emptyMap(),
     val rows: List<HamClockBandHealthRow> = emptyList(),
     val historical: List<HamClockBandHistoricalRow> = emptyList(),
+    val contributors: Map<String, List<HamClockBandContributor>> = emptyMap(),
     val contributingObservationIds: Map<String, List<String>> = emptyMap(),
     val generatedEpoch: Long = 0,
+    val message: String = "",
 )
 
-internal fun computeHamClockBandHealth(
+data class HamClockBandContributor(
+    val id: String,
+    val source: String,
+    val sourceReferenceId: String,
+    val callsign: String,
+    val receiver: String,
+    val band: String,
+    val mode: String,
+    val frequencyHz: Long,
+    val snr: Int?,
+    val observedEpoch: Long,
+)
+
+internal data class HamClockBandHealthComputation(
+    val rows: List<HamClockBandHealthRow>,
+    val contributors: Map<String, List<HamClockBandContributor>>,
+)
+
+private fun contributorFor(row: HamClockBandEvidence): HamClockBandContributor {
+    val prefix = row.source.lowercase(Locale.US)
+    val stableId = if (row.id.startsWith("$prefix:") || row.id.startsWith("${row.source}|")) row.id else "$prefix:${row.id}"
+    val sourceReference = when {
+        row.id.startsWith("$prefix:") -> row.id.removePrefix("$prefix:")
+        else -> row.id
+    }
+    return HamClockBandContributor(stableId, row.source, sourceReference, row.callsign, row.receiver,
+        row.band, row.mode, row.frequencyHz, row.snr, row.observedEpoch)
+}
+
+private fun computeHamClockBandHealthAccepted(
     evidence: List<HamClockBandEvidence>,
     availability: Map<String, HamClockEvidenceAvailability>,
     preference: HamClockBandHealthPreference,
-    nowEpoch: Long = Instant.now().epochSecond,
-): List<HamClockBandHealthRow> {
+    nowEpoch: Long,
+): HamClockBandHealthComputation {
+    val contributors = linkedMapOf<String, List<HamClockBandContributor>>()
     val liveSources = preference.enabledSources.filter { it != "QSO_HISTORY" &&
-        availability[it] in setOf(HamClockEvidenceAvailability.CURRENT, HamClockEvidenceAvailability.STALE)
+        availability[it] in setOf(HamClockEvidenceAvailability.CURRENT, HamClockEvidenceAvailability.DEGRADED,
+            HamClockEvidenceAvailability.STALE)
     }
     val cutoff = nowEpoch - preference.windowMinutes * 60L
-    return preference.visibleBands.sortedBy(::bandSortKey).map { band ->
+    val rows = preference.visibleBands.sortedBy(::bandSortKey).map { band ->
         val historical = evidence.count { it.source == "QSO_HISTORY" && it.band.equals(band, true) }
-        if (liveSources.isEmpty()) return@map HamClockBandHealthRow(band, "NO LIVE EVIDENCE", 0, 0, 0, null,
-            "UNKNOWN", 0, 0.0, 0.0, "NONE", historical,
-            listOf("All selected live evidence sources are disabled or unavailable"))
+        if (liveSources.isEmpty()) {
+            contributors[band] = emptyList()
+            return@map HamClockBandHealthRow(band, "NO LIVE EVIDENCE", 0, 0, 0, null,
+                "UNKNOWN", 0, 0.0, 0.0, "NONE", historical,
+                listOf("All selected live evidence sources are disabled or unavailable"))
+        }
         val repeats = mutableMapOf<String, Int>()
         val uniqueEvents = LinkedHashMap<String, HamClockBandEvidence>()
         evidence.asSequence().filter { it.source in liveSources && it.band.equals(band, true) && it.observedEpoch >= cutoff }
@@ -332,44 +390,56 @@ internal fun computeHamClockBandHealth(
             .sortedByDescending(HamClockBandEvidence::observedEpoch)
             .forEach { row -> uniqueEvents.putIfAbsent(
                 "${row.callsign.uppercase(Locale.US)}|${row.receiver.uppercase(Locale.US)}|${row.band}|${row.mode}|${row.observedEpoch / 30L}", row) }
-        val rows = uniqueEvents.values.asSequence()
-            .filter {
-                val key = "${it.callsign.uppercase(Locale.US)}|${it.receiver.uppercase(Locale.US)}"
-                (repeats.getOrDefault(key, 0) < 3).also { accepted -> if (accepted) repeats[key] = repeats.getOrDefault(key, 0) + 1 }
-            }.toList()
-        val calls = rows.map { it.callsign }.filter(String::isNotBlank).toSet().size
-        val receivers = rows.map { it.receiver }.filter(String::isNotBlank).toSet().size
-        val sources = rows.map { it.source }.toSet().size
-        val median = rows.mapNotNull { it.snr }.sorted().let { values -> values.takeIf(List<Int>::isNotEmpty)?.get(values.size / 2) }
+        val accepted = uniqueEvents.values.asSequence().filter {
+            val key = "${it.callsign.uppercase(Locale.US)}|${it.receiver.uppercase(Locale.US)}"
+            (repeats.getOrDefault(key, 0) < 3).also { keep -> if (keep) repeats[key] = repeats.getOrDefault(key, 0) + 1 }
+        }.toList()
+        contributors[band] = accepted.map(::contributorFor)
+        val calls = accepted.map { it.callsign }.filter(String::isNotBlank).toSet().size
+        val receivers = accepted.map { it.receiver }.filter(String::isNotBlank).toSet().size
+        val sources = accepted.map { it.source }.toSet().size
+        val median = accepted.mapNotNull { it.snr }.sorted().let { values -> values.takeIf(List<Int>::isNotEmpty)?.get(values.size / 2) }
         val midpoint = nowEpoch - preference.windowMinutes * 30L
-        val older = rows.count { it.observedEpoch < midpoint }; val newer = rows.size - older
+        val older = accepted.count { it.observedEpoch < midpoint }; val newer = accepted.size - older
         val trend = when { newer > older * 3 / 2 -> "RISING"; older > newer * 3 / 2 -> "FALLING"; else -> "STEADY" }
-        val selectedStates = preference.enabledSources.mapNotNull(availability::get)
-        val hasCurrent = selectedStates.any { it == HamClockEvidenceAvailability.CURRENT }
-        val hasStale = selectedStates.any { it == HamClockEvidenceAvailability.STALE }
-        val hasError = selectedStates.any { it == HamClockEvidenceAvailability.ERROR }
-        val degraded = hasCurrent && (hasStale || hasError)
+        val selectedSources = preference.enabledSources.mapNotNull { source -> availability[source]?.let { source to it } }
+        val hasCurrent = selectedSources.any { it.second == HamClockEvidenceAvailability.CURRENT }
+        val hasStale = selectedSources.any { it.second == HamClockEvidenceAvailability.STALE }
+        val hasDegraded = selectedSources.any { it.second == HamClockEvidenceAvailability.DEGRADED }
+        val hasError = selectedSources.any { it.second == HamClockEvidenceAvailability.ERROR }
+        val degraded = hasDegraded || (hasCurrent && (hasStale || hasError))
+        val hasUsableSource = hasCurrent || hasStale || hasDegraded
         val confidence = when {
-            !hasCurrent || degraded -> if (rows.isNotEmpty()) "LOW" else "NONE"
-            rows.size >= 12 && sources >= 2 -> "HIGH"
-            rows.size >= 4 -> "MEDIUM"
-            rows.isNotEmpty() -> "LOW"
+            !hasUsableSource || degraded -> if (accepted.isNotEmpty()) "LOW" else "NONE"
+            accepted.size >= 12 && sources >= 2 -> "HIGH"
+            accepted.size >= 4 -> "MEDIUM"
+            accepted.isNotEmpty() -> "LOW"
             else -> "NONE"
         }
-        val activity = when { rows.size >= 20 -> "HIGH ACTIVITY"; rows.size >= 8 -> "GOOD ACTIVITY"; rows.size >= 4 -> "ACTIVE"; rows.isNotEmpty() -> "QUIET"; else -> "NO RECENT EVIDENCE" }
-        val state = when { !hasCurrent && hasStale -> "STALE EVIDENCE"; degraded -> "DEGRADED SOURCES"; else -> activity }
-        val sourceReasons = selectedStates.mapIndexedNotNull { index, sourceState ->
+        val activity = when { accepted.size >= 20 -> "HIGH ACTIVITY"; accepted.size >= 8 -> "GOOD ACTIVITY"; accepted.size >= 4 -> "ACTIVE"; accepted.isNotEmpty() -> "QUIET"; else -> "NO RECENT EVIDENCE" }
+        val state = when { degraded -> "DEGRADED SOURCES"; !hasCurrent && hasStale -> "STALE EVIDENCE"; else -> activity }
+        val sourceReasons = selectedSources.mapNotNull { (source, sourceState) ->
             if (sourceState in setOf(HamClockEvidenceAvailability.CURRENT, HamClockEvidenceAvailability.DISABLED)) null
-            else "${preference.enabledSources.elementAtOrNull(index).orEmpty()} ${sourceState.name.lowercase(Locale.US)}"
+            else "$source ${sourceState.name.lowercase(Locale.US)}"
         }
-        val reasons = (if (rows.isEmpty()) listOf("No selected observations inside the ${preference.windowMinutes} minute window")
-            else listOf("${rows.size} capped observations from $sources source${if (sources == 1) "" else "s"}",
+        val reasons = (if (accepted.isEmpty()) listOf("No selected observations inside the ${preference.windowMinutes} minute window")
+            else listOf("${accepted.size} capped observations from $sources source${if (sources == 1) "" else "s"}",
                 "$calls unique calls · $receivers unique receivers")) + sourceReasons
-        HamClockBandHealthRow(band, state, rows.size, calls, receivers, median, trend, sources,
-            if (rows.isEmpty()) 0.0 else calls.toDouble() / rows.size,
-            if (rows.isEmpty()) 0.0 else receivers.toDouble() / rows.size,
+        HamClockBandHealthRow(band, state, accepted.size, calls, receivers, median, trend, sources,
+            if (accepted.isEmpty()) 0.0 else calls.toDouble() / accepted.size,
+            if (accepted.isEmpty()) 0.0 else receivers.toDouble() / accepted.size,
             confidence, historical, reasons)
     }
+    return HamClockBandHealthComputation(rows, contributors)
+}
+
+internal fun computeHamClockBandHealth(
+    evidence: List<HamClockBandEvidence>,
+    availability: Map<String, HamClockEvidenceAvailability>,
+    preference: HamClockBandHealthPreference,
+    nowEpoch: Long = Instant.now().epochSecond,
+): List<HamClockBandHealthRow> {
+    return computeHamClockBandHealthAccepted(evidence, availability, preference, nowEpoch).rows
 }
 
 internal fun computeHamClockBandHealthSnapshot(
@@ -379,15 +449,13 @@ internal fun computeHamClockBandHealthSnapshot(
     historical: List<HamClockBandHistoricalRow>,
     nowEpoch: Long = Instant.now().epochSecond,
 ): HamClockBandHealthSnapshot {
-    val rows = computeHamClockBandHealth(evidence, availability, preference, nowEpoch).map { row ->
+    val computed = computeHamClockBandHealthAccepted(evidence, availability, preference, nowEpoch)
+    val rows = computed.rows.map { row ->
         row.copy(historicalObservations = historical.filter { it.band.equals(row.band, true) &&
             (preference.mode == "ALL" || it.modeFamily.equals(preference.mode, true)) }.sumOf(HamClockBandHistoricalRow::comparableWindowCount))
     }
-    val cutoff = nowEpoch - preference.windowMinutes * 60L
-    val contributors = rows.associate { row -> row.band to evidence.asSequence()
-        .filter { it.source in preference.enabledSources && it.band.equals(row.band, true) && it.observedEpoch >= cutoff }
-        .filter { preference.mode == "ALL" || it.mode.equals(preference.mode, true) }.map(HamClockBandEvidence::id).distinct().take(200).toList() }
-    return HamClockBandHealthSnapshot(preference, availability.toMap(), rows, historical, contributors, nowEpoch)
+    val ids = computed.contributors.mapValues { (_, value) -> value.map(HamClockBandContributor::id) }
+    return HamClockBandHealthSnapshot(preference, availability.toMap(), rows, historical, computed.contributors, ids, nowEpoch)
 }
 
 private fun bandSortKey(band: String): Int = listOf("2200m", "630m", "160m", "80m", "60m", "40m", "30m",

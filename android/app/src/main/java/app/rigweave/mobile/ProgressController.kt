@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -16,11 +17,49 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
+import java.util.Locale
 import app.rigweave.mobile.hamclock.HamClockBandEvidence
 import app.rigweave.mobile.hamclock.HamClockBandHealthPreference
 import app.rigweave.mobile.hamclock.HamClockBandHealthSnapshot
 import app.rigweave.mobile.hamclock.HamClockEvidenceAvailability
 import app.rigweave.mobile.hamclock.computeHamClockBandHealthSnapshot
+
+private const val BAND_HISTORY_CONTRACT = "one-year-comparable-utc-hour-v1"
+
+internal data class BandHistoryCacheKey(
+    val databaseChangeToken: Long,
+    val stationProfileId: String,
+    val stationCallsign: String,
+    val utcHourBucket: Long,
+    val contract: String = BAND_HISTORY_CONTRACT,
+)
+
+internal class BandHistoryCache(private val maximumEntries: Int = 4) {
+    private val rows = object : LinkedHashMap<BandHistoryCacheKey, List<app.rigweave.mobile.hamclock.HamClockBandHistoricalRow>>(8, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<BandHistoryCacheKey, List<app.rigweave.mobile.hamclock.HamClockBandHistoricalRow>>?) =
+            size > maximumEntries.coerceAtLeast(1)
+    }
+
+    fun getOrLoad(
+        key: BandHistoryCacheKey,
+        loader: () -> List<app.rigweave.mobile.hamclock.HamClockBandHistoricalRow>,
+    ): List<app.rigweave.mobile.hamclock.HamClockBandHistoricalRow> {
+        synchronized(rows) { rows[key]?.let { return it } }
+        val loaded = loader()
+        synchronized(rows) { rows[key] = loaded }
+        return loaded
+    }
+
+    internal fun size(): Int = synchronized(rows) { rows.size }
+}
+
+internal class LatestWinsRequestQueue<T> {
+    private var active = false
+    private var pending: T? = null
+    fun submit(value: T): T? = if (active) { pending = value; null } else { active = true; value }
+    fun complete(): T? = pending.also { pending = null; active = it != null }
+    fun isActive(): Boolean = active
+}
 
 internal class ProgressGoalStore(context: Context) {
     private val file = AtomicFile(File(context.filesDir, "progress-goals.json"))
@@ -71,9 +110,13 @@ internal class ProgressController(context: Context, private val database: QsoDat
     private var pendingRefresh: (() -> Unit)? = null
     private var lastKey: Any? = null
     private var bandHealthJob: Job? = null
-    private var bandHealthKey: Any? = null
+    private val bandHealthQueue = LatestWinsRequestQueue<BandHealthRefreshRequest>()
+    private val bandHistoryCache = BandHistoryCache()
+    private var completedBandHealthKey: Any? = null
+    private var bandHealthGeneration = 0L
     var snapshot by mutableStateOf(ProgressSnapshot()); private set
     var bandHealthSnapshot by mutableStateOf(HamClockBandHealthSnapshot()); private set
+    var bandHealthMessage by mutableStateOf(""); private set
     var busy by mutableStateOf(false); private set
     var stationProfiles by mutableStateOf<List<String>>(emptyList()); private set
     var stationCallsigns by mutableStateOf<List<String>>(emptyList()); private set
@@ -166,18 +209,58 @@ internal class ProgressController(context: Context, private val database: QsoDat
         nowEpoch: Long = java.time.Instant.now().epochSecond,
     ) {
         val identity = evidence.fold(1L) { value, row -> 31L * value + row.id.hashCode() }
-        val key = listOf(database.changeToken(), identity, availability, preference, stationProfileId, stationCall,
+        val databaseToken = database.changeToken()
+        val key = listOf(databaseToken, identity, availability, preference, stationProfileId, stationCall,
             nowEpoch / 60L)
-        if (key == bandHealthKey || bandHealthJob?.isActive == true) return
-        bandHealthKey = key
+        if (key == completedBandHealthKey && !bandHealthQueue.isActive()) return
+        val request = BandHealthRefreshRequest(key, ++bandHealthGeneration, evidence, availability, preference,
+            stationProfileId, stationCall, nowEpoch, BandHistoryCacheKey(databaseToken,
+                stationProfileId.orEmpty(), stationCall.trim().uppercase(Locale.US), nowEpoch / 3_600L))
+        bandHealthQueue.submit(request)?.let(::startBandHealthRefresh)
+    }
+
+    private fun startBandHealthRefresh(request: BandHealthRefreshRequest) {
         bandHealthJob = scope.launch {
-            val built = withContext(Dispatchers.IO) {
-                val historical = repository.bandHistory(stationProfileId, stationCall, nowEpoch)
-                computeHamClockBandHealthSnapshot(evidence, availability, preference, historical, nowEpoch)
+            try {
+                val built = withContext(Dispatchers.IO) {
+                    val historical = bandHistoryCache.getOrLoad(request.historyKey) {
+                        repository.bandHistory(request.stationProfileId, request.stationCall, request.nowEpoch)
+                    }
+                    computeHamClockBandHealthSnapshot(request.evidence, request.availability, request.preference,
+                        historical, request.nowEpoch)
+                }
+                if (request.generation == bandHealthGeneration) {
+                    bandHealthSnapshot = built
+                    bandHealthMessage = ""
+                    completedBandHealthKey = request.key
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (request.generation == bandHealthGeneration) {
+                    bandHealthMessage = error.message.orEmpty()
+                        .replace(Regex("https?://\\S+|(?i)(token|key|password)=[^\\s]+"), "[redacted]")
+                        .take(160).ifBlank { "Band Health refresh unavailable; retry remains enabled" }
+                    bandHealthSnapshot = bandHealthSnapshot.copy(message = bandHealthMessage)
+                }
+            } finally {
+                bandHealthJob = null
+                bandHealthQueue.complete()?.let(::startBandHealthRefresh)
             }
-            bandHealthSnapshot = built
         }
     }
+
+    private data class BandHealthRefreshRequest(
+        val key: Any,
+        val generation: Long,
+        val evidence: List<HamClockBandEvidence>,
+        val availability: Map<String, HamClockEvidenceAvailability>,
+        val preference: HamClockBandHealthPreference,
+        val stationProfileId: String?,
+        val stationCall: String,
+        val nowEpoch: Long,
+        val historyKey: BandHistoryCacheKey,
+    )
     fun close() = scope.cancel()
 }
 
