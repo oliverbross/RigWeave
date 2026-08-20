@@ -46,6 +46,9 @@ data class GroupsIoGroup(
     val archivesVisible: Boolean,
     val active: Boolean,
     val lastSyncMillis: Long,
+    val canPost: Boolean = false,
+    val canReply: Boolean = false,
+    val downloadArchives: Boolean = false,
 )
 
 data class GroupsIoTopic(
@@ -95,7 +98,7 @@ internal fun groupsIoPagination(root: JSONObject): Pair<String?, Boolean> {
 }
 
 internal class GroupsIoDatabase(private val appContext: Context, private val databaseName: String = GROUPS_IO_DATABASE_NAME) :
-    SQLiteOpenHelper(appContext, databaseName, null, 1) {
+    SQLiteOpenHelper(appContext, databaseName, null, 2) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
@@ -130,16 +133,86 @@ internal class GroupsIoDatabase(private val appContext: Context, private val dat
         db.execSQL("CREATE INDEX messages_group_created ON messages(group_id, created DESC)")
         db.execSQL("CREATE INDEX sync_state_scope ON sync_state(scope, scope_id)")
         db.execSQL("CREATE VIRTUAL TABLE message_search USING fts5(group_name, topic_subject, message_subject, author_name, body_plain)")
+        createPhase2Schema(db)
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion > 2 || newVersion > 2) throw GroupsIoApiException("compatibility", "Groups.io cache schema is newer than this app")
+        if (oldVersion == 1 && newVersion == 2) db.transaction {
+            execSQL("ALTER TABLE groups ADD COLUMN can_reply INTEGER NOT NULL DEFAULT 0")
+            execSQL("ALTER TABLE groups ADD COLUMN download_archives INTEGER NOT NULL DEFAULT 0")
+            execSQL("ALTER TABLE groups ADD COLUMN post_status TEXT NOT NULL DEFAULT ''")
+            execSQL("ALTER TABLE groups ADD COLUMN max_attachment_size INTEGER")
+            execSQL("ALTER TABLE groups ADD COLUMN default_reply_policy TEXT")
+            execSQL("ALTER TABLE groups ADD COLUMN permissions_synced_at INTEGER")
+            execSQL("ALTER TABLE messages ADD COLUMN reply_policy TEXT")
+            execSQL("ALTER TABLE messages ADD COLUMN quoted_plain TEXT")
+            execSQL("ALTER TABLE messages ADD COLUMN remainder_plain TEXT")
+            execSQL("ALTER TABLE messages ADD COLUMN attachments_synced_at INTEGER")
+            createPhase2Schema(this)
+        }
+    }
+
+    private fun createPhase2Schema(db: SQLiteDatabase) {
+        fun addColumn(table: String, definition: String) {
+            val name = definition.substringBefore(' ')
+            val exists = db.rawQuery("PRAGMA table_info($table)", null).use { cursor ->
+                var found = false
+                while (cursor.moveToNext()) if (cursor.getString(1) == name) found = true
+                found
+            }
+            if (!exists) db.execSQL("ALTER TABLE $table ADD COLUMN $definition")
+        }
+        addColumn("groups", "can_reply INTEGER NOT NULL DEFAULT 0")
+        addColumn("groups", "download_archives INTEGER NOT NULL DEFAULT 0")
+        addColumn("groups", "post_status TEXT NOT NULL DEFAULT ''")
+        addColumn("groups", "max_attachment_size INTEGER")
+        addColumn("groups", "default_reply_policy TEXT")
+        addColumn("groups", "permissions_synced_at INTEGER")
+        addColumn("messages", "reply_policy TEXT")
+        addColumn("messages", "quoted_plain TEXT")
+        addColumn("messages", "remainder_plain TEXT")
+        addColumn("messages", "attachments_synced_at INTEGER")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS message_attachments(
+            group_id INTEGER NOT NULL, message_number INTEGER NOT NULL, attachment_id INTEGER NOT NULL,
+            filename TEXT NOT NULL, media_type TEXT NOT NULL DEFAULT '', reported_size INTEGER,
+            local_relative_path TEXT, local_size INTEGER, sha256 TEXT, download_state TEXT NOT NULL DEFAULT 'remote',
+            downloaded_at INTEGER, last_error TEXT, PRIMARY KEY(group_id,message_number,attachment_id))""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS local_drafts(
+            local_id TEXT PRIMARY KEY, group_id INTEGER NOT NULL, topic_id INTEGER, reply_message_number INTEGER,
+            reply_api_message_id INTEGER, remote_draft_id INTEGER, draft_type TEXT NOT NULL,
+            subject TEXT NOT NULL DEFAULT '', body_plain TEXT NOT NULL DEFAULT '', reply_destination TEXT,
+            state TEXT NOT NULL DEFAULT 'draft_local', send_when_online INTEGER NOT NULL DEFAULT 0,
+            pending_moderation INTEGER NOT NULL DEFAULT 0, delivery_unknown INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_attempt_at INTEGER,
+            last_error_category TEXT, last_error_text TEXT)""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS draft_attachments(
+            local_id TEXT PRIMARY KEY, draft_local_id TEXT NOT NULL REFERENCES local_drafts(local_id) ON DELETE CASCADE,
+            remote_attachment_id INTEGER, filename TEXT NOT NULL, media_type TEXT NOT NULL DEFAULT '', byte_size INTEGER NOT NULL,
+            local_relative_path TEXT NOT NULL, sha256 TEXT NOT NULL, upload_state TEXT NOT NULL DEFAULT 'queued', last_error TEXT)""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS server_drafts(
+            remote_draft_id INTEGER PRIMARY KEY, group_id INTEGER NOT NULL, draft_type TEXT NOT NULL, message_id INTEGER,
+            subject TEXT NOT NULL DEFAULT '', body_plain TEXT NOT NULL DEFAULT '', attachment_count INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER, updated_at INTEGER, synced_at INTEGER NOT NULL)""")
+        db.execSQL("""CREATE TABLE IF NOT EXISTS archive_exports(
+            group_id INTEGER NOT NULL, relative_path TEXT NOT NULL, requested_at INTEGER NOT NULL, completed_at INTEGER,
+            start_message_number INTEGER, byte_size INTEGER, sha256 TEXT, state TEXT NOT NULL, last_error TEXT,
+            PRIMARY KEY(group_id,relative_path))""")
+        db.execSQL("CREATE INDEX IF NOT EXISTS local_drafts_state_updated ON local_drafts(state,updated_at DESC)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS local_drafts_group ON local_drafts(group_id)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS draft_attachments_draft ON draft_attachments(draft_local_id)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS message_attachments_message ON message_attachments(group_id,message_number)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS archive_exports_group ON archive_exports(group_id)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS server_drafts_group_updated ON server_drafts(group_id,updated_at DESC)")
+    }
 
     fun applyMemberships(values: List<GroupsIoGroup>, completed: Boolean, syncedAt: Long) = writableDatabase.transaction {
         values.forEach { group ->
             val row = ContentValues().apply {
                 put("group_id", group.id); put("name", group.name); put("title", group.title); put("summary", group.summary)
                 put("membership_status", group.status); put("archive_visibility", if (group.archivesVisible) "visible" else "restricted")
-                put("can_read", group.archivesVisible); put("active", true); put("last_seen", syncedAt); put("last_successful_sync", syncedAt)
+                put("can_read", group.archivesVisible); put("can_post", group.canPost); put("can_reply", group.canReply); put("download_archives", group.downloadArchives)
+                put("active", true); put("last_seen", syncedAt); put("last_successful_sync", syncedAt)
                 put("first_seen", syncedAt)
             }
             insertWithOnConflict("groups", null, row, SQLiteDatabase.CONFLICT_IGNORE)
@@ -218,10 +291,123 @@ internal class GroupsIoDatabase(private val appContext: Context, private val dat
 
     fun sizeBytes(): Long = listOf("", "-wal", "-shm").sumOf { suffix -> appContext.getDatabasePath(databaseName + suffix).takeIf { it.isFile }?.length() ?: 0L }
 
-    fun deleteDownloadedData() {
+    fun capabilities(groupId: Long): GroupsIoCapabilities? = readableDatabase.rawQuery(
+        "SELECT can_read,can_post,can_reply,download_archives,post_status,max_attachment_size,default_reply_policy,permissions_synced_at FROM groups WHERE group_id=?",
+        arrayOf(groupId.toString())
+    ).use { cursor -> if (!cursor.moveToFirst()) null else GroupsIoCapabilities(
+        archivesVisible = cursor.getInt(0) != 0, canPost = cursor.getInt(1) != 0, canReply = cursor.getInt(2) != 0,
+        downloadArchives = cursor.getInt(3) != 0, postStatus = cursor.getString(4), maxAttachmentSize = cursor.longOrNull(5),
+        defaultReplyPolicy = cursor.getString(6), syncedAtMillis = cursor.longOrNull(7)
+    ) }
+
+    fun updateCapabilities(groupId: Long, value: GroupsIoCapabilities) = writableDatabase.transaction {
+        val row = ContentValues().apply {
+            put("can_read", value.archivesVisible); put("can_post", value.canPost); put("can_reply", value.canReply)
+            put("download_archives", value.downloadArchives); put("post_status", value.postStatus)
+            value.maxAttachmentSize?.let { put("max_attachment_size", it) } ?: putNull("max_attachment_size")
+            value.defaultReplyPolicy?.let { put("default_reply_policy", it) } ?: putNull("default_reply_policy")
+            value.syncedAtMillis?.let { put("permissions_synced_at", it) } ?: putNull("permissions_synced_at")
+        }
+        update("groups", row, "group_id=?", arrayOf(groupId.toString()))
+    }
+
+    fun saveDraft(draft: GroupsIoLocalDraft) = writableDatabase.transaction {
+        val row = ContentValues().apply {
+            put("local_id", draft.localId); put("group_id", draft.groupId); draft.topicId?.let { put("topic_id", it) } ?: putNull("topic_id")
+            draft.replyMessageNumber?.let { put("reply_message_number", it) } ?: putNull("reply_message_number")
+            draft.replyApiMessageId?.let { put("reply_api_message_id", it) } ?: putNull("reply_api_message_id")
+            draft.remoteDraftId?.let { put("remote_draft_id", it) } ?: putNull("remote_draft_id")
+            put("draft_type", draft.type.wire); put("subject", draft.subject); put("body_plain", draft.bodyPlain)
+            draft.replyDestination?.let { put("reply_destination", it.wire) } ?: putNull("reply_destination")
+            put("state", draft.state.wire); put("send_when_online", draft.sendWhenOnline)
+            put("pending_moderation", draft.pendingModeration); put("delivery_unknown", draft.deliveryUnknown)
+            put("created_at", draft.createdAtMillis); put("updated_at", draft.updatedAtMillis)
+            draft.lastAttemptAtMillis?.let { put("last_attempt_at", it) } ?: putNull("last_attempt_at")
+            draft.lastErrorCategory?.let { put("last_error_category", it) } ?: putNull("last_error_category")
+            draft.lastErrorText?.let { put("last_error_text", it.take(160)) } ?: putNull("last_error_text")
+        }
+        insertWithOnConflict("local_drafts", null, row, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun drafts(limit: Int = 100): List<GroupsIoLocalDraft> = readableDatabase.rawQuery(
+        "SELECT local_id,group_id,topic_id,reply_message_number,reply_api_message_id,remote_draft_id,draft_type,subject,body_plain,reply_destination,state,send_when_online,pending_moderation,delivery_unknown,created_at,updated_at,last_attempt_at,last_error_category,last_error_text FROM local_drafts ORDER BY updated_at DESC LIMIT ?",
+        arrayOf(limit.coerceIn(1, 100).toString())
+    ).use { cursor -> buildList { while (cursor.moveToNext()) add(GroupsIoLocalDraft(
+        localId = cursor.getString(0), groupId = cursor.getLong(1), topicId = cursor.longOrNull(2),
+        replyMessageNumber = cursor.longOrNull(3), replyApiMessageId = cursor.longOrNull(4), remoteDraftId = cursor.longOrNull(5),
+        type = GroupsIoDraftType.fromWire(cursor.getString(6)), subject = cursor.getString(7), bodyPlain = cursor.getString(8),
+        replyDestination = cursor.getString(9)?.takeIf(String::isNotBlank)?.let(GroupsIoReplyDestination::fromWire),
+        state = GroupsIoOutboxState.fromWire(cursor.getString(10)), sendWhenOnline = cursor.getInt(11) != 0,
+        pendingModeration = cursor.getInt(12) != 0, deliveryUnknown = cursor.getInt(13) != 0,
+        createdAtMillis = cursor.getLong(14), updatedAtMillis = cursor.getLong(15), lastAttemptAtMillis = cursor.longOrNull(16),
+        lastErrorCategory = cursor.getString(17), lastErrorText = cursor.getString(18)
+    )) } }
+
+    fun deleteDraft(localId: String) { writableDatabase.delete("local_drafts", "local_id=?", arrayOf(localId)) }
+    fun unsentDraftCount(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM local_drafts WHERE state NOT IN ('posted','pending_moderation')", null).use { it.moveToFirst(); it.getInt(0) }
+
+    fun saveDraftAttachment(value: GroupsIoDraftAttachment) {
+        val row = ContentValues().apply {
+            put("local_id", value.localId); put("draft_local_id", value.draftLocalId)
+            value.remoteAttachmentId?.let { put("remote_attachment_id", it) } ?: putNull("remote_attachment_id")
+            put("filename", value.filename); put("media_type", value.mediaType); put("byte_size", value.byteSize)
+            put("local_relative_path", value.localRelativePath); put("sha256", value.sha256); put("upload_state", value.uploadState)
+        }
+        writableDatabase.insertWithOnConflict("draft_attachments", null, row, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun draftAttachments(localId: String): List<GroupsIoDraftAttachment> = readableDatabase.rawQuery(
+        "SELECT local_id,draft_local_id,remote_attachment_id,filename,media_type,byte_size,local_relative_path,sha256,upload_state FROM draft_attachments WHERE draft_local_id=? ORDER BY filename COLLATE NOCASE",
+        arrayOf(localId)
+    ).use { cursor -> buildList { while (cursor.moveToNext()) add(GroupsIoDraftAttachment(
+        localId = cursor.getString(0), draftLocalId = cursor.getString(1), remoteAttachmentId = cursor.longOrNull(2), filename = cursor.getString(3),
+        mediaType = cursor.getString(4), byteSize = cursor.getLong(5), localRelativePath = cursor.getString(6), sha256 = cursor.getString(7), uploadState = cursor.getString(8)
+    )) } }
+
+    fun markDraftAttachmentUploaded(localId: String, remoteId: Long) {
+        writableDatabase.update("draft_attachments", ContentValues().apply { put("remote_attachment_id", remoteId); put("upload_state", "uploaded"); putNull("last_error") }, "local_id=?", arrayOf(localId))
+    }
+
+    fun upsertIncomingAttachment(groupId: Long, messageNumber: Long, value: GroupsIoIncomingAttachment, relativePath: String? = null, localSize: Long? = null, sha256: String? = null) {
+        val row = ContentValues().apply {
+            put("group_id", groupId); put("message_number", messageNumber); put("attachment_id", value.id); put("filename", value.filename); put("media_type", value.mediaType)
+            value.size?.let { put("reported_size", it) } ?: putNull("reported_size")
+            relativePath?.let { put("local_relative_path", it); put("download_state", "downloaded"); put("downloaded_at", System.currentTimeMillis()) } ?: put("download_state", "remote")
+            localSize?.let { put("local_size", it) }; sha256?.let { put("sha256", it) }; putNull("last_error")
+        }
+        writableDatabase.insertWithOnConflict("message_attachments", null, row, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun saveArchiveExport(groupId: Long, relativePath: String, requestedAt: Long, completedAt: Long, byteSize: Long, sha256: String) {
+        writableDatabase.insertWithOnConflict("archive_exports", null, ContentValues().apply {
+            put("group_id", groupId); put("relative_path", relativePath); put("requested_at", requestedAt); put("completed_at", completedAt)
+            put("byte_size", byteSize); put("sha256", sha256); put("state", "complete"); putNull("last_error")
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun clearDownloadedCache() = writableDatabase.transaction {
+        delete("message_attachments", null, null); delete("message_search", null, null); delete("messages", null, null); delete("topics", null, null)
+        delete("archive_exports", null, null); delete("server_drafts", null, null)
+        delete("sync_state", "scope NOT IN ('outbox','server_drafts')", null)
+    }
+
+    fun removeGroupArchive(groupId: Long) = writableDatabase.transaction {
+        execSQL("DELETE FROM message_search WHERE rowid IN (SELECT row_id FROM messages WHERE group_id=?)", arrayOf(groupId))
+        delete("message_attachments", "group_id=?", arrayOf(groupId.toString()))
+        delete("messages", "group_id=?", arrayOf(groupId.toString()))
+        delete("topics", "group_id=?", arrayOf(groupId.toString()))
+        delete("archive_exports", "group_id=?", arrayOf(groupId.toString()))
+        delete("sync_state", "scope IN ('complete_archive','archive_export') AND scope_id=?", arrayOf(groupId.toString()))
+    }
+
+    fun deleteAllLocalData() {
         close()
         appContext.deleteDatabase(databaseName)
+        appContext.filesDir.resolve("GroupsIO").deleteRecursively()
     }
+
+    @Deprecated("Use clearDownloadedCache or deleteAllLocalData explicitly")
+    fun deleteDownloadedData() = clearDownloadedCache()
 
     fun recordFailure(scope: String, scopeId: String, category: String, text: String) = writableDatabase.transaction {
         val now = System.currentTimeMillis()
@@ -295,7 +481,10 @@ internal class GroupsIoLiveApi {
         val name = value.requiredString("name", "group_name")
         val perms = value.optJSONObject("perms") ?: value.optJSONObject("permissions")
         GroupsIoGroup(id, name, value.firstString("title", "display_name").ifBlank { name }, value.firstString("description", "desc", "summary"),
-            value.firstString("status", "subscription_status"), perms?.optBoolean("archives_visible", value.optBoolean("archives_visible", false)) ?: value.optBoolean("archives_visible", false), true, System.currentTimeMillis())
+            value.firstString("status", "subscription_status"), perms?.optBoolean("archives_visible", value.optBoolean("archives_visible", false)) ?: value.optBoolean("archives_visible", false), true, System.currentTimeMillis(),
+            canPost = perms?.optBoolean("post", value.optBoolean("can_post", false)) ?: value.optBoolean("can_post", false),
+            canReply = perms?.optBoolean("reply", value.optBoolean("can_reply", false)) ?: value.optBoolean("can_reply", false),
+            downloadArchives = perms?.optBoolean("download_archives", value.optBoolean("download_archives", false)) ?: value.optBoolean("download_archives", false))
     }
 
     fun topics(key: String, groupId: Long, pageToken: String? = null): GroupsIoPage<GroupsIoTopic> = page("gettopics", key, pageToken, mapOf("group_id" to groupId.toString(), "sort_dir" to "desc")) { value ->
@@ -374,6 +563,8 @@ class GroupsIoController(context: Context) {
     private val settings = appContext.getSharedPreferences("rigweave-groupsio", Context.MODE_PRIVATE)
     private val credentials = GroupsIoCredentialStore(appContext)
     private val api = GroupsIoLiveApi()
+    private val phase2Api = GroupsIoPhase2Api()
+    private val attachmentStore = GroupsIoAttachmentStore(appContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var database: GroupsIoDatabase? = null
     private var operation: Job? = null
@@ -386,23 +577,37 @@ class GroupsIoController(context: Context) {
     var topics by mutableStateOf<List<GroupsIoTopic>>(emptyList()); private set
     var messages by mutableStateOf<List<GroupsIoMessage>>(emptyList()); private set
     var searchResults by mutableStateOf<List<GroupsIoSearchResult>>(emptyList()); private set
+    var onlineSearchResults by mutableStateOf<List<GroupsIoSearchResult>>(emptyList()); private set
+    var onlineSearchHasMore by mutableStateOf(false); private set
     var selectedGroupId by mutableStateOf<Long?>(null); private set
     var selectedTopicId by mutableStateOf<Long?>(null); private set
     var storageBytes by mutableLongStateOf(0L); private set
     var topicsHaveMore by mutableStateOf(false); private set
     var messagesHaveMore by mutableStateOf(false); private set
+    var capabilities by mutableStateOf<GroupsIoCapabilities?>(null); private set
+    var localDrafts by mutableStateOf<List<GroupsIoLocalDraft>>(emptyList()); private set
+    var serverDrafts by mutableStateOf<List<GroupsIoRemoteDraft>>(emptyList()); private set
+    var composerDraft by mutableStateOf<GroupsIoLocalDraft?>(null); private set
+    var showComposer by mutableStateOf(false); private set
+    var showDraftsOutbox by mutableStateOf(false); private set
+    var archiveProgress by mutableStateOf(GroupsIoArchiveProgress()); private set
+    var selectedMessage by mutableStateOf<GroupsIoMessage?>(null); private set
+    var incomingAttachments by mutableStateOf<List<GroupsIoIncomingAttachment>>(emptyList()); private set
+    var showAttachments by mutableStateOf(false); private set
     private var topicNextToken: String? = null
     private var messageNextToken: String? = null
+    private var onlineSearchNextToken: String? = null
+    private var lastOnlineSearch: String = ""
 
     fun updateEnabled(value: Boolean) {
         enabled = value; settings.edit().putBoolean("enabled", value).apply()
-        if (!value) { operation?.cancel(); busy = false; status = "Groups.io disabled · downloaded data preserved" }
+        if (!value) { if (composerDraft != null) autosaveComposer(); operation?.cancel(); archiveProgress = archiveProgress.paused(); busy = false; status = "Groups.io disabled · drafts and downloaded data preserved" }
         else loadCachedGroups()
     }
 
     fun loadCachedGroups() {
         if (!enabled) return
-        scope.launch { val db = db(); val loaded = db.groups(); withContext(Dispatchers.Main) { groups = loaded; storageBytes = db.sizeBytes() } }
+        scope.launch { val db = db(); val loaded = db.groups(); val savedDrafts = db.drafts(); withContext(Dispatchers.Main) { groups = loaded; localDrafts = savedDrafts; storageBytes = db.sizeBytes() } }
     }
 
     fun connectAndVerify(candidate: String) = replaceOperation {
@@ -427,9 +632,12 @@ class GroupsIoController(context: Context) {
     fun selectGroup(groupId: Long) {
         selectedGroupId = groupId; selectedTopicId = null; messages = emptyList(); topicsHaveMore = false; topicNextToken = null
         operation?.cancel(); operation = scope.launch {
-            val cached = db().topics(groupId)
-            withContext(Dispatchers.Main) { topics = cached; status = if (cached.isEmpty()) "No downloaded topics" else "Showing downloaded topics" }
+            val cached = db().topics(groupId); val cachedCapabilities = db().capabilities(groupId)
+            withContext(Dispatchers.Main) { topics = cached; capabilities = cachedCapabilities; status = if (cached.isEmpty()) "No downloaded topics" else "Showing downloaded topics${if (cachedCapabilities?.stale == true) " · permissions stale" else ""}" }
             if (!connected) return@launch
+            runCatching { phase2Api.permissions(credentials.load(), groupId) }.onSuccess { value ->
+                db().updateCapabilities(groupId, value); withContext(Dispatchers.Main) { capabilities = value }
+            }.onFailure { publishFailure("permissions", groupId.toString(), it) }
             runCatching { api.topics(credentials.load(), groupId) }.onSuccess { page ->
                 val now = System.currentTimeMillis(); db().applyTopics(groupId, page.values, page.nextPageToken, page.hasMore, now)
                 withContext(Dispatchers.Main) { topics = db().topics(groupId); topicNextToken = page.nextPageToken; topicsHaveMore = page.hasMore; status = "Newest topics synced"; storageBytes = db().sizeBytes() }
@@ -447,6 +655,145 @@ class GroupsIoController(context: Context) {
                 val now = System.currentTimeMillis(); db().applyMessages(groupId, topicId, page.values, page.nextPageToken, page.hasMore, now)
                 withContext(Dispatchers.Main) { messages = db().messages(topicId); messageNextToken = page.nextPageToken; messagesHaveMore = page.hasMore; status = "Thread synced"; storageBytes = db().sizeBytes() }
             }.onFailure { publishFailure("messages", topicId.toString(), it) }
+        }
+    }
+
+    fun selectMessage(message: GroupsIoMessage) { selectedMessage = message }
+
+    fun openAttachments(message: GroupsIoMessage) {
+        selectedMessage = message; showAttachments = true
+        if (!connected) { status = "Offline · previously downloaded attachments remain available"; return }
+        replaceOperation {
+            val values = phase2Api.incomingAttachments(credentials.load(), message.groupId, message.number)
+            values.forEach { db().upsertIncomingAttachment(message.groupId, message.number, it) }
+            withContext(Dispatchers.Main) { incomingAttachments = values; status = "Attachment metadata refreshed" }
+        }
+    }
+
+    fun closeAttachments() { showAttachments = false }
+
+    fun downloadAttachment(value: GroupsIoIncomingAttachment) {
+        val message = selectedMessage ?: return
+        replaceOperation {
+            val (partial, final) = attachmentStore.incomingFile(message.groupId, message.number, value.id, value.filename)
+            val refreshed = phase2Api.downloadIncomingAttachment(credentials.load(), message.groupId, message.number, value.id, partial)
+            final.parentFile?.mkdirs(); if (!partial.renameTo(final)) { partial.copyTo(final, overwrite = false); partial.delete() }
+            db().upsertIncomingAttachment(message.groupId, message.number, refreshed, final.relativeTo(appContext.filesDir).path, final.length(), groupsIoSha256(final))
+            withContext(Dispatchers.Main) { status = "Attachment downloaded for offline access" }
+        }
+    }
+
+    fun openNewTopic() {
+        val groupId = selectedGroupId ?: return
+        if (capabilities?.canPost != true) { status = "This group is read-only for the current account"; return }
+        composerDraft = GroupsIoLocalDraft(groupId = groupId, type = GroupsIoDraftType.NEW_TOPIC)
+        showComposer = true
+    }
+
+    fun openReply(message: GroupsIoMessage) {
+        if (capabilities?.canReply != true) { status = "Replies are not permitted in this group"; return }
+        val topic = topics.firstOrNull { it.id == message.topicId }
+        if (topic?.closed == true) { status = "This topic is closed"; return }
+        composerDraft = GroupsIoLocalDraft(groupId = message.groupId, topicId = message.topicId, replyMessageNumber = message.number,
+            replyApiMessageId = message.apiId, type = GroupsIoDraftType.REPLY, subject = message.subject, replyDestination = GroupsIoReplyDestination.GROUP)
+        showComposer = true
+    }
+
+    fun updateComposer(subject: String, body: String, destination: GroupsIoReplyDestination? = composerDraft?.replyDestination) {
+        composerDraft = composerDraft?.copy(subject = subject, bodyPlain = body, replyDestination = destination, updatedAtMillis = System.currentTimeMillis())
+    }
+
+    fun autosaveComposer() {
+        val draft = composerDraft ?: return
+        scope.launch { db().saveDraft(draft.copy(state = GroupsIoOutboxState.DRAFT_LOCAL, sendWhenOnline = false)); withContext(Dispatchers.Main) { localDrafts = db().drafts(); status = "Draft saved locally" } }
+    }
+
+    fun closeComposer() { autosaveComposer(); showComposer = false }
+
+    fun addComposerAttachments(uris: List<android.net.Uri>) {
+        val draft = composerDraft ?: return
+        scope.launch {
+            runCatching {
+                db().saveDraft(draft)
+                uris.forEach { db().saveDraftAttachment(attachmentStore.importDraftAttachment(draft.localId, it)) }
+            }.onSuccess { withContext(Dispatchers.Main) { status = "${uris.size} attachment(s) copied to private storage" } }
+                .onFailure { publishFailure("draft_attachment", draft.localId, it) }
+        }
+    }
+
+    fun queueComposer(sendNow: Boolean) {
+        val draft = composerDraft ?: return
+        if (draft.subject.isBlank() || draft.bodyPlain.isBlank()) { status = "Subject and body are required"; return }
+        val queued = draft.copy(state = GroupsIoOutboxState.QUEUED, sendWhenOnline = true, updatedAtMillis = System.currentTimeMillis())
+        composerDraft = queued; scope.launch {
+            db().saveDraft(queued); withContext(Dispatchers.Main) { localDrafts = db().drafts(); showComposer = false; status = if (sendNow) "Sending authorised message…" else "Queued for explicit foreground sending" }
+            if (sendNow) processDraft(queued)
+        }
+    }
+
+    fun openDraftsOutbox() { showDraftsOutbox = true; scope.launch { val values = db().drafts(); withContext(Dispatchers.Main) { localDrafts = values } } }
+    fun closeDraftsOutbox() { showDraftsOutbox = false }
+    fun openLocalDraft(draft: GroupsIoLocalDraft) { composerDraft = draft; showDraftsOutbox = false; showComposer = true }
+    fun processQueuedExplicitly() { scope.launch { db().drafts().filter { it.state in setOf(GroupsIoOutboxState.QUEUED, GroupsIoOutboxState.FAILED_RETRYABLE) }.forEach { processDraft(it) } } }
+
+    private suspend fun processDraft(draft: GroupsIoLocalDraft) {
+        val persistence = object : GroupsIoOutboxPersistence {
+            override fun save(draft: GroupsIoLocalDraft) { db().saveDraft(draft) }
+            override fun attachments(localId: String) = db().draftAttachments(localId)
+            override fun markAttachmentUploaded(localId: String, remoteId: Long) = db().markDraftAttachmentUploaded(localId, remoteId)
+        }
+        val result = GroupsIoOutbox(phase2Api, persistence, attachmentStore.filesRoot).process(draft, credentials.load(), connected, enabled)
+        withContext(Dispatchers.Main) { localDrafts = db().drafts(); status = when (result.state) {
+            GroupsIoOutboxState.POSTED -> "Message posted"
+            GroupsIoOutboxState.PENDING_MODERATION -> "Submitted successfully and awaiting moderator approval"
+            GroupsIoOutboxState.DELIVERY_UNKNOWN -> "Delivery could not be confirmed · review before retrying"
+            else -> result.lastErrorText ?: "Outbox item needs attention"
+        } }
+    }
+
+    fun refreshServerDrafts() = replaceOperation {
+        val key = credentials.load().takeIf(String::isNotBlank) ?: throw GroupsIoApiException("credential", "Reconnect to view server drafts")
+        val all = mutableListOf<GroupsIoRemoteDraft>(); var token: String? = null; var more: Boolean
+        do { val page = phase2Api.drafts(key, token); all += page.first; token = page.second.first; more = page.second.second } while (more && all.size < 200)
+        withContext(Dispatchers.Main) { serverDrafts = all; status = "Server drafts refreshed · ${all.size}" }
+    }
+
+    fun startCompleteArchiveDownload() {
+        val groupId = selectedGroupId ?: return
+        if (capabilities?.archivesVisible != true) { status = "Archive access is not available"; return }
+        replaceOperation {
+            val key = credentials.load(); var progress = archiveProgress.copy(state = "syncing"); var token = progress.nextPageToken
+            do {
+                ensureActive(); val root = phase2Api.archivePage(key, groupId, token); val data = root.optJSONArray("data") ?: org.json.JSONArray()
+                val now = System.currentTimeMillis(); val byTopic = mutableMapOf<Long, MutableList<GroupsIoMessage>>()
+                for (index in 0 until data.length()) {
+                    val value = data.getJSONObject(index); val topicId = value.optLong("topic_id").takeIf { it > 0 } ?: value.optLong("thread_id").takeIf { it > 0 } ?: continue
+                    val number = value.optLong("msg_num").takeIf { it > 0 } ?: continue
+                    val message = GroupsIoMessage(value.optLong("id").takeIf { it > 0 }, groupId, topicId, number, value.optLong("reply_to").takeIf { it > 0 },
+                        value.optString("subject"), value.optString("name").ifBlank { "Unknown author" }, now, normaliseBody(value.optString("body")), false, false, value.optBoolean("has_attachments"))
+                    byTopic.getOrPut(topicId) { mutableListOf() } += message
+                }
+                byTopic.forEach { (topicId, values) ->
+                    if (db().topics(groupId, 100).none { it.id == topicId }) db().applyTopics(groupId, listOf(GroupsIoTopic(topicId, groupId, values.firstOrNull()?.subject.orEmpty(), now, values.size, false, values.minOfOrNull { it.number }, values.maxOfOrNull { it.number })), null, false, now)
+                    db().applyMessages(groupId, topicId, values, null, false, now)
+                }
+                val (next, more) = groupsIoPagination(root); progress = progress.applyPage(data.length(), root.optInt("total_count").takeIf { it > 0 }, next, more); token = next
+                withContext(Dispatchers.Main) { archiveProgress = progress; status = "Archive ${progress.state} · ${progress.downloaded}${progress.total?.let { "/$it" }.orEmpty()} messages" }
+            } while (progress.state != "complete")
+        }
+    }
+
+    fun pauseArchiveDownload() { operation?.cancel(); archiveProgress = archiveProgress.paused(); status = "Archive download paused · completed pages preserved" }
+
+    fun downloadOfficialArchive() {
+        val groupId = selectedGroupId ?: return
+        if (capabilities?.downloadArchives != true) { status = "Official archive export is not permitted for this group"; return }
+        replaceOperation {
+            val requested = System.currentTimeMillis(); val (partial, final) = attachmentStore.officialArchiveFile(groupId, requested)
+            phase2Api.downloadOfficialArchive(credentials.load(), groupId, null, partial)
+            final.parentFile?.mkdirs(); if (!partial.renameTo(final)) { partial.copyTo(final, overwrite = false); partial.delete() }
+            val completed = System.currentTimeMillis(); db().saveArchiveExport(groupId, final.relativeTo(appContext.filesDir).path, requested, completed, final.length(), groupsIoSha256(final))
+            withContext(Dispatchers.Main) { status = "Official archive ZIP downloaded · manual share available"; storageBytes = db().sizeBytes() }
         }
     }
 
@@ -476,6 +823,36 @@ class GroupsIoController(context: Context) {
         }
     }
 
+    fun searchOnline(query: String, loadMore: Boolean = false) {
+        val groupId = selectedGroupId ?: run { status = "Select one group for Groups.io online search"; return }
+        if (!connected) { status = "Reconnect to search Groups.io"; return }
+        if (!loadMore) { onlineSearchNextToken = null; onlineSearchResults = emptyList(); lastOnlineSearch = query }
+        val token = if (loadMore) onlineSearchNextToken else null
+        replaceOperation {
+            val root = phase2Api.search(credentials.load(), groupId, if (loadMore) lastOnlineSearch else query, newest = false, pageToken = token)
+            val data = root.optJSONArray("data") ?: org.json.JSONArray(); val parsed = buildList {
+                for (index in 0 until data.length()) {
+                    val value = data.getJSONObject(index); val number = value.optLong("msg_num").takeIf { it > 0 } ?: continue
+                    add(GroupsIoSearchResult(groupId, value.optLong("topic_id"), number, groups.firstOrNull { it.id == groupId }?.title.orEmpty(),
+                        value.optString("subject"), value.optString("name").ifBlank { "Unknown author" }, System.currentTimeMillis(), normaliseBody(value.optString("snippet", value.optString("body")))))
+                }
+            }
+            val (next, more) = groupsIoPagination(root); onlineSearchNextToken = next
+            withContext(Dispatchers.Main) { onlineSearchResults = if (loadMore) onlineSearchResults + parsed else parsed; onlineSearchHasMore = more; status = "Groups.io online search · ${onlineSearchResults.size} results" }
+        }
+    }
+
+    fun openOnlineSearchResult(result: GroupsIoSearchResult) = replaceOperation {
+        val root = phase2Api.message(credentials.load(), result.groupId, result.messageNumber)
+        val value = root.optJSONObject("message") ?: root.optJSONObject("data") ?: root
+        val topicId = value.optLong("topic_id").takeIf { it > 0 } ?: result.topicId
+        val now = System.currentTimeMillis(); val subject = value.optString("subject", result.topicSubject)
+        db().applyTopics(result.groupId, listOf(GroupsIoTopic(topicId, result.groupId, subject, now, 1, false, result.messageNumber, result.messageNumber)), null, false, now)
+        db().applyMessages(result.groupId, topicId, listOf(GroupsIoMessage(value.optLong("id").takeIf { it > 0 }, result.groupId, topicId, result.messageNumber,
+            value.optLong("reply_to").takeIf { it > 0 }, subject, value.optString("name").ifBlank { result.author }, now, normaliseBody(value.optString("body")), false, false, value.optBoolean("has_attachments"))), null, false, now)
+        withContext(Dispatchers.Main) { selectedGroupId = result.groupId; selectedTopicId = topicId; topics = db().topics(result.groupId); messages = db().messages(topicId); onlineSearchResults = emptyList(); status = "Online result cached for offline reading" }
+    }
+
     fun openSearchResult(result: GroupsIoSearchResult) {
         selectedGroupId = result.groupId; selectedTopicId = result.topicId
         scope.launch { val loadedTopics = db().topics(result.groupId); val loadedMessages = db().messages(result.topicId); withContext(Dispatchers.Main) { topics = loadedTopics; messages = loadedMessages; searchResults = emptyList() } }
@@ -485,11 +862,19 @@ class GroupsIoController(context: Context) {
         operation?.cancel(); credentials.clear(); connected = false; busy = false; status = "Disconnected · downloaded data preserved"
     }
 
-    fun deleteDownloadedData() {
-        operation?.cancel(); database?.deleteDownloadedData(); database = null
+    fun clearDownloadedCache() {
+        operation?.cancel(); database?.clearDownloadedCache()
         groups = emptyList(); topics = emptyList(); messages = emptyList(); searchResults = emptyList(); selectedGroupId = null; selectedTopicId = null; storageBytes = 0
-        status = "Downloaded Groups.io data deleted · credential preserved"
+        localDrafts = database?.drafts().orEmpty(); status = "Downloaded Groups.io cache cleared · drafts and credential preserved"
     }
+
+    fun deleteAllLocalData() {
+        operation?.cancel(); database?.deleteAllLocalData(); database = null
+        groups = emptyList(); topics = emptyList(); messages = emptyList(); searchResults = emptyList(); localDrafts = emptyList(); serverDrafts = emptyList(); selectedGroupId = null; selectedTopicId = null; storageBytes = 0
+        status = "All local Groups.io data deleted · credential preserved"
+    }
+
+    @Deprecated("Use clearDownloadedCache") fun deleteDownloadedData() = clearDownloadedCache()
 
     fun close() { operation?.cancel(); scope.cancel(); database?.close() }
     private fun db(): GroupsIoDatabase = database ?: GroupsIoDatabase(appContext).also { database = it }
@@ -516,21 +901,36 @@ class GroupsIoController(context: Context) {
 @Composable
 fun GroupsIoScreen(controller: GroupsIoController, compact: Boolean) {
     var query by remember { mutableStateOf("") }
+    var showOffline by remember { mutableStateOf(false) }
+    var onlineSearch by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { controller.loadCachedGroups() }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column { Text("Groups.io", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold); Text(controller.status, color = Color(0xFFA5ADB2), style = MaterialTheme.typography.bodySmall) }
-            TextButton({ controller.syncMemberships() }, enabled = controller.connected && !controller.busy) { Text("Sync Now") }
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(controller::openNewTopic, enabled = controller.capabilities?.canPost == true) { Text("New Topic") }
+                TextButton(controller::openDraftsOutbox) { Text("Drafts & Outbox") }
+                TextButton({ showOffline = true }, enabled = controller.selectedGroupId != null) { Text("Group Offline") }
+                TextButton({ controller.syncMemberships() }, enabled = controller.connected && !controller.busy) { Text("Sync") }
+            }
         }
         if (!controller.connected) {
             Text("Connect an API key in Settings → Integrations. Downloaded content remains available offline.")
         }
-        OutlinedTextField(query, { query = it; controller.search(it) }, label = { Text("Search downloaded content") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        if (controller.searchResults.isNotEmpty()) {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) { items(controller.searchResults, key = { "${it.groupId}:${it.messageNumber}" }) { result ->
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            FilterChip(selected = !onlineSearch, onClick = { onlineSearch = false; controller.search(query) }, label = { Text("Downloaded") })
+            FilterChip(selected = onlineSearch, onClick = { onlineSearch = true }, label = { Text("Groups.io") })
+            OutlinedTextField(query, { query = it; if (!onlineSearch) controller.search(it) }, label = { Text(if (onlineSearch) "Search selected group online" else "Search downloaded content") }, modifier = Modifier.weight(1f), singleLine = true)
+            if (onlineSearch) Button({ controller.searchOnline(query) }, enabled = query.isNotBlank() && controller.selectedGroupId != null && controller.connected) { Text("Search") }
+        }
+        val visibleResults = if (onlineSearch) controller.onlineSearchResults else controller.searchResults
+        if (visibleResults.isNotEmpty()) {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) { items(visibleResults, key = { "${it.groupId}:${it.messageNumber}" }) { result ->
                 ListItem(headlineContent = { Text(result.topicSubject) }, supportingContent = { Text("${result.groupName} · ${result.author}\n${result.snippet}", maxLines = 3, overflow = TextOverflow.Ellipsis) },
-                    modifier = Modifier.clickable { query = ""; controller.openSearchResult(result) })
-            } }
+                    modifier = Modifier.clickable { query = ""; if (onlineSearch) controller.openOnlineSearchResult(result) else controller.openSearchResult(result) })
+            }
+            if (onlineSearch && controller.onlineSearchHasMore) item { OutlinedButton({ controller.searchOnline(query, loadMore = true) }) { Text("Load More") } }
+            }
         } else if (!compact) {
             Row(Modifier.fillMaxSize()) {
                 GroupsList(controller, Modifier.widthIn(min = 260.dp, max = 340.dp).fillMaxHeight())
@@ -545,6 +945,8 @@ fun GroupsIoScreen(controller: GroupsIoController, compact: Boolean) {
             }
         }
     }
+    GroupsIoPhase2Overlays(controller)
+    if (showOffline) GroupsIoOfflineDialog(controller) { showOffline = false }
 }
 
 @Composable private fun GroupsList(controller: GroupsIoController, modifier: Modifier) = LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -577,7 +979,10 @@ fun GroupsIoScreen(controller: GroupsIoController, compact: Boolean) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(message.author, fontWeight = FontWeight.Bold); Text("#${message.number}", color = Color(0xFFA5ADB2)) }
             if (message.subject.isNotBlank()) Text(message.subject, color = Color(0xFFE9A72B))
             Text(if (message.deleted) "Message unavailable or deleted" else message.body)
-            if (message.hasAttachments) Text("Attachments present · not downloaded in Phase 1", color = Color(0xFFF4C94E), style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton({ controller.openReply(message) }, enabled = controller.capabilities?.canReply == true) { Text("Reply") }
+                if (message.hasAttachments) TextButton({ controller.openAttachments(message) }) { Text("Attachments") }
+            }
         } }
     }
     if (controller.messagesHaveMore) item { OutlinedButton(controller::loadMoreMessages, enabled = !controller.busy) { Text("Load More Messages") } }
@@ -587,6 +992,7 @@ fun GroupsIoScreen(controller: GroupsIoController, compact: Boolean) {
 fun GroupsIoSettingsPanel(controller: GroupsIoController, openGroupsIo: () -> Unit) {
     var candidate by remember { mutableStateOf("") }
     var confirmDelete by remember { mutableStateOf(false) }
+    var confirmDeleteAll by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column { Text("Groups.io enabled", fontWeight = FontWeight.Bold); Text("Disabled by default; no sync or startup work when off", style = MaterialTheme.typography.bodySmall) }
@@ -602,10 +1008,15 @@ fun GroupsIoSettingsPanel(controller: GroupsIoController, openGroupsIo: () -> Un
         Text(controller.status, color = if (controller.connected) Color(0xFF42C77B) else Color(0xFFA5ADB2))
         Text("Downloaded storage: ${controller.storageBytes / 1024} KiB", style = MaterialTheme.typography.bodySmall)
         TextButton({ controller.disconnect() }, enabled = controller.connected) { Text("Disconnect Groups.io") }
-        TextButton({ confirmDelete = true }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Delete Downloaded Groups.io Data") }
+        TextButton({ confirmDelete = true }) { Text("Clear Downloaded Groups.io Cache") }
+        TextButton({ confirmDeleteAll = true }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Delete All Local Groups.io Data") }
     }
-    if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete downloaded Groups.io data?") },
-        text = { Text("This deletes only the separate Groups.io database. Your API key remains stored.") },
-        confirmButton = { Button({ controller.deleteDownloadedData(); confirmDelete = false }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("Delete") } },
+    if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Clear downloaded Groups.io cache?") },
+        text = { Text("Remote topics, messages, search rows, incoming attachments and archive exports are removed. Local drafts, queued messages, outgoing attachments and the API key are preserved.") },
+        confirmButton = { Button({ controller.clearDownloadedCache(); confirmDelete = false }) { Text("Clear Cache") } },
         dismissButton = { TextButton({ confirmDelete = false }) { Text("Cancel") } })
+    if (confirmDeleteAll) AlertDialog(onDismissRequest = { confirmDeleteAll = false }, title = { Text("Delete all local Groups.io data?") },
+        text = { Text("This permanently deletes local drafts, queued messages, outgoing and incoming files, exports and the separate Groups.io database. The API key remains until Disconnect. Unsent items require deliberate confirmation.") },
+        confirmButton = { Button({ controller.deleteAllLocalData(); confirmDeleteAll = false }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("Delete All Local Data") } },
+        dismissButton = { TextButton({ confirmDeleteAll = false }) { Text("Cancel") } })
 }
