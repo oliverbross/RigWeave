@@ -40,11 +40,15 @@ One module registry owns default layout, migration completion, configuration lab
 
 ## Persistent lawful map and text parity
 
-Android Home owns one lifecycle-forwarded MapLibre view whose style may change without recreating the view. DARK and LIGHT use attributed CARTO/OpenStreetMap raster tiles with MapLibre attribution/logo controls enabled. SATELLITE and TERRAIN remain explicitly unavailable until lawful configured tile contracts exist. User pan disables follow, camera writes debounce, reset returns to the configured station, and style failure/low-data mode uses the same bounded Map Data snapshot without tile work.
+Android Home owns one lifecycle-forwarded MapLibre view whose style may change without recreating the view. DARK is a bundled no-network style. LIGHT is the documented public OpenFreeMap Liberty style with provider-required MapLibre attribution; no key or demo endpoint is committed. SATELLITE and TERRAIN remain explicitly unavailable. User pan disables follow, gesture camera writes debounce and merge into the latest non-camera settings, newer profile/camera state cancels a late write, reset returns to the configured station, and style failure/low-data mode uses the same bounded Map Data snapshot without tile work.
 
 ## Manual target and workspace actions
 
 Manual targets resolve through configured callbook data, Maidenhead geometry and CTY fallback, persist source/lock/clear state, and feed both selected-path geometry and propagation. A locked manual target blocks automatic DX replacement. Marker/module actions deep-link only to the existing DX, Portable, Operations/Satellite, Logbook, Progress, Radio or Digi workspaces; they never issue CAT commands.
+
+Task 2A1 retains exact marker identity across the hand-off: spot ID/callsign/frequency/mode, portable spot ID, NORAD, QSO ID and target context. Satellite positions are calculated only by `SatelliteOperationsController` through the pinned `NativeSatellite` SGP4 engine. Home frequency actions and destination frequency actions converge on one receive-only review dialog; confirmation may change RX frequency/mode but cannot key PTT or start TUNE.
+
+The former Immersive Home label was overstated. It is now Minimal Home, hides only the Operations summary and remains `PARTIAL` in settings truth. `RESET PANELS` resets only the panel layout and never deletes named profiles.
 
 ## Provenance and licence
 

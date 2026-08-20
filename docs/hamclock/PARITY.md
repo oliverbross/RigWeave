@@ -10,7 +10,7 @@ All IDs are the keys returned by `panelDefs` in upstream `src/DockableApp.jsx`. 
 
 | Upstream id / name | Upstream paths | Operator outcome | RigWeave status | RigWeave owner/files | Provider owner | Notes / gaps |
 |---|---|---|---|---|---|---|
-| `world-map` / World Map | `src/DockableApp.jsx`, `src/components/WorldMap.jsx` | Map-first RF activity view | NATIVE | `HamClockHomeMap.kt`, `HamClockRegistries.kt` | RigWeave controllers | Persistent lifecycle-managed MapLibre view; registry-driven bounded GeoJSON layers, camera persistence and lawful CARTO styles. |
+| `world-map` / World Map | `src/DockableApp.jsx`, `src/components/WorldMap.jsx` | Map-first RF activity view | NATIVE | `HamClockHomeMap.kt`, `HamClockRegistries.kt` | RigWeave controllers | Persistent lifecycle-managed MapLibre view; bundled no-network DARK style, optional attributed OpenFreeMap LIGHT style, bounded GeoJSON layers and guarded camera persistence. |
 | `map-list-view` / Map Data (text view) | `src/DockableApp.jsx`, `src/components/MapDataListView.jsx` | Accessible text equivalent of map layers | NATIVE | `HamClockHomeMap.kt` | Same native snapshots | Low-data and map-failure paths expose the same visible bounded layers and actions without tile work. |
 | `de-location` / DE Location | `src/DockableApp.jsx` | Station identity and position | NATIVE | `HamClockHomeScreen.kt`, `AppController.kt`, `WavelogController.kt` | RigWeave local/Wavelog | Live station identity; no upstream component embedded. |
 | `dx-location` / DX Target | `src/DockableApp.jsx` | Current DX target and path | NATIVE | `HamClockHomeScreen.kt`, `HamClockHomeMap.kt` | Callbook + CTY + DX cluster | Persisted manual target, grid/coordinate resolution, lock and clear; locked manual state blocks automatic replacement. |
@@ -80,9 +80,11 @@ These are all 24 static modules in upstream `src/plugins/layerRegistry.js`; loca
 
 ## Task 2A map availability
 
-Active registry layers are DE station, DX spots, DX reporting paths, selected target, PSK Reporter, portable activity, satellite positions, recent logged QSOs, grayline/night, sun, moon, Maidenhead field grid and lightning. RBN, expanded WSPR, IBP, aurora, global MUF, propagation heatmap, weather radar and WWBOTA remain explicitly unavailable with reasons in Layout and Map Data; Task 2B owns those provider/image contracts.
+Active registry layers are DE station, DX spots, DX reporting paths, selected target, PSK Reporter, portable activity, authoritative Satellite Operations positions, recent logged QSOs, grayline/night, sun, Maidenhead field grid and lightning. Moon map position is explicitly unavailable because truthful sublunar geometry is not implemented; the separate Moon phase panel remains active. RBN, expanded WSPR, IBP, aurora, global MUF, propagation heatmap, weather radar and WWBOTA remain explicitly unavailable with reasons in Layout and Map Data; Task 2B owns those provider/image contracts.
 
 Home now consumes panel visibility/order/column/row span/column span/collapse, map visibility/opacity/camera/follow/basemap, density, time-zone/hour format, units, low-data, immersive, manual-target and complete profile lifecycle settings. Satellite/portable/provider filter fields not wired by production UI remain truthfully planned.
+
+Task 2A1 correction: `display.immersive` is presented as **Minimal Home** and remains `PARTIAL`; it hides only the Operations summary. Density changes layout thresholds, spacing and panel height, while unit selection applies to weather and map distance/altitude values. Exact feature identity is retained for DX, Portable, NORAD, QSO and target drill-through. All frequency-changing UI paths use the receive-tune review gate.
 
 ## Closure rule
 

@@ -44,3 +44,12 @@ The journal stores at most three sanitized crash summaries and twelve slow-query
 Home no longer owns a screen-wide one-second clock state; the ticking state is isolated inside the header, while celestial/map snapshots advance once per minute. The MapLibre view is remembered across ordinary recomposition and style changes, forwards lifecycle events exactly once, and updates stable GeoJSON sources rather than reconstructing the map.
 
 Every map layer declares a maximum object count. DX points cap at 160, great-circle paths at 80, PSK reports at 60, portable points at 160, satellites at 40, recent QSO projection rows at 120, and lightning at 120. Geometry splits at the dateline. Recent QSOs select eight compact indexed projection columns and never call `QsoDatabase.all()` or decode canonical JSON. Camera persistence is debounced by 600 ms, manual pan disables follow, and low-data mode avoids MapLibre/tile work while retaining the same visibility and selection actions.
+# Task 2A1 Android Home closure (2026-08-20)
+
+- Overlay caps are registry-owned; the visible grid produces exactly its declared 32 lines.
+- Map source updates are fingerprinted per stable GeoJSON source so unchanged snapshots are not rewritten.
+- One MapLibre view is lifecycle-forwarded; style callbacks are generation-guarded and disposal invalidates late callbacks.
+- Low-data and style failure use the bounded Map Data snapshot; low-data makes no style/tile request.
+- Home satellite positions reuse Satellite Operations' validated element cache and pinned SGP4 engine, with a bounded 40-object snapshot calculated off the main thread.
+- QSO projection remains capped at 120 compact rows; no canonical log JSON is materialized.
+- Camera persistence is gesture-only, delayed 600 ms, merges latest non-camera settings and rejects stale writes after profile/new-camera changes.
