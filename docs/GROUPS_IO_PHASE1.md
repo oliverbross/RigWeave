@@ -83,3 +83,5 @@ Apple implementation is source-only and unvalidated by build/test at the owner's
 ## Known limitations and Phase 2 boundary
 
 Phase 1 intentionally defers replying, new topics, drafts, an offline outbox, attachments, `GET /searcharchives` online archive search, ZIP/MBOX import, background refresh, notifications, automatic retention, multiple accounts and desktop UI. It caches only explicitly fetched bounded pages and never represents the cache as a complete group archive.
+
+Those member-facing messaging and archive capabilities are implemented on `feature/groupsio-complete-messaging`; see [GROUPS_IO_PHASE2.md](GROUPS_IO_PHASE2.md). Background polling, administration, multiple accounts and desktop UI remain out of scope.
