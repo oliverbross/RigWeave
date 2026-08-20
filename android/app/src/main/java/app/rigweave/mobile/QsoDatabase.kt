@@ -61,6 +61,26 @@ data class HamClockRecentQso(
     val grid: String,
     val createdAt: Long,
 )
+data class HamClockContestQsoFilter(
+    val contestId: String = "",
+    val startEpoch: Long,
+    val endEpoch: Long,
+    val band: String = "",
+    val mode: String = "",
+    val stationProfileId: String? = null,
+    val confirmedOnly: Boolean = false,
+    val maximumRows: Int = 200,
+)
+data class HamClockContestQso(
+    val id: String,
+    val contestId: String,
+    val callsign: String,
+    val band: String,
+    val mode: String,
+    val grid: String,
+    val createdAt: Long,
+    val confirmed: Boolean,
+)
 data class NeuralLogSummary(
     val qsos: Int = 0, val calls: Int = 0, val dxccs: Int = 0, val confirmedDxccs: Int = 0,
     val bands: Map<String, Int> = emptyMap(), val modes: Map<String, Int> = emptyMap(),
@@ -255,6 +275,36 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
                 }
             }
         }
+    }
+
+    fun contestHamClockProjection(filter: HamClockContestQsoFilter): List<HamClockContestQso> {
+        require(filter.startEpoch >= 0 && filter.endEpoch > filter.startEpoch) { "Invalid contest time window" }
+        val clauses = mutableListOf("is_valid=1", "created_at>=?", "created_at<?")
+        val args = mutableListOf(filter.startEpoch.toString(), filter.endEpoch.toString())
+        fun optional(expression: String, value: String) {
+            value.trim().uppercase(java.util.Locale.US).takeIf(String::isNotBlank)?.let {
+                clauses += "$expression=?"; args += it
+            }
+        }
+        optional("contest_id_norm", filter.contestId)
+        optional("band_norm", filter.band)
+        optional("mode_family", filter.mode)
+        filter.stationProfileId?.trim()?.takeIf(String::isNotBlank)?.let {
+            clauses += "station_profile_id=?"; args += it
+        }
+        if (filter.confirmedOnly) clauses += "(paper_received=1 OR lotw_received=1 OR eqsl_received=1 OR qrz_received=1 OR clublog_received=1 OR dcl_received=1)"
+        val limit = filter.maximumRows.coerceIn(1, 200)
+        return readableDatabase.rawQuery(
+            """SELECT qso_id,contest_id_norm,callsign_norm,band_norm,mode_family,grid_norm,created_at,
+                CASE WHEN paper_received=1 OR lotw_received=1 OR eqsl_received=1 OR qrz_received=1 OR clublog_received=1 OR dcl_received=1 THEN 1 ELSE 0 END
+                FROM qso_projection WHERE ${clauses.joinToString(" AND ")}
+                ORDER BY created_at DESC,qso_id LIMIT $limit""".trimIndent(), args.toTypedArray(),
+        ).use { cursor -> buildList {
+            while (cursor.moveToNext()) add(HamClockContestQso(
+                cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getString(3),
+                cursor.getString(4), cursor.getString(5), cursor.getLong(6), cursor.getInt(7) == 1,
+            ))
+        } }
     }
     // Compatibility/export helper only: interactive screens must use bounded projection queries.
     fun all(): List<Qso> = query("")

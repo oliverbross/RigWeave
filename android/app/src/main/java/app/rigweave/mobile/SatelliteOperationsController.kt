@@ -17,6 +17,11 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.time.Instant
 import java.util.Locale
+import kotlin.math.asin
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.acos
 
 internal data class SatellitePassRow(
     val satellite: SatelliteCatalogueEntry,
@@ -33,6 +38,22 @@ internal data class HamClockSatellitePosition(
     val longitude: Double,
     val altitudeKm: Double,
     val elevationDeg: Double,
+    val generatedAtEpoch: Long,
+    val stale: Boolean,
+)
+
+internal data class HamClockSatelliteTrack(
+    val noradId: Long,
+    val name: String,
+    val segments: List<List<GeoPoint>>,
+    val generatedAtEpoch: Long,
+    val stale: Boolean,
+)
+
+internal data class HamClockSatelliteFootprint(
+    val noradId: Long,
+    val name: String,
+    val ring: List<GeoPoint>,
     val generatedAtEpoch: Long,
     val stale: Boolean,
 )
@@ -92,6 +113,8 @@ internal class SatelliteOperationsController(
     var skyTrack by mutableStateOf<List<OrbitalPoint>>(emptyList()); private set
     var livePoint by mutableStateOf<OrbitalPoint?>(null); private set
     var hamClockPositions by mutableStateOf<List<HamClockSatellitePosition>>(emptyList()); private set
+    var hamClockTracks by mutableStateOf<List<HamClockSatelliteTrack>>(emptyList()); private set
+    var hamClockFootprints by mutableStateOf<List<HamClockSatelliteFootprint>>(emptyList()); private set
     var busy by mutableStateOf(false); private set
     var message by mutableStateOf("Offline prediction uses the last-good validated element cache."); private set
 
@@ -239,6 +262,8 @@ internal class SatelliteOperationsController(
         if (!homeActive) return
         val point = maidenheadCenter(homeObserverGrid) ?: run {
             hamClockPositions = emptyList()
+            hamClockTracks = emptyList()
+            hamClockFootprints = emptyList()
             return
         }
         homeJob = scope.launch {
@@ -246,15 +271,33 @@ internal class SatelliteOperationsController(
                 val epoch = Instant.now().epochSecond
                 val entries = homeSatelliteEntries(elements.rows, favourites, selectedHomeNoradId)
                 val stale = elements.metadata.state != SatelliteCacheState.CURRENT
-                val positions = withContext(Dispatchers.Default) {
+                val geometry = withContext(Dispatchers.Default) {
                     homePropagationMutex.withLock {
-                        calculateHomeSatellitePositions(entries, SatelliteObserver(point.latitude, point.longitude),
+                        val observer = SatelliteObserver(point.latitude, point.longitude)
+                        val positions = calculateHomeSatellitePositions(entries, observer,
                             epoch, stale) { satelliteElements, observer, atEpoch ->
                             NativeSatellite.propagate(satelliteElements, observer, atEpoch)
                         }
+                        val tracks = entries.take(4).mapNotNull { entry ->
+                            val samples = (NativeSatellite.samples(entry.elements, observer, epoch - 45 * 60,
+                                epoch + 90 * 60, 300, 40, false) as? SatelliteNativeResult.Success)?.value.orEmpty()
+                            val segments = splitSatelliteTrack(samples.map { GeoPoint(it.latitudeDeg, it.longitudeDeg) })
+                            segments.takeIf(List<List<GeoPoint>>::isNotEmpty)?.let {
+                                HamClockSatelliteTrack(entry.noradId, entry.name, it, epoch, stale)
+                            }
+                        }
+                        val footprints = positions.take(4).map {
+                            HamClockSatelliteFootprint(it.noradId, it.name,
+                                satelliteFootprint(it.latitude, it.longitude, it.altitudeKm), epoch, stale)
+                        }
+                        Triple(positions, tracks, footprints)
                     }
                 }
-                if (generation == homeGeneration && homeActive) hamClockPositions = positions
+                if (generation == homeGeneration && homeActive) {
+                    hamClockPositions = geometry.first
+                    hamClockTracks = geometry.second
+                    hamClockFootprints = geometry.third
+                }
                 delay(45_000)
             }
         }
@@ -302,6 +345,30 @@ internal class SatelliteOperationsController(
         ?: transponders.rows.rowsFor(noradId).firstOrNull { it.downlinkLowHz != null }
     private fun List<SatelliteTransponder>.rowsFor(id: Long) = filter { it.noradId == id }
     fun close() { homeJob?.cancel(); scope.cancel() }
+}
+
+internal fun splitSatelliteTrack(points: List<GeoPoint>): List<List<GeoPoint>> {
+    if (points.isEmpty()) return emptyList()
+    val segments = mutableListOf(mutableListOf(points.first()))
+    points.drop(1).forEach { point ->
+        val current = segments.last()
+        if (kotlin.math.abs(point.longitude - current.last().longitude) > 180.0) segments += mutableListOf(point)
+        else current += point
+    }
+    return segments.filter { it.size >= 2 }
+}
+
+internal fun satelliteFootprint(latitude: Double, longitude: Double, altitudeKm: Double): List<GeoPoint> {
+    val angularRadius = acos((6371.0 / (6371.0 + altitudeKm.coerceAtLeast(0.0))).coerceIn(-1.0, 1.0))
+    val lat1 = Math.toRadians(latitude)
+    val lon1 = Math.toRadians(longitude)
+    return (0..48).map { index ->
+        val bearing = 2.0 * Math.PI * index / 48.0
+        val lat2 = asin(sin(lat1) * cos(angularRadius) + cos(lat1) * sin(angularRadius) * cos(bearing))
+        val lon2 = lon1 + atan2(sin(bearing) * sin(angularRadius) * cos(lat1),
+            cos(angularRadius) - sin(lat1) * sin(lat2))
+        GeoPoint(Math.toDegrees(lat2), ((Math.toDegrees(lon2) + 540.0) % 360.0) - 180.0)
+    }
 }
 
 internal fun satelliteQsoMode(label: String): String? = label.uppercase(Locale.US).let {

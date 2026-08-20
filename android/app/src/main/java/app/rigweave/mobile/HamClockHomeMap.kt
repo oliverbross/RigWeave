@@ -47,6 +47,7 @@ import app.rigweave.mobile.hamclock.HamClockBasemap
 import app.rigweave.mobile.hamclock.HamClockDxTarget
 import app.rigweave.mobile.hamclock.HamClockDxTargetSource
 import app.rigweave.mobile.hamclock.HamClockMapLayerId
+import app.rigweave.mobile.hamclock.finishline.HamClockAuroraSnapshot
 import app.rigweave.mobile.hamclock.HamClockMapLayerAvailability
 import app.rigweave.mobile.hamclock.HamClockMapPreference
 import app.rigweave.mobile.hamclock.HamClockMapRenderKind
@@ -251,6 +252,10 @@ internal fun buildHamClockMapSnapshot(
     rbnShowPaths: Boolean = true,
     wsprShowPaths: Boolean = true,
     ibpPreference: app.rigweave.mobile.hamclock.HamClockIbpPreference = app.rigweave.mobile.hamclock.HamClockIbpPreference(),
+    satelliteTracks: List<HamClockSatelliteTrack> = emptyList(),
+    satelliteFootprints: List<HamClockSatelliteFootprint> = emptyList(),
+    contestQsos: List<HamClockContestQso> = emptyList(),
+    aurora: HamClockAuroraSnapshot = HamClockAuroraSnapshot(),
 ): HamClockMapSnapshot {
     val station = maidenheadCenter(stationGrid)
     val points = mutableListOf<HamClockMapPoint>()
@@ -370,6 +375,16 @@ internal fun buildHamClockMapSnapshot(
             satellite.latitude, satellite.longitude, "#b783f5", HamClockMapSelection.SATELLITE,
             satellite.noradId.toString())
     }
+    satelliteTracks.take(4).forEach { track ->
+        lines += HamClockMapLine("sat-track-${track.noradId}", HamClockMapLayerId.SATELLITES, track.name,
+            "Authoritative local SGP4 ground track${if (track.stale) " · STALE elements" else ""}",
+            track.segments, "#b783f5", HamClockMapSelection.SATELLITE, track.noradId.toString())
+    }
+    satelliteFootprints.take(4).forEach { footprint ->
+        fills += HamClockMapFill("sat-footprint-${footprint.noradId}", HamClockMapLayerId.SATELLITES,
+            footprint.name, "Radio-horizon footprint${if (footprint.stale) " · STALE elements" else ""}",
+            unwrapDatelineRing(footprint.ring), "#563878")
+    }
     recentQsos.take(120).forEach { qso ->
         maidenheadCenter(qso.grid)?.let { location ->
             points += HamClockMapPoint(qso.id, HamClockMapLayerId.LOGGED_QSOS, qso.callsign,
@@ -377,6 +392,34 @@ internal fun buildHamClockMapSnapshot(
                 location.latitude, location.longitude, "#91a1a9", HamClockMapSelection.QSO,
                 qso.id, qso.callsign, mode = qso.mode)
         }
+    }
+    contestQsos.take(200).forEach { qso ->
+        maidenheadCenter(qso.grid)?.let { location ->
+            points += HamClockMapPoint("contest-${qso.id}", HamClockMapLayerId.CONTEST_QSOS, qso.callsign,
+                "${qso.contestId.ifBlank { "Selected contest" }} · ${qso.band} ${qso.mode}${if (qso.confirmed) " · CONFIRMED" else ""}",
+                location.latitude, location.longitude, if (qso.confirmed) "#42c77b" else "#f0ad35",
+                HamClockMapSelection.QSO, qso.id, qso.callsign, mode = qso.mode)
+            station?.let { origin ->
+                val path = greatCirclePath(LatLng(origin.latitude, origin.longitude),
+                    LatLng(location.latitude, location.longitude), 20)
+                lines += HamClockMapLine("contest-path-${qso.id}", HamClockMapLayerId.CONTEST_QSOS,
+                    qso.callsign, "Selected contest logged-QSO path",
+                    listOf(path.map { GeoPoint(it.latitude, it.longitude) }),
+                    if (qso.confirmed) "#42c77b" else "#f0ad35", HamClockMapSelection.QSO,
+                    qso.id, qso.callsign, mode = qso.mode)
+            }
+        }
+    }
+    aurora.cells.asSequence().sortedByDescending { it.probability }.take(180).forEachIndexed { index, cell ->
+        val half = 1.25
+        fills += HamClockMapFill("aurora-$index", HamClockMapLayerId.AURORA, "Aurora ${cell.probability}%",
+            "NOAA OVATION forecast · ${aurora.forecastAtEpoch}", listOf(
+                GeoPoint((cell.latitude - half).coerceIn(-90.0, 90.0), cell.longitude - half),
+                GeoPoint((cell.latitude - half).coerceIn(-90.0, 90.0), cell.longitude + half),
+                GeoPoint((cell.latitude + half).coerceIn(-90.0, 90.0), cell.longitude + half),
+                GeoPoint((cell.latitude + half).coerceIn(-90.0, 90.0), cell.longitude - half),
+                GeoPoint((cell.latitude - half).coerceIn(-90.0, 90.0), cell.longitude - half),
+            ), if (cell.probability >= 50) "#45e389" else if (cell.probability >= 25) "#7ccf6b" else "#5d9466")
     }
     val grayline = greylineArea(now)
     fills += HamClockMapFill("night", HamClockMapLayerId.GRAYLINE, "Night region", "Local UTC astronomy",
@@ -405,6 +448,18 @@ internal fun buildHamClockMapSnapshot(
             "#e65b54", HamClockMapSelection.WEATHER)
     }
     return boundedHamClockMapSnapshot(HamClockMapSnapshot(points, lines, fills, now.epochSecond, sourceStatus))
+}
+
+internal fun unwrapDatelineRing(ring: List<GeoPoint>): List<GeoPoint> {
+    if (ring.isEmpty()) return ring
+    val result = mutableListOf(ring.first())
+    ring.drop(1).forEach { point ->
+        var longitude = point.longitude
+        while (longitude - result.last().longitude > 180.0) longitude -= 360.0
+        while (longitude - result.last().longitude < -180.0) longitude += 360.0
+        result += GeoPoint(point.latitude, longitude)
+    }
+    return result
 }
 
 internal fun hamClockRbnPathEndpoints(row: HamClockRbnObservation): Pair<GeoPoint, GeoPoint>? =
