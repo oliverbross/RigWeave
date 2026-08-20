@@ -95,6 +95,7 @@ import java.io.File
 import java.io.InputStream
 import java.util.Locale
 import kotlin.math.abs
+import app.rigweave.mobile.hamclock.HamClockSettingsCoordinator
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -175,6 +176,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val mutations = remember { QsoMutationCoordinator(database) }
     val progress = remember { ProgressController(context, database) }
     val publicProviders = remember { app.rigweave.mobile.hamclock.HamClockPublicProviders(File(context.filesDir, "hamclock-public")) }
+    val hamClockSettings = remember { HamClockSettingsCoordinator(context) }
     val operations = remember { OperationsController(context, publicProviders, database) }
     val portable = remember { PortableController(context, database) }
     val activation = remember { PotaActivationController(context, database) }
@@ -273,7 +275,40 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             while (app.radioFamily == RadioFamily.FLEXRADIO) { radio = flex.state; delay(120) }
         }
     }
-    LaunchedEffect(features) { features.connectConfiguredCluster() }
+    val hamClockStationCall = wavelog.selectedStation?.callsign?.ifBlank { null }
+        ?: app.stationCallsign.ifBlank { features.clusterCallsign }
+    val hamClockStationGrid = wavelog.selectedStation?.grid?.ifBlank { null } ?: app.stationGrid
+    LaunchedEffect(hamClockSettings.document.settings.cluster.enabled, hamClockSettings.document.settings.rbn, foreground) {
+        features.applyRbnPreference(hamClockSettings.document.settings.rbn)
+        if (!foreground || !hamClockSettings.document.settings.cluster.enabled) features.disconnectCluster(disabled = true)
+        else if (features.clusterConnection.state in setOf(ClusterConnectionState.DISABLED, ClusterConnectionState.DISCONNECTED)) {
+            features.connectConfiguredCluster()
+        }
+    }
+    LaunchedEffect(hamClockSettings.document.settings.wspr, foreground, hamClockStationCall, hamClockStationGrid) {
+        val preference = hamClockSettings.document.settings.wspr
+        neuralDx.applyWsprPreference(preference)
+        if (!foreground || !preference.personalEnabled) return@LaunchedEffect
+        while (true) {
+            val now = Instant.now().epochSecond
+            if (neuralDx.wsprPersonal.fetchedEpoch == 0L || now - neuralDx.wsprPersonal.fetchedEpoch >= 300L) {
+                neuralDx.refreshWspr(hamClockStationCall, hamClockStationGrid)
+            }
+            delay(60_000)
+        }
+    }
+    LaunchedEffect(hamClockSettings.document.settings.pskReporter, foreground, hamClockStationCall, hamClockStationGrid) {
+        val preference = hamClockSettings.document.settings.pskReporter
+        neuralDx.applyPskPreference(preference)
+        if (!foreground || !preference.enabled) return@LaunchedEffect
+        while (true) {
+            val now = Instant.now().epochSecond
+            if (neuralDx.mySignal.fetchedEpoch == 0L || now - neuralDx.mySignal.fetchedEpoch >= preference.refreshSeconds) {
+                neuralDx.refreshPsk(hamClockStationCall, hamClockStationGrid)
+            }
+            delay(60_000)
+        }
+    }
     LaunchedEffect(wavelog.logMode) { syncHub.setAuthority(wavelog.logMode) }
     LaunchedEffect(transport, radio.mode) {
         while (isCwMacroMode(radio.mode)) { delay(90); transport.pollCwText()?.let(::accept) }
@@ -389,7 +424,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
-            Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
+            Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
                 voiceStore, voiceAudio, voiceTx, eqStudio, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
@@ -403,7 +438,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.OPERATIONS }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
-            Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
+            Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
                 voiceStore, voiceAudio, voiceTx, eqStudio, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
@@ -436,6 +471,7 @@ private fun navIcon(item: Destination) = when (item) {
 @Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase,
     mutations: QsoMutationCoordinator, progress: ProgressController, operations: OperationsController,
     publicProviders: app.rigweave.mobile.hamclock.HamClockPublicProviders,
+    hamClockSettings: HamClockSettingsCoordinator,
     features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, wavelogNative: WavelogNativeController,
     syncHub: SyncHubController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
     portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
@@ -457,7 +493,7 @@ private fun navIcon(item: Destination) = when (item) {
     }
     when (destination) {
         Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, callbook,
-            publicProviders, operations, send, openDx, openPortable, openProgress, openOperations,
+            publicProviders, hamClockSettings, operations, send, openDx, openPortable, openProgress, openOperations,
             openLogbook, closeEq, openDigi, foreground, requestHomeReceiveTune,
             openHomeQso)
         Destination.RADIO -> Column(Modifier.fillMaxSize()) {
@@ -499,7 +535,9 @@ private fun navIcon(item: Destination) = when (item) {
             openLogbook = openLogbook, openLogbookFilter = { filter -> progress.requestLogbook(filter); openLogbook() }, openSync = openSync)
         Destination.SYNC -> SyncHubScreen(database, mutations, syncHub, wavelog, wavelogNative, openLogbook)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
-        Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app, progress.snapshot.needs,
+        Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app,
+            hamClockSettings.document.settings.cluster, hamClockSettings.document.settings.dxNews,
+            { value -> hamClockSettings.updateSettings { it.copy(dxNews = value) } }, progress.snapshot.needs,
             operations, openOperations, send, requestHomeReceiveTune) { callsign ->
             progress.requestLogbook(logbookFilterForDimension("callsign", callsign)); openLogbook()
         }
@@ -2996,6 +3034,9 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
 
 @Composable private fun DXScreen(neuralDx: NeuralDxController, features: FeatureController, database: QsoDatabase,
     wavelog: WavelogController, callbook: CallbookController, cty: CtyController, app: AppController,
+    clusterPreference: app.rigweave.mobile.hamclock.HamClockClusterPreference,
+    dxNewsPreference: app.rigweave.mobile.hamclock.HamClockDxNewsPreference,
+    updateDxNewsPreference: (app.rigweave.mobile.hamclock.HamClockDxNewsPreference) -> Unit,
     needs: List<ProgressNeed>, operations: OperationsController, openOperations: () -> Unit, send: (String) -> Unit,
     requestReceiveTune: (Long, String?, String, String) -> Unit, openHistory: (String) -> Unit) {
     val calendarByCall = operations.dxItems.associateBy { it.callsign.uppercase(Locale.US) }
@@ -3010,7 +3051,8 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
             }
         }
         Box(Modifier.weight(1f)) {
-            NeuralDxScreen(neuralDx, features, database, wavelog, callbook, cty, app, send, requestReceiveTune, dxNeeds) { spot ->
+            NeuralDxScreen(neuralDx, features, database, wavelog, callbook, cty, app, clusterPreference,
+                dxNewsPreference, updateDxNewsPreference, send, requestReceiveTune, dxNeeds) { spot ->
                 openHistory(spot.callsign)
             }
         }

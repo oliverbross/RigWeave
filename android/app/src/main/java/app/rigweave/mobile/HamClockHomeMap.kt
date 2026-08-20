@@ -52,6 +52,10 @@ import app.rigweave.mobile.hamclock.HamClockMapPreference
 import app.rigweave.mobile.hamclock.HamClockMapRenderKind
 import app.rigweave.mobile.hamclock.HamClockMapSelection
 import app.rigweave.mobile.hamclock.HamClockUnitSystem
+import app.rigweave.mobile.hamclock.HamClockIbpSchedule
+import app.rigweave.mobile.hamclock.HamClockRbnObservation
+import app.rigweave.mobile.hamclock.HamClockWsprSnapshot
+import app.rigweave.mobile.hamclock.hamClockIbpManifest
 import app.rigweave.mobile.hamclock.hamClockMapLayerRegistry
 import com.google.gson.JsonObject
 import kotlinx.coroutines.delay
@@ -241,6 +245,12 @@ internal fun buildHamClockMapSnapshot(
     now: java.time.Instant,
     units: HamClockUnitSystem = HamClockUnitSystem.METRIC,
     sourceStatus: Map<String, HamClockMapSourceStatus> = emptyMap(),
+    rbn: List<Pair<HamClockRbnObservation, GeoPoint>> = emptyList(),
+    wspr: HamClockWsprSnapshot = HamClockWsprSnapshot(),
+    ibp: HamClockIbpSchedule? = null,
+    rbnShowPaths: Boolean = true,
+    wsprShowPaths: Boolean = true,
+    ibpPreference: app.rigweave.mobile.hamclock.HamClockIbpPreference = app.rigweave.mobile.hamclock.HamClockIbpPreference(),
 ): HamClockMapSnapshot {
     val station = maidenheadCenter(stationGrid)
     val points = mutableListOf<HamClockMapPoint>()
@@ -282,11 +292,66 @@ internal fun buildHamClockMapSnapshot(
         val reportId = mapPoint.contextId
         points += mapPoint
         station?.let { origin ->
-            val path = greatCirclePath(LatLng(origin.latitude, origin.longitude), LatLng(latitude, longitude), 20)
+            val endpoints = hamClockSignalPathEndpoints(report, origin) ?: return@let
+            val path = greatCirclePath(LatLng(endpoints.first.latitude, endpoints.first.longitude),
+                LatLng(endpoints.second.latitude, endpoints.second.longitude), 20)
             lines += HamClockMapLine(reportId, HamClockMapLayerId.PSK_REPORTER,
                 report.callsign, mapPoint.detail, splitAtDateline(path).map { segment -> segment.map { GeoPoint(it.latitude, it.longitude) } },
                 if (report.mutual) "#f3d054" else hamClockBandColor(report.band), HamClockMapSelection.PSK_REPORT, reportId, report.callsign,
                 report.frequencyHz, report.mode)
+        }
+    }
+    rbn.take(120).forEach { (row, location) ->
+        val detail = "${row.skimmerCall} · ${row.band} ${row.mode}" +
+            row.snr?.let { " · $it dB" }.orEmpty() + row.wpm?.let { " · $it WPM" }.orEmpty()
+        points += HamClockMapPoint(row.id, HamClockMapLayerId.RBN, row.dxCall, detail,
+            location.latitude, location.longitude, "#4ed9b2", HamClockMapSelection.RBN_OBSERVATION,
+            row.id, row.dxCall, row.frequencyHz, row.mode)
+        if (station != null && rbnShowPaths) {
+            val path = greatCirclePath(LatLng(station.latitude, station.longitude), LatLng(location.latitude, location.longitude), 20)
+            lines += HamClockMapLine(row.id, HamClockMapLayerId.RBN, row.dxCall, detail,
+                splitAtDateline(path).map { segment -> segment.map { GeoPoint(it.latitude, it.longitude) } },
+                hamClockBandColor(row.band), HamClockMapSelection.RBN_OBSERVATION, row.id, row.dxCall,
+                row.frequencyHz, row.mode)
+        }
+    }
+    wspr.reports.asSequence().filter { it.latitude != null && it.longitude != null }.take(100).forEach { report ->
+        val latitude = report.latitude ?: return@forEach
+        val longitude = report.longitude ?: return@forEach
+        val id = signalReportReference(report)
+        val detail = "${report.direction.name.replace('_', ' ')} · ${report.band} WSPR" +
+            report.snr?.let { " · $it dB" }.orEmpty()
+        points += HamClockMapPoint(id, HamClockMapLayerId.WSPR_EXPANDED, report.callsign, detail,
+            latitude, longitude, "#9d72f2", HamClockMapSelection.WSPR_OBSERVATION,
+            id, report.callsign, report.frequencyHz, "WSPR")
+        if (station != null && wsprShowPaths) {
+            val endpoints = if (report.direction == SignalDirection.HEARING)
+                LatLng(latitude, longitude) to LatLng(station.latitude, station.longitude)
+            else LatLng(station.latitude, station.longitude) to LatLng(latitude, longitude)
+            val path = greatCirclePath(endpoints.first, endpoints.second, 20)
+            lines += HamClockMapLine(id, HamClockMapLayerId.WSPR_EXPANDED, report.callsign, detail,
+                splitAtDateline(path).map { segment -> segment.map { GeoPoint(it.latitude, it.longitude) } },
+                hamClockBandColor(report.band), HamClockMapSelection.WSPR_OBSERVATION, id,
+                report.callsign, report.frequencyHz, "WSPR")
+        }
+    }
+    ibp?.let { schedule ->
+        val sites = if (ibpPreference.showAllSites) hamClockIbpManifest else
+            schedule.transmissions.map { it.beacon }.distinctBy { it.callsign }
+        sites.take(18).forEach { beacon ->
+            points += HamClockMapPoint(beacon.callsign, HamClockMapLayerId.IBP, beacon.callsign,
+                "${beacon.grid} · schedule reference; not heard evidence", beacon.point.latitude, beacon.point.longitude,
+                "#f3d054", HamClockMapSelection.IBP_BEACON, beacon.callsign, beacon.callsign)
+        }
+        if (station != null && ibpPreference.showPaths) schedule.transmissions.take(5).forEach { transmission ->
+            val beacon = transmission.beacon
+            val path = greatCirclePath(LatLng(station.latitude, station.longitude),
+                LatLng(beacon.point.latitude, beacon.point.longitude), 24)
+            lines += HamClockMapLine("${transmission.band}-${beacon.callsign}", HamClockMapLayerId.IBP,
+                beacon.callsign, "${transmission.band} scheduled now · not heard evidence",
+                splitAtDateline(path).map { segment -> segment.map { GeoPoint(it.latitude, it.longitude) } },
+                hamClockBandColor(transmission.band), HamClockMapSelection.IBP_BEACON, beacon.callsign,
+                beacon.callsign, transmission.frequencyHz, "CW")
         }
     }
     portableSpots.asSequence().filter { it.latitude != null && it.longitude != null }.take(160).forEach { spot ->
@@ -337,6 +402,11 @@ internal fun buildHamClockMapSnapshot(
             "#e65b54", HamClockMapSelection.WEATHER)
     }
     return boundedHamClockMapSnapshot(HamClockMapSnapshot(points, lines, fills, now.epochSecond, sourceStatus))
+}
+
+internal fun hamClockSignalPathEndpoints(report: SignalReport, station: GeoPoint): Pair<GeoPoint, GeoPoint>? {
+    val remote = GeoPoint(report.latitude ?: return null, report.longitude ?: return null)
+    return if (report.direction == SignalDirection.HEARING) remote to station else station to remote
 }
 
 internal fun hamClockDxMapPoint(spot: AndroidDXSpot): HamClockMapPoint {
@@ -802,6 +872,9 @@ private fun HamClockMapPoint.reference() = HamClockMapFeatureRef(layerId, contex
 internal fun hamClockSelectionAction(selection: HamClockMapSelection): String = when (selection) {
     HamClockMapSelection.DX_SPOT -> "Open DX spot"
     HamClockMapSelection.PSK_REPORT -> "Open PSK report"
+    HamClockMapSelection.RBN_OBSERVATION -> "Open RBN observation"
+    HamClockMapSelection.WSPR_OBSERVATION -> "Open WSPR observation"
+    HamClockMapSelection.IBP_BEACON -> "Open IBP schedule"
     HamClockMapSelection.PORTABLE -> "Open portable spot"
     HamClockMapSelection.SATELLITE -> "Open satellite"
     HamClockMapSelection.QSO -> "Open logged QSO"

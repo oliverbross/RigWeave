@@ -24,9 +24,9 @@ All IDs are the keys returned by `panelDefs` in upstream `src/DockableApp.jsx`. 
 | `propagation-chart` / VOACAP Chart | `src/DockableApp.jsx`, `src/components/PropagationPanel.jsx` | Time/band prediction chart | PARTIAL | `HamClockHomeScreen.kt` | openhamclock.com | Current path/band snapshot, not a full chart. |
 | `propagation-bars` / VOACAP Bars | `src/DockableApp.jsx`, `src/components/PropagationPanel.jsx` | Per-band reliability | NATIVE | `HamClockHomeScreen.kt`, `HamClockPropagationRepository.kt` | openhamclock.com | Bounded per-band reliability/status rows. |
 | `band-conditions` / Band Conditions | `src/DockableApp.jsx`, `src/components/BandConditionsPanel.jsx` | Current usable-band summary | NATIVE | `HamClockHomeScreen.kt`, `NeuralDxController.kt` | RigWeave measured data | Behaviour parity from native RF evidence. |
-| `band-health` / Band Health | `src/DockableApp.jsx`, `src/components/BandHealthPanel.jsx` | Provider health by band | MISSING | — | — | Planned, not currently available. |
+| `band-health` / Band Health | `src/DockableApp.jsx`, `src/components/BandHealthPanel.jsx` | Provider health by band | NATIVE | `HamClockRfEvidence.kt`, `HamClockHomeScreen.kt`, `NeuralDxScreen.kt` | RigWeave measured evidence | Deterministic cluster/PSK/RBN/personal-WSPR/recent-QSO evidence; unavailable sources produce `NO LIVE EVIDENCE`, never `CLOSED`. |
 | `band-activity` / Band Activity | `src/DockableApp.jsx`, `src/components/BandActivityHeatmap.jsx` | Activity counts/heat | NATIVE | `HamClockHomeScreen.kt`, `NeuralDxController.kt` | RigWeave measured data | Native activity summary. |
-| `ibp` / IBP Beacons | `src/DockableApp.jsx`, `src/components/IBPPanel.jsx` | Current beacon schedule | MISSING | `NeuralDxController.kt` | DL0TUD reference | Reference data is not a completed Home feature. |
+| `ibp` / IBP Beacons | `src/DockableApp.jsx`, `src/components/IBPPanel.jsx` | Current beacon schedule | NATIVE | `HamClockRfEvidence.kt`, `HamClockHomeMap.kt`, `HamClockHomeScreen.kt` | NCDXF/IARU local manifest | Versioned/hash-recorded 18-site manifest, five bands, 10-second slots and 180-second cycle; schedule is explicitly not heard evidence. |
 | `dx-cluster` / DX Cluster | `src/DockableApp.jsx`, `src/components/DXClusterPanel.jsx` | Live DX spots | NATIVE | `HamClockHomeScreen.kt`, `FeatureController.kt` | User-configured DX cluster | Home summary plus authoritative DX workspace. |
 | `dx-news-ticker` / DX News | `src/components/DXNewsTicker.jsx`, `server/routes/dxNewsSources/*`, `server/utils/dxNewsMerge.js` | Source-attributed current/upcoming DX news | NATIVE | `HamClockHomeScreen.kt`, `NeuralDxScreen.kt`, `DxNewsPskRepository.kt` | DX-World RSS + shared NG3K ADXO | Typed merge, bounded cache, source truth, search/filter, exact article/log/watch actions. DXNews.com is explicitly unavailable because no stable direct structured contract was verified. |
 | `psk-reporter` / PSK Reporter | `src/DockableApp.jsx`, `src/components/PSKReporterPanel.jsx`, `src/hooks/usePSKReporter.js`, `server/routes/pskreporter.js` | Direct reports being heard/hearing | NATIVE | `HamClockHomeScreen.kt`, `HamClockHomeMap.kt`, `NeuralDxController.kt`, `NeuralDxScreen.kt`, `DxNewsPskRepository.kt` | PSK Reporter direct query | Sender and receiver queries, mutual intersection, active direction/window/cadence/cap/filter controls, directional map and exact review; no automatic CAT. |
@@ -63,10 +63,10 @@ These are all 24 static modules in upstream `src/plugins/layerRegistry.js`; loca
 | `floods` / Floods | `src/plugins/layers/useFloods.js` | Flood overlay | MISSING | — | — | Not currently available. |
 | `tornado-warnings` / Tornado Warnings | `src/plugins/layers/useTornadoWarnings.js` | Warning overlay | MISSING | — | — | Not currently available. |
 | `aurora` / Aurora | `src/plugins/layers/useAurora.js` | Aurora oval | MISSING | — | NOAA | Persisted layer model alone is not a visible feature. |
-| `wspr` / WSPR | `src/plugins/layers/useWSPR.js` | WSPR paths/activity | PARTIAL | `NeuralDxController.kt`, `HamClockHomeScreen.kt` | WSPR.live | Native evidence summary; no equivalent map layer. |
+| `wspr` / WSPR | `src/plugins/layers/useWSPR.js` | WSPR paths/activity | NATIVE | `HamClockRfEvidence.kt`, `NeuralDxController.kt`, `HamClockHomeMap.kt` | PSK Reporter | Personal sender/receiver evidence reuses the PSK transport with `mode=WSPR`; regional WSPR.live is `UNAVAILABLE_POLICY` and is never queried. |
 | `grayline` / Gray Line | `src/plugins/layers/useGrayLine.js` | Day/night terminator | NATIVE | `NeuralDxMap.kt`, `HamClockHomeMap.kt` | Local calculation | GeoJSON night fill and dateline-safe terminator line. |
 | `lightning` / Lightning | `src/plugins/layers/useLightning.js` | Lightning strikes | NATIVE | `NeuralDxController.kt`, `HamClockHomeMap.kt` | Public lightning feed | Bounded selectable GeoJSON points with source truth. |
-| `rbn` / Reverse Beacon Network | `src/plugins/layers/useRBN.js` | RBN spots | MISSING | — | RBN | Not currently available. |
+| `rbn` / Reverse Beacon Network | `src/plugins/layers/useRBN.js` | RBN spots | NATIVE | `FeatureController.kt`, `HamClockRfEvidence.kt`, `HamClockHomeMap.kt` | Operator-configured retail DX cluster | Typed, bounded RBN observations parsed from the existing retail cluster socket; no official raw RBN firehose. |
 | `contest_qsos` / Contest QSOs | `src/plugins/layers/useContestQsos.js` | Contest-specific QSO overlay | PARTIAL | `QsoDatabase.kt`, `HamClockHomeScreen.kt` | RigWeave log | Logged QSOs visible; contest-specific selection is absent. |
 | `great-circle` / DE/DX Great Circle | `src/plugins/layers/useGreatCircle.js` | DE-to-DX path | NATIVE | `NeuralDxMap.kt`, `HamClockHomeScreen.kt` | Local geometry | Native reporting paths. |
 | `voacap-heatmap` / VOACAP Propagation Map | `src/plugins/layers/useVOACAPHeatmap.js` | Propagation heatmap | PARTIAL | `HamClockPropagationRepository.kt`, `NeuralDxMap.kt` | openhamclock.com + RigWeave evidence | Path prediction exists; no full heatmap. |
@@ -74,7 +74,7 @@ These are all 24 static modules in upstream `src/plugins/layerRegistry.js`; loca
 | `satellites` / Satellite Tracks | `src/plugins/layers/useSatelliteLayer.js` | Satellite positions/tracks | PARTIAL | `SatelliteOperationsController.kt`, `HamClockHomeScreen.kt` | CelesTrak/SatNOGS/local SGP4 | Positions visible; Home track/footprint preferences inactive. |
 | `meshtastic` / Meshtastic Nodes | `src/plugins/layers/useMeshtastic.js` | Mesh nodes | MISSING | — | — | Not currently available. |
 | `active-users` / Active Users | `src/plugins/layers/useActiveUsers.js` | Hosted-client presence | EXCLUDED | — | openhamclock.com | Product-specific presence/tracking is not adopted. |
-| `ibp` / IBP Beacons | `src/plugins/layers/useIBPLayer.js` | Beacon overlay | MISSING | — | DL0TUD reference | Reference fetch is not a completed map feature. |
+| `ibp` / IBP Beacons | `src/plugins/layers/useIBPLayer.js` | Beacon overlay | NATIVE | `HamClockRfEvidence.kt`, `HamClockHomeMap.kt` | NCDXF/IARU local manifest | 18 selectable schedule sites and five current scheduled paths; not heard evidence. |
 | `winlink-gateways` / Winlink Gateways | `src/plugins/layers/useWinlinkGateways.js` | Gateway overlay | MISSING | — | — | Not currently available. |
 | `aircraft` / Aircraft | `src/plugins/layers/useAircraft.js` | Aircraft overlay | MISSING | — | — | Not currently available. |
 | `atc-sectors` / ATC Sectors | `src/plugins/layers/useATCSectors.js` | ATC sector overlay | EXCLUDED | — | — | Outside current amateur-radio operator outcome. |
@@ -94,6 +94,14 @@ Map selection is typed as DX spot, PSK report, Portable spot, NORAD satellite, Q
 ## Task 2B1 DX News and PSK availability
 
 DX News and direct bidirectional PSK Reporter are operator-visible native features. Home consumes the same shared repositories as the DX workspace; NG3K is reused from the public-provider feed rather than fetched a second time. News opens the exact Briefing workspace, while PSK opens the directional My Signal map. Article/report actions expose batch log context, history, watchlist and explicit receive review only; neither provider result issues CAT directly.
+
+## Task 2B2 RBN, WSPR, IBP and Band Health availability
+
+RBN, personal WSPR and IBP are active native modules and map layers. RBN consumes only the operator's already configured retail DX-cluster connection and retains skimmer, DX, frequency, mode, SNR, speed, CQ/test and observation time. Personal WSPR is a mode-filtered view of the existing PSK Reporter transport. Regional WSPR.live remains visible as `UNAVAILABLE_POLICY`; no query is made.
+
+IBP renders 18 manifest sites and up to five current scheduled paths. Those rows are reference schedule geometry, never reception proof. Band Health derives bounded, repeated-source-capped evidence with counts, unique calls/receivers, median SNR, trend, diversity, confidence and reasons. Its empty states are `NO LIVE EVIDENCE` or `NO RECENT EVIDENCE`, never an unsupported propagation claim.
+
+Map caps are RBN 120 observations/paths, personal WSPR 100 observations/paths, and IBP 18 sites plus five scheduled paths. Exact typed selection opens the RF Evidence page and retains receive-review safety.
 
 ## Closure rule
 

@@ -1,6 +1,16 @@
 # Home provider ownership and contracts
 
-Reviewed 2026-08-20 against Android production code through Task 2B1. `filesDir` means app-private storage. Provider state must say `LIVE`, `CACHED`, `STALE`, or `UNAVAILABLE` (or the equivalent propagation state); a successful parse is required before last-good data is replaced.
+Reviewed 2026-08-20 against Android production code through Task 2B2. `filesDir` means app-private storage. Provider state must say `LIVE`, `CACHED`, `STALE`, or `UNAVAILABLE` (or the equivalent propagation state); a successful parse is required before last-good data is replaced.
+
+Task 2B2 adds no unbounded public-provider poller:
+
+- RBN is typed `RBN` evidence from the existing operator-configured retail DX-cluster socket. RigWeave does not connect to the official raw RBN Telnet nodes.
+- personal WSPR delegates to the same `PskReporterRepository` used by PSK Reporter, adding only `mode=WSPR`; sender/receiver semantics, `nolocator=1`, caching, cooldown and backoff remain shared;
+- regional WSPR.live is `UNAVAILABLE_POLICY`, default disabled, and has no production HTTP path;
+- IBP is a versioned/hash-recorded local NCDXF/IARU schedule manifest, with no network refresh and no claim that a scheduled beacon was heard;
+- Band Health is a local deterministic reducer over bounded live evidence plus recent QSO history. It is not a propagation forecast.
+
+Task 2B2 scale contracts are RBN buffer 1,000/raw and 120/presentation-map, personal WSPR 100/map, PSK provider response 500/direction, and IBP 18 points plus five current paths. Repeated Band Health contributors are capped at three observations per source/call/receiver key.
 
 | Home input | Data source and native owner | Request / response contract | TTL; manual limit; maximum response | Cache and last-good behaviour | Attribution / openhamclock.com / shared ownership |
 |---|---|---|---|---|---|

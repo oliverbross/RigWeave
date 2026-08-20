@@ -12,5 +12,6 @@ internal class HamClockPublicProviders(
     val dxpeditions = DxpeditionScheduleProvider(cacheDirectory, http, coalescer)
     val dxNews = DxNewsRepository(cacheDirectory, http, coalescer)
     val pskReporter = PskReporterRepository(cacheDirectory, http, coalescer)
+    val wspr = HamClockWsprRepository(pskReporter)
     val solarCelestial = SolarCelestialProvider(cacheDirectory, http, coalescer)
 }

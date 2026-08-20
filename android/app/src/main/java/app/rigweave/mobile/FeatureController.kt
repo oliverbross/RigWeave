@@ -22,6 +22,10 @@ import java.net.Socket
 import java.net.URL
 import java.time.Instant
 import java.time.YearMonth
+import app.rigweave.mobile.hamclock.HamClockRbnObservation
+import app.rigweave.mobile.hamclock.HamClockRbnPreference
+import app.rigweave.mobile.hamclock.boundedRbnObservations
+import app.rigweave.mobile.hamclock.parseRbnClusterLine
 
 data class AndroidDXSpot(
     val id: String, val callsign: String, val spotter: String, val frequencyHz: Long,
@@ -135,6 +139,8 @@ class FeatureController internal constructor(private val context: Context, priva
     private var clusterSocket: Socket? = null
     private var clusterGeneration = 0
     private val prefs = context.getSharedPreferences("dx_cluster", Context.MODE_PRIVATE)
+    private val rbnBuffer = ArrayDeque<HamClockRbnObservation>()
+    private var rbnPreference = HamClockRbnPreference(enabled = false)
 
     var clusterHost by mutableStateOf(prefs.getString("host", RigWeaveDefaults.CLUSTER_HOST) ?: RigWeaveDefaults.CLUSTER_HOST)
     var clusterPort by mutableStateOf(prefs.getInt("port", RigWeaveDefaults.CLUSTER_PORT))
@@ -165,6 +171,7 @@ class FeatureController internal constructor(private val context: Context, priva
     var newestSpotEpoch by mutableStateOf(0L); private set
     var requestedSpotId by mutableStateOf<String?>(null); private set
     var requestedSpotRequiresReceiveReview by mutableStateOf(false); private set
+    var rbnObservations by mutableStateOf(emptyList<HamClockRbnObservation>()); private set
 
     init {
         val defaults = prefs.edit()
@@ -187,6 +194,14 @@ class FeatureController internal constructor(private val context: Context, priva
         requestedSpotRequiresReceiveReview = requireReceiveReview
     }
     fun consumeRequestedSpot() { requestedSpotId = null; requestedSpotRequiresReceiveReview = false }
+
+    fun applyRbnPreference(value: HamClockRbnPreference) {
+        rbnPreference = value
+        if (!value.enabled) {
+            synchronized(rbnBuffer) { rbnBuffer.clear() }
+            rbnObservations = emptyList()
+        } else publishRbn()
+    }
 
     fun connectConfiguredCluster() {
         if (clusterHost.isNotBlank() && clusterPort in 1..65535 && clusterCallsign.isNotBlank()) {
@@ -236,6 +251,13 @@ class FeatureController internal constructor(private val context: Context, priva
                     BufferedReader(InputStreamReader(socket.getInputStream())).useLines { lines ->
                         lines.forEach { line ->
                             if (generation != clusterGeneration) return@useLines
+                            parseRbnClusterLine(line)?.let {
+                                synchronized(rbnBuffer) {
+                                    rbnBuffer.addLast(it)
+                                    while (rbnBuffer.size > 1_000) rbnBuffer.removeFirst()
+                                }
+                                withContext(Dispatchers.Main) { publishRbn() }
+                            }
                             if (NativeCore.featureClusterLine(handle, line, Instant.now().epochSecond)) refreshDX()
                         }
                     }
@@ -364,6 +386,12 @@ class FeatureController internal constructor(private val context: Context, priva
             newestSpotEpoch = root.optLong("newestSpotEpoch")
             clusterConnection = clusterConnection.copy(latestSpotEpoch = newestSpotEpoch)
         }
+    }
+
+    private fun publishRbn() {
+        val watchlist = watchlistText.lineSequence().map(String::trim).filter(String::isNotBlank).toSet()
+        val buffered = synchronized(rbnBuffer) { rbnBuffer.toList() }
+        rbnObservations = boundedRbnObservations(buffered, rbnPreference, watchlist)
     }
 
     private fun summaryValue(url: String, keys: List<String>): Float {

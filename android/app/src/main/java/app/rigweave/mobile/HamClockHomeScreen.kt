@@ -140,6 +140,7 @@ internal fun HamClockHomeScreen(
     cty: CtyController,
     callbook: CallbookController,
     publicProviders: HamClockPublicProviders,
+    settingsCoordinator: HamClockSettingsCoordinator,
     operations: OperationsController,
     send: (String) -> Unit,
     openDx: () -> Unit,
@@ -159,8 +160,7 @@ internal fun HamClockHomeScreen(
     val stationCall = wavelog.selectedStation?.callsign?.ifBlank { null }
         ?: app.stationCallsign.ifBlank { features.clusterCallsign }
     val hamClockPrefs = remember(context) { context.getSharedPreferences("rigweave-hamclock-layout", Context.MODE_PRIVATE) }
-    val settingsStore = remember(context) { HamClockSettingsStore(context) }
-    var settingsDocument by remember { mutableStateOf(settingsStore.snapshot()) }
+    val settingsDocument = settingsCoordinator.document
     var contestFeed by remember { mutableStateOf<HamClockFeed<List<HamClockContest>>?>(null) }
     var dxpeditionFeed by remember { mutableStateOf<HamClockFeed<List<HamClockDxpedition>>?>(null) }
     var celestialFeed by remember { mutableStateOf<HamClockFeed<HamClockSolarCelestialSnapshot>?>(null) }
@@ -176,11 +176,10 @@ internal fun HamClockHomeScreen(
     var recentQsoRevision by remember { mutableStateOf(0L) }
     val compactScreen = LocalConfiguration.current.screenWidthDp < 900
     fun saveDashboardProfile(name: String, replaceProfileId: String? = null) {
-        settingsStore.saveProfile(name, replaceProfileId)
-        settingsDocument = settingsStore.snapshot()
+        settingsCoordinator.saveProfile(name, replaceProfileId)
     }
     fun applyDashboardProfile(id: String) {
-        settingsDocument = settingsStore.applyProfile(id)
+        settingsCoordinator.applyProfile(id)
     }
     fun updateSpotFilters(value: SpotFilters) {
         spotFilters = value
@@ -191,35 +190,20 @@ internal fun HamClockHomeScreen(
     }
 
     LaunchedEffect(Unit) {
-        while (true) { mapInstant = Instant.now(); delay(60_000) }
+        while (true) { mapInstant = Instant.now(); delay(10_000) }
     }
     DisposableEffect(operations.satellites, stationGrid, homeForeground) {
         operations.satellites.setHomeActive(homeForeground, stationGrid)
         onDispose { operations.satellites.setHomeActive(false, stationGrid) }
-    }
-    LaunchedEffect(features.liveSpots, stationId, cty.dataRevision) {
-        neuralDx.ingest(features.liveSpots, stationId, cty, stationCall)
-    }
-    LaunchedEffect(settingsDocument.settings.pskReporter) {
-        neuralDx.applyPskPreference(settingsDocument.settings.pskReporter)
-    }
-    LaunchedEffect(settingsDocument.settings.cluster.enabled) {
-        if (!settingsDocument.settings.cluster.enabled) features.disconnectCluster(disabled = true)
-        else if (features.clusterConnection.state in setOf(ClusterConnectionState.DISABLED, ClusterConnectionState.DISCONNECTED)) {
-            features.connectConfiguredCluster()
-        }
     }
     LaunchedEffect(stationGrid, stationCall, stationId, settingsDocument.settings.pskReporter) {
         while (true) {
             val epoch = Instant.now().epochSecond
             portable.markForegroundAge(epoch)
             if (neuralDx.lastRefreshEpoch == 0L || epoch - neuralDx.lastRefreshEpoch > 15 * 60) {
-                neuralDx.refresh(stationCall, stationGrid, stationId, features.liveSpots,
+                neuralDx.refresh(stationCall, stationGrid, stationId,
+                    filterClusterPresentation(features.liveSpots, settingsDocument.settings.cluster, epoch),
                     refreshScope = NeuralDxRefreshScope.HOME)
-            }
-            if (settingsDocument.settings.pskReporter.enabled &&
-                (neuralDx.mySignal.fetchedEpoch == 0L || epoch - neuralDx.mySignal.fetchedEpoch >= settingsDocument.settings.pskReporter.refreshSeconds)) {
-                neuralDx.refreshPsk(stationCall, stationGrid)
             }
             if (!features.solar.valid || epoch - features.solar.observedEpoch > 60 * 60) features.refreshSolar()
             val potaAge = portable.providerStatus(PortableProgram.POTA).fetchedAt
@@ -253,6 +237,9 @@ internal fun HamClockHomeScreen(
         filterClusterPresentation(mapSpots, settingsDocument.settings.cluster, mapInstant.epochSecond)
             .filter { spotMatchesFilters(it, spotStatuses[it.id], spotFilters) }
     }
+    LaunchedEffect(visibleMapSpots, stationId, cty.dataRevision) {
+        neuralDx.ingest(visibleMapSpots, stationId, cty, stationCall)
+    }
     val propagationRepository = remember(context) { HamClockPropagationRepository(context) }
     var pathPrediction by remember { mutableStateOf(HamClockPropagationSnapshot()) }
     val selectedDxTarget = preferredDxTarget(visibleMapSpots)
@@ -265,7 +252,7 @@ internal fun HamClockHomeScreen(
         val current = settingsDocument.settings.dxTarget
         if (current?.source != HamClockDxTargetSource.AUTOMATIC || current.callsign != automatic.callsign ||
             current.latitude != automatic.latitude || current.longitude != automatic.longitude) {
-            settingsDocument = settingsStore.updateSettings { settings ->
+            settingsCoordinator.updateSettings { settings ->
                 settings.copy(dxTarget = HamClockDxTarget(
                     callsign = automatic.callsign,
                     latitude = automatic.latitude,
@@ -318,10 +305,61 @@ internal fun HamClockHomeScreen(
             .take(160).toList()
     }
     val portableMapStatuses = PortableProgram.entries.map(portable::providerStatus)
+    val rbnMapRows = remember(features.rbnObservations, cty.dataRevision) {
+        features.rbnObservations.mapNotNull { row ->
+            cty.lookup(row.dxCall)?.takeIf { it.latitude != 0.0 || it.longitude != 0.0 }
+                ?.let { row to GeoPoint(it.latitude, it.longitude) }
+        }
+    }
+    val ibpSchedule = remember(mapInstant.epochSecond / 10) { hamClockIbpSchedule(mapInstant.epochSecond) }
+    val bandHealthEvidence = remember(visibleMapSpots, neuralDx.mySignal, features.rbnObservations,
+        neuralDx.wsprPersonal, recentQsos) {
+        visibleMapSpots.map { HamClockBandEvidence("CLUSTER", it.band, it.mode, it.callsign,
+            it.spotter, observedEpoch = it.receivedEpoch) } +
+            neuralDx.mySignal.reports.map { HamClockBandEvidence("PSK", it.band, it.mode, it.callsign,
+                it.receiverCallsign, it.snr, it.epoch) } +
+            features.rbnObservations.map { HamClockBandEvidence("RBN", it.band, it.mode, it.dxCall,
+                it.skimmerCall, it.snr, it.observedEpoch) } +
+            neuralDx.wsprPersonal.reports.map { HamClockBandEvidence("WSPR", it.band, "WSPR", it.callsign,
+                it.receiverCallsign, it.snr, it.epoch) } +
+            recentQsos.map { HamClockBandEvidence("QSO_HISTORY", it.band, it.mode, it.callsign,
+                observedEpoch = it.createdAt) }
+    }
+    val bandHealthAvailability = remember(features.clusterConnection, neuralDx.mySignal, neuralDx.wsprPersonal,
+        settingsDocument.settings.rbn, settingsDocument.settings.wspr) {
+        mapOf(
+            "CLUSTER" to if (features.clusterConnection.state == ClusterConnectionState.CONNECTED)
+                HamClockEvidenceAvailability.CURRENT else HamClockEvidenceAvailability.UNAVAILABLE,
+            "PSK" to if (!settingsDocument.settings.pskReporter.enabled) HamClockEvidenceAvailability.DISABLED
+                else if (neuralDx.mySignal.beingHeardState == HamClockFeedState.UNAVAILABLE &&
+                    neuralDx.mySignal.hearingState == HamClockFeedState.UNAVAILABLE)
+                    HamClockEvidenceAvailability.UNAVAILABLE
+                else if (neuralDx.mySignal.beingHeardState == HamClockFeedState.STALE ||
+                    neuralDx.mySignal.hearingState == HamClockFeedState.STALE)
+                    HamClockEvidenceAvailability.STALE else HamClockEvidenceAvailability.CURRENT,
+            "RBN" to if (settingsDocument.settings.rbn.enabled && features.clusterConnection.state == ClusterConnectionState.CONNECTED)
+                HamClockEvidenceAvailability.CURRENT else if (settingsDocument.settings.rbn.enabled)
+                HamClockEvidenceAvailability.UNAVAILABLE else HamClockEvidenceAvailability.DISABLED,
+            "WSPR" to if (!settingsDocument.settings.wspr.personalEnabled) HamClockEvidenceAvailability.DISABLED
+                else if (neuralDx.wsprPersonal.beingHeardState == HamClockFeedState.UNAVAILABLE &&
+                    neuralDx.wsprPersonal.hearingState == HamClockFeedState.UNAVAILABLE)
+                    HamClockEvidenceAvailability.UNAVAILABLE
+                else if (neuralDx.wsprPersonal.beingHeardState == HamClockFeedState.STALE ||
+                    neuralDx.wsprPersonal.hearingState == HamClockFeedState.STALE)
+                    HamClockEvidenceAvailability.STALE else HamClockEvidenceAvailability.CURRENT,
+            "QSO_HISTORY" to HamClockEvidenceAvailability.CURRENT,
+        )
+    }
+    val bandHealth = remember(bandHealthEvidence, bandHealthAvailability, settingsDocument.settings.bandHealth,
+        mapInstant.epochSecond / 60) {
+        computeHamClockBandHealth(bandHealthEvidence, bandHealthAvailability,
+            settingsDocument.settings.bandHealth, mapInstant.epochSecond)
+    }
     val mapSourceStatus = remember(visibleMapSpots, portableMapSpots, operations.satellites.hamClockPositions,
         recentQsos, recentQsoRevision, neuralDx.mySignal, neuralDx.lightning, mapInstant, stationPoint, resolvedDxTarget,
         portableMapStatuses, features.clusterConnection, operations.satellites.elements.metadata,
-        settingsDocument.settings.pskReporter) {
+        settingsDocument.settings.pskReporter, settingsDocument.settings.rbn, settingsDocument.settings.wspr,
+        features.rbnObservations, neuralDx.wsprPersonal, ibpSchedule) {
         fun state(rows: Int) = if (rows > 0) HamClockMapSourceState.CURRENT else HamClockMapSourceState.EMPTY
         fun safe(value: String) = value.replace(Regex("https?://\\S+|(?i)(token|key|password)=[^\\s]+"), "[redacted]").take(160)
         val portableStatuses = portableMapStatuses
@@ -372,7 +410,26 @@ internal fun HamClockHomeScreen(
                     "Hearing ${neuralDx.mySignal.hearingState.name} ${neuralDx.mySignal.hearingCount}",
                     "window ${settingsDocument.settings.pskReporter.windowMinutes}m",
                     "cadence ${settingsDocument.settings.pskReporter.refreshSeconds}s",
-                    neuralDx.mySignal.error).filter(String::isNotBlank).joinToString(" · "))),
+                     neuralDx.mySignal.error).filter(String::isNotBlank).joinToString(" · "))),
+            HamClockMapLayerId.RBN to HamClockMapSourceStatus(
+                if (!settingsDocument.settings.rbn.enabled) HamClockMapSourceState.UNAVAILABLE
+                else clusterMapState(features.clusterConnection, features.rbnObservations.size,
+                    settingsDocument.settings.cluster.refreshSeconds, mapInstant.epochSecond),
+                features.rbnObservations.maxOfOrNull(HamClockRbnObservation::observedEpoch) ?: 0,
+                "Configured retail DX cluster", "RBN source kind · bounded ${settingsDocument.settings.rbn.maximumRows}"),
+            HamClockMapLayerId.WSPR_EXPANDED to HamClockMapSourceStatus(
+                if (!settingsDocument.settings.wspr.personalEnabled) HamClockMapSourceState.UNAVAILABLE
+                else when {
+                    neuralDx.wsprPersonal.reports.isNotEmpty() -> HamClockMapSourceState.CURRENT
+                    neuralDx.wsprPersonal.error.isNotBlank() -> HamClockMapSourceState.ERROR
+                    neuralDx.wsprPersonal.beingHeardState == HamClockFeedState.UNAVAILABLE &&
+                        neuralDx.wsprPersonal.hearingState == HamClockFeedState.UNAVAILABLE -> HamClockMapSourceState.UNAVAILABLE
+                    else -> HamClockMapSourceState.EMPTY
+                }, neuralDx.wsprPersonal.fetchedEpoch,
+                "PSK Reporter · mode WSPR", "Regional WSPR.live ${neuralDx.wsprPersonal.regionalState}"),
+            HamClockMapLayerId.IBP to HamClockMapSourceStatus(HamClockMapSourceState.CURRENT,
+                mapInstant.epochSecond, "NCDXF/IARU local schedule manifest",
+                "${ibpSchedule.manifestVersion} · schedule only; not heard evidence"),
             HamClockMapLayerId.PORTABLE to HamClockMapSourceStatus(portableState,
                 portableStatuses.maxOfOrNull(ProviderStatus::fetchedAt) ?: 0, "POTA · SOTA · WWFF",
                 safe(PortableProgram.entries.zip(portableStatuses).joinToString(" · ") { (program, status) ->
@@ -401,18 +458,27 @@ internal fun HamClockHomeScreen(
     }
     val mapSnapshot = remember(visibleMapSpots, neuralDx.mySignal, portableMapSpots, operations.satellites.hamClockPositions,
         recentQsos, neuralDx.lightning, resolvedDxTarget, stationCall, stationGrid, mapInstant,
-        settingsDocument.settings.display.unitSystem, mapSourceStatus) {
+        settingsDocument.settings.display.unitSystem, mapSourceStatus, rbnMapRows, neuralDx.wsprPersonal,
+        ibpSchedule, settingsDocument.settings.rbn.showPaths, settingsDocument.settings.wspr.showPaths,
+        settingsDocument.settings.ibp) {
         buildHamClockMapSnapshot(stationCall, stationGrid, visibleMapSpots, neuralDx.mySignal,
             portableMapSpots, operations.satellites.hamClockPositions, recentQsos, neuralDx.lightning,
-            resolvedDxTarget, mapInstant, settingsDocument.settings.display.unitSystem, mapSourceStatus)
+            resolvedDxTarget, mapInstant, settingsDocument.settings.display.unitSystem, mapSourceStatus,
+            rbnMapRows, neuralDx.wsprPersonal, ibpSchedule, settingsDocument.settings.rbn.showPaths,
+            settingsDocument.settings.wspr.showPaths, settingsDocument.settings.ibp)
     }
-    fun updateMapPreference(value: HamClockMapPreference) {
-        settingsDocument = settingsStore.updateSettings { it.copy(map = value) }
-    }
+    fun updateMapPreference(value: HamClockMapPreference) = settingsCoordinator.updateSettings { it.copy(map = value) }
     fun openMapSelection(reference: HamClockMapFeatureRef) {
         when (reference.selection) {
             HamClockMapSelection.DX_SPOT -> { features.requestSpot(reference.featureId, requireReceiveReview = true); openDx() }
             HamClockMapSelection.PSK_REPORT -> { neuralDx.requestSignalReport(reference.featureId); openDx() }
+            HamClockMapSelection.RBN_OBSERVATION,
+            HamClockMapSelection.WSPR_OBSERVATION,
+            HamClockMapSelection.IBP_BEACON -> {
+                neuralDx.requestRfEvidence(reference.featureId)
+                neuralDx.requestPage(NeuralDxPage.OBSERVATIONS)
+                openDx()
+            }
             HamClockMapSelection.TARGET -> configureTarget = true
             HamClockMapSelection.PORTABLE -> { portable.requestSpot(reference.featureId); openPortable() }
             HamClockMapSelection.SATELLITE -> {
@@ -438,7 +504,7 @@ internal fun HamClockHomeScreen(
     }
     val visiblePanels = settingsDocument.settings.panels.filter { panel ->
         panel.visible && !(panel.id == HamClockPanelId.DX_NEWS && compactScreen &&
-            !hamClockPrefs.getBoolean("dx_news_compact_enabled", false))
+            !settingsDocument.settings.dxNews.compactVisible)
     }
     val mapPanel = visiblePanels.firstOrNull { it.id == HamClockPanelId.MAP }
     val leftPanels = visiblePanels.filter { mapPanel != null && it.id != HamClockPanelId.MAP && it.column <= 0 && it.columnSpan == 1 }
@@ -473,12 +539,20 @@ internal fun HamClockHomeScreen(
             HamClockModuleRenderer.PSK_REPORTER -> SignalPanel(neuralDx.mySignal, settingsDocument.settings.pskReporter,
                 { neuralDx.refreshPsk(stationCall, stationGrid, true) }, neuralDx::clearPskDisplay,
                 { neuralDx.requestPage(NeuralDxPage.MAP); openDeepLink(HamClockDeepLink.DX) }, modifier)
-            HamClockModuleRenderer.DX_NEWS -> DxNewsPanel(neuralDx.briefing,
+            HamClockModuleRenderer.DX_NEWS -> DxNewsPanel(neuralDx.briefing.filter { source ->
+                settingsDocument.settings.dxNews.source == HamClockDxNewsSource.ALL ||
+                    settingsDocument.settings.dxNews.source == HamClockDxNewsSource.DX_WORLD && source.id == "dxworld" ||
+                    settingsDocument.settings.dxNews.source == HamClockDxNewsSource.NG3K && source.id == "ng3k"
+            },
                 { neuralDx.requestPage(NeuralDxPage.BRIEFING); openDeepLink(HamClockDeepLink.DX) }, modifier)
             HamClockModuleRenderer.DX_EXPEDITIONS -> DxpeditionPanel(dxpeditionFeed, open, modifier)
             HamClockModuleRenderer.BAND_ACTIVITY -> BandConditionsPanel(neuralDx.bandActivity, open, modifier)
             HamClockModuleRenderer.DX_CLUSTER -> DxPanel(visibleMapSpots, mapSpots.size, features.clusterStatus,
                 spotFilters, { activeSpotFilter = it }, open, modifier)
+            HamClockModuleRenderer.RBN -> RbnPanel(features.rbnObservations, open, modifier)
+            HamClockModuleRenderer.WSPR -> WsprPanel(neuralDx.wsprPersonal, open, modifier)
+            HamClockModuleRenderer.IBP -> IbpPanel(ibpSchedule, open, modifier)
+            HamClockModuleRenderer.BAND_HEALTH -> BandHealthPanel(bandHealth, open, modifier)
             HamClockModuleRenderer.SOLAR -> SolarPanel(features, celestialFeed, modifier)
             HamClockModuleRenderer.DX_TARGET -> DxTargetPanel(resolvedDxTarget, stationGrid,
                 settingsDocument.settings.display.unitSystem, { configureTarget = true }, modifier)
@@ -514,17 +588,21 @@ internal fun HamClockHomeScreen(
         HamClockDensity.COMPACT -> 6.dp; HamClockDensity.COMFORTABLE -> 8.dp; HamClockDensity.LARGE_TOUCH -> 12.dp
     }
     fun mutatePanel(value: HamClockPanelPreference) {
+        settingsCoordinator.setPanel(value)
         if (value.id == HamClockPanelId.DX_NEWS && compactScreen) {
-            hamClockPrefs.edit().putBoolean("dx_news_compact_enabled", value.visible).apply()
+            settingsCoordinator.updateSettings { it.copy(dxNews = it.dxNews.copy(compactVisible = value.visible)) }
         }
-        settingsDocument = settingsStore.setPanel(value)
     }
-    fun mutateLayer(value: HamClockMapLayerPreference) { settingsDocument = settingsStore.setMapLayer(value) }
+    fun mutateLayer(value: HamClockMapLayerPreference) { settingsCoordinator.setMapLayer(value) }
     fun mutateDisplay(value: HamClockDisplayPreference) {
-        settingsDocument = settingsStore.updateSettings { it.copy(display = value) }
+        settingsCoordinator.updateSettings { it.copy(display = value) }
     }
     fun mutateProviders(cluster: HamClockClusterPreference, psk: HamClockPskPreference) {
-        settingsDocument = settingsStore.updateSettings { it.copy(cluster = cluster, pskReporter = psk) }
+        settingsCoordinator.updateSettings { it.copy(cluster = cluster, pskReporter = psk) }
+    }
+    fun mutateRfEvidence(rbn: HamClockRbnPreference, wspr: HamClockWsprPreference,
+        ibp: HamClockIbpPreference, bandHealth: HamClockBandHealthPreference) {
+        settingsCoordinator.updateSettings { it.copy(rbn = rbn, wspr = wspr, ibp = ibp, bandHealth = bandHealth) }
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(HcBg).windowInsetsPadding(WindowInsets.safeDrawing).testTag("openhamclock-home")) {
@@ -536,7 +614,7 @@ internal fun HamClockHomeScreen(
             Column(Modifier.fillMaxSize().padding(outerPadding).testTag("openhamclock-safe-content"), verticalArrangement = Arrangement.spacedBy(panelGap)) {
                 HamClockHeader(stationCall, stationGrid, radio, app, features, neuralDx,
                     settingsDocument.settings.display, neuralDx.weather, {
-                    neuralDx.refresh(stationCall, stationGrid, stationId, features.liveSpots, true, NeuralDxRefreshScope.HOME)
+                    neuralDx.refresh(stationCall, stationGrid, stationId, visibleMapSpots, true, NeuralDxRefreshScope.HOME)
                     features.refreshSolar(); portable.refreshAll()
                 }) { configureDashboard = true }
                 if (!settingsDocument.settings.display.immersive) OperationsHomeSummary(operations, openOperations)
@@ -579,24 +657,62 @@ internal fun HamClockHomeScreen(
             }
         }
         if (configureDashboard) HamClockConfigDialog(settingsDocument, ::mutatePanel,
-            { id -> settingsDocument = settingsStore.resetPanel(id) },
-            { settingsDocument = settingsStore.resetLayout() }, ::mutateLayer, ::updateMapPreference,
-            ::mutateDisplay, ::mutateProviders, ::saveDashboardProfile, ::applyDashboardProfile,
-            { id, name -> settingsStore.renameProfile(id, name); settingsDocument = settingsStore.snapshot() },
-            { id -> settingsDocument = settingsStore.deleteProfile(id) },
-            { settingsDocument = settingsStore.clearActiveProfile() },
-            { settingsStore.exportJson(true) },
-            { json -> settingsStore.importJson(json); settingsDocument = settingsStore.snapshot() },
+                settingsCoordinator::resetPanel,
+                settingsCoordinator::resetLayout, ::mutateLayer, ::updateMapPreference,
+            ::mutateDisplay, ::mutateProviders, ::mutateRfEvidence, ::saveDashboardProfile, ::applyDashboardProfile,
+                settingsCoordinator::renameProfile,
+                settingsCoordinator::deleteProfile,
+                settingsCoordinator::clearActiveProfile,
+                { settingsCoordinator.exportJson(true) },
+                { json -> settingsCoordinator.importJson(json) },
             { configureTarget = true },
         ) { configureDashboard = false }
         if (configureTarget) HamClockTargetDialog(settingsDocument.settings.dxTarget, callbook, cty,
-            { target -> settingsDocument = settingsStore.updateSettings { it.copy(dxTarget = target) }; configureTarget = false },
-            { settingsDocument = settingsStore.updateSettings { it.copy(dxTarget = null) }; configureTarget = false },
+            { target -> settingsCoordinator.updateSettings { it.copy(dxTarget = target) }; configureTarget = false },
+            { settingsCoordinator.updateSettings { it.copy(dxTarget = null) }; configureTarget = false },
             { configureTarget = false })
         activeSpotFilter?.let { dimension ->
             SpotFilterOverlay(dimension, spotFilters,
                 (spotModeOptions + mapSpots.map { canonicalSpotMode(it.mode) }).distinct().sorted(),
                 { activeSpotFilter = null }, { updateSpotFilters(it); activeSpotFilter = null }, Modifier.fillMaxSize())
+        }
+    }
+}
+
+@Composable private fun RbnPanel(rows: List<HamClockRbnObservation>, open: () -> Unit, modifier: Modifier) {
+    Module("Reverse Beacon Network", "RETAIL CLUSTER · ${rows.size}", modifier = modifier, onClick = open) {
+        if (rows.isEmpty()) EmptyLine("No RBN skimmer observations match the current bounded policy.")
+        rows.take(6).forEach { row ->
+            KeyValue(row.dxCall, "${row.band} ${row.mode} · ${row.skimmerCall}" +
+                row.snr?.let { " · $it dB" }.orEmpty(), HcInk)
+        }
+    }
+}
+
+@Composable private fun WsprPanel(snapshot: HamClockWsprSnapshot, open: () -> Unit, modifier: Modifier) {
+    Module("Personal WSPR", "PSK REPORTER · ${snapshot.reports.size}", modifier = modifier, onClick = open) {
+        Text("Regional WSPR.live · ${snapshot.regionalState}", color = HcMuted, fontSize = 9.sp)
+        if (snapshot.reports.isEmpty()) EmptyLine(snapshot.error.ifBlank { "No personal WSPR observations in the selected window." })
+        snapshot.reports.take(6).forEach { row ->
+            KeyValue(row.callsign, "${row.direction.name.replace('_', ' ')} · ${row.band}" +
+                row.snr?.let { " · $it dB" }.orEmpty(), HcInk)
+        }
+    }
+}
+
+@Composable private fun IbpPanel(schedule: HamClockIbpSchedule, open: () -> Unit, modifier: Modifier) {
+    Module("IBP schedule", "SLOT ${schedule.slot + 1}/18", modifier = modifier, onClick = open) {
+        Text("Schedule reference only · not heard evidence", color = HcAmber, fontSize = 9.sp)
+        schedule.transmissions.forEach { row ->
+            KeyValue(row.band, "${row.beacon.callsign} · ${row.beacon.grid} · %.3f MHz".format(Locale.US, row.frequencyHz / 1_000_000.0), HcInk)
+        }
+    }
+}
+
+@Composable private fun BandHealthPanel(rows: List<HamClockBandHealthRow>, open: () -> Unit, modifier: Modifier) {
+    Module("Band Health", "MEASURED · EXPLAINABLE", modifier = modifier, onClick = open) {
+        rows.take(9).forEach { row ->
+            KeyValue(row.band, "${row.state} · n=${row.observations} · ${row.trend} · ${row.confidence}", HcInk)
         }
     }
 }
@@ -682,6 +798,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
     updateMap: (HamClockMapPreference) -> Unit,
     updateDisplay: (HamClockDisplayPreference) -> Unit,
     updateProviders: (HamClockClusterPreference, HamClockPskPreference) -> Unit,
+    updateRfEvidence: (HamClockRbnPreference, HamClockWsprPreference, HamClockIbpPreference, HamClockBandHealthPreference) -> Unit,
     saveProfile: (String, String?) -> Unit,
     applyProfile: (String) -> Unit,
     renameProfile: (String, String) -> Unit,
@@ -732,6 +849,10 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
             item {
                 val cluster = settings.cluster
                 val psk = settings.pskReporter
+                val rbn = settings.rbn
+                val wspr = settings.wspr
+                val ibp = settings.ibp
+                val health = settings.bandHealth
                 Text("LIVE RF SOURCES", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 10.sp)
                 ToggleRow("DX cluster connection and Home visibility", cluster.enabled) {
                     updateProviders(cluster.copy(enabled = it), psk)
@@ -795,6 +916,96 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                             updateProviders(cluster, psk.copy(filter = psk.filter.copy(minimumSnr = value)))
                         }, { Text(value?.let { "$it dB" } ?: "ANY") })
                     }
+                }
+                HorizontalDivider(color = HcLine)
+                Text("RBN OBSERVATIONS", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 10.sp)
+                ToggleRow("RBN from configured retail cluster", rbn.enabled) {
+                    updateRfEvidence(rbn.copy(enabled = it), wspr, ibp, health)
+                }
+                EnumChips(HamClockRbnSource.entries, rbn.source) {
+                    updateRfEvidence(rbn.copy(source = it), wspr, ibp, health)
+                }
+                Text("No official raw RBN firehose is opened. Source choices remain inside the existing configured retail-cluster connection.",
+                    color = HcMuted, fontSize = 9.sp)
+                Text("RBN window", color = HcMuted, fontSize = 9.sp)
+                IntChips(listOf(2, 5, 10, 15, 30), rbn.windowMinutes, "m") {
+                    updateRfEvidence(rbn.copy(windowMinutes = it), wspr, ibp, health)
+                }
+                Text("RBN row/map cap", color = HcMuted, fontSize = 9.sp)
+                IntChips(listOf(50, 100, 120, 250), rbn.maximumRows) {
+                    updateRfEvidence(rbn.copy(maximumRows = it), wspr, ibp, health)
+                }
+                FilterTokenChips("RBN bands", listOf("80M", "40M", "20M", "15M", "10M", "6M"), rbn.bands) {
+                    updateRfEvidence(rbn.copy(bands = it), wspr, ibp, health)
+                }
+                FilterTokenChips("RBN modes", listOf("CW", "RTTY", "PSK", "FT8"), rbn.modes) {
+                    updateRfEvidence(rbn.copy(modes = it), wspr, ibp, health)
+                }
+                OutlinedTextField(rbn.skimmerCall, { updateRfEvidence(rbn.copy(skimmerCall = it.uppercase().take(24)), wspr, ibp, health) },
+                    label = { Text("Skimmer callsign") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(rbn.dxCall, { updateRfEvidence(rbn.copy(dxCall = it.uppercase().take(24)), wspr, ibp, health) },
+                    label = { Text("DX callsign") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                ToggleRow("Watchlist only", rbn.watchlistOnly) { updateRfEvidence(rbn.copy(watchlistOnly = it), wspr, ibp, health) }
+                ToggleRow("Show RBN paths", rbn.showPaths) { updateRfEvidence(rbn.copy(showPaths = it), wspr, ibp, health) }
+                Text("Minimum RBN SNR", color = HcMuted, fontSize = 9.sp)
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf<Int?>(null, -20, -15, -10, -5, 0).forEach { value ->
+                        FilterChip(rbn.minimumSnr == value, { updateRfEvidence(rbn.copy(minimumSnr = value), wspr, ibp, health) },
+                            { Text(value?.let { "$it dB" } ?: "ANY") })
+                    }
+                }
+                HorizontalDivider(color = HcLine)
+                Text("PERSONAL WSPR", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 10.sp)
+                ToggleRow("Personal WSPR via PSK Reporter", wspr.personalEnabled) {
+                    updateRfEvidence(rbn, wspr.copy(personalEnabled = it), ibp, health)
+                }
+                EnumChips(HamClockPskDirection.entries, wspr.direction) {
+                    updateRfEvidence(rbn, wspr.copy(direction = it), ibp, health)
+                }
+                IntChips(listOf(2, 5, 10, 15, 30, 60, 120), wspr.windowMinutes, "m") {
+                    updateRfEvidence(rbn, wspr.copy(windowMinutes = it), ibp, health)
+                }
+                FilterTokenChips("WSPR band", listOf("ALL", "80M", "40M", "20M", "15M", "10M", "6M"), setOf(wspr.band)) {
+                    updateRfEvidence(rbn, wspr.copy(band = it.firstOrNull() ?: "ALL"), ibp, health)
+                }
+                ToggleRow("Show personal WSPR paths", wspr.showPaths) {
+                    updateRfEvidence(rbn, wspr.copy(showPaths = it), ibp, health)
+                }
+                Text("Personal WSPR path cap", color = HcMuted, fontSize = 9.sp)
+                IntChips(listOf(25, 50, 100), wspr.maximumPaths) {
+                    updateRfEvidence(rbn, wspr.copy(maximumPaths = it), ibp, health)
+                }
+                Text("Minimum WSPR SNR", color = HcMuted, fontSize = 9.sp)
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    listOf<Int?>(null, -25, -20, -15, -10, -5).forEach { value ->
+                        FilterChip(wspr.minimumSnr == value, { updateRfEvidence(rbn, wspr.copy(minimumSnr = value), ibp, health) },
+                            { Text(value?.let { "$it dB" } ?: "ANY") })
+                    }
+                }
+                ToggleRow("Regional WSPR.live (policy unavailable)", wspr.regionalEnabled) {
+                    updateRfEvidence(rbn, wspr.copy(regionalEnabled = it), ibp, health)
+                }
+                Text("Regional state: UNAVAILABLE_POLICY. The app never queries WSPR.live without owner approval.",
+                    color = HcAmber, fontSize = 9.sp)
+                ToggleRow("Show regional grid (inactive while policy unavailable)", wspr.showRegionalGrid) {
+                    updateRfEvidence(rbn, wspr.copy(showRegionalGrid = it), ibp, health)
+                }
+                HorizontalDivider(color = HcLine)
+                Text("IBP AND BAND HEALTH", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 10.sp)
+                ToggleRow("Show all 18 IBP sites", ibp.showAllSites) { updateRfEvidence(rbn, wspr, ibp.copy(showAllSites = it), health) }
+                ToggleRow("Show five scheduled IBP paths", ibp.showPaths) { updateRfEvidence(rbn, wspr, ibp.copy(showPaths = it), health) }
+                Text("Band Health window", color = HcMuted, fontSize = 9.sp)
+                IntChips(listOf(5, 10, 15, 30, 60), health.windowMinutes, "m") {
+                    updateRfEvidence(rbn, wspr, ibp, health.copy(windowMinutes = it))
+                }
+                FilterTokenChips("Band Health mode", listOf("ALL", "CW", "SSB", "FT8", "WSPR", "RTTY"), setOf(health.mode)) {
+                    updateRfEvidence(rbn, wspr, ibp, health.copy(mode = it.firstOrNull() ?: "ALL"))
+                }
+                FilterTokenChips("Band Health sources", listOf("CLUSTER", "PSK", "RBN", "WSPR", "QSO_HISTORY"), health.enabledSources) {
+                    updateRfEvidence(rbn, wspr, ibp, health.copy(enabledSources = it))
+                }
+                FilterTokenChips("Band Health visible bands", listOf("160M", "80M", "60M", "40M", "30M", "20M", "17M", "15M", "12M", "10M", "6M"), health.visibleBands) {
+                    updateRfEvidence(rbn, wspr, ibp, health.copy(visibleBands = it))
                 }
                 HorizontalDivider(color = HcLine)
             }

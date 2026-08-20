@@ -59,6 +59,19 @@
       "server/routes/pskreporter.js",
       "src/hooks/useWSPR.js"
     ],
+    "task2b2_rbn_wspr_ibp_band_health": [
+      "src/plugins/layers/useRBN.js",
+      "server/routes/rbn.js",
+      "src/plugins/layers/useWSPR.js",
+      "src/components/IBPPanel.jsx",
+      "src/hooks/useIBP.js",
+      "src/hooks/useIBPRBN.js",
+      "src/utils/ibp.js",
+      "src/components/BandHealthPanel.jsx",
+      "src/hooks/useBandHealth.js",
+      "src/DockableApp.jsx",
+      "src/plugins/layerRegistry.js"
+    ],
     "propagation_algorithms": [
       "server/utils/propagationPhysics.js",
       "iturhfprop-service/",

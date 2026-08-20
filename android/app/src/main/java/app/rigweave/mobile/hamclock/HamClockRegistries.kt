@@ -4,7 +4,8 @@ internal enum class HamClockModuleCategory { STATION, MAP, RF, SPACE_WEATHER, AC
 internal enum class HamClockModuleAvailability { ACTIVE, DELEGATED, UNAVAILABLE }
 internal enum class HamClockModuleRenderer {
     MAP, STATION, WEATHER, PSK_REPORTER, DX_NEWS, DX_EXPEDITIONS, BAND_ACTIVITY, DX_CLUSTER,
-    SOLAR, DX_TARGET, PROPAGATION, PORTABLE, SATELLITES, CONTESTS, ANALOG_CLOCK, LEGACY,
+    SOLAR, DX_TARGET, PROPAGATION, PORTABLE, SATELLITES, CONTESTS, ANALOG_CLOCK,
+    RBN, WSPR, IBP, BAND_HEALTH, LEGACY,
 }
 internal enum class HamClockDeepLink { NONE, DX, PORTABLE, OPERATIONS, LOGBOOK, LOG_INTELLIGENCE, RADIO, DIGI }
 
@@ -92,6 +93,22 @@ internal val hamClockModuleRegistry: List<HamClockModuleSpec> = listOf(
         availability = HamClockModuleAvailability.DELEGATED, sourceLabel = "CelesTrak · SatNOGS · local SGP4",
         renderer = HamClockModuleRenderer.SATELLITES, deepLink = HamClockDeepLink.OPERATIONS,
         lowDataRepresentation = "Next-pass rows"),
+    HamClockModuleSpec(HamClockPanelId.RBN, setOf("rbn"), "Reverse Beacon Network",
+        HamClockModuleCategory.RF, "skimmer-observations", false, 2, 8, preferredHeightDp = 240,
+        sourceLabel = "Configured retail DX cluster · RBN observations", renderer = HamClockModuleRenderer.RBN,
+        deepLink = HamClockDeepLink.DX, lowDataRepresentation = "Bounded skimmer and DX rows"),
+    HamClockModuleSpec(HamClockPanelId.WSPR, setOf("wspr"), "Personal WSPR",
+        HamClockModuleCategory.RF, "personal-wspr-paths", false, 2, 9, preferredHeightDp = 230,
+        sourceLabel = "PSK Reporter · mode WSPR", renderer = HamClockModuleRenderer.WSPR,
+        deepLink = HamClockDeepLink.DX, lowDataRepresentation = "Bounded sender and receiver rows"),
+    HamClockModuleSpec(HamClockPanelId.IBP, setOf("ibp"), "IBP schedule",
+        HamClockModuleCategory.RF, "beacon-schedule-reference", false, 2, 10, preferredHeightDp = 220,
+        sourceLabel = "NCDXF/IARU schedule manifest", renderer = HamClockModuleRenderer.IBP,
+        deepLink = HamClockDeepLink.DX, lowDataRepresentation = "Current five-band schedule; not heard evidence"),
+    HamClockModuleSpec(HamClockPanelId.BAND_HEALTH, setOf("band-health"), "Band Health",
+        HamClockModuleCategory.RF, "measured-band-evidence", false, 2, 11, preferredHeightDp = 280,
+        sourceLabel = "Cluster · PSK · RBN · personal WSPR", renderer = HamClockModuleRenderer.BAND_HEALTH,
+        deepLink = HamClockDeepLink.DX, lowDataRepresentation = "Explainable per-band evidence rows"),
     HamClockModuleSpec(HamClockPanelId.ANALOG_CLOCK, setOf("analog-clock"), "Analog clock",
         HamClockModuleCategory.STATION, "native-clock-face", false, 0, 4, preferredHeightDp = 220,
         sourceLabel = "Local time calculation", renderer = HamClockModuleRenderer.ANALOG_CLOCK,
@@ -116,7 +133,10 @@ internal fun defaultPanelsFromRegistry(): List<HamClockPanelPreference> =
 internal enum class HamClockMapLayerCategory { STATION, DX, REPORTS, PORTABLE, SPACE, LOG, WEATHER, REFERENCE, FUTURE }
 internal enum class HamClockMapLayerAvailability { ACTIVE, DELEGATED, UNAVAILABLE }
 internal enum class HamClockMapRenderKind { POINT, LINE, FILL }
-internal enum class HamClockMapSelection { NONE, DX_SPOT, PSK_REPORT, PORTABLE, SATELLITE, QSO, TARGET, WEATHER }
+internal enum class HamClockMapSelection {
+    NONE, DX_SPOT, PSK_REPORT, RBN_OBSERVATION, WSPR_OBSERVATION, IBP_BEACON,
+    PORTABLE, SATELLITE, QSO, TARGET, WEATHER
+}
 
 internal data class HamClockMapLayerSpec(
     val id: String,
@@ -187,15 +207,18 @@ internal val hamClockMapLayerRegistry = listOf(
         false, availability = HamClockMapLayerAvailability.ACTIVE, sourceLabel = "RigWeave DX weather authority",
         renderKinds = setOf(HamClockMapRenderKind.POINT), selection = HamClockMapSelection.WEATHER,
         lowDataRepresentation = "Bounded recent strikes", maximumObjectCount = 120),
-    HamClockMapLayerSpec(HamClockMapLayerId.RBN, "rbn", "Reverse Beacon Network", HamClockMapLayerCategory.FUTURE,
-        false, availability = HamClockMapLayerAvailability.UNAVAILABLE, unavailableReason = "Task 2B provider work",
-        sourceLabel = "Not connected", renderKinds = emptySet(), lowDataRepresentation = "Unavailable", maximumObjectCount = 0),
-    HamClockMapLayerSpec(HamClockMapLayerId.WSPR_EXPANDED, "wspr", "Expanded WSPR paths", HamClockMapLayerCategory.FUTURE,
-        false, availability = HamClockMapLayerAvailability.UNAVAILABLE, unavailableReason = "Task 2B provider work",
-        sourceLabel = "Not connected", renderKinds = emptySet(), lowDataRepresentation = "Unavailable", maximumObjectCount = 0),
-    HamClockMapLayerSpec(HamClockMapLayerId.IBP, "ibp", "IBP beacons", HamClockMapLayerCategory.FUTURE,
-        false, availability = HamClockMapLayerAvailability.UNAVAILABLE, unavailableReason = "No completed Home provider",
-        sourceLabel = "Not connected", renderKinds = emptySet(), lowDataRepresentation = "Unavailable", maximumObjectCount = 0),
+    HamClockMapLayerSpec(HamClockMapLayerId.RBN, "rbn", "Reverse Beacon Network", HamClockMapLayerCategory.REPORTS,
+        false, .72f, HamClockMapLayerAvailability.ACTIVE, sourceLabel = "Configured retail DX cluster",
+        renderKinds = setOf(HamClockMapRenderKind.POINT, HamClockMapRenderKind.LINE),
+        selection = HamClockMapSelection.RBN_OBSERVATION, lowDataRepresentation = "Bounded RBN observations", maximumObjectCount = 120),
+    HamClockMapLayerSpec(HamClockMapLayerId.WSPR_EXPANDED, "wspr", "Personal WSPR paths", HamClockMapLayerCategory.REPORTS,
+        false, .68f, HamClockMapLayerAvailability.ACTIVE, sourceLabel = "PSK Reporter · mode WSPR",
+        renderKinds = setOf(HamClockMapRenderKind.POINT, HamClockMapRenderKind.LINE),
+        selection = HamClockMapSelection.WSPR_OBSERVATION, lowDataRepresentation = "Bounded personal WSPR observations", maximumObjectCount = 100),
+    HamClockMapLayerSpec(HamClockMapLayerId.IBP, "ibp", "IBP beacons", HamClockMapLayerCategory.REFERENCE,
+        false, .8f, HamClockMapLayerAvailability.ACTIVE, sourceLabel = "NCDXF/IARU schedule manifest",
+        renderKinds = setOf(HamClockMapRenderKind.POINT, HamClockMapRenderKind.LINE),
+        selection = HamClockMapSelection.IBP_BEACON, lowDataRepresentation = "18 sites and five scheduled paths", maximumObjectCount = 23),
     HamClockMapLayerSpec(HamClockMapLayerId.AURORA, "aurora", "Aurora", HamClockMapLayerCategory.FUTURE,
         false, availability = HamClockMapLayerAvailability.UNAVAILABLE, unavailableReason = "Task 2B image/provider work",
         sourceLabel = "Not connected", renderKinds = emptySet(), lowDataRepresentation = "Unavailable", maximumObjectCount = 0),

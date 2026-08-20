@@ -54,6 +54,7 @@ internal data class DxNewsSnapshot(
     val sources: List<DxNewsSource> = emptyList(),
     val merged: List<DxNewsItem> = emptyList(),
     val fetchedEpoch: Long = 0,
+    val manualCooldownSeconds: Long = 0,
 ) {
     val error: String get() = sources.map(DxNewsSource::error).filter(String::isNotBlank).joinToString(" · ")
 }
@@ -70,18 +71,30 @@ internal class DxNewsRepository(
         ng3k: HamClockFeed<List<HamClockDxpedition>>?,
         force: Boolean = false,
         nowEpoch: Long = Instant.now().epochSecond,
-    ): DxNewsSnapshot = coalescer.run("dx-news") {
-        val manualAllowed = force && nowEpoch - lastManualEpoch >= MANUAL_SECONDS
-        if (manualAllowed) lastManualEpoch = nowEpoch
-        val dxWorld = refreshDxWorld(force = manualAllowed, nowEpoch = nowEpoch)
+    ): DxNewsSnapshot {
+        val remaining = (MANUAL_SECONDS - (nowEpoch - lastManualEpoch)).coerceAtLeast(0)
+        val manualBlocked = force && lastManualEpoch > 0 && remaining > 0
+        val dxWorld = if (manualBlocked) cachedDxWorld(nowEpoch, "Manual refresh available in ${remaining}s")
+        else {
+            if (force) lastManualEpoch = nowEpoch
+            coalescer.run("dx-news-dxworld") { refreshDxWorld(force = force, nowEpoch = nowEpoch) }
+        }
         val dxNews = DxNewsSource(
             "dxnews", "DXNews.com", DXNEWS_HOME, error = "UNAVAILABLE · no stable direct structured contract",
             state = HamClockFeedState.UNAVAILABLE,
         )
         val ng3kSource = ng3kSource(ng3k, nowEpoch)
         val sources = listOf(dxWorld, dxNews, ng3kSource)
-        DxNewsSnapshot(sources, mergeDxNews(sources.flatMap(DxNewsSource::items), nowEpoch),
-            sources.maxOfOrNull(DxNewsSource::updatedEpoch) ?: 0)
+        return DxNewsSnapshot(sources, mergeDxNews(sources.flatMap(DxNewsSource::items), nowEpoch),
+            sources.maxOfOrNull(DxNewsSource::updatedEpoch) ?: 0, if (manualBlocked) remaining else 0)
+    }
+
+    private fun cachedDxWorld(nowEpoch: Long, error: String): DxNewsSource {
+        val saved = dxWorldCache.read() ?: return DxNewsSource("dxworld", "DX-World", DXWORLD_HOME,
+            error = error, state = HamClockFeedState.UNAVAILABLE)
+        val state = if (nowEpoch - saved.fetchedAtEpoch < TTL_SECONDS) HamClockFeedState.CACHED else HamClockFeedState.STALE
+        return DxNewsSource("dxworld", "DX-World", DXWORLD_HOME, decodeNews(saved.body), saved.fetchedAtEpoch,
+            state == HamClockFeedState.STALE, error, state)
     }
 
     private fun refreshDxWorld(force: Boolean, nowEpoch: Long): DxNewsSource {
@@ -123,7 +136,7 @@ internal class DxNewsRepository(
                 title = listOf(row.callsign, row.entity).filter(String::isNotBlank).joinToString(" · "),
                 link = row.sourceUrl.ifBlank { NG3K_HOME }, published = row.dateText,
                 summary = row.information, callsigns = listOf(row.callsign),
-                id = "ng3k:${row.callsign}:${row.startEpoch ?: 0}", publishedEpoch = row.startEpoch ?: nowEpoch,
+                id = "ng3k:${row.callsign}:${row.startEpoch ?: 0}", publishedEpoch = row.startEpoch ?: 0,
                 activityEndEpoch = row.endEpoch, sourceId = "ng3k", sourceLabel = "NG3K ADXO",
                 sourceHomeUrl = NG3K_HOME, bands = row.bands, modes = row.modes, entity = row.entity,
             )
@@ -151,7 +164,7 @@ internal fun parseDxWorldRss(body: String, nowEpoch: Long): List<DxNewsItem> {
         val link = xmlText(block, "link").takeIf(::isHttpsUrl).orEmpty()
         if (title.length < 4 || link.isBlank()) return@mapNotNull null
         val published = xmlText(block, "pubDate")
-        val epoch = parseNewsEpoch(published) ?: nowEpoch
+        val epoch = parseNewsEpoch(published) ?: return@mapNotNull null
         val summary = stripMarkup(xmlText(block, "description")).take(480)
         val calls = extractNewsCallsigns("$title $summary")
         DxNewsItem(title, link, published, summary, calls,
@@ -163,7 +176,7 @@ internal fun parseDxWorldRss(body: String, nowEpoch: Long): List<DxNewsItem> {
 
 internal fun mergeDxNews(items: List<DxNewsItem>, nowEpoch: Long, newsWindowHours: Int = 24): List<DxNewsItem> {
     val fresh = items.filter { item ->
-        if (item.sourceId == "ng3k") item.activityEndEpoch == null || item.activityEndEpoch >= nowEpoch
+        if (item.sourceId == "ng3k") item.publishedEpoch > 0 && (item.activityEndEpoch == null || item.activityEndEpoch >= nowEpoch)
         else item.publishedEpoch in (nowEpoch - newsWindowHours.coerceIn(24, 72) * 3600L)..(nowEpoch + 300)
     }.sortedByDescending(DxNewsItem::publishedEpoch)
     val kept = mutableListOf<DxNewsItem>()
@@ -258,28 +271,35 @@ internal class PskReporterRepository(
     private val lastManual = mutableMapOf<String, Long>()
     private val backoffUntil = mutableMapOf<String, Long>()
 
-    fun refresh(callsign: String, station: GeoPoint?, windowMinutes: Int, force: Boolean = false,
+    fun refresh(callsign: String, station: GeoPoint?, windowMinutes: Int, force: Boolean = false, mode: String = "",
         nowEpoch: Long = Instant.now().epochSecond): PskReporterSnapshot {
         val call = callsign.trim().uppercase(Locale.US)
         require(call.isNotBlank()) { "Station callsign is required" }
         val window = windowMinutes.takeIf { it in setOf(2, 5, 10, 15, 30, 60, 120) } ?: 15
-        return coalescer.run("psk:$call:$window") {
+        val normalizedMode = mode.trim().uppercase(Locale.US).take(12)
+        return coalescer.run("psk:$call:$window:$normalizedMode") {
             PskReporterSnapshot(call,
-                refreshDirection(SignalDirection.BEING_HEARD, call, station, window, force, nowEpoch),
-                refreshDirection(SignalDirection.HEARING, call, station, window, force, nowEpoch))
+                refreshDirection(SignalDirection.BEING_HEARD, call, station, window, force, nowEpoch, normalizedMode),
+                refreshDirection(SignalDirection.HEARING, call, station, window, force, nowEpoch, normalizedMode))
         }
     }
 
     private fun refreshDirection(direction: SignalDirection, call: String, station: GeoPoint?, window: Int,
-        force: Boolean, nowEpoch: Long): PskDirectionFeed {
+        force: Boolean, nowEpoch: Long, mode: String): PskDirectionFeed {
         val safeCall = call.replace(Regex("[^A-Z0-9]"), "_")
-        val key = "${direction.name}:$safeCall:$window"
-        val cache = HamClockLastGoodCache(cacheDirectory, "psk-${direction.name.lowercase()}-$safeCall-$window")
+        val modeKey = mode.ifBlank { "all" }.lowercase(Locale.US)
+        val key = "${direction.name}:$safeCall:$window:$modeKey"
+        val cache = HamClockLastGoodCache(cacheDirectory, "psk-${direction.name.lowercase()}-$safeCall-$window-$modeKey")
         val saved = cache.read()
         fun cached(entry: HamClockCacheEntry, state: HamClockFeedState, error: String = "") =
             PskDirectionFeed(direction, decodePskReports(entry.body), state, entry.fetchedAtEpoch, error)
         val manualAllowed = force && nowEpoch - (lastManual[key] ?: 0) >= MANUAL_SECONDS
         if (manualAllowed) lastManual[key] = nowEpoch
+        if (force && !manualAllowed && (lastManual[key] ?: 0) > 0) {
+            val remaining = (MANUAL_SECONDS - (nowEpoch - (lastManual[key] ?: 0))).coerceAtLeast(1)
+            return if (saved != null) cached(saved, HamClockFeedState.STALE, "Manual refresh available in ${remaining}s")
+            else PskDirectionFeed(direction, error = "Manual refresh available in ${remaining}s")
+        }
         if (nowEpoch < (backoffUntil[key] ?: 0)) {
             return if (saved != null) cached(saved, HamClockFeedState.STALE, "Provider backoff active")
             else PskDirectionFeed(direction, error = "Provider backoff active")
@@ -291,7 +311,9 @@ internal class PskReporterRepository(
             val parameter = if (direction == SignalDirection.BEING_HEARD) "senderCallsign" else "receiverCallsign"
             val callback = "rwPsk"
             val query = "$parameter=${URLEncoder.encode(call, "UTF-8")}&flowStartSeconds=-${window * 60}" +
-                "&rptlimit=500&rronly=1&noactive=1&callback=$callback"
+                "&rptlimit=500&rronly=1&noactive=1&nolocator=1" +
+                mode.takeIf(String::isNotBlank)?.let { "&mode=${URLEncoder.encode(it, "UTF-8")}" }.orEmpty() +
+                "&callback=$callback"
             val response = http.get(HamClockHttpRequest("https://retrieve.pskreporter.info/query?$query",
                 "application/javascript, application/json, text/javascript, text/plain", MAX_PSK_BYTES))
             require(response.contentType.isBlank() || response.contentType.contains("json", true) ||
@@ -347,7 +369,7 @@ internal fun parsePskReporterPayload(body: String, callback: String, direction: 
             if (band.isBlank()) continue
             val snr = row.optString("sNR").toIntOrNull()?.takeIf { it in -100..100 }
             val report = SignalReport(remoteCall, remoteGrid, remotePoint?.latitude, remotePoint?.longitude,
-                frequency, band, mode, snr, station?.let { local -> remotePoint?.let { greatCircleKm(local, it).roundToInt() } }, epoch,
+                frequency, band, mode, snr, null, epoch,
                 direction, localCallsign, sender, senderGrid, receiver, receiverGrid, mutual = false)
             add(report)
         }
@@ -395,7 +417,7 @@ private fun greatCircleKm(a: GeoPoint, b: GeoPoint): Double {
 private fun encodePskReports(rows: List<SignalReport>) = JSONArray(rows.map { row -> JSONObject()
     .put("call", row.callsign).put("locator", row.locator).put("lat", row.latitude).put("lon", row.longitude)
     .put("frequency", row.frequencyHz).put("band", row.band).put("mode", row.mode).put("snr", row.snr)
-    .put("distance", row.distanceKm).put("epoch", row.epoch).put("direction", row.direction.name)
+    .put("epoch", row.epoch).put("direction", row.direction.name)
     .put("local", row.localCallsign).put("sender", row.senderCallsign).put("sender_grid", row.senderLocator)
     .put("receiver", row.receiverCallsign).put("receiver_grid", row.receiverLocator).put("mutual", row.mutual)
     .put("continent", row.continent) }).toString()

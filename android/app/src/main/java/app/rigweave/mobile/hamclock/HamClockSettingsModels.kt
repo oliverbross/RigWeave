@@ -17,6 +17,10 @@ object HamClockPanelId {
     const val CONTESTS = "contests"
     const val MAP = "map"
     const val ANALOG_CLOCK = "analog_clock"
+    const val RBN = "rbn"
+    const val WSPR = "wspr"
+    const val IBP = "ibp"
+    const val BAND_HEALTH = "band_health"
 }
 
 object HamClockMapLayerId {
@@ -49,6 +53,8 @@ enum class HamClockTimeZoneMode { UTC, LOCAL, BOTH }
 enum class HamClockHourFormat { H12, H24 }
 enum class HamClockUnitSystem { METRIC, IMPERIAL }
 enum class HamClockPskDirection { BEING_HEARD, HEARING, BOTH, MUTUAL }
+enum class HamClockDxNewsSource { ALL, DX_WORLD, NG3K }
+enum class HamClockRbnSource { CONFIGURED_RETAIL_CLUSTER }
 enum class HamClockDxTargetSource { MANUAL, AUTOMATIC }
 
 data class HamClockPanelPreference(
@@ -102,6 +108,50 @@ data class HamClockPskPreference(
     val filter: HamClockSpotFilter = HamClockSpotFilter(),
 )
 
+data class HamClockDxNewsPreference(
+    val source: HamClockDxNewsSource = HamClockDxNewsSource.ALL,
+    val compactVisible: Boolean = false,
+)
+
+data class HamClockRbnPreference(
+    val enabled: Boolean = true,
+    val source: HamClockRbnSource = HamClockRbnSource.CONFIGURED_RETAIL_CLUSTER,
+    val windowMinutes: Int = 10,
+    val maximumRows: Int = 120,
+    val bands: Set<String> = emptySet(),
+    val modes: Set<String> = emptySet(),
+    val minimumSnr: Int? = null,
+    val skimmerCall: String = "",
+    val dxCall: String = "",
+    val watchlistOnly: Boolean = false,
+    val showPaths: Boolean = true,
+)
+
+data class HamClockWsprPreference(
+    val personalEnabled: Boolean = true,
+    val direction: HamClockPskDirection = HamClockPskDirection.BOTH,
+    val windowMinutes: Int = 30,
+    val band: String = "ALL",
+    val minimumSnr: Int? = null,
+    val maximumPaths: Int = 100,
+    val regionalEnabled: Boolean = false,
+    val policyAcknowledged: Boolean = false,
+    val showPaths: Boolean = true,
+    val showRegionalGrid: Boolean = false,
+)
+
+data class HamClockIbpPreference(
+    val showAllSites: Boolean = true,
+    val showPaths: Boolean = true,
+)
+
+data class HamClockBandHealthPreference(
+    val windowMinutes: Int = 15,
+    val mode: String = "ALL",
+    val enabledSources: Set<String> = setOf("CLUSTER", "PSK", "RBN", "WSPR", "QSO_HISTORY"),
+    val visibleBands: Set<String> = setOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"),
+)
+
 data class HamClockPortablePreference(
     val enabledPrograms: Set<String> = setOf("POTA", "WWFF", "SOTA", "WWBOTA"),
     val windowMinutes: Int = 30,
@@ -142,6 +192,11 @@ data class HamClockUserSettings(
     val map: HamClockMapPreference = HamClockMapPreference(),
     val cluster: HamClockClusterPreference = HamClockClusterPreference(),
     val pskReporter: HamClockPskPreference = HamClockPskPreference(),
+    val dxNews: HamClockDxNewsPreference = HamClockDxNewsPreference(),
+    val rbn: HamClockRbnPreference = HamClockRbnPreference(),
+    val wspr: HamClockWsprPreference = HamClockWsprPreference(),
+    val ibp: HamClockIbpPreference = HamClockIbpPreference(),
+    val bandHealth: HamClockBandHealthPreference = HamClockBandHealthPreference(),
     val portable: HamClockPortablePreference = HamClockPortablePreference(),
     val satellites: HamClockSatellitePreference = HamClockSatellitePreference(),
     val dxTarget: HamClockDxTarget? = null,
