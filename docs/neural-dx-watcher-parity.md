@@ -31,16 +31,16 @@ by in-process controllers, encrypted preferences, SQLite, and Compose UI.
 - **World:** band and 15–360 minute window controls; anomaly-only and grey-line
   overlays; observed region cells, expected baseline, anomaly ratio,
   confidence/sample count, and an explanation/reality-check view.
-- **Briefing:** 12-hour cached DX-World, DXNews, NG3K ADXO, and QO-100 sources;
-  per-source status and items; operator reordering; manual refresh; DX mode;
+- **Briefing:** independently validated 12-hour last-good caches for DX-World, DXNews, NG3K ADXO, and QO-100 sources;
+  per-source live/cached/stale/unavailable state and age; operator reordering; manual refresh; DX mode;
   callsign extraction; and one-tap watchlist addition.
-- **Satellites:** CelesTrak OMM/TLE refresh and cache; followed-satellite list;
+- **Satellites:** validated CelesTrak/AMSAT last-good catalogue refresh with visible state and age; followed-satellite list;
   searchable amateur catalogue; current latitude/longitude/altitude,
   azimuth/elevation/range/visibility and footprint; 4/12/24-hour pass list with
   AOS/TCA/LOS and maximum elevation; and cached SatNOGS uplink/downlink/mode
   details.
 - **Weather Radio:** global HF/VHF heuristic synthesis with honesty labels;
-  Open-Meteo local HF and VHF/UHF conditions; pressure trend, humidity, wind,
+  QTH-scoped Open-Meteo and WSPR last-good caches with visible state and age; Open-Meteo local HF and VHF/UHF conditions; pressure trend, humidity, wind,
   precipitation, CAPE, 300 hPa wind, and tropo/ducting heuristic; WSPR.live HF,
   VHF and 2 m confirmation; QRN/noise correlation; regional lightning state;
   Quick VOACAP path reliability; 24-hour band activity; monthly
@@ -51,9 +51,9 @@ by in-process controllers, encrypted preferences, SQLite, and Compose UI.
 
 - Reuse RigWeave's single primary-plus-two-fallback cluster connection and
   CTY.DAT resolver; never open a competing cluster stream.
-- Keep bounded live state and a durable indexed spot journal. Network caches
-  survive restarts and expose age, source, refresh, loading, unavailable, and
-  stale states without fabricating values.
+- Keep bounded live state and a durable indexed spot journal. Android provider caches
+  validate before atomic commit, survive restarts, and expose source, age, and uniform
+  `LIVE`, `CACHED`, `STALE`, or `UNAVAILABLE` state without fabricating values.
 - Use the configured local log or selected Wavelog station for worked status.
   A QSO is confirmed only by paper QSL or LoTW, as explicitly required for
   RigWeave.

@@ -86,6 +86,27 @@ Android manual cluster posting accepts operator-entered frequencies through 10.5
 
 Current source contains integrations for the configured DX cluster; NOAA SWPC solar products; country-files.com CTY data; Open-Meteo; wspr.live; PSK Reporter; DX-World; DXNews; NG3K ADXO; QO-100 DX Club; CelesTrak; AMSAT orbital elements; SatNOGS transmitters; the dl0tud beacon list; Blitzortung community MQTT; optional Perplexity; and an operator-configured HTTPS ntfy endpoint. Provider availability, terms, credentials, and live-service behaviour are separate from source/build validation.
 
+### Android provider freshness and last-good cache contract
+
+Android uses one visible state vocabulary for the Neural DX providers:
+
+- `LIVE`: a response was fetched, decoded, semantically validated, and atomically committed as the new last-good cache;
+- `CACHED`: a valid last-good cache remains within the provider refresh interval, including after a failed forced refresh;
+- `STALE`: an expired last-good value is retained after provider failure, invalid content, or an unproven derived startup restore;
+- `UNAVAILABLE`: no valid live or cached value exists.
+
+Each status records its source, update epoch, expiry epoch, and a short safe detail. A live or cached status is evaluated as stale after its expiry, and the Compose panels show `Source · STATE · age`. The top-level refresh summary counts every requested core provider; the four briefing feeds count independently, blank-callsign PSK Reporter is excluded, and optional Perplexity enrichment is not a core provider. Local opportunity, log, and world calculations remain available when providers fail.
+
+Raw network text is decoded and validated before it can replace last-good data. Bounded cache reads reject empty or oversized files. Writes use a temporary file in the destination directory, flush and sync it, then move with atomic replace where supported and a narrow replace fallback; the destination is never explicitly deleted first and abandoned temporary files are removed. Malformed successful HTTP responses therefore cannot poison a valid cache, and coroutine cancellation is rethrown rather than converted to fallback state.
+
+Open-Meteo and WSPR caches use locale-independent, rounded station-coordinate keys. The selected station's scoped cache is restored at controller startup; legacy unscoped files are not trusted for another QTH. The same Open-Meteo decoder restores current values, CAPE, 850 hPa temperature, 300 hPa wind, pressure trend, tropo index, and ducting label. WSPR restores separate HF and VHF/UHF lists, with an explicit empty `data` array treated as a valid zero-observation result.
+
+PSK Reporter retains its per-callsign raw cache and recalculates receiver distances for the current QTH whenever raw live or cached data is decoded. Its derived display file is atomic and starts stale until callsign/QTH revalidation. Briefing raw caches retain independent states and require at least one parsed item before commit; the combined display cache is atomic. Satellite catalogues must decode to a non-empty catalogue before commit. The beacon raw cache requires at least ten valid rows, recalculates QTH-relative ranges, and atomically writes its derived display cache. Satellite and beacon catalogue age is shown separately from continuously recalculated local positions.
+
+Blitzortung uses the same vocabulary without disk persistence: a connected session is live, retained strikes during disconnect are stale, and disconnect without strikes is unavailable. The controller owns the active socket, closes it before a materially different QTH listener starts, and closes it during idempotent controller shutdown before cancelling jobs and scope. No reconnect loop survives scope cancellation.
+
+This cache/freshness work is Android-only. It adds no dependency or database migration, leaves `neural-dx.sqlite` at schema version 3, does not change `rigweave.sqlite`, scoring, worked-log logic, observation bands, direct-tune safety, endpoints, or iOS/shared-core code, and does not resolve the Neural-DX-Watcher licence/permission release blocker.
+
 ## Future upstream review procedure
 
 1. Retain the approved immutable upstream commit and obtain explicit licence/permission status.
@@ -121,6 +142,14 @@ Unified observation-band contract on base `76e1e40e8471f142c9349a193c0a62687c79b
 - The complete generic iOS Simulator build passed for both simulator architectures. The dynamic snapshot decoder and band/pulse views require no static 16-band list.
 - Focused source review found no 54 MHz cap in shared parser or engine, no QO-100 stored/filter band identity, and guards on every Android/iOS Neural DX `FA` path. `git diff --check` passed.
 - No live service, physical UI, physical device, CAT, radio, transmission, RF, or release validation was performed.
+
+Provider freshness/cache closure on base `45eec41bc3e12abeecf87c9c59cde6012743b342`:
+
+- Android JVM tests passed `234/234`, including focused last-good state transitions, malformed-response preservation, bounded reads, cancellation, atomic replacement, effective ageing, human-readable ages, full weather offline decode, WSPR empty-data semantics, QTH cache keys, and truthful provider-summary counts.
+- Android debug APK and instrumentation APK assembly passed. No APK was installed and no instrumentation test was run on Oliver's protected operator tablet.
+- Production-source scans found no `cachedFetch`, `All Neural DX sources current`, or `STALE CACHE` wording in the Neural DX controller/UI.
+- Changed source is Android-only. No shared C++, iOS, database schema, current-opportunity ranking, worked-log, observation-band, or direct-tune implementation changed. Shared-core and iOS builds were deliberately not run.
+- No live provider, physical UI/device, authenticated service, CAT, radio, transmission, RF, release, or store validation was performed.
 
 Validation commands:
 
