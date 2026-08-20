@@ -20,9 +20,11 @@ set_target_properties(rigweave_flex PROPERTIES IMPORTED_LOCATION
     ${FLEX_ROOT}/target/${FLEX_RUST_TARGET}/release/librigweave_flex.a)
 add_library(rigweave SHARED
     native_bridge.cpp
+    hamclock_propagation_bridge.cpp
     ${CORE_ROOT}/src/core.cpp
     ${CORE_ROOT}/src/features.cpp
     ${CORE_ROOT}/src/satellite.cpp
+    ${CORE_ROOT}/src/propagation/p533.cpp
     ${CORE_ROOT}/portable/src/adif.cpp
     ${CORE_ROOT}/portable/src/cat_parser.cpp
     ${CORE_ROOT}/portable/src/cty.cpp
