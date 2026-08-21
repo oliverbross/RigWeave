@@ -18,7 +18,7 @@ class NeuralDxStoreInstrumentedTest {
     private val databaseName = "neural-dx-store-${System.nanoTime()}.sqlite"
     private lateinit var store: NeuralDxStore
 
-    @Before fun createVersionTwoDatabase() {
+    @Before fun createVersionThreeDatabase() {
         context.deleteDatabase(databaseName)
         context.openOrCreateDatabase(databaseName, Context.MODE_PRIVATE, null).use { db ->
             db.execSQL("""CREATE TABLE spot(id TEXT PRIMARY KEY, ts INTEGER NOT NULL, call TEXT NOT NULL, spotter TEXT NOT NULL,
@@ -29,11 +29,18 @@ class NeuralDxStoreInstrumentedTest {
             db.execSQL("CREATE INDEX spot_band_ts_idx ON spot(band,ts DESC)")
             db.execSQL("CREATE INDEX spot_call_ts_idx ON spot(call,ts DESC)")
             db.execSQL("CREATE TABLE prediction_result(key TEXT PRIMARY KEY)")
+            db.execSQL("ALTER TABLE spot ADD COLUMN dxcc TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE spot ADD COLUMN confidence INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE spot ADD COLUMN samples INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE spot ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
+            db.execSQL("ALTER TABLE spot ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0")
             val timestamp = Instant.now().epochSecond - 60
-            db.execSQL("INSERT INTO spot VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", arrayOf(
+            db.execSQL("""INSERT INTO spot(id,ts,call,spotter,frequency_hz,band,mode,country,continent,latitude,longitude,
+                score,watchlisted,comment,dxcc,confidence,samples,reason,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", arrayOf<Any?>(
                 "existing", timestamp, "JA1OLD", "W1AW", 14_074_000, "20m", "FT8", "", "", 0.0, 0.0, 45, 0, "legacy comment",
+                "", 0, 0, "", timestamp,
             ))
-            db.version = 2
+            db.version = 3
         }
         store = NeuralDxStore(context, databaseName)
         store.writableDatabase
@@ -44,14 +51,18 @@ class NeuralDxStoreInstrumentedTest {
         context.deleteDatabase(databaseName)
     }
 
-    @Test fun migratesVersionTwoAndUpsertsWithoutErasingEnrichmentOrCreatingFreshAlerts() {
+    @Test fun migratesVersionThreeAndUpsertsWithoutErasingEnrichmentOrCreatingFreshAlerts() {
         val db = store.writableDatabase
-        assertEquals(3, db.version)
+        assertEquals(4, db.version)
         val columns = db.rawQuery("PRAGMA table_info(spot)", null).use { cursor ->
             buildSet { while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("name"))) }
         }
         assertTrue(columns.containsAll(setOf("dxcc", "confidence", "samples", "reason", "updated_at")))
         assertFalse(tableExists("prediction_result"))
+        assertTrue(tableExists("evidence_bucket"))
+        assertTrue(tableExists("outlook_prediction"))
+        assertTrue(tableExists("outlook_calibration"))
+        assertTrue(tableExists("outlook_meta"))
         assertEquals(readLong("existing", "ts"), readLong("existing", "updated_at"))
 
         val enriched = spot(
@@ -89,6 +100,14 @@ class NeuralDxStoreInstrumentedTest {
         val fresh = spot(id = "fresh", call = "VK8NEW", score = 60, confidence = 50, samples = 5)
         assertEquals(listOf("fresh"), store.ingest(listOf(fresh)).map { it.id })
         assertEquals(2, rowCount())
+
+        val outlook = NeuralOutlookController(store)
+        outlook.runBackfillBatchForTest("profile|OM0RX|JN88TQ")
+        val firstBackfillCount = tableCount("evidence_bucket")
+        outlook.runBackfillBatchForTest("profile|OM0RX|JN88TQ")
+        assertEquals(firstBackfillCount, tableCount("evidence_bucket"))
+        assertTrue(firstBackfillCount > 0)
+        outlook.close()
     }
 
     private fun spot(
@@ -106,6 +125,10 @@ class NeuralDxStoreInstrumentedTest {
     ).use { it.moveToFirst() }
 
     private fun rowCount(): Int = store.readableDatabase.rawQuery("SELECT COUNT(*) FROM spot", null).use {
+        it.moveToFirst(); it.getInt(0)
+    }
+
+    private fun tableCount(table: String): Int = store.readableDatabase.rawQuery("SELECT COUNT(*) FROM $table", null).use {
         it.moveToFirst(); it.getInt(0)
     }
 

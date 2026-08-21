@@ -68,7 +68,7 @@ internal fun shouldStartForegroundWork(foreground: Boolean, alreadyActive: Boole
     foreground && !alreadyActive
 
 enum class NeuralDxPage(val label: String) {
-    COCKPIT("Cockpit"), MAP("Map"), INSIGHT("AI Insight"), WORLD("World"),
+    COCKPIT("Cockpit"), MAP("Map"), INSIGHT("Insight & Outlook"), WORLD("World"),
     BRIEFING("Briefing"), OBSERVATIONS("RF Evidence"), SATELLITES("Satellites"), WEATHER("Weather")
 }
 
@@ -112,7 +112,8 @@ internal fun buildCurrentOpportunities(spots: List<AndroidDXSpot>): List<NeuralC
     .toList()
 data class NeuralWorldCell(val row: Int, val column: Int, val latitude: Double, val longitude: Double,
     val observed: Int, val expected: Double?, val anomalyRatio: Double?, val confidence: String,
-    val calls: List<String>, val greyline: Boolean)
+    val calls: List<String>, val greyline: Boolean, val baselineSamples: Int, val sourceCount: Int,
+    val anomalyLabel: String)
 data class NeuralInsight(val generatedEpoch: Long = 0, val title: String = "DX analysis is waiting for data",
     val report: String = "", val bullets: List<String> = emptyList(), val recommendations: List<String> = emptyList(),
     val log: NeuralLogSummary = NeuralLogSummary(), val source: String = "LOCAL", val error: String = "")
@@ -367,7 +368,7 @@ internal fun extractCallsigns(text: String): List<String> = Regex("(?<![A-Z0-9/]
     .findAll(text.uppercase(Locale.US)).map { it.value }.filterNot { it in setOf("2024", "2025", "2026") }.distinct().take(24).toList()
 
 internal class NeuralDxStore(context: Context, databaseName: String = "neural-dx.sqlite") :
-    SQLiteOpenHelper(context, databaseName, null, 3) {
+    SQLiteOpenHelper(context, databaseName, null, 4) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE spot(id TEXT PRIMARY KEY, ts INTEGER NOT NULL, call TEXT NOT NULL, spotter TEXT NOT NULL,
             frequency_hz INTEGER NOT NULL, band TEXT NOT NULL, mode TEXT NOT NULL, country TEXT NOT NULL,
@@ -379,6 +380,7 @@ internal class NeuralDxStore(context: Context, databaseName: String = "neural-dx
         db.execSQL("CREATE INDEX spot_band_ts_idx ON spot(band,ts DESC)")
         db.execSQL("CREATE INDEX spot_call_ts_idx ON spot(call,ts DESC)")
         db.execSQL("CREATE INDEX spot_dxcc_band_ts_idx ON spot(dxcc,band,ts DESC)")
+        createNeuralOutlookSchema(db)
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 3) {
@@ -391,6 +393,7 @@ internal class NeuralDxStore(context: Context, databaseName: String = "neural-dx
             db.execSQL("CREATE INDEX IF NOT EXISTS spot_dxcc_band_ts_idx ON spot(dxcc,band,ts DESC)")
             db.execSQL("DROP TABLE IF EXISTS prediction_result")
         }
+        if (oldVersion < 4) createNeuralOutlookSchema(db)
     }
 
     fun ingest(rows: List<AndroidDXSpot>): List<AndroidDXSpot> {
@@ -451,37 +454,51 @@ internal class NeuralDxStore(context: Context, databaseName: String = "neural-dx
         return out
     }
 
-    fun worldCells(windowMinutes: Int, band: String): List<NeuralWorldCell> {
+    fun worldCells(windowMinutes: Int, band: String, stationKey: String = ""): List<NeuralWorldCell> {
+        if (stationKey.isBlank()) return emptyList()
         val now = Instant.now().epochSecond; val currentSince = now - windowMinutes * 60L
-        val historySince = currentSince - 14L * 86400L
-        data class Bucket(var now: Int = 0, var historical: Int = 0, val calls: MutableSet<String> = linkedSetOf())
+        val historySince = now - 56L * 86400L
+        data class Bucket(var current: Int = 0, var sourceCount: Int = 0, val historical: MutableMap<Long, Int> = linkedMapOf())
         val buckets = mutableMapOf<Pair<Int, Int>, Bucket>()
-        val whereBand = if (band == "ALL") "" else " AND band=?"
-        val args = if (band == "ALL") arrayOf(historySince.toString()) else arrayOf(historySince.toString(), band)
-        readableDatabase.rawQuery("SELECT ts,call,latitude,longitude FROM spot WHERE ts>=? AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180$whereBand", args).use { c ->
+        val bandSql = if (band == "ALL") " AND band<>'*'" else " AND band=?"
+        val args = mutableListOf(stationKey, historySince.toString(), now.toString()).apply {
+            if (band != "ALL") add(band)
+        }.toTypedArray()
+        readableDatabase.rawQuery("""SELECT bucket_start,region_row,region_col,SUM(observation_count),COUNT(DISTINCT source) FROM evidence_bucket
+            WHERE station_key=? AND bucket_start>=? AND bucket_start<=? AND region_row BETWEEN 0 AND 5
+            AND region_col BETWEEN 0 AND 11$bandSql GROUP BY bucket_start,region_row,region_col""", args).use { c ->
             while (c.moveToNext()) {
-                val lat = c.getDouble(2); val lon = c.getDouble(3)
-                if (lat == 0.0 && lon == 0.0) continue
-                val row = floor((75.0 - lat) / 30.0).toInt().coerceIn(0, 5)
-                val col = floor((lon + 180.0) / 30.0).toInt().coerceIn(0, 11)
-                val b = buckets.getOrPut(row to col) { Bucket() }
-                if (c.getLong(0) >= currentSince) { b.now++; if (b.calls.size < 8) b.calls += c.getString(1) } else b.historical++
+                val epoch = c.getLong(0); val slot = ((epoch / 900L) % 96L).toInt()
+                if (utcQuarterHourDistance(epoch, now) > 2 && epoch < currentSince) continue
+                val value = buckets.getOrPut(c.getInt(1) to c.getInt(2)) { Bucket() }
+                if (epoch >= currentSince) { value.current += c.getInt(3); value.sourceCount = max(value.sourceCount, c.getInt(4)) }
+                else value.historical[epoch] = (value.historical[epoch] ?: 0) + c.getInt(3)
             }
         }
-        val historyWindows = max(1.0, (14.0 * 24.0 * 60.0) / windowMinutes)
         return buckets.map { (key, value) ->
-            val expected = value.historical / historyWindows
-            val ratio = if (expected >= 0.35) value.now / expected else null
+            val samples = value.historical.size
+            val expected = if (samples > 0) value.historical.values.sum().toDouble() / samples else null
+            val ratio = expected?.takeIf { samples >= 8 && it >= .25 }?.let { value.current / it }
             val lat = 75.0 - key.first * 30.0 - 15.0; val lon = -180.0 + key.second * 30.0 + 15.0
-            NeuralWorldCell(key.first, key.second, lat, lon, value.now, expected.takeIf { value.historical > 0 }, ratio,
-                when { value.historical >= 30 -> "HIGH"; value.historical >= 8 -> "MEDIUM"; else -> "LOW" }, value.calls.toList(),
-                isGreyline(lon, now))
-        }.filter { it.observed > 0 }.sortedByDescending { it.anomalyRatio ?: it.observed.toDouble() }
+            val label = when {
+                ratio == null -> "INSUFFICIENT BASELINE"
+                ratio >= 1.8 -> "STRONG ANOMALY"
+                ratio >= 1.25 -> "ABOVE NORMAL"
+                ratio <= 0.65 -> "BELOW NORMAL"
+                else -> "NORMAL RANGE"
+            }
+            NeuralWorldCell(key.first, key.second, lat, lon, value.current, expected, ratio,
+                when { samples >= 24 -> "HIGH"; samples >= 8 -> "MEDIUM"; else -> "LOW" }, emptyList(), isGreyline(lon, now),
+                samples, value.sourceCount, label)
+        }.filter { it.observed > 0 || it.expected != null }.sortedByDescending { it.anomalyRatio ?: it.observed.toDouble() }.take(72)
     }
 
     fun recentBandCount(band: String, minutes: Int): Int = readableDatabase.rawQuery(
         "SELECT COUNT(*) FROM spot WHERE band=? AND ts>=?", arrayOf(band, (Instant.now().epochSecond - minutes * 60L).toString())
     ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+
+    internal fun outlookReadableDatabase(): SQLiteDatabase = readableDatabase
+    internal fun outlookWritableDatabase(): SQLiteDatabase = writableDatabase
 
     companion object {
         private fun isGreyline(longitude: Double, epoch: Long): Boolean {
@@ -498,6 +515,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
     initialGrid: String = "") {
     private val scope = CoroutineScope(Job() + Dispatchers.IO)
     private val store = NeuralDxStore(context)
+    internal val outlook = NeuralOutlookController(store)
     private val prefs = context.getSharedPreferences("neural-dx-v12", Context.MODE_PRIVATE)
     private val cacheDir = File(context.filesDir, "neural-dx-cache").apply { mkdirs() }
     private var refreshJob: Job? = null
@@ -622,7 +640,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
 
     fun setWorldFilter(windowMinutes: Int, band: String) {
         worldWindowMinutes = windowMinutes.coerceIn(15, 360); worldBand = band
-        scope.launch { val rows = store.worldCells(worldWindowMinutes, worldBand); withContext(Dispatchers.Main) { world = rows } }
+        scope.launch { val rows = store.worldCells(worldWindowMinutes, worldBand, outlook.snapshot.stationKey); withContext(Dispatchers.Main) { world = rows } }
     }
 
     fun saveSettings(notifications: Boolean, ntfy: String, token: String, perplexity: String, dxMode: Boolean) {
@@ -658,6 +676,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
     fun setForeground(value: Boolean) {
         if (foreground == value) return
         foreground = value
+        outlook.setForeground(value)
         if (!value) {
             refreshJob?.cancel(); refreshJob = null
             pskGeneration++; pskJob?.cancel(); pskJob = null
@@ -828,7 +847,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
                 val localInsight = buildInsight(call, log, live)
                 val finalInsight = if (perplexityKey.isNotBlank()) runCatching { enrichInsight(localInsight) }.getOrElse { localInsight.copy(error = "AI provider unavailable; local analysis shown") } else localInsight
                 val derivedOpportunities = buildCurrentOpportunities(live)
-                val derivedWorld = store.worldCells(worldWindowMinutes, worldBand)
+                val derivedWorld = store.worldCells(worldWindowMinutes, worldBand, outlook.snapshot.stationKey)
                 val derivedBands = store.bandActivity(); val derivedHeatmap = store.heatmap6m()
                 val derivedBeacons = buildBeaconReception(live)
                 withContext(Dispatchers.Main) {
@@ -849,7 +868,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
         closed = true
         closeActiveLightningSocket()
         refreshJob?.cancel(); pskJob?.cancel(); wsprJob?.cancel(); lightningJob?.cancel()
-        scope.cancel(); store.close()
+        outlook.close(); scope.cancel(); store.close()
     }
 
     @Synchronized private fun registerLightningSocket(socket: Socket) {
@@ -870,7 +889,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
     }
 
     private suspend fun publishDerived(rows: List<AndroidDXSpot>, stationId: String?, stationCall: String) {
-        val opportunities = buildCurrentOpportunities(rows); val w = store.worldCells(worldWindowMinutes, worldBand)
+        val opportunities = buildCurrentOpportunities(rows); val w = store.worldCells(worldWindowMinutes, worldBand, outlook.snapshot.stationKey)
         val b = store.bandActivity(); val h = store.heatmap6m(); val be = buildBeaconReception(rows)
         val currentInsight = buildInsight(stationCall, database.neuralLogSummary(stationId), rows)
         withContext(Dispatchers.Main) { currentOpportunities = opportunities; world = w; bandActivity = b; heatmap6m = h; beacons = be; insight = currentInsight }
