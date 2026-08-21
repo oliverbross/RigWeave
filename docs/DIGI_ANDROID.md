@@ -32,6 +32,12 @@ interlock, remote audio stream, Opus packetizer, MOX lifecycle, and bounded
 cleanup. Both paths are built and protocol-tested but have no physical Flex
 hardware acceptance in this delivery.
 
+After TX, Elecraft success requires confirmed DATA mode, confirmed PTT, complete
+audio, an RX command and `TQ` confirming receive. Flex success is returned only
+after `stopTransmit` completes and the controller observes `DISABLED`, `READY`
+or `ARMED`; a bounded timeout remains visibly `RX UNCONFIRMED`. That latch
+disables TX and decoder restart until `REQUEST RX & RECHECK` confirms receive.
+
 Mode, CW pitch/speed, RTTY sense, SSTV mode, and TX text persist in app-private
 preferences. Arming and selected image pixels deliberately do not persist.
 
@@ -75,9 +81,16 @@ Start live RX and explicitly enable TX. For CQ, choose `TX FIRST / EVEN` or
 `TX SECOND / ODD`, review auto-CQ/retry bounds, then press `CALL CQ`. For
 search-and-pounce, select a decode from the current session and press
 `CALL SELECTED`; the application derives the opposite TX parity from that
-decode's captured slot and locks it for the exchange.
+decode's exact millisecond capture slot and locks it for the exchange. FT4
+7.5-second half boundaries remain exact in memory, SQLite and WSJT-X UDP.
 
 The UI shows the exact parity and countdown. Any mode, radio identity,
 frequency, clock, route, PTT, audio or RX-confirmation failure cancels the
 automatic exchange. A completed draft is offered only when the standard
 exchange completes with both sent and received reports.
+
+`AUTO SEQUENCE` is explicit. When off, `CALL CQ` and `CALL SELECTED` prepare
+one message and the correct parity but never queue a follow-up; the operator
+must arm and send it. Auto-CQ is unavailable while automatic sequencing is off.
+Reference recordings, companion rows and legacy second-resolution history are
+visible for review/manual drafts but cannot start or advance on-air automation.

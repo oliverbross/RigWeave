@@ -126,7 +126,7 @@ product/mode domain remain absent.
 
 Added `DigiDomain.kt`, `DigiSessionStore.kt`, `DigiRawRecorder.kt`,
 `DigiWsjtInterop.kt`, the native spectrum/tuning ABI, one upstream watcher and
-its weekly workflow. `rigweave-digi.sqlite` schema:
+its weekly workflow. `rigweave-digi.sqlite` schema v2:
 `decode_event`, `digi_session`, `qso_draft`, `sstv_gallery`,
 `digi_meta`. Bounds: 3,000 live rows; seven days/20,000 durable decodes;
 90-day completed sessions/drafts; gallery 100 MB default/250 MB maximum.
@@ -194,8 +194,11 @@ the wait. It permits only a 120 ms late-start window, revalidates clock, radio,
 mode, frequency and TX enable immediately before PTT, and exposes the selected
 FIRST/EVEN or SECOND/ODD slot plus countdown. CQ parity has one persisted
 authority. Search-and-pounce parity is derived as the opposite of the selected
-captured decode slot. Captured slot start is retained through decode, UDP,
-selection, sequencing and re-decode.
+captured decode slot. The earlier hardening statement that captured slot timing
+was retained end-to-end was incomplete: the production model and schema still
+rounded it to whole seconds. Final closure replaces that field with exact
+`slotStartMillis`, including FT4 `.500` boundaries, through decode, schema-v2
+storage, UDP, selection, sequencing and re-decode.
 
 Reports are derived from the associated decode SNR and clamped to FT syntax.
 Sent and received reports remain distinct, and automatic draft creation requires
@@ -213,3 +216,13 @@ The debug AAB is 51,817,294 bytes, SHA-256
 `734e30ae166f50287b6b057e9afc7afa438fccdf054e0e487561d25d3cfc1c1d`.
 Physical radio/audio/RF and device UI acceptance remains pending; no install or
 deployment was performed.
+
+## Final production-path closure
+
+Schema v2 and the production adapters now preserve exact FT4 milliseconds,
+type decode sources, use monotonic runtime countdown, require confirmed Flex
+post-stop receive state, latch RX-unconfirmed recovery, and expose truthful
+automatic/manual sequencing. Final closure validation passed 422 Android host
+unit tests, Android-test source compilation, APK/AAB builds, 97 Rust tests
+(1 ignored), shared-core CTest 2/2, and both package scans. Exact evidence and
+artifact hashes are in `NEXUS_DIGI_FINAL_PRODUCTION_CLOSURE.md`.
