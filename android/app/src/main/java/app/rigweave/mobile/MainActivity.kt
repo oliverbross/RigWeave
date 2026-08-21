@@ -1719,7 +1719,7 @@ private val callbookImageCache = object : LruCache<String, androidx.compose.ui.g
                 connection.connectTimeout = 7_000; connection.readTimeout = 10_000
                 connection.instanceFollowRedirects = true
                 connection.inputStream.use { input ->
-                    val bytes = input.readBoundedBytes(5 * 1024 * 1024)
+                    val bytes = input.readBoundedBytesOrThrow(5 * 1024 * 1024)
                     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
                     var sample = 1

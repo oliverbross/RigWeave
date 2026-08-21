@@ -20,7 +20,7 @@ data class ProjectionHealth(
 }
 
 internal object QsoProjectionStore {
-    const val VERSION = 5
+    const val VERSION = 2
     private const val META_VERSION = "version"
     private const val META_STATE = "state"
     private const val META_CURSOR_TIME = "cursor_time"
@@ -29,7 +29,6 @@ internal object QsoProjectionStore {
     private const val META_COMPLETED = "completed_at"
     private const val META_REPAIRED = "repaired_at"
     private const val META_ERROR = "last_error"
-    private val canonicalContinents = setOf("AF","AN","AS","EU","NA","OC","SA")
 
     fun createSchema(db: SQLiteDatabase, initialState: ProjectionState) {
         db.execSQL("""CREATE TABLE IF NOT EXISTS qso_projection(
@@ -85,22 +84,6 @@ internal object QsoProjectionStore {
         putMeta(db, META_VERSION, VERSION.toString())
     }
 
-    fun migrateV3(db: SQLiteDatabase) {
-        db.execSQL("UPDATE qso_projection SET dxcc='' WHERE TRIM(dxcc)='0'")
-        putMeta(db, META_VERSION, VERSION.toString())
-    }
-
-    fun migrateV4(db: SQLiteDatabase) {
-        createIndexes(db)
-        putMeta(db, META_VERSION, VERSION.toString())
-    }
-
-    fun migrateV5(db: SQLiteDatabase) {
-        db.execSQL("UPDATE qso_projection SET continent='' WHERE TRIM(UPPER(continent)) NOT IN ('AF','AN','AS','EU','NA','OC','SA')")
-        db.execSQL("UPDATE qso_projection SET continent=TRIM(UPPER(continent)) WHERE continent<>''")
-        putMeta(db, META_VERSION, VERSION.toString())
-    }
-
     private fun createIndexes(db: SQLiteDatabase) {
         listOf(
             "CREATE INDEX IF NOT EXISTS qso_projection_time_idx ON qso_projection(created_at DESC,qso_id)",
@@ -120,9 +103,6 @@ internal object QsoProjectionStore {
             "CREATE INDEX IF NOT EXISTS qso_projection_activation_idx ON qso_projection(activation_program,activation_session_id,created_at DESC)",
             "CREATE INDEX IF NOT EXISTS qso_projection_sync_idx ON qso_projection(sync_state,remote_id,created_at DESC)",
             "CREATE INDEX IF NOT EXISTS qso_projection_confirmation_idx ON qso_projection(paper_received,lotw_received,created_at DESC)",
-            "CREATE INDEX IF NOT EXISTS qso_projection_distance_idx ON qso_projection(distance_km DESC) WHERE distance_km>0",
-            "CREATE INDEX IF NOT EXISTS qso_projection_day_idx ON qso_projection(utc_day)",
-            "CREATE INDEX IF NOT EXISTS qso_projection_month_idx ON qso_projection(utc_month)",
             "CREATE INDEX IF NOT EXISTS qso_reference_program_idx ON qso_reference(program,direction,reference_norm,qso_id)",
             "CREATE INDEX IF NOT EXISTS qso_reference_qso_idx ON qso_reference(qso_id,program,direction)",
         ).forEach(db::execSQL)
@@ -138,7 +118,7 @@ internal object QsoProjectionStore {
             put("mode_norm", norm(qso.mode)); put("submode_norm", norm(qso.submode)); put("mode_family", modeFamily(qso))
             put("station_profile_id", qso.stationProfileId); put("station_callsign_norm", norm(qso.stationCallsign)); put("operator_norm", norm(qso.operatorCallsign)); put("my_grid_norm", norm(qso.myGrid))
             put("name_norm", norm(qso.name)); put("qth_norm", norm(qso.qth)); put("email_norm", norm(qso.email)); put("country_norm", norm(qso.country)); put("grid_norm", norm(qso.grid))
-            put("dxcc", normalizeDxcc(qso.dxcc)); put("continent", normalizeContinent(qso.continent)); put("cq_zone", qso.cqZone.trim()); put("itu_zone", qso.ituZone.trim())
+            put("dxcc", norm(qso.dxcc)); put("continent", norm(qso.continent)); put("cq_zone", qso.cqZone.trim()); put("itu_zone", qso.ituZone.trim())
             put("state_norm", norm(qso.state)); put("region_norm", norm(qso.region)); put("county_norm", norm(qso.county)); put("dok_norm", norm(qso.dok)); put("iota_norm", norm(qso.iota))
             put("sota_ref_norm", norm(qso.sotaRef)); put("wwff_ref_norm", norm(qso.wwffRef)); put("pota_ref_norm", norm(qso.potaRef))
             put("my_iota_norm", norm(qso.myIota)); put("my_sota_ref_norm", norm(qso.mySotaRef)); put("my_wwff_ref_norm", norm(qso.myWwffRef)); put("my_pota_ref_norm", norm(qso.myPotaRef))
@@ -166,9 +146,6 @@ internal object QsoProjectionStore {
             }, SQLiteDatabase.CONFLICT_IGNORE)
         }
     }
-
-    internal fun normalizeDxcc(value: String): String = norm(value).takeUnless { it == "0" }.orEmpty()
-    internal fun normalizeContinent(value:String):String = norm(value).takeIf(canonicalContinents::contains).orEmpty()
 
     fun state(db: SQLiteDatabase): ProjectionState = runCatching {
         ProjectionState.valueOf(meta(db, META_STATE).ifBlank { ProjectionState.OPTIMISING.name })

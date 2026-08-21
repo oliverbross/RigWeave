@@ -450,14 +450,14 @@ internal class NeuralDxStore(context: Context, databaseName: String = "neural-dx
         return inserted
     }
 
-    fun searchHistory(query: String, limit: Int = 100): List<SpotHistorySummary> {
-        val prefix = query.trim().uppercase(Locale.US).replace("%", "").replace("_", "")
-        if (prefix.length < 2) return emptyList()
+    fun searchHistory(query: String): List<SpotHistorySummary> {
+        val callsign = query.trim().uppercase(Locale.US)
+        if (callsign.length < 2) return emptyList()
         val rows = mutableListOf<SpotHistorySummary>()
         readableDatabase.rawQuery("""SELECT call,COUNT(*),MIN(ts),MAX(ts),GROUP_CONCAT(DISTINCT band),
             GROUP_CONCAT(DISTINCT mode),COUNT(DISTINCT spotter),GROUP_CONCAT(DISTINCT country)
-            FROM spot WHERE call>=? AND call<? GROUP BY call ORDER BY MAX(ts) DESC LIMIT ?""",
-            arrayOf(prefix, "$prefix\uFFFF", limit.coerceIn(1, 250).toString())).use { cursor ->
+            FROM spot WHERE call=? GROUP BY call LIMIT 1""",
+            arrayOf(callsign)).use { cursor ->
             while (cursor.moveToNext()) rows += SpotHistorySummary(
                 cursor.getString(0), cursor.getInt(1), cursor.getLong(2), cursor.getLong(3),
                 cursor.getString(4).orEmpty().split(',').filter(String::isNotBlank).sorted(),

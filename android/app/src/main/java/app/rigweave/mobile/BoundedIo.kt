@@ -26,3 +26,11 @@ internal fun InputStream.readBoundedBytes(maximumBytes: Int): ByteArray {
 
 internal fun InputStream.readExactBytes(count: Int): ByteArray =
     readBoundedBytes(count).also { require(it.size == count) { "Incomplete stream" } }
+
+internal fun InputStream.readBoundedBytesOrThrow(maximumBytes: Int): ByteArray {
+    require(maximumBytes >= 0)
+    val probeLimit = maximumBytes.toLong().plus(1).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    return readBoundedBytes(probeLimit).also {
+        require(it.size <= maximumBytes) { "Stream exceeds $maximumBytes bytes" }
+    }
+}

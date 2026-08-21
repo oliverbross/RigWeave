@@ -117,22 +117,22 @@ class NeuralDxStoreInstrumentedTest {
     @Test fun historySearchAggregatesByCallsignAndUsesTheCallTimeIndex() {
         val now = Instant.now().epochSecond
         store.ingest(listOf(
-            spot("history-one", "N0AN", 60, 50, 3).copy(receivedEpoch = now - 3_600, band = "20m", mode = "FT8"),
-            spot("history-two", "N0AN", 65, 55, 4).copy(receivedEpoch = now - 60, spotter = "K1ABC", band = "40m", mode = "CW"),
-            spot("history-other", "N0ZZ", 55, 45, 2).copy(receivedEpoch = now - 30),
+            spot("history-one", "K1ABC", 60, 50, 3).copy(receivedEpoch = now - 3_600, band = "20m", mode = "FT8"),
+            spot("history-two", "K1ABC", 65, 55, 4).copy(receivedEpoch = now - 60, spotter = "W3LPL", band = "40m", mode = "CW"),
+            spot("history-other", "K1ABD", 55, 45, 2).copy(receivedEpoch = now - 30),
         ))
 
-        val rows = store.searchHistory("N0A")
+        val rows = store.searchHistory("K1ABC")
         assertEquals(1, rows.size)
-        assertEquals("N0AN", rows.single().callsign)
+        assertEquals("K1ABC", rows.single().callsign)
         assertEquals(2, rows.single().observations)
         assertEquals(listOf("20m", "40m"), rows.single().bands)
         assertEquals(listOf("CW", "FT8"), rows.single().modes)
         assertEquals(2, rows.single().spotters)
 
         val plan = store.readableDatabase.rawQuery(
-            "EXPLAIN QUERY PLAN SELECT call,COUNT(*) FROM spot WHERE call>=? AND call<? GROUP BY call",
-            arrayOf("N0A", "N0A\uFFFF"),
+            "EXPLAIN QUERY PLAN SELECT call,COUNT(*) FROM spot WHERE call=? GROUP BY call",
+            arrayOf("K1ABC"),
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(3)) } }
         assertTrue(plan.any { it.contains("spot_call_ts_idx") })
     }

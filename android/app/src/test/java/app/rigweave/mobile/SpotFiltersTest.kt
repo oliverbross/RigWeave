@@ -37,18 +37,15 @@ class SpotFiltersTest {
         assertFalse(spotMatchesSearch(spot, "Slovak Republic", "504", "Japan"))
     }
 
-    @Test fun bandChoicesCoverLfThroughSatelliteAndMicrowaveOperations() {
+    @Test fun bandChoicesCoverLfThroughSatelliteAndNormalizeTheLegacyAlias() {
         assertTrue(setOf("2190m", "630m", "160m", "6m", "4m", "2m", "1.25m", "70cm", "23cm", "3cm", "6mm", "sat")
             .all { it in spotBandOptions })
         assertEquals(spotBandOptions.size, spotBandOptions.distinct().size)
-    }
-
-    @Test fun legacyLfBandAliasMatchesTheAdifBandName() {
         assertEquals("2190m", canonicalSpotBand("2200m"))
         assertEquals("2190m", canonicalSpotBand("2190M"))
     }
 
-    @Test fun hamClockHomeOffersAmateurBandsFrom160mThrough13cmAndSatellite() {
+    @Test fun hamClockBandsAndCustomStatusColoursRemainBoundedAndValid() {
         assertEquals("160m", hamClockHomeBandOptions.first())
         assertEquals("sat", hamClockHomeBandOptions.last())
         assertTrue("13cm" in hamClockHomeBandOptions)
@@ -59,9 +56,6 @@ class SpotFiltersTest {
             hamClockHomeBandPresets.first { it.first == "LOW HF" }.second)
         assertEquals(setOf("20m", "17m", "15m", "12m", "10m"),
             hamClockHomeBandPresets.first { it.first == "HIGH HF" }.second)
-    }
-
-    @Test fun customStatusColourHexIsOpaqueAndValidated() {
         assertEquals(0xFF43C7D9.toInt(), parseSpotColourHex("#43c7d9"))
         assertEquals("43C7D9", spotColourHex(0xFF43C7D9.toInt()))
         assertEquals(null, parseSpotColourHex("12345"))

@@ -12,5 +12,8 @@ class InAppBrowserTest {
         assertNull(validatedInAppBrowserUrl("file:///data/local/tmp/page.html"))
         assertNull(validatedInAppBrowserUrl("javascript:alert(1)"))
         assertNull(validatedInAppBrowserUrl("https://"))
+        assertNull(validatedInAppBrowserUrl("https://user:secret@example.com/"))
+        assertEquals("mailto:operator@example.com", validatedExternalBrowserUrl("mailto:operator@example.com"))
+        assertNull(validatedExternalBrowserUrl("file:///data/local/tmp/page.html"))
     }
 }
