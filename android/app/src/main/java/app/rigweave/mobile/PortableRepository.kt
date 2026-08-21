@@ -69,7 +69,7 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
 
     var sotaSpots by mutableStateOf<List<PortableSpot>>(emptyList()); private set
     var wwffSpots by mutableStateOf<List<PortableSpot>>(emptyList()); private set
-    var sotaStatus by mutableStateOf(ProviderStatus(PortableFeedKind.UNAVAILABLE, error = "SOTA live API approval required")); private set
+    var sotaStatus by mutableStateOf(ProviderStatus(PortableFeedKind.UNAVAILABLE)); private set
     var wwffStatus by mutableStateOf(ProviderStatus()); private set
     var lastQsoRevision by mutableLongStateOf(qsoDatabase.changeToken()); private set
     var rankedOpportunities by mutableStateOf<List<PortableOpportunity>>(emptyList()); private set

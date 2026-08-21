@@ -22,6 +22,26 @@ class OvernightScaleSatelliteTest {
         assertEquals(SatelliteCacheState.ERROR, satelliteCacheState(0, "INVALID", 100, 95, 10))
     }
 
+    @Test fun localTimersAreAHealthyLocalCapabilityNotAProviderError() {
+        val metadata = localSatelliteTimerMetadata(1234)
+        assertEquals(SatelliteCacheState.CURRENT, metadata.state)
+        assertEquals("", metadata.lastError)
+        assertEquals(1234, metadata.fetchedAt)
+    }
+
+    @Test fun flightpathLongitudesStayNearTheSelectedWorldCopy() {
+        assertEquals(181.0, unwrapSatelliteLongitude(-179.0, 179.0), 0.001)
+        assertEquals(-181.0, unwrapSatelliteLongitude(179.0, -179.0), 0.001)
+        assertEquals(20.0, unwrapSatelliteLongitude(20.0, 15.0), 0.001)
+    }
+
+    @Test fun qo100PointingFromCentralEuropeIsAboveTheSouthernHorizon() {
+        val look = geostationaryLookAngle(GeoPoint(48.7, 17.6))
+        assertTrue(look.visible)
+        assertTrue(look.azimuthDeg in 160.0..190.0)
+        assertTrue(look.elevationDeg in 25.0..45.0)
+    }
+
     @Test fun satelliteDraftCarriesReviewableAdifAndPassContext() {
         val draft = satelliteFastEntryDraft(SatellitePassRow(satellite, pass, transponder), "JN88TQ")
         listOf("<PROP_MODE:SAT>", "<SAT_NAME:AO-91>", "<SAT_MODE:FM>", "<MODE:FM>",

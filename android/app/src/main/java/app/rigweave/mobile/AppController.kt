@@ -32,6 +32,25 @@ data class RadioPreset(
     val color: Long,
 )
 
+internal const val SPOT_STATUS_CS = "CS"
+internal const val SPOT_STATUS_DS = "DS"
+
+private val defaultSpotStatusColours = mapOf(
+    "$SPOT_STATUS_CS:NC" to 0xFF43C7D9.toInt(),
+    "$SPOT_STATUS_CS:NB" to 0xFFE9A72B.toInt(),
+    "$SPOT_STATUS_CS:NM" to 0xFFC481D8.toInt(),
+    "$SPOT_STATUS_CS:W" to 0xFFA5ADB2.toInt(),
+    "$SPOT_STATUS_CS:C" to 0xFF42C77B.toInt(),
+    "$SPOT_STATUS_DS:ATNO" to 0xFFE4544D.toInt(),
+    "$SPOT_STATUS_DS:W/NB" to 0xFFE9A72B.toInt(),
+    "$SPOT_STATUS_DS:C/NB" to 0xFF43C7D9.toInt(),
+    "$SPOT_STATUS_DS:W" to 0xFFA5ADB2.toInt(),
+    "$SPOT_STATUS_DS:C" to 0xFF42C77B.toInt(),
+)
+
+internal fun defaultSpotStatusColour(dimension: String, status: String): Int =
+    defaultSpotStatusColours["$dimension:$status"] ?: 0xFFF4F0E7.toInt()
+
 class AppController(private val context: Context) {
     private val prefs = context.getSharedPreferences("rigweave-app", Context.MODE_PRIVATE)
     private val needsDxccCountryColumnMigration = !prefs.getBoolean("logbook_dxcc_country_v1", false)
@@ -55,6 +74,7 @@ class AppController(private val context: Context) {
     var brightness by mutableStateOf(prefs.getInt("brightness", 82)); private set
     var cqRepeatSeconds by mutableStateOf(prefs.getInt("cq_repeat", 3).coerceIn(CQ_REPEAT_MIN_SECONDS, CQ_REPEAT_MAX_SECONDS)); private set
     var favoriteBands by mutableStateOf(prefs.getString("favorites", "7.020,7.030,7.100,7.200,14.060,21.060")!!.split(",")); private set
+    var spotStatusColours by mutableStateOf(loadSpotStatusColours()); private set
     val macroLabels = mutableStateListOf<String>().apply {
         repeat(CW_MACRO_COUNT) { index -> add(sanitizeCwMacroLabel(prefs.getString("macro_label_$index", defaultCwMacroLabel(index))
             ?: defaultCwMacroLabel(index))) }
@@ -117,6 +137,26 @@ class AppController(private val context: Context) {
     fun updateVoiceTxLevel(value: Float) {
         voiceTxLevel = value.coerceIn(0.02f, 1f)
         prefs.edit().putFloat("voice_tx_level", voiceTxLevel).apply()
+    }
+
+    fun spotStatusColour(dimension: String, status: String?): Int = status?.takeIf(String::isNotBlank)?.let {
+        spotStatusColours["$dimension:$it"] ?: defaultSpotStatusColour(dimension, it)
+    } ?: 0xFFF4F0E7.toInt()
+
+    fun setSpotStatusColour(dimension: String, status: String, colour: Int) {
+        val key = "$dimension:$status"
+        spotStatusColours = spotStatusColours + (key to (colour or 0xFF000000.toInt()))
+        prefs.edit().putInt(spotStatusColourPreferenceKey(dimension, status), spotStatusColours.getValue(key)).apply()
+    }
+
+    fun resetSpotStatusColours() {
+        val editor = prefs.edit()
+        defaultSpotStatusColours.keys.forEach { key ->
+            val (dimension, status) = key.split(':', limit = 2)
+            editor.remove(spotStatusColourPreferenceKey(dimension, status))
+        }
+        editor.apply()
+        spotStatusColours = defaultSpotStatusColours
     }
     fun saveVoiceMacroLabels(labels: List<String>) {
         val editor = prefs.edit()
@@ -257,6 +297,14 @@ class AppController(private val context: Context) {
                 row.getLong("frequency"), row.getString("mode"), row.getInt("bandwidth"), row.getLong("color")) }
         }
     }.getOrDefault(emptyList())
+
+    private fun loadSpotStatusColours(): Map<String, Int> = defaultSpotStatusColours.mapValues { (key, fallback) ->
+        val (dimension, status) = key.split(':', limit = 2)
+        prefs.getInt(spotStatusColourPreferenceKey(dimension, status), fallback)
+    }
+
+    private fun spotStatusColourPreferenceKey(dimension: String, status: String) =
+        "spot_status_colour_${dimension.lowercase()}_${status.replace('/', '_').lowercase()}"
 
     private fun persistPresets() {
         val rows = JSONArray()

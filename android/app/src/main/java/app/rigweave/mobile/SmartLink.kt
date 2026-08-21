@@ -66,7 +66,7 @@ object SmartLinkAuth {
     }
 
     private fun domain(config: SmartLinkConfig) = config.authDomain.removePrefix("https://").trimEnd('/')
-    private fun encode(value: String) = URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20")
+    private fun encode(value: String) = URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
 
     fun authorizationUrl(config: SmartLinkConfig, state: String): String {
         require(config.complete && state.isNotBlank())
@@ -97,7 +97,7 @@ object SmartLinkAuth {
         ) return null
         val values = redirect.rawFragment?.split('&')?.mapNotNull {
             it.split('=', limit = 2).takeIf { parts -> parts.size == 2 }?.let { parts ->
-                URLDecoder.decode(parts[0], StandardCharsets.UTF_8) to URLDecoder.decode(parts[1], StandardCharsets.UTF_8)
+                URLDecoder.decode(parts[0], Charsets.UTF_8.name()) to URLDecoder.decode(parts[1], Charsets.UTF_8.name())
             }
         }?.toMap().orEmpty()
         val state = values["state"] ?: return null

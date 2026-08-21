@@ -7,21 +7,29 @@ import android.database.sqlite.SQLiteOpenHelper
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
 import org.json.JSONObject
+import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
@@ -88,6 +96,8 @@ data class GroupsIoSearchResult(
     val snippet: String,
 )
 
+data class GroupsIoCacheStats(val topics: Int = 0, val messages: Int = 0, val downloadedAttachments: Int = 0)
+
 internal data class GroupsIoPage<T>(val values: List<T>, val nextPageToken: String?, val hasMore: Boolean)
 internal fun groupsIoDestinationVisible(enabled: Boolean, compact: Boolean): Boolean = enabled && !compact
 internal fun groupsIoPagination(root: JSONObject): Pair<String?, Boolean> {
@@ -132,7 +142,9 @@ internal class GroupsIoDatabase(private val appContext: Context, private val dat
         db.execSQL("CREATE INDEX messages_topic_number ON messages(topic_id, message_number)")
         db.execSQL("CREATE INDEX messages_group_created ON messages(group_id, created DESC)")
         db.execSQL("CREATE INDEX sync_state_scope ON sync_state(scope, scope_id)")
-        db.execSQL("CREATE VIRTUAL TABLE message_search USING fts5(group_name, topic_subject, message_subject, author_name, body_plain)")
+        // Android's framework SQLite is not guaranteed to include FTS5. FTS4 is available on
+        // every Android version supported by RigWeave and keeps local archive search indexed.
+        db.execSQL("CREATE VIRTUAL TABLE message_search USING fts4(group_name, topic_subject, message_subject, author_name, body_plain)")
         createPhase2Schema(db)
     }
 
@@ -284,12 +296,16 @@ internal class GroupsIoDatabase(private val appContext: Context, private val dat
         val where = buildString { append("message_search MATCH ?"); if (groupId != null) append(" AND m.group_id=?"); if (topicId != null) append(" AND m.topic_id=?") }
         val args = mutableListOf(match); groupId?.let { args += it.toString() }; topicId?.let { args += it.toString() }; args += limit.coerceIn(1, 100).toString()
         return readableDatabase.rawQuery("""SELECT m.group_id,m.topic_id,m.message_number,g.title,t.subject,m.author_name,m.created,
-            snippet(message_search,4,'[',']',' … ',18) FROM message_search JOIN messages m ON m.row_id=message_search.rowid
-            JOIN groups g ON g.group_id=m.group_id JOIN topics t ON t.topic_id=m.topic_id WHERE $where ORDER BY bm25(message_search) LIMIT ?""", args.toTypedArray())
+            snippet(message_search,'[',']',' … ',4,18) FROM message_search JOIN messages m ON m.row_id=message_search.rowid
+            JOIN groups g ON g.group_id=m.group_id JOIN topics t ON t.topic_id=m.topic_id WHERE $where ORDER BY m.created DESC LIMIT ?""", args.toTypedArray())
             .use { cursor -> buildList { while (cursor.moveToNext()) add(GroupsIoSearchResult(cursor.getLong(0), cursor.getLong(1), cursor.getLong(2), cursor.getString(3), cursor.getString(4), cursor.getString(5), cursor.getLong(6), cursor.getString(7))) } }
     }
 
     fun sizeBytes(): Long = listOf("", "-wal", "-shm").sumOf { suffix -> appContext.getDatabasePath(databaseName + suffix).takeIf { it.isFile }?.length() ?: 0L }
+
+    fun cacheStats(): GroupsIoCacheStats = readableDatabase.rawQuery(
+        "SELECT (SELECT COUNT(*) FROM topics),(SELECT COUNT(*) FROM messages),(SELECT COUNT(*) FROM message_attachments WHERE download_state='downloaded')", null
+    ).use { cursor -> cursor.moveToFirst(); GroupsIoCacheStats(cursor.getInt(0), cursor.getInt(1), cursor.getInt(2)) }
 
     fun capabilities(groupId: Long): GroupsIoCapabilities? = readableDatabase.rawQuery(
         "SELECT can_read,can_post,can_reply,download_archives,post_status,max_attachment_size,default_reply_policy,permissions_synced_at FROM groups WHERE group_id=?",
@@ -369,14 +385,31 @@ internal class GroupsIoDatabase(private val appContext: Context, private val dat
     }
 
     fun upsertIncomingAttachment(groupId: Long, messageNumber: Long, value: GroupsIoIncomingAttachment, relativePath: String? = null, localSize: Long? = null, sha256: String? = null) {
+        val saved = readableDatabase.rawQuery(
+            "SELECT local_relative_path,local_size,sha256 FROM message_attachments WHERE group_id=? AND message_number=? AND attachment_id=?",
+            arrayOf(groupId.toString(), messageNumber.toString(), value.id.toString())
+        ).use { cursor -> if (cursor.moveToFirst()) Triple(
+            if (cursor.isNull(0)) null else cursor.getString(0), cursor.longOrNull(1), if (cursor.isNull(2)) null else cursor.getString(2)
+        ) else null }
+        val effectivePath = relativePath ?: saved?.first
+        val effectiveSize = localSize ?: saved?.second
+        val effectiveSha = sha256 ?: saved?.third
         val row = ContentValues().apply {
             put("group_id", groupId); put("message_number", messageNumber); put("attachment_id", value.id); put("filename", value.filename); put("media_type", value.mediaType)
             value.size?.let { put("reported_size", it) } ?: putNull("reported_size")
-            relativePath?.let { put("local_relative_path", it); put("download_state", "downloaded"); put("downloaded_at", System.currentTimeMillis()) } ?: put("download_state", "remote")
-            localSize?.let { put("local_size", it) }; sha256?.let { put("sha256", it) }; putNull("last_error")
+            effectivePath?.let { put("local_relative_path", it); put("download_state", "downloaded"); put("downloaded_at", System.currentTimeMillis()) } ?: put("download_state", "remote")
+            effectiveSize?.let { put("local_size", it) }; effectiveSha?.let { put("sha256", it) }; putNull("last_error")
         }
         writableDatabase.insertWithOnConflict("message_attachments", null, row, SQLiteDatabase.CONFLICT_REPLACE)
     }
+
+    fun incomingAttachments(groupId: Long, messageNumber: Long): List<GroupsIoIncomingAttachment> = readableDatabase.rawQuery(
+        "SELECT attachment_id,filename,media_type,reported_size,local_relative_path FROM message_attachments WHERE group_id=? AND message_number=? ORDER BY filename COLLATE NOCASE",
+        arrayOf(groupId.toString(), messageNumber.toString())
+    ).use { cursor -> buildList { while (cursor.moveToNext()) add(GroupsIoIncomingAttachment(
+        id = cursor.getLong(0), filename = cursor.getString(1), mediaType = cursor.getString(2), size = cursor.longOrNull(3), transientHttpsUrl = null,
+        localRelativePath = if (cursor.isNull(4)) null else cursor.getString(4)
+    )) } }
 
     fun saveArchiveExport(groupId: Long, relativePath: String, requestedAt: Long, completedAt: Long, byteSize: Long, sha256: String) {
         writableDatabase.insertWithOnConflict("archive_exports", null, ContentValues().apply {
@@ -476,20 +509,20 @@ internal class GroupsIoCredentialStore(context: Context) {
 }
 
 internal class GroupsIoLiveApi {
-    fun groups(key: String, pageToken: String? = null): GroupsIoPage<GroupsIoGroup> = page("groups", key, pageToken) { value ->
-        val id = value.requiredLong("id", "group_id")
-        val name = value.requiredString("name", "group_name")
+    fun groups(key: String, pageToken: String? = null): GroupsIoPage<GroupsIoGroup> = page("getsubs", key, pageToken) { value ->
+        val id = value.requiredLong("group_id", "id")
+        val name = value.requiredString("group_name", "name")
         val perms = value.optJSONObject("perms") ?: value.optJSONObject("permissions")
-        GroupsIoGroup(id, name, value.firstString("title", "display_name").ifBlank { name }, value.firstString("description", "desc", "summary"),
+        GroupsIoGroup(id, name, value.firstString("title", "nice_group_name", "display_name").ifBlank { name }, value.firstString("description", "desc", "summary"),
             value.firstString("status", "subscription_status"), perms?.optBoolean("archives_visible", value.optBoolean("archives_visible", false)) ?: value.optBoolean("archives_visible", false), true, System.currentTimeMillis(),
-            canPost = perms?.optBoolean("post", value.optBoolean("can_post", false)) ?: value.optBoolean("can_post", false),
-            canReply = perms?.optBoolean("reply", value.optBoolean("can_reply", false)) ?: value.optBoolean("can_reply", false),
+            canPost = perms?.optBoolean("can_post", value.optBoolean("can_post", false)) ?: value.optBoolean("can_post", false),
+            canReply = perms?.optBoolean("can_reply", value.optBoolean("can_reply", false)) ?: value.optBoolean("can_reply", false),
             downloadArchives = perms?.optBoolean("download_archives", value.optBoolean("download_archives", false)) ?: value.optBoolean("download_archives", false))
     }
 
     fun topics(key: String, groupId: Long, pageToken: String? = null): GroupsIoPage<GroupsIoTopic> = page("gettopics", key, pageToken, mapOf("group_id" to groupId.toString(), "sort_dir" to "desc")) { value ->
         GroupsIoTopic(value.requiredLong("id", "topic_id"), groupId, value.requiredString("subject", "title"), value.instantMillis("updated", "last_message_time", "created"),
-            value.firstInt("message_count", "num_messages", "message_cnt"), value.optBoolean("closed", value.optBoolean("locked", false)), value.firstLongOrNull("first_msg_num", "first_message_number"), value.firstLongOrNull("last_msg_num", "latest_message_number"))
+            value.firstInt("message_count", "num_messages", "message_cnt"), value.optBoolean("is_closed", value.optBoolean("closed", value.optBoolean("locked", false))), value.firstLongOrNull("first_msg_num", "first_message_number"), value.firstLongOrNull("last_msg_num", "latest_message_number"))
     }
 
     fun messages(key: String, groupId: Long, topicId: Long, pageToken: String? = null): GroupsIoPage<GroupsIoMessage> = page("gettopic", key, pageToken, mapOf("topic_id" to topicId.toString(), "sort_dir" to "asc")) { value ->
@@ -497,7 +530,7 @@ internal class GroupsIoLiveApi {
         val rawBody = value.firstString("body", "html_body", "text", "snippet")
         GroupsIoMessage(value.firstLongOrNull("id", "message_id"), groupId, topicId, number, value.firstLongOrNull("reply_to", "reply_to_msg_num"),
             value.firstString("subject"), value.firstString("name", "author_name", "sender_name", "from_name").ifBlank { "Unknown author" },
-            value.instantMillis("created", "date"), normaliseBody(rawBody), value.optBoolean("moderated", false), value.optBoolean("deleted", false),
+            value.instantMillis("created", "date"), normaliseBody(rawBody), value.optBoolean("is_moderated", value.optBoolean("moderated", false)), value.optBoolean("deleted", false),
             value.optBoolean("has_attachments", false) || value.optJSONArray("attachments")?.length()?.let { it > 0 } == true)
     }
 
@@ -549,11 +582,16 @@ internal fun normaliseBody(raw: String): String = raw
     .replace(Regex("<[^>]+>"), "")
     .replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
     .replace("&quot;", "\"").replace("&#39;", "'").replace('\u00a0', ' ')
+    .replace(Regex("&#(x?[0-9A-Fa-f]+);")) { match ->
+        val token = match.groupValues[1]
+        val codePoint = runCatching { if (token.startsWith("x", true)) token.drop(1).toInt(16) else token.toInt() }.getOrNull()
+        codePoint?.takeIf(Character::isValidCodePoint)?.let(Character::toChars)?.concatToString() ?: match.value
+    }
     .replace(Regex("[ \\t]+\\n"), "\n").replace(Regex("\\n{3,}"), "\n\n").trim()
 
-private fun JSONObject.firstString(vararg names: String): String = names.firstNotNullOfOrNull { name -> optString(name).takeIf { it.isNotBlank() && it != "null" } }.orEmpty()
+internal fun JSONObject.firstString(vararg names: String): String = names.firstNotNullOfOrNull { name -> optString(name).takeIf { it.isNotBlank() && it != "null" } }.orEmpty()
 private fun JSONObject.requiredString(vararg names: String): String = firstString(*names).ifBlank { throw GroupsIoApiException("compatibility", "Groups.io response omitted ${names.first()}") }
-private fun JSONObject.firstLongOrNull(vararg names: String): Long? = names.firstNotNullOfOrNull { name -> if (has(name) && !isNull(name)) optLong(name).takeIf { it != 0L } else null }
+internal fun JSONObject.firstLongOrNull(vararg names: String): Long? = names.firstNotNullOfOrNull { name -> if (has(name) && !isNull(name)) optLong(name).takeIf { it != 0L } else null }
 private fun JSONObject.requiredLong(vararg names: String): Long = firstLongOrNull(*names) ?: throw GroupsIoApiException("compatibility", "Groups.io response omitted ${names.first()}")
 private fun JSONObject.firstInt(vararg names: String): Int = names.firstNotNullOfOrNull { name -> if (has(name)) optInt(name) else null } ?: 0
 private fun JSONObject.instantMillis(vararg names: String): Long = names.firstNotNullOfOrNull { name -> firstString(name).takeIf(String::isNotBlank)?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() } } ?: System.currentTimeMillis()
@@ -582,6 +620,7 @@ class GroupsIoController(context: Context) {
     var selectedGroupId by mutableStateOf<Long?>(null); private set
     var selectedTopicId by mutableStateOf<Long?>(null); private set
     var storageBytes by mutableLongStateOf(0L); private set
+    var cacheStats by mutableStateOf(GroupsIoCacheStats()); private set
     var topicsHaveMore by mutableStateOf(false); private set
     var messagesHaveMore by mutableStateOf(false); private set
     var capabilities by mutableStateOf<GroupsIoCapabilities?>(null); private set
@@ -591,6 +630,7 @@ class GroupsIoController(context: Context) {
     var showComposer by mutableStateOf(false); private set
     var showDraftsOutbox by mutableStateOf(false); private set
     var archiveProgress by mutableStateOf(GroupsIoArchiveProgress()); private set
+    var archiveRangeDays by mutableStateOf<Int?>(365); private set
     var selectedMessage by mutableStateOf<GroupsIoMessage?>(null); private set
     var incomingAttachments by mutableStateOf<List<GroupsIoIncomingAttachment>>(emptyList()); private set
     var showAttachments by mutableStateOf(false); private set
@@ -607,7 +647,8 @@ class GroupsIoController(context: Context) {
 
     fun loadCachedGroups() {
         if (!enabled) return
-        scope.launch { val db = db(); val loaded = db.groups(); val savedDrafts = db.drafts(); withContext(Dispatchers.Main) { groups = loaded; localDrafts = savedDrafts; storageBytes = db.sizeBytes() } }
+        scope.launch { val db = db(); val loaded = db.groups(); val savedDrafts = db.drafts(); val stats = db.cacheStats(); val size = db.sizeBytes()
+            withContext(Dispatchers.Main) { groups = loaded; localDrafts = savedDrafts; cacheStats = stats; storageBytes = size } }
     }
 
     fun connectAndVerify(candidate: String) = replaceOperation {
@@ -618,7 +659,8 @@ class GroupsIoController(context: Context) {
         while (more) { ensureActive(); val page = api.groups(key, next); all += page.values; more = page.hasMore; next = page.nextPageToken }
         val now = System.currentTimeMillis(); db().applyMemberships(all, true, now); credentials.save(key)
         settings.edit().putLong("last_sync", now).apply()
-        withContext(Dispatchers.Main) { connected = true; groups = db().groups(); lastSyncMillis = now; status = "Connected · memberships synced"; storageBytes = db().sizeBytes() }
+        val stats = db().cacheStats(); val size = db().sizeBytes(); val savedGroups = db().groups()
+        withContext(Dispatchers.Main) { connected = true; groups = savedGroups; lastSyncMillis = now; status = "Connected · memberships synced"; cacheStats = stats; storageBytes = size }
     }
 
     fun syncMemberships() = replaceOperation {
@@ -626,10 +668,12 @@ class GroupsIoController(context: Context) {
         val all = mutableListOf<GroupsIoGroup>(); var next: String? = null; var more: Boolean
         do { ensureActive(); val page = api.groups(key, next); all += page.values; more = page.hasMore; next = page.nextPageToken } while (more)
         val now = System.currentTimeMillis(); db().applyMemberships(all, true, now); settings.edit().putLong("last_sync", now).apply()
-        withContext(Dispatchers.Main) { groups = db().groups(); lastSyncMillis = now; status = "Memberships synced"; storageBytes = db().sizeBytes() }
+        val stats = db().cacheStats(); val size = db().sizeBytes(); val savedGroups = db().groups()
+        withContext(Dispatchers.Main) { groups = savedGroups; lastSyncMillis = now; status = "Memberships synced"; cacheStats = stats; storageBytes = size }
     }
 
     fun selectGroup(groupId: Long) {
+        if (selectedGroupId != groupId) { archiveProgress = GroupsIoArchiveProgress(); archiveRangeDays = 365 }
         selectedGroupId = groupId; selectedTopicId = null; messages = emptyList(); topicsHaveMore = false; topicNextToken = null
         operation?.cancel(); operation = scope.launch {
             val cached = db().topics(groupId); val cachedCapabilities = db().capabilities(groupId)
@@ -640,7 +684,8 @@ class GroupsIoController(context: Context) {
             }.onFailure { publishFailure("permissions", groupId.toString(), it) }
             runCatching { api.topics(credentials.load(), groupId) }.onSuccess { page ->
                 val now = System.currentTimeMillis(); db().applyTopics(groupId, page.values, page.nextPageToken, page.hasMore, now)
-                withContext(Dispatchers.Main) { topics = db().topics(groupId); topicNextToken = page.nextPageToken; topicsHaveMore = page.hasMore; status = "Newest topics synced"; storageBytes = db().sizeBytes() }
+                val savedTopics = db().topics(groupId); val stats = db().cacheStats(); val size = db().sizeBytes()
+                withContext(Dispatchers.Main) { topics = savedTopics; topicNextToken = page.nextPageToken; topicsHaveMore = page.hasMore; status = "Newest topics synced"; cacheStats = stats; storageBytes = size }
             }.onFailure { publishFailure("topics", groupId.toString(), it) }
         }
     }
@@ -653,7 +698,8 @@ class GroupsIoController(context: Context) {
             if (!connected) return@launch
             runCatching { api.messages(credentials.load(), groupId, topicId) }.onSuccess { page ->
                 val now = System.currentTimeMillis(); db().applyMessages(groupId, topicId, page.values, page.nextPageToken, page.hasMore, now)
-                withContext(Dispatchers.Main) { messages = db().messages(topicId); messageNextToken = page.nextPageToken; messagesHaveMore = page.hasMore; status = "Thread synced"; storageBytes = db().sizeBytes() }
+                val savedMessages = db().messages(topicId); val stats = db().cacheStats(); val size = db().sizeBytes()
+                withContext(Dispatchers.Main) { messages = savedMessages; messageNextToken = page.nextPageToken; messagesHaveMore = page.hasMore; status = "Thread synced"; cacheStats = stats; storageBytes = size }
             }.onFailure { publishFailure("messages", topicId.toString(), it) }
         }
     }
@@ -662,11 +708,30 @@ class GroupsIoController(context: Context) {
 
     fun openAttachments(message: GroupsIoMessage) {
         selectedMessage = message; showAttachments = true
-        if (!connected) { status = "Offline · previously downloaded attachments remain available"; return }
         replaceOperation {
+            val local = db().incomingAttachments(message.groupId, message.number)
+            withContext(Dispatchers.Main) { incomingAttachments = local }
+            if (!connected) {
+                withContext(Dispatchers.Main) { status = "Offline · previously downloaded attachments remain available" }
+                return@replaceOperation
+            }
             val values = phase2Api.incomingAttachments(credentials.load(), message.groupId, message.number)
             values.forEach { db().upsertIncomingAttachment(message.groupId, message.number, it) }
-            withContext(Dispatchers.Main) { incomingAttachments = values; status = "Attachment metadata refreshed" }
+            val previews = values.map { value ->
+                if (!value.mediaType.startsWith("image/") || value.transientThumbnailHttpsUrl == null) return@map value
+                runCatching {
+                    val (partial, final) = attachmentStore.incomingPreviewFile(message.groupId, message.number, value.id, value.filename)
+                    phase2Api.downloadIncomingPreview(credentials.load(), value, partial)
+                    final.parentFile?.mkdirs()
+                    if (!partial.renameTo(final)) { partial.copyTo(final, overwrite = true); partial.delete() }
+                    value.copy(localPreviewRelativePath = final.relativeTo(appContext.filesDir).path)
+                }.getOrDefault(value)
+            }
+            val cached = db().incomingAttachments(message.groupId, message.number).associateBy { it.id }
+            withContext(Dispatchers.Main) {
+                incomingAttachments = previews.map { remote -> remote.copy(localRelativePath = cached[remote.id]?.localRelativePath) }
+                status = "Attachment metadata and image previews refreshed"
+            }
         }
     }
 
@@ -679,9 +744,14 @@ class GroupsIoController(context: Context) {
             val refreshed = phase2Api.downloadIncomingAttachment(credentials.load(), message.groupId, message.number, value.id, partial)
             final.parentFile?.mkdirs(); if (!partial.renameTo(final)) { partial.copyTo(final, overwrite = false); partial.delete() }
             db().upsertIncomingAttachment(message.groupId, message.number, refreshed, final.relativeTo(appContext.filesDir).path, final.length(), groupsIoSha256(final))
-            withContext(Dispatchers.Main) { status = "Attachment downloaded for offline access" }
+            withContext(Dispatchers.Main) {
+                incomingAttachments = incomingAttachments.map { if (it.id == value.id) it.copy(localRelativePath = final.relativeTo(appContext.filesDir).path) else it }
+                status = "Attachment downloaded for offline access"
+            }
         }
     }
+
+    fun attachmentFile(relativePath: String?): File? = relativePath?.let { appContext.filesDir.resolve(it) }?.takeIf(File::isFile)
 
     fun openNewTopic() {
         val groupId = selectedGroupId ?: return
@@ -758,27 +828,40 @@ class GroupsIoController(context: Context) {
         withContext(Dispatchers.Main) { serverDrafts = all; status = "Server drafts refreshed · ${all.size}" }
     }
 
-    fun startCompleteArchiveDownload() {
+    fun startCompleteArchiveDownload() = startArchiveDownload(null)
+
+    fun startArchiveDownload(days: Int?) {
         val groupId = selectedGroupId ?: return
         if (capabilities?.archivesVisible != true) { status = "Archive access is not available"; return }
+        if (archiveRangeDays != days) { archiveRangeDays = days; archiveProgress = GroupsIoArchiveProgress() }
         replaceOperation {
+            val since = days?.let { System.currentTimeMillis() - it * 86_400_000L }
             val key = credentials.load(); var progress = archiveProgress.copy(state = "syncing"); var token = progress.nextPageToken
             do {
                 ensureActive(); val root = phase2Api.archivePage(key, groupId, token); val data = root.optJSONArray("data") ?: org.json.JSONArray()
-                val now = System.currentTimeMillis(); val byTopic = mutableMapOf<Long, MutableList<GroupsIoMessage>>()
+                val now = System.currentTimeMillis(); val byTopic = mutableMapOf<Long, MutableList<GroupsIoMessage>>(); var oldest = Long.MAX_VALUE
                 for (index in 0 until data.length()) {
                     val value = data.getJSONObject(index); val topicId = value.optLong("topic_id").takeIf { it > 0 } ?: value.optLong("thread_id").takeIf { it > 0 } ?: continue
                     val number = value.optLong("msg_num").takeIf { it > 0 } ?: continue
+                    val created = value.instantMillis("created", "date"); oldest = minOf(oldest, created)
+                    if (since != null && created < since) continue
                     val message = GroupsIoMessage(value.optLong("id").takeIf { it > 0 }, groupId, topicId, number, value.optLong("reply_to").takeIf { it > 0 },
-                        value.optString("subject"), value.optString("name").ifBlank { "Unknown author" }, now, normaliseBody(value.optString("body")), false, false, value.optBoolean("has_attachments"))
+                        value.optString("subject"), value.optString("name").ifBlank { "Unknown author" }, created, normaliseBody(value.optString("body")),
+                        value.optBoolean("is_moderated", value.optBoolean("moderated")), false,
+                        value.optBoolean("has_attachments") || (value.optJSONArray("attachments")?.length() ?: 0) > 0)
                     byTopic.getOrPut(topicId) { mutableListOf() } += message
                 }
                 byTopic.forEach { (topicId, values) ->
                     if (db().topics(groupId, 100).none { it.id == topicId }) db().applyTopics(groupId, listOf(GroupsIoTopic(topicId, groupId, values.firstOrNull()?.subject.orEmpty(), now, values.size, false, values.minOfOrNull { it.number }, values.maxOfOrNull { it.number })), null, false, now)
                     db().applyMessages(groupId, topicId, values, null, false, now)
                 }
-                val (next, more) = groupsIoPagination(root); progress = progress.applyPage(data.length(), root.optInt("total_count").takeIf { it > 0 }, next, more); token = next
-                withContext(Dispatchers.Main) { archiveProgress = progress; status = "Archive ${progress.state} · ${progress.downloaded}${progress.total?.let { "/$it" }.orEmpty()} messages" }
+                val (next, remoteMore) = groupsIoPagination(root)
+                val reachedRange = since != null && oldest < since
+                val more = remoteMore && !reachedRange
+                progress = progress.applyPage(byTopic.values.sumOf { it.size }, if (days == null) root.optInt("total_count").takeIf { it > 0 } else null, if (more) next else null, more); token = if (more) next else null
+                val stats = db().cacheStats(); val size = db().sizeBytes()
+                withContext(Dispatchers.Main) { archiveProgress = progress; cacheStats = stats; storageBytes = size
+                    status = "Offline ${days?.let { "$it days" } ?: "full archive"} · ${progress.downloaded} messages this run" }
             } while (progress.state != "complete")
         }
     }
@@ -906,16 +989,18 @@ fun GroupsIoScreen(controller: GroupsIoController, compact: Boolean) {
     LaunchedEffect(Unit) { controller.loadCachedGroups() }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Column { Text("Groups.io", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold); Text(controller.status, color = Color(0xFFA5ADB2), style = MaterialTheme.typography.bodySmall) }
+            Column { Text("Groups.io", color = Color(0xFFF4F0E8), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold); Text(controller.status, color = Color(0xFFA5ADB2), style = MaterialTheme.typography.bodySmall) }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(controller::openNewTopic, enabled = controller.capabilities?.canPost == true) { Text("New Topic") }
                 TextButton(controller::openDraftsOutbox) { Text("Drafts & Outbox") }
-                TextButton({ showOffline = true }, enabled = controller.selectedGroupId != null) { Text("Group Offline") }
+                TextButton({ showOffline = true }, enabled = controller.selectedGroupId != null) { Text("Offline Storage") }
                 TextButton({ controller.syncMemberships() }, enabled = controller.connected && !controller.busy) { Text("Sync") }
+                Text("${controller.groups.size} groups · ${controller.cacheStats.topics} topics · ${controller.cacheStats.messages} messages${controller.cacheStats.downloadedAttachments.takeIf { it > 0 }?.let { " · $it files" }.orEmpty()} · ${controller.storageBytes / 1024} KiB",
+                    color = Color(0xFFA5ADB2), style = MaterialTheme.typography.labelMedium, modifier = Modifier.align(Alignment.CenterVertically))
             }
         }
         if (!controller.connected) {
-            Text("Connect an API key in Settings → Integrations. Downloaded content remains available offline.")
+            Text("Connect an API key in Settings → Integrations. Downloaded content remains available offline.", color = Color(0xFFA5ADB2))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             FilterChip(selected = !onlineSearch, onClick = { onlineSearch = false; controller.search(query) }, label = { Text("Downloaded") })
@@ -932,11 +1017,7 @@ fun GroupsIoScreen(controller: GroupsIoController, compact: Boolean) {
             if (onlineSearch && controller.onlineSearchHasMore) item { OutlinedButton({ controller.searchOnline(query, loadMore = true) }) { Text("Load More") } }
             }
         } else if (!compact) {
-            Row(Modifier.fillMaxSize()) {
-                GroupsList(controller, Modifier.widthIn(min = 260.dp, max = 340.dp).fillMaxHeight())
-                VerticalDivider()
-                GroupsDetail(controller, Modifier.weight(1f).fillMaxHeight())
-            }
+            AdjustableGroupsDetail(controller, Modifier.fillMaxSize())
         } else {
             when {
                 controller.selectedTopicId != null -> GroupsMessages(controller, Modifier.fillMaxSize())
@@ -952,41 +1033,89 @@ fun GroupsIoScreen(controller: GroupsIoController, compact: Boolean) {
 @Composable private fun GroupsList(controller: GroupsIoController, modifier: Modifier) = LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
     if (controller.groups.isEmpty()) item { Text("No downloaded memberships. Connect and sync, or reconnect when online.", color = Color(0xFFA5ADB2), modifier = Modifier.padding(12.dp)) }
     items(controller.groups, key = { it.id }) { group ->
-        ListItem(headlineContent = { Text(group.title) }, supportingContent = { Text(if (group.active) group.name else "${group.name} · cached/inactive") },
+        val accent = groupsIoAccent(group.name)
+        ListItem(headlineContent = { Text(group.title, fontWeight = if (controller.selectedGroupId == group.id) FontWeight.Bold else FontWeight.Medium) },
+            supportingContent = { Text(if (group.active) group.name else "${group.name} · cached/inactive") },
+            leadingContent = { Surface(shape = CircleShape, color = accent.copy(alpha = .22f), modifier = Modifier.size(42.dp)) {
+                Box(contentAlignment = Alignment.Center) { Text(groupInitials(group.title), color = accent, fontWeight = FontWeight.Black) }
+            } },
             trailingContent = { if (!group.archivesVisible) Text("Restricted", color = Color(0xFFF4C94E)) },
+            colors = ListItemDefaults.colors(containerColor = if (controller.selectedGroupId == group.id) accent.copy(alpha = .12f) else Color(0xFF1B2228)),
             modifier = Modifier.clickable { controller.selectGroup(group.id) })
     }
 }
 
-@Composable private fun GroupsDetail(controller: GroupsIoController, modifier: Modifier) = Row(modifier) {
-    GroupsTopics(controller, Modifier.widthIn(min = 280.dp, max = 380.dp).fillMaxHeight()); VerticalDivider(); GroupsMessages(controller, Modifier.weight(1f).fillMaxHeight())
+@Composable private fun AdjustableGroupsDetail(controller: GroupsIoController, modifier: Modifier) {
+    var groupsWidth by rememberSaveable { mutableFloatStateOf(310f) }
+    var topicsWidth by rememberSaveable { mutableFloatStateOf(360f) }
+    val density = LocalDensity.current
+    Row(modifier) {
+        GroupsList(controller, Modifier.width(groupsWidth.dp).fillMaxHeight())
+        GroupsResizeHandle { pixels -> with(density) { groupsWidth = (groupsWidth + pixels.toDp().value).coerceIn(230f, 560f) } }
+        GroupsTopics(controller, Modifier.width(topicsWidth.dp).fillMaxHeight())
+        GroupsResizeHandle { pixels -> with(density) { topicsWidth = (topicsWidth + pixels.toDp().value).coerceIn(260f, 680f) } }
+        GroupsMessages(controller, Modifier.weight(1f).fillMaxHeight())
+    }
 }
 
-@Composable private fun GroupsTopics(controller: GroupsIoController, modifier: Modifier) = LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+@Composable private fun GroupsResizeHandle(onDrag: (Float) -> Unit) = Box(
+    Modifier.width(12.dp).fillMaxHeight().pointerInput(Unit) {
+        detectHorizontalDragGestures { change, amount -> change.consume(); onDrag(amount) }
+    }.background(Color(0xFF38424A)), contentAlignment = Alignment.Center
+) { Box(Modifier.width(3.dp).height(56.dp).background(Color(0xFFE9A72B), CircleShape)) }
+
+@Composable private fun GroupsTopics(controller: GroupsIoController, modifier: Modifier) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(controller.selectedGroupId) { listState.scrollToItem(0) }
+    LazyColumn(modifier, state = listState, verticalArrangement = Arrangement.spacedBy(4.dp)) {
     if (controller.selectedGroupId == null) item { Text("Select a group", color = Color(0xFFA5ADB2), modifier = Modifier.padding(16.dp)) }
     else if (controller.topics.isEmpty()) item { Text("No downloaded topics for this group", color = Color(0xFFA5ADB2), modifier = Modifier.padding(16.dp)) }
     items(controller.topics, key = { it.id }) { topic ->
-        ListItem(headlineContent = { Text(topic.subject) }, supportingContent = { Text("${topic.messageCount} messages${if (topic.closed) " · closed" else ""}") }, modifier = Modifier.clickable { controller.selectTopic(topic.id) })
+        val accent = groupsIoAccent(controller.groups.firstOrNull { it.id == topic.groupId }?.name.orEmpty())
+        ListItem(headlineContent = { Text(topic.subject, fontWeight = if (controller.selectedTopicId == topic.id) FontWeight.Bold else FontWeight.Medium) },
+            supportingContent = { Text("${topic.messageCount} messages${if (topic.closed) " · closed" else ""}") },
+            leadingContent = { Box(Modifier.width(5.dp).height(46.dp).background(accent, CircleShape)) },
+            colors = ListItemDefaults.colors(containerColor = if (controller.selectedTopicId == topic.id) accent.copy(alpha = .12f) else Color(0xFF1B2228)),
+            modifier = Modifier.clickable { controller.selectTopic(topic.id) })
     }
     if (controller.topicsHaveMore) item { OutlinedButton(controller::loadOlderTopics, enabled = !controller.busy, modifier = Modifier.padding(12.dp)) { Text("Load Older Topics") } }
+    }
 }
 
-@Composable private fun GroupsMessages(controller: GroupsIoController, modifier: Modifier) = LazyColumn(modifier, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+@Composable private fun GroupsMessages(controller: GroupsIoController, modifier: Modifier) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(controller.selectedTopicId) { listState.scrollToItem(0) }
+    LazyColumn(modifier, state = listState, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
     if (controller.selectedTopicId == null) item { Text("Select a topic", color = Color(0xFFA5ADB2)) }
     else if (controller.messages.isEmpty()) item { Text("No downloaded messages in this thread", color = Color(0xFFA5ADB2)) }
+    val newest = controller.messages.maxOfOrNull(GroupsIoMessage::number)
     items(controller.messages, key = { "${it.groupId}:${it.number}" }) { message ->
-        Surface(color = Color(0xFF1B2228), shape = MaterialTheme.shapes.medium) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(message.author, fontWeight = FontWeight.Bold); Text("#${message.number}", color = Color(0xFFA5ADB2)) }
-            if (message.subject.isNotBlank()) Text(message.subject, color = Color(0xFFE9A72B))
-            Text(if (message.deleted) "Message unavailable or deleted" else message.body)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextButton({ controller.openReply(message) }, enabled = controller.capabilities?.canReply == true) { Text("Reply") }
-                if (message.hasAttachments) TextButton({ controller.openAttachments(message) }) { Text("Attachments") }
+        val accent = groupsIoAccent(controller.groups.firstOrNull { it.id == message.groupId }?.name.orEmpty())
+        Surface(color = Color(0xFF1B2228), shape = MaterialTheme.shapes.medium) { Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
+            Surface(shape = CircleShape, color = accent.copy(alpha = .22f), modifier = Modifier.size(46.dp)) { Box(contentAlignment = Alignment.Center) {
+                Text(if (message.number == newest) "N" else message.author.firstOrNull()?.uppercase().orEmpty(), color = accent, fontWeight = FontWeight.Black)
+            } }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(message.author, fontWeight = FontWeight.Bold)
+                    Text("${if (message.number == newest) "NEWEST · " else ""}#${message.number}", color = if (message.number == newest) accent else Color(0xFFA5ADB2))
+                }
+                if (message.subject.isNotBlank()) Text(message.subject, color = accent)
+                Text(if (message.deleted) "Message unavailable or deleted" else message.body)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton({ controller.openReply(message) }, enabled = controller.capabilities?.canReply == true) { Text("Reply") }
+                    if (message.hasAttachments) TextButton({ controller.openAttachments(message) }) { Text("Attachments / images") }
+                }
             }
         } }
     }
     if (controller.messagesHaveMore) item { OutlinedButton(controller::loadMoreMessages, enabled = !controller.busy) { Text("Load More Messages") } }
+    }
 }
+
+private val groupsIoAccents = listOf(Color(0xFFE9A72B), Color(0xFF42C77B), Color(0xFF65A6C7), Color(0xFFC481D8), Color(0xFFE47D72), Color(0xFF8FA7E8))
+private fun groupsIoAccent(key: String): Color = groupsIoAccents[(key.hashCode() and Int.MAX_VALUE) % groupsIoAccents.size]
+private fun groupInitials(value: String): String = value.split(Regex("[^A-Za-z0-9]+")).filter(String::isNotBlank).take(2).mapNotNull { it.firstOrNull()?.uppercase() }.joinToString("").ifBlank { "G" }
 
 @Composable
 fun GroupsIoSettingsPanel(controller: GroupsIoController, openGroupsIo: () -> Unit) {

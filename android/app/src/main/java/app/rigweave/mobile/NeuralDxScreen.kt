@@ -34,7 +34,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.platform.LocalUriHandler
 import app.rigweave.mobile.hamclock.mergeDxNews
 import app.rigweave.mobile.hamclock.HamClockClusterPreference
 import app.rigweave.mobile.hamclock.*
@@ -65,7 +64,7 @@ private val DxGreen = Color(0xFF42C77B)
 private val DxRed = Color(0xFFE4544D)
 private val DxCyan = Color(0xFF43C7D9)
 private val DxYellow = Color(0xFFF4C94E)
-private val DxBands = listOf("ALL", "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m", "70cm", "23cm", "3cm")
+private val DxBands = listOf("ALL") + spotBandOptions
 
 @Composable
 fun NeuralDxScreen(
@@ -166,7 +165,7 @@ fun NeuralDxScreen(
         HorizontalDivider(color = Color(0xFF465159))
         val pageModifier = Modifier.fillMaxWidth().weight(1f).clipToBounds().testTag("dx-page-${page.name.lowercase()}")
         when (page) {
-            NeuralDxPage.COCKPIT -> DxCockpit(controller, features, policySpots, database, wavelog, callbook, cty, stationGrid, tune,
+            NeuralDxPage.COCKPIT -> DxCockpit(controller, features, policySpots, database, wavelog, callbook, cty, app, stationGrid, tune,
                 requestReceiveTune, intelligenceNeeds, previousQsos, { page = NeuralDxPage.INSIGHT }, pageModifier)
             NeuralDxPage.MAP -> DxMap(controller, enrichedPolicySpots, features, cty, stationGrid,
                 database, wavelog, requestReceiveTune, previousQsos, pageModifier)
@@ -178,11 +177,53 @@ fun NeuralDxScreen(
                 callbook, stationId, stationCall, stationGrid, bandHealthPreference, bandHealthSnapshot, updateBandHealthPreference,
                 openCallHistory, requestReceiveTune, pageModifier)
             NeuralDxPage.SATELLITES -> DxSatellitesPage(controller, stationGrid, pageModifier)
+            NeuralDxPage.HISTORY -> DxHistoryPage(controller, pageModifier)
             NeuralDxPage.WEATHER -> DxWeatherPage(controller, features, stationGrid, pageModifier)
         }
     }
     }
 }
+
+@Composable
+private fun DxHistoryPage(controller: NeuralDxController, modifier: Modifier) {
+    var query by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(query) {
+        delay(250)
+        controller.searchSpotHistory(query)
+    }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        DxSection("HISTORICAL SPOT JOURNAL · LOCAL SQLITE") {
+            OutlinedTextField(query, { query = it.uppercase(Locale.US).filter { ch -> ch.isLetterOrDigit() || ch == '/' } },
+                label = { Text("Callsign prefix") }, placeholder = { Text("N0AN") }, singleLine = true,
+                leadingIcon = { Icon(Icons.Outlined.Search, null) }, modifier = Modifier.fillMaxWidth())
+            Text("Append-only observations are deduplicated by source ID and indexed by callsign, band and UTC time. Up to 500,000 recent observations are retained offline.",
+                color = DxMuted)
+        }
+        if (controller.historySearching) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (query.length < 2) DxEmpty("Enter at least two callsign characters")
+        else if (!controller.historySearching && controller.historyResults.isEmpty()) DxEmpty("No historical observations match $query")
+        else LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            items(controller.historyResults, key = SpotHistorySummary::callsign) { row ->
+                ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = DxPanel)) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(row.callsign, color = DxCyan, fontWeight = FontWeight.Black, fontSize = 22.sp)
+                            Text("${row.observations} observations · ${row.spotters} spotters", color = DxInk)
+                        }
+                        Text("First ${spotHistoryDate(row.firstEpoch)} · last ${spotHistoryDate(row.lastEpoch)}", color = DxMuted)
+                        Text("Bands · ${row.bands.joinToString().ifBlank { "unknown" }}", color = DxInk)
+                        Text("Modes · ${row.modes.joinToString().ifBlank { "unknown" }}", color = DxInk)
+                        Text("Entities · ${row.countries.take(6).joinToString().ifBlank { "unknown" }}", color = DxMuted,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun spotHistoryDate(epoch: Long): String = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'", Locale.US)
+    .withZone(ZoneOffset.UTC).format(Instant.ofEpochSecond(epoch))
 
 @Composable private fun DxRfEvidencePage(
     controller: NeuralDxController,
@@ -201,7 +242,7 @@ fun NeuralDxScreen(
     requestReceiveTune: (Long, String?, String, String) -> Unit,
     modifier: Modifier,
 ) {
-    val uriHandler = LocalUriHandler.current
+    val inAppBrowser = LocalInAppBrowserState.current
     val stationPoint = remember(stationGrid) { maidenheadCenter(stationGrid) }
     val rbn = remember(features.rbnObservations, stationCall, stationPoint, cty.dataRevision, callbook.status) {
         fun ctyPoint(call: String) = cty.lookup(call)?.takeIf { it.latitude != 0.0 || it.longitude != 0.0 }
@@ -402,14 +443,14 @@ fun NeuralDxScreen(
                 "Review receive-only frequency change"); selectedIbp = null }) { Text("Review receive") } },
             dismissButton = { Row { TextButton({ openCallHistory(row.beacon.callsign); selectedIbp = null }) { Text("Logbook history") }
                 TextButton({ toggleWatch(row.beacon.callsign) }) { Text(if (row.beacon.callsign in watchlist) "Unwatch" else "Watch") }
-                TextButton({ uriHandler.openUri(HAMCLOCK_IBP_MANIFEST_SOURCE) }) { Text("NCDXF source") }
+                TextButton({ inAppBrowser?.open(HAMCLOCK_IBP_MANIFEST_SOURCE) }) { Text("NCDXF source") }
                 TextButton({ selectedIbp = null }) { Text("Close") } } })
     }
     selectedIbpSite?.takeIf { site -> selectedIbp?.beacon?.callsign != site.callsign }?.let { site ->
         val next = nextHamClockIbpTransmission(site.callsign)
         AlertDialog(onDismissRequest = { selectedIbpSite = null }, title = { Text("IBP · ${site.callsign}") },
             text = { Text("${site.grid} · ${site.locationLabel}\n${next?.let { "Next ${it.band} ${formatMHz(it.frequencyHz)} MHz at ${utcSeconds(it.slotStartEpoch)} UTC" } ?: "Next schedule unavailable"}\nNCDXF/IARU schedule site reference; no reception is claimed.\nReviewed $HAMCLOCK_IBP_MANIFEST_REVIEW_DATE") },
-            confirmButton = { TextButton({ uriHandler.openUri(HAMCLOCK_IBP_MANIFEST_SOURCE) }) { Text("NCDXF source") } },
+            confirmButton = { TextButton({ inAppBrowser?.open(HAMCLOCK_IBP_MANIFEST_SOURCE) }) { Text("NCDXF source") } },
             dismissButton = { Row { TextButton({ openCallHistory(site.callsign); selectedIbpSite = null }) { Text("Logbook history") }
                 TextButton({ toggleWatch(site.callsign) }) { Text(if (site.callsign in watchlist) "Unwatch" else "Watch") }
                 TextButton({ selectedIbpSite = null }) { Text("Close") } } })
@@ -427,7 +468,7 @@ fun NeuralDxScreen(
 }
 
 @Composable private fun DxCockpit(controller: NeuralDxController, features: FeatureController, policySpots: List<AndroidDXSpot>, database: QsoDatabase,
-    wavelog: WavelogController, callbook: CallbookController, cty: CtyController, stationGrid: String,
+    wavelog: WavelogController, callbook: CallbookController, cty: CtyController, app: AppController, stationGrid: String,
     tune: (String) -> Unit, requestReceiveTune: (Long, String?, String, String) -> Unit,
     intelligenceNeeds: Map<String, List<String>>, previousQsos: (AndroidDXSpot) -> Unit,
     openOutlook: () -> Unit,
@@ -498,7 +539,7 @@ fun NeuralDxScreen(
             Text("${rows.size} LIVE", color = DxCyan, fontWeight = FontWeight.Black)
         }
         if (mode == "COCKPIT") Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            DxSpotFeed(rows, statuses, distances, cty, intelligenceNeeds, { selected = it; selectedRequiresReview = false }, previousQsos, Modifier.weight(1.55f).fillMaxHeight())
+            DxSpotFeed(rows, statuses, distances, cty, app, intelligenceNeeds, { selected = it; selectedRequiresReview = false }, previousQsos, Modifier.weight(1.55f).fillMaxHeight())
             LazyColumn(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 item { DxSection("ACTIVE BANDS · 24H") { controller.bandActivity.entries.take(12).forEach { DxBar(it.key, it.value, controller.bandActivity.values.maxOrNull() ?: 1) } } }
                 item { DxSection("NEXT 60 MIN", Modifier.clickable(onClick = openOutlook)) {
@@ -535,8 +576,8 @@ fun NeuralDxScreen(
                 } }
                 item { DxHeatmap(controller.heatmap6m) }
             }
-        } else if (mode == "SMART") DxSmartFeed(rows, statuses, distances, cty, intelligenceNeeds, { selected = it; selectedRequiresReview = false }, previousQsos, Modifier.weight(1f))
-        else DxSpotTable(rows, statuses, distances, cty, intelligenceNeeds, { selected = it; selectedRequiresReview = false }, previousQsos, Modifier.weight(1f))
+        } else if (mode == "SMART") DxSmartFeed(rows, statuses, distances, cty, app, intelligenceNeeds, { selected = it; selectedRequiresReview = false }, previousQsos, Modifier.weight(1f))
+        else DxSpotTable(rows, statuses, distances, cty, app, intelligenceNeeds, { selected = it; selectedRequiresReview = false }, previousQsos, Modifier.weight(1f))
     }
     selected?.let { spot -> DxSpotDialog(spot, cty, statuses[spot.id], { selected = null }, {
         if (selectedRequiresReview) requestReceiveTune(spot.frequencyHz, spot.mode, "Home DX spot ${spot.callsign}",
@@ -551,58 +592,61 @@ fun NeuralDxScreen(
 }
 
 @Composable private fun DxSpotFeed(rows: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>, distances: Map<String, Int>, cty: CtyController,
-    intelligenceNeeds: Map<String, List<String>> = emptyMap(), selected: (AndroidDXSpot) -> Unit, previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
+    app: AppController, intelligenceNeeds: Map<String, List<String>> = emptyMap(), selected: (AndroidDXSpot) -> Unit,
+    previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
     DxSection("DX FEED · WORKED STATUS · DISTANCE · SCORE", modifier) {
         DxSpotHeader()
         LazyColumn(Modifier.fillMaxSize()) { items(rows, key = { it.id }) { spot ->
-            DxSpotRow(spot, statuses[spot.id], distances[spot.callsign.uppercase(Locale.US)], cty, selected, previous, intelligenceNeeds[spot.id].orEmpty())
+            DxSpotRow(spot, statuses[spot.id], distances[spot.callsign.uppercase(Locale.US)], cty, app, selected, previous, intelligenceNeeds[spot.id].orEmpty())
         } }
     }
 }
 
 @Composable private fun DxSmartFeed(rows: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>, distances: Map<String, Int>, cty: CtyController,
-    intelligenceNeeds: Map<String, List<String>>, selected: (AndroidDXSpot) -> Unit, previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
+    app: AppController, intelligenceNeeds: Map<String, List<String>>, selected: (AndroidDXSpot) -> Unit,
+    previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
     DxSection("SMART PRIORITY · HIGHEST OPPORTUNITY FIRST", modifier) {
         DxSpotHeader()
         LazyColumn(Modifier.fillMaxSize()) { items(rows.sortedByDescending { intelligenceNeeds[it.id].orEmpty().size * 100 + it.score }, key = { it.id }) { spot ->
-            DxSpotRow(spot, statuses[spot.id], distances[spot.callsign.uppercase(Locale.US)], cty, selected, previous,
+            DxSpotRow(spot, statuses[spot.id], distances[spot.callsign.uppercase(Locale.US)], cty, app, selected, previous,
                 intelligenceNeeds[spot.id].orEmpty(), smart = true)
         } }
     }
 }
 
 @Composable private fun DxSpotTable(rows: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>, distances: Map<String, Int>, cty: CtyController,
-    intelligenceNeeds: Map<String, List<String>>, selected: (AndroidDXSpot) -> Unit, previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
+    app: AppController, intelligenceNeeds: Map<String, List<String>>, selected: (AndroidDXSpot) -> Unit,
+    previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
     DxSection("CLASSIC CLUSTER TABLE · ${rows.size} LIVE", modifier) {
         DxSpotHeader()
         LazyColumn(Modifier.fillMaxSize()) { items(rows, key = { it.id }) { spot ->
-            DxSpotRow(spot, statuses[spot.id], distances[spot.callsign.uppercase(Locale.US)], cty, selected, previous, intelligenceNeeds[spot.id].orEmpty())
+            DxSpotRow(spot, statuses[spot.id], distances[spot.callsign.uppercase(Locale.US)], cty, app, selected, previous, intelligenceNeeds[spot.id].orEmpty())
         } }
     }
 }
 
-@Composable private fun DxSpotHeader() = Row(Modifier.fillMaxWidth().height(38.dp).background(DxRaised).padding(horizontal=6.dp),verticalAlignment=Alignment.CenterVertically) {
+@Composable private fun DxSpotHeader() = Row(Modifier.fillMaxWidth().height(52.dp).background(DxRaised).padding(horizontal=6.dp),verticalAlignment=Alignment.CenterVertically) {
     DxFlexCell("UTC",.62f,DxInk,true);DxFlexCell("CALL",.86f,DxInk,true);DxFlexCell("BAND",.5f,DxInk,true);DxFlexCell("MODE",.55f,DxInk,true)
     DxFlexCell("FREQ MHz",.76f,DxInk,true);DxFlexCell("COUNTRY / DXCC",1.42f,DxInk,true);DxFlexCell("CQ",.36f,DxInk,true)
     DxFlexCell("DX DE",.82f,DxInk,true);DxFlexCell("CS",.34f,DxInk,true);DxFlexCell("DS",.46f,DxInk,true);DxFlexCell("KM",.52f,DxInk,true)
     DxFlexCell("SCORE",.48f,DxInk,true);DxFlexCell("COMMENT / REASON",1.72f,DxInk,true)
 }
 
-@Composable private fun DxSpotRow(spot:AndroidDXSpot,status:SpotLogStatus?,calculatedDistanceKm:Int?,cty:CtyController,selected:(AndroidDXSpot)->Unit,
+@Composable private fun DxSpotRow(spot:AndroidDXSpot,status:SpotLogStatus?,calculatedDistanceKm:Int?,cty:CtyController,app:AppController,selected:(AndroidDXSpot)->Unit,
     previous:(AndroidDXSpot)->Unit,intelligenceNeeds:List<String> = emptyList(),smart:Boolean=false){
     val entity=cty.lookup(spot.callsign);val country=entity?.country.orEmpty().ifBlank{spot.country}.ifBlank{"Unknown"}
-    Row(Modifier.fillMaxWidth().height(48.dp).clickable(role=Role.Button){selected(spot)}
+    Row(Modifier.fillMaxWidth().height(64.dp).clickable(role=Role.Button){selected(spot)}
         .background(if(smart&&spot.score>=75)DxGreen.copy(alpha=.08f) else if(spot.receivedEpoch%2L==0L)DxPanel else DxBg).padding(horizontal=6.dp),verticalAlignment=Alignment.CenterVertically){
-        DxFlexCell(utcSeconds(spot.receivedEpoch),.62f,DxInk);Box(Modifier.weight(.86f).fillMaxHeight().clickable{previous(spot)},contentAlignment=Alignment.CenterStart){Text(spot.callsign,color=if(spot.watchlisted)DxYellow else OperationalCallsign,fontWeight=FontWeight.Black,maxLines=1,overflow=TextOverflow.Ellipsis)}
+        DxFlexCell(utcSeconds(spot.receivedEpoch),.62f,DxInk);Box(Modifier.weight(.86f).fillMaxHeight().clickable{previous(spot)},contentAlignment=Alignment.CenterStart){Text(spot.callsign,color=if(spot.watchlisted)DxYellow else OperationalCallsign,fontWeight=FontWeight.Black,fontSize=19.sp,maxLines=1,overflow=TextOverflow.Ellipsis)}
         DxFlexCell(spot.band,.5f,DxInk);DxFlexCell(spot.mode,.55f,DxInk);DxFlexCell(formatMHz(spot.frequencyHz),.76f,OperationalFrequency)
         DxFlexCell(country,1.42f,OperationalCountry);DxFlexCell(entity?.cqZone.orEmpty().ifBlank{spot.cqZone.takeIf{it>0}?.toString().orEmpty()},.36f,DxInk)
-        DxFlexCell(spot.spotter,.82f,DxMuted);DxFlexCell(status?.callStatus.orEmpty(),.34f,DxGreen,true);DxFlexCell(status?.dxccStatus.orEmpty(),.46f,if(status?.dxccStatus=="ATNO")DxRed else DxYellow,true)
+        DxFlexCell(spot.spotter,.82f,DxMuted);DxFlexCell(status?.callStatus.orEmpty(),.34f,Color(app.spotStatusColour(SPOT_STATUS_CS,status?.callStatus)),true);DxFlexCell(status?.dxccStatus.orEmpty(),.46f,Color(app.spotStatusColour(SPOT_STATUS_DS,status?.dxccStatus)),true)
         DxFlexCell(spot.distanceKm.takeIf{it>0}?.toString() ?: calculatedDistanceKm?.toString().orEmpty(),.52f,DxMuted);DxFlexCell(spot.score.toString(),.48f,scoreColor(spot.score),true)
         DxFlexCell(intelligenceNeeds.joinToString(" · ").ifBlank { spot.reason.ifBlank{spot.comment} },1.72f,if(intelligenceNeeds.isEmpty())DxMuted else DxYellow,true)
     };HorizontalDivider(color=Color(0xFF303940))
 }
 
-@Composable private fun RowScope.DxFlexCell(text:String,weight:Float,color:Color,bold:Boolean=false){Text(text,color=color,fontWeight=if(bold)FontWeight.Black else FontWeight.Medium,fontFamily=FontFamily.Monospace,fontSize=12.sp,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(weight).padding(horizontal=3.dp))}
+@Composable private fun RowScope.DxFlexCell(text:String,weight:Float,color:Color,bold:Boolean=false){Text(text,color=color,fontWeight=if(bold)FontWeight.Black else FontWeight.Medium,fontFamily=FontFamily.Monospace,fontSize=18.sp,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(weight).padding(horizontal=3.dp))}
 
 @Composable private fun DxMap(controller:NeuralDxController,rows: List<AndroidDXSpot>, features: FeatureController, cty: CtyController, stationGrid: String,
     database: QsoDatabase, wavelog: WavelogController, requestReceiveTune: (Long, String?, String, String) -> Unit,
@@ -712,7 +756,7 @@ private fun signalReportSpot(report: SignalReport, cty: CtyController): AndroidD
         } }
         OutlookWindow.entries.forEach { window ->
             item { DxSection("NEXT ${window.minutes} MINUTES") {
-        val rows = outlook.forecasts.filter { it.window == window }.sortedByDescending(OutlookForecast::supportScore).take(3)
+                val rows = outlook.forecasts.filter { it.window == window }.sortedByDescending(OutlookForecast::supportScore).take(3)
                 if (rows.isEmpty()) DxEmpty(if (window == outlook.selectedWindow) "Insufficient evidence" else "Select this window in World for detail")
                 rows.take(5).forEach { row -> DxLine(row.band,
                     "${row.label.name.replace('_', ' ')} · ${row.confidence} · support ${row.supportScore} · ${row.sourceCount} sources", DxCyan) }
@@ -788,7 +832,7 @@ private fun signalReportSpot(report: SignalReport, cty: CtyController): AndroidD
     var query by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf<BriefingItem?>(null) }
     var statuses by remember { mutableStateOf(emptyMap<String, SpotLogStatus>()) }
-    val uriHandler = LocalUriHandler.current
+    val inAppBrowser = LocalInAppBrowserState.current
     val now = Instant.now().epochSecond
     val merged = remember(controller.briefing, now / 60) { mergeDxNews(controller.briefing.flatMap(BriefingSource::items), now) }
     val watched = features.watchlistText.lineSequence().map { it.trim().uppercase(Locale.US) }.filter(String::isNotBlank).toSet()
@@ -859,8 +903,8 @@ private fun signalReportSpot(report: SignalReport, cty: CtyController): AndroidD
                 calendar?.let { Text("Calendar match · ${it.published} · ${it.summary}", color = DxYellow) }
                 live?.let { Text("Live cluster · ${formatMHz(it.frequencyHz)} MHz ${it.mode} · ${intelligenceNeeds[it.id].orEmpty().joinToString().ifBlank { it.reason }}", color = DxGreen) }
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton({ if (item.sourceHomeUrl.startsWith("https://")) uriHandler.openUri(item.sourceHomeUrl) }) { Text("SOURCE") }
-                    TextButton({ if (item.link.startsWith("https://")) uriHandler.openUri(item.link) }) { Text("ARTICLE") }
+                    TextButton({ if (item.sourceHomeUrl.startsWith("https://")) inAppBrowser?.open(item.sourceHomeUrl) }) { Text("SOURCE") }
+                    TextButton({ if (item.link.startsWith("https://")) inAppBrowser?.open(item.link) }) { Text("ARTICLE") }
                     if (call.isNotBlank()) TextButton({
                         val calls = watched.toMutableSet(); if (!calls.add(call)) calls.remove(call)
                         features.setWatchlist(calls.joinToString("\n")); selected = null
@@ -951,13 +995,13 @@ private fun newsItemSpot(item: BriefingItem, cty: CtyController): AndroidDXSpot 
 @Composable private fun DxSelect(label:String,value:String,choices:List<String>,change:(String)->Unit){var open by remember{mutableStateOf(false)};Box{OutlinedButton({open=true},modifier=Modifier.heightIn(min=48.dp)){Text("$label · $value",fontWeight=FontWeight.Bold);Icon(Icons.Outlined.ArrowDropDown,null)};DropdownMenu(open,{open=false}){choices.distinct().forEach{choice->DropdownMenuItem({Text(choice)},onClick={change(choice);open=false},trailingIcon={if(choice==value)Icon(Icons.Outlined.Check,null)})}}}}
 
 private val briefingImageCache=object:LruCache<String,ImageBitmap>(12*1024*1024){override fun sizeOf(key:String,value:ImageBitmap)=value.width*value.height*4}
-@Composable private fun DxBriefImage(url:String,title:String,modifier:Modifier){val bitmap by produceState<ImageBitmap?>(null,url){value=null;if(url.startsWith("https://",true))value=withContext(Dispatchers.IO){briefingImageCache.get(url)?:runCatching{val c=URL(url).openConnection() as HttpURLConnection;c.connectTimeout=6000;c.readTimeout=9000;c.instanceFollowRedirects=true;try{val bytes=c.inputStream.use{it.readNBytes(2*1024*1024)};val b=BitmapFactory.Options().apply{inJustDecodeBounds=true};BitmapFactory.decodeByteArray(bytes,0,bytes.size,b);var s=1;while(b.outWidth/s>360||b.outHeight/s>240)s*=2;BitmapFactory.decodeByteArray(bytes,0,bytes.size,BitmapFactory.Options().apply{inSampleSize=s})?.asImageBitmap()?.also{briefingImageCache.put(url,it)}}finally{c.disconnect()}}.getOrNull()}}
+@Composable private fun DxBriefImage(url:String,title:String,modifier:Modifier){val bitmap by produceState<ImageBitmap?>(null,url){value=null;if(url.startsWith("https://",true))value=withContext(Dispatchers.IO){briefingImageCache.get(url)?:runCatching{val c=URL(url).openConnection() as HttpURLConnection;c.connectTimeout=6000;c.readTimeout=9000;c.instanceFollowRedirects=true;try{val bytes=c.inputStream.use{it.readBoundedBytes(2*1024*1024)};val b=BitmapFactory.Options().apply{inJustDecodeBounds=true};BitmapFactory.decodeByteArray(bytes,0,bytes.size,b);var s=1;while(b.outWidth/s>360||b.outHeight/s>240)s*=2;BitmapFactory.decodeByteArray(bytes,0,bytes.size,BitmapFactory.Options().apply{inSampleSize=s})?.asImageBitmap()?.also{briefingImageCache.put(url,it)}}finally{c.disconnect()}}.getOrNull()}}
     Surface(color=DxRaised,shape=RoundedCornerShape(6.dp),modifier=modifier){if(bitmap!=null)Image(bitmap!!,contentDescription="Briefing image for $title",contentScale=ContentScale.Crop,modifier=Modifier.fillMaxSize())else Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){Icon(Icons.Outlined.Newspaper,null,tint=DxMuted)}}}
 
 @Composable private fun DxSpotDialog(spot:AndroidDXSpot,cty:CtyController,status:SpotLogStatus?,dismiss:()->Unit,tune:()->Unit,history:()->Unit,toggleWatch:()->Unit){val e=cty.lookup(spot.callsign);val directTune=dxDirectTuneAvailable(spot.frequencyHz);AlertDialog(onDismissRequest=dismiss,title={Text(spot.callsign)},text={Column(verticalArrangement=Arrangement.spacedBy(6.dp)){Text("${formatMHz(spot.frequencyHz)} MHz · ${dxDisplayBand(spot.band,spot.frequencyHz,spot.comment)} · ${spot.mode}",color=DxAmber,fontWeight=FontWeight.Bold);Text(e?.country.orEmpty().ifBlank{spot.country}.ifBlank{"Unknown DXCC"});Text("CQ ${e?.cqZone.orEmpty().ifBlank{spot.cqZone.toString()}} · ITU ${e?.ituZone.orEmpty().ifBlank{spot.ituZone.toString()}} · ${e?.continent.orEmpty().ifBlank{spot.continent}}",color=DxMuted);Text("Call ${status?.callStatus?:"—"} · DXCC ${status?.dxccStatus?:"—"}",color=DxYellow);Text("Score ${spot.score} · confidence ${spot.confidence} · ${spot.samples} samples");Text(spot.reason.ifBlank{spot.comment}.ifBlank{"No additional analysis"},color=DxMuted);if(!directTune)Text("Observation only above 6 m · configure a supported radio/transverter path before direct CAT tuning.",color=DxMuted)}},confirmButton={Button(tune,enabled=directTune){Text("Tune VFO A")}},dismissButton={Row{TextButton(history){Text("Log history")};TextButton(toggleWatch){Text(if(spot.watchlisted)"Unwatch" else "Watch")};TextButton(dismiss){Text("Close")}}})}
 @Composable private fun ManualSpotDialog(features:FeatureController,dismiss:()->Unit){var call by remember{mutableStateOf("")};var freq by remember{mutableStateOf("")};var comment by remember{mutableStateOf("")};AlertDialog(onDismissRequest=dismiss,title={Text("Send DX cluster spot")},text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(call,{call=it.uppercase()},label={Text("Callsign")},singleLine=true);OutlinedTextField(freq,{freq=it.filter{c->c.isDigit()||c=='.'}},label={Text("Frequency kHz")},singleLine=true);OutlinedTextField(comment,{comment=it},label={Text("Comment")},singleLine=true);Text("Posts to the currently connected cluster only.",color=DxMuted)}},confirmButton={Button({features.postSpot(call,freq.toDoubleOrNull()?:0.0,comment);dismiss()},enabled=call.isNotBlank()&&freq.toDoubleOrNull()!=null){Text("Send spot")}},dismissButton={TextButton(dismiss){Text("Cancel")}})}
 
-private fun dxPageIcon(page:NeuralDxPage)=when(page){NeuralDxPage.COCKPIT->Icons.Outlined.SpaceDashboard;NeuralDxPage.MAP->Icons.Outlined.Map;NeuralDxPage.INSIGHT->Icons.Outlined.Psychology;NeuralDxPage.WORLD->Icons.Outlined.Public;NeuralDxPage.BRIEFING->Icons.Outlined.Newspaper;NeuralDxPage.OBSERVATIONS->Icons.Outlined.Radar;NeuralDxPage.SATELLITES->Icons.Outlined.SatelliteAlt;NeuralDxPage.WEATHER->Icons.Outlined.Thunderstorm}
+private fun dxPageIcon(page:NeuralDxPage)=when(page){NeuralDxPage.COCKPIT->Icons.Outlined.SpaceDashboard;NeuralDxPage.MAP->Icons.Outlined.Map;NeuralDxPage.INSIGHT->Icons.Outlined.Psychology;NeuralDxPage.WORLD->Icons.Outlined.Public;NeuralDxPage.BRIEFING->Icons.Outlined.Newspaper;NeuralDxPage.OBSERVATIONS->Icons.Outlined.Radar;NeuralDxPage.SATELLITES->Icons.Outlined.SatelliteAlt;NeuralDxPage.HISTORY->Icons.Outlined.History;NeuralDxPage.WEATHER->Icons.Outlined.Thunderstorm}
 private fun scoreColor(score:Int)=when{score>=75->DxGreen;score>=55->DxYellow;else->DxMuted}
 private fun formatMHz(hz:Long)="%.3f".format(Locale.US,hz/1_000_000.0)
 private fun ageLabel(epoch:Long):String{val m=((Instant.now().epochSecond-epoch).coerceAtLeast(0)/60).toInt();return if(m<60)"${m}m" else "${m/60}h ${m%60}m"}

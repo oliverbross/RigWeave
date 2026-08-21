@@ -69,7 +69,7 @@ internal fun shouldStartForegroundWork(foreground: Boolean, alreadyActive: Boole
 
 enum class NeuralDxPage(val label: String) {
     COCKPIT("Cockpit"), MAP("Map"), INSIGHT("Insight & Outlook"), WORLD("World"),
-    BRIEFING("Briefing"), OBSERVATIONS("RF Evidence"), SATELLITES("Satellites"), WEATHER("Weather")
+    BRIEFING("Briefing"), OBSERVATIONS("RF Evidence"), SATELLITES("Satellites"), HISTORY("History"), WEATHER("Weather")
 }
 
 enum class NeuralDxRefreshScope { HOME, FULL_DX }
@@ -343,7 +343,7 @@ internal fun decodeNeuralWspr(text: String): NeuralWspr {
 }
 
 internal fun normalizeNeuralWsprBand(raw: String): String = when (raw.trim().lowercase()) {
-    "-1" -> "2200m"; "0" -> "630m"; "1" -> "160m"; "3" -> "80m"; "5" -> "60m"; "7" -> "40m"
+        "-1" -> "2190m"; "0" -> "630m"; "1" -> "160m"; "3" -> "80m"; "5" -> "60m"; "7" -> "40m"
     "10" -> "30m"; "14" -> "20m"; "18" -> "17m"; "21" -> "15m"; "24" -> "12m"; "28" -> "10m"
     "50" -> "6m"; "70" -> "4m"; "144" -> "2m"; "432" -> "70cm"; else -> raw
 }
@@ -366,6 +366,17 @@ internal fun dxDisplayBand(band: String, frequencyHz: Long, comment: String): St
 
 internal fun extractCallsigns(text: String): List<String> = Regex("(?<![A-Z0-9/])(?:(?:[A-Z0-9]{1,4})/)?(?:[A-Z]{1,2}|[0-9][A-Z])[0-9][A-Z0-9]{1,4}(?:/[A-Z0-9]{1,4})?(?![A-Z0-9/])")
     .findAll(text.uppercase(Locale.US)).map { it.value }.filterNot { it in setOf("2024", "2025", "2026") }.distinct().take(24).toList()
+
+internal data class SpotHistorySummary(
+    val callsign: String,
+    val observations: Int,
+    val firstEpoch: Long,
+    val lastEpoch: Long,
+    val bands: List<String>,
+    val modes: List<String>,
+    val spotters: Int,
+    val countries: List<String>,
+)
 
 internal class NeuralDxStore(context: Context, databaseName: String = "neural-dx.sqlite") :
     SQLiteOpenHelper(context, databaseName, null, 5) {
@@ -431,10 +442,30 @@ internal class NeuralDxStore(context: Context, databaseName: String = "neural-dx
                     db.update("spot", updates, "id=?", arrayOf(row.id))
                 }
             }
-            db.delete("spot", "ts<?", arrayOf((Instant.now().epochSecond - 90L * 86400L).toString()))
+            val rowCount = db.rawQuery("SELECT COUNT(*) FROM spot", emptyArray()).use { if (it.moveToFirst()) it.getLong(0) else 0L }
+            if (rowCount > 510_000L) db.execSQL(
+                "DELETE FROM spot WHERE rowid IN (SELECT rowid FROM spot ORDER BY ts DESC LIMIT -1 OFFSET 500000)")
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
         return inserted
+    }
+
+    fun searchHistory(query: String, limit: Int = 100): List<SpotHistorySummary> {
+        val prefix = query.trim().uppercase(Locale.US).replace("%", "").replace("_", "")
+        if (prefix.length < 2) return emptyList()
+        val rows = mutableListOf<SpotHistorySummary>()
+        readableDatabase.rawQuery("""SELECT call,COUNT(*),MIN(ts),MAX(ts),GROUP_CONCAT(DISTINCT band),
+            GROUP_CONCAT(DISTINCT mode),COUNT(DISTINCT spotter),GROUP_CONCAT(DISTINCT country)
+            FROM spot WHERE call>=? AND call<? GROUP BY call ORDER BY MAX(ts) DESC LIMIT ?""",
+            arrayOf(prefix, "$prefix\uFFFF", limit.coerceIn(1, 250).toString())).use { cursor ->
+            while (cursor.moveToNext()) rows += SpotHistorySummary(
+                cursor.getString(0), cursor.getInt(1), cursor.getLong(2), cursor.getLong(3),
+                cursor.getString(4).orEmpty().split(',').filter(String::isNotBlank).sorted(),
+                cursor.getString(5).orEmpty().split(',').filter(String::isNotBlank).sorted(), cursor.getInt(6),
+                cursor.getString(7).orEmpty().split(',').filter(String::isNotBlank).distinct().sorted(),
+            )
+        }
+        return rows
     }
 
     fun bandActivity(hours: Int = 24): Map<String, Int> {
@@ -610,8 +641,26 @@ class NeuralDxController internal constructor(private val context: Context, priv
     var briefingDxMode by mutableStateOf(prefs.getBoolean("briefing_dx_mode", true)); private set
     var briefingOrder by mutableStateOf(loadBriefingOrder()); private set
     var enrichedSpots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
+    internal var historyResults by mutableStateOf(emptyList<SpotHistorySummary>()); private set
+    internal var historySearching by mutableStateOf(false); private set
+    private var historySearchGeneration = 0
 
     init { createNotificationChannel() }
+
+    internal fun searchSpotHistory(query: String) {
+        val generation = ++historySearchGeneration
+        if (query.trim().length < 2) { historyResults = emptyList(); historySearching = false; return }
+        historySearching = true
+        scope.launch {
+            val rows = store.searchHistory(query)
+            withContext(Dispatchers.Main) {
+                if (generation == historySearchGeneration) {
+                    historyResults = rows
+                    historySearching = false
+                }
+            }
+        }
+    }
 
     fun ingest(spots: List<AndroidDXSpot>, stationId: String?, cty: CtyController, stationCall: String = "") {
         ctyController = cty
@@ -984,7 +1033,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
         writeMqttString("MQTT");write(4);write(2);write(0);write(60);writeMqttString(clientId)
     }.toByteArray()
     private fun mqttWrite(output:BufferedOutputStream,header:Int,payload:ByteArray){output.write(header);var n=payload.size;do{var digit=n%128;n/=128;if(n>0)digit= digit or 128;output.write(digit)}while(n>0);output.write(payload);output.flush()}
-    private fun mqttRead(input:BufferedInputStream):Pair<Int,ByteArray>{val header=input.read();if(header<0)error("Lightning broker closed connection");var multiplier=1;var remaining=0;var loops=0;do{val digit=input.read();if(digit<0)error("Incomplete MQTT packet");remaining+=(digit and 127)*multiplier;multiplier*=128;loops++;require(loops<=4){"Invalid MQTT length"}}while((digit and 128)!=0);require(remaining<=1_000_000){"MQTT packet too large"};return header to input.readNBytes(remaining).also{require(it.size==remaining){"Incomplete MQTT packet"}}}
+    private fun mqttRead(input:BufferedInputStream):Pair<Int,ByteArray>{val header=input.read();if(header<0)error("Lightning broker closed connection");var multiplier=1;var remaining=0;var loops=0;do{val digit=input.read();if(digit<0)error("Incomplete MQTT packet");remaining+=(digit and 127)*multiplier;multiplier*=128;loops++;require(loops<=4){"Invalid MQTT length"}}while((digit and 128)!=0);require(remaining<=1_000_000){"MQTT packet too large"};return header to input.readExactBytes(remaining)}
     private fun ByteArrayOutputStream.writeMqttString(value:String){val bytes=value.toByteArray();write((bytes.size ushr 8) and 255);write(bytes.size and 255);write(bytes)}
     private fun lightningGeohashNeighbors(point:GeoPoint):Set<String>{val latBits=7;val lonBits=8;val latStep=180.0/(1 shl latBits);val lonStep=360.0/(1 shl lonBits);return buildSet{for(dLat in -1..1)for(dLon in -1..1)add(geohash((point.latitude+dLat*latStep).coerceIn(-89.999,89.999),((point.longitude+dLon*lonStep+180)%360+360)%360-180,3))}}
     private fun geohash(latitude:Double,longitude:Double,precision:Int):String{val alphabet="0123456789bcdefghjkmnpqrstuvwxyz";var minLat=-90.0;var maxLat=90.0;var minLon=-180.0;var maxLon=180.0;var even=true;var bit=0;var value=0;val out=StringBuilder();while(out.length<precision){val mid=if(even)(minLon+maxLon)/2 else(minLat+maxLat)/2;val high=if(even)longitude>mid else latitude>mid;if(high){value=value or (16 shr bit);if(even)minLon=mid else minLat=mid}else if(even)maxLon=mid else maxLat=mid;even=!even;if(bit<4)bit++ else{out.append(alphabet[value]);bit=0;value=0}};return out.toString()}
@@ -1177,7 +1226,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
         val cooldownKey = "alert_${key.hashCode()}"; val now = System.currentTimeMillis()
         if (!force && now - prefs.getLong(cooldownKey, 0L) < 15 * 60_000L) return
         prefs.edit().putLong(cooldownKey, now).apply()
-        scope.launch(Dispatchers.Main) { alerts.add(0, "$title · $message"); while (alerts.size > 20) alerts.removeLast() }
+        scope.launch(Dispatchers.Main) { alerts.add(0, "$title · $message"); while (alerts.size > 20) alerts.removeAt(alerts.lastIndex) }
         if (notificationsEnabled && (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)) {
             val manager = context.getSystemService(NotificationManager::class.java)
             manager.notify(key.hashCode(), NotificationCompat.Builder(context, NOTIFICATION_CHANNEL).setSmallIcon(android.R.drawable.stat_notify_more)
@@ -1277,7 +1326,7 @@ class NeuralDxController internal constructor(private val context: Context, priv
             if(body!=null){connection.doOutput=true;connection.outputStream.use{it.write(body.toByteArray())}}
             val code=connection.responseCode; if(code !in 200..299) error("HTTP $code")
             if(connection.contentLengthLong>limit) error("Response too large")
-            val bytes=connection.inputStream.use{it.readNBytes(limit+1)}; if(bytes.size>limit) error("Response too large")
+            val bytes=connection.inputStream.use{it.readBoundedBytes(limit+1)}; if(bytes.size>limit) error("Response too large")
             return bytes.toString(Charsets.UTF_8)
         } finally { connection.disconnect() }
     }

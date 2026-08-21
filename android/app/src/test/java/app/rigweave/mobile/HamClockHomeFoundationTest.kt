@@ -82,7 +82,11 @@ class HamClockHomeFoundationTest {
         assertEquals(spot.id, dx.contextId)
         assertEquals(spot.frequencyHz, dx.frequencyHz)
         assertEquals(HamClockMapSelection.DX_SPOT, dx.selection)
+        assertEquals("ZL1AUTO", dx.callsign)
         assertEquals(hamClockBandColor("20m"), dx.color)
+        assertEquals("#f08ba7", hamClockBandColor("2m"))
+        assertEquals("#c481d8", hamClockBandColor("70cm"))
+        assertEquals("#f4c94e", hamClockBandColor("sat"))
         assertEquals("260 mi", hamClockDistanceLabel(420.0, HamClockUnitSystem.IMPERIAL))
         assertEquals(HamClockMapLayerAvailability.UNAVAILABLE,
             hamClockMapLayerRegistry.first { it.id == HamClockMapLayerId.MOON }.availability)

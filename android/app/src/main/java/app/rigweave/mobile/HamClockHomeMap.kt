@@ -1,5 +1,6 @@
 package app.rigweave.mobile
 
+import android.graphics.RectF
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -71,6 +73,8 @@ import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.LineLayer
+import org.maplibre.android.style.layers.Property
+import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.layers.PropertyFactory.circleColor
 import org.maplibre.android.style.layers.PropertyFactory.circleOpacity
 import org.maplibre.android.style.layers.PropertyFactory.circleRadius
@@ -81,6 +85,17 @@ import org.maplibre.android.style.layers.PropertyFactory.fillOpacity
 import org.maplibre.android.style.layers.PropertyFactory.lineColor
 import org.maplibre.android.style.layers.PropertyFactory.lineOpacity
 import org.maplibre.android.style.layers.PropertyFactory.lineWidth
+import org.maplibre.android.style.layers.PropertyFactory.textAllowOverlap
+import org.maplibre.android.style.layers.PropertyFactory.textAnchor
+import org.maplibre.android.style.layers.PropertyFactory.textColor
+import org.maplibre.android.style.layers.PropertyFactory.textField
+import org.maplibre.android.style.layers.PropertyFactory.textFont
+import org.maplibre.android.style.layers.PropertyFactory.textHaloColor
+import org.maplibre.android.style.layers.PropertyFactory.textHaloWidth
+import org.maplibre.android.style.layers.PropertyFactory.textIgnorePlacement
+import org.maplibre.android.style.layers.PropertyFactory.textOffset
+import org.maplibre.android.style.layers.PropertyFactory.textOpacity
+import org.maplibre.android.style.layers.PropertyFactory.textSize
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
@@ -563,6 +578,7 @@ internal fun HamClockHomeMap(
         return
     }
     val context = LocalContext.current
+    val hitSlopPx = with(LocalDensity.current) { 20.dp.toPx() }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val mapView = remember {
         MapLibre.getInstance(context.applicationContext)
@@ -640,8 +656,14 @@ internal fun HamClockHomeMap(
             }
             ready.addOnMapClickListener { coordinate ->
                 val layerIds = activeLayerIds(currentPreference)
-                val hit = ready.queryRenderedFeatures(ready.projection.toScreenLocation(coordinate), *layerIds.toTypedArray())
-                    .firstOrNull()
+                val screen = ready.projection.toScreenLocation(coordinate)
+                val hits = ready.queryRenderedFeatures(RectF(screen.x - hitSlopPx, screen.y - hitSlopPx,
+                    screen.x + hitSlopPx, screen.y + hitSlopPx), *layerIds.toTypedArray())
+                val hit = hits.firstOrNull { feature ->
+                    feature.getStringProperty("selection")?.let {
+                        runCatching { HamClockMapSelection.valueOf(it) }.getOrDefault(HamClockMapSelection.NONE)
+                    } != HamClockMapSelection.NONE
+                } ?: hits.firstOrNull()
                 selected = hit?.let { feature ->
                     HamClockSelectedFeature(
                         feature.getStringProperty("title") ?: "Map item",
@@ -846,12 +868,23 @@ private fun installHamClockLayers(style: Style, preference: HamClockMapPreferenc
             style.addSource(GeoJsonSource(sourceId, emptyFeatureCollection()))
             val opacity = preference.layers.firstOrNull { it.id == spec.id }?.opacity ?: spec.defaultOpacity
             when (kind) {
-                HamClockMapRenderKind.POINT -> style.addLayer(CircleLayer(layerId, sourceId).withProperties(
-                    circleColor(Expression.get("color")), circleRadius(5.5f), circleOpacity(opacity),
-                    circleStrokeColor(Expression.switchCase(Expression.eq(Expression.get("watchlisted"), Expression.literal(true)),
-                        Expression.literal("#f3d054"), Expression.literal("rgba(0,0,0,0)"))),
-                    circleStrokeWidth(Expression.switchCase(Expression.eq(Expression.get("watchlisted"), Expression.literal(true)),
-                        Expression.literal(2.5f), Expression.literal(0f)))))
+                HamClockMapRenderKind.POINT -> {
+                    style.addLayer(CircleLayer(layerId, sourceId).withProperties(
+                        circleColor(Expression.get("color")), circleRadius(5.5f), circleOpacity(opacity),
+                        circleStrokeColor(Expression.switchCase(Expression.eq(Expression.get("watchlisted"), Expression.literal(true)),
+                            Expression.literal("#f3d054"), Expression.literal("rgba(0,0,0,0)"))),
+                        circleStrokeWidth(Expression.switchCase(Expression.eq(Expression.get("watchlisted"), Expression.literal(true)),
+                            Expression.literal(2.5f), Expression.literal(0f)))))
+                    val label = SymbolLayer("${spec.sourcePrefix}-point-label-layer", sourceId).withProperties(
+                        textField(Expression.get("callsign")), textSize(12.5f), textColor("#f4f0e7"),
+                        textFont(arrayOf("Noto Sans Regular")),
+                        textHaloColor("#07151b"), textHaloWidth(1.6f), textOffset(arrayOf(0f, 1.15f)),
+                        textAnchor(Property.TEXT_ANCHOR_TOP), textAllowOverlap(false), textIgnorePlacement(false),
+                        textOpacity(opacity),
+                    )
+                    label.setMinZoom(3.0f)
+                    style.addLayer(label)
+                }
                 HamClockMapRenderKind.LINE -> style.addLayer(LineLayer(layerId, sourceId).withProperties(
                     lineColor(Expression.get("color")), lineWidth(1.7f), lineOpacity(opacity)))
                 HamClockMapRenderKind.FILL -> style.addLayer(FillLayer(layerId, sourceId).withProperties(
@@ -874,6 +907,9 @@ private fun updateHamClockSources(style: Style, snapshot: HamClockMapSnapshot, p
                 HamClockMapRenderKind.LINE -> lineOpacity(opacity)
                 HamClockMapRenderKind.FILL -> fillOpacity(opacity * .5f)
             })
+            if (kind == HamClockMapRenderKind.POINT) {
+                style.getLayer("${spec.sourcePrefix}-point-label-layer")?.setProperties(textOpacity(opacity))
+            }
             val features = if (spec.id !in visible) emptyList() else when (kind) {
                 HamClockMapRenderKind.POINT -> snapshot.points.filter { it.layerId == spec.id }.map { pointFeature(it) }
                 HamClockMapRenderKind.LINE -> snapshot.lines.filter { it.layerId == spec.id }.flatMap { lineFeatures(it) }
@@ -969,7 +1005,11 @@ internal fun hamClockSelectionAction(selection: HamClockMapSelection): String = 
 }
 
 internal fun hamClockBandColor(band: String): String = when (band.trim().lowercase()) {
-    "160m" -> "#ff6b6b"; "80m" -> "#ff9f68"; "60m", "40m" -> "#f3d054"; "30m" -> "#8fdf62"
+    "2190m", "2200m", "630m", "560m", "160m" -> "#ff6b6b"
+    "80m" -> "#ff9f68"; "60m", "40m" -> "#f3d054"; "30m" -> "#8fdf62"
     "20m" -> "#43d17c"; "17m" -> "#4ed9b2"; "15m" -> "#42c7d8"; "12m" -> "#69a7f5"
-    "10m" -> "#9d72f2"; "6m" -> "#e86ad7"; else -> "#42c7d8"
+    "10m", "8m" -> "#9d72f2"; "6m", "5m", "4m" -> "#e86ad7"; "2m" -> "#f08ba7"
+    "1.25m", "70cm" -> "#c481d8"; "33cm", "23cm" -> "#5b8ff9"; "13cm", "9cm" -> "#43c7d9"
+    "6cm", "3cm", "1.25cm", "6mm", "4mm", "2.5mm", "2mm", "1mm", "submm" -> "#35b7a6"
+    "sat" -> "#f4c94e"; else -> "#42c7d8"
 }

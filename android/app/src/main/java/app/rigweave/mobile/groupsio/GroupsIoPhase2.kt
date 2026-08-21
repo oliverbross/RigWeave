@@ -260,7 +260,16 @@ internal class GroupsIoDeliveryUnknownException : IOException("Delivery could no
 
 data class GroupsIoRemoteDraft(val id: Long, val groupId: Long, val type: String, val messageId: Long?, val subject: String, val body: String, val attachmentCount: Int)
 internal data class GroupsIoPostResult(val pendingModeration: Boolean)
-data class GroupsIoIncomingAttachment(val id: Long, val filename: String, val mediaType: String, val size: Long?, internal val transientHttpsUrl: String?)
+data class GroupsIoIncomingAttachment(
+    val id: Long,
+    val filename: String,
+    val mediaType: String,
+    val size: Long?,
+    internal val transientHttpsUrl: String?,
+    internal val transientThumbnailHttpsUrl: String? = null,
+    val localRelativePath: String? = null,
+    val localPreviewRelativePath: String? = null,
+)
 
 internal class GroupsIoPhase2Api(private val transport: GroupsIoTransport = GroupsIoHttpTransport()) {
     suspend fun permissions(key: String, groupId: Long): GroupsIoCapabilities {
@@ -271,8 +280,8 @@ internal class GroupsIoPhase2Api(private val transport: GroupsIoTransport = Grou
         val postStatus = member.optString("post_status")
         return GroupsIoCapabilities(
             archivesVisible = perms.optBoolean("archives_visible"),
-            canPost = if (perms.has("post")) perms.optBoolean("post") else postStatus !in setOf("sub_poststatus_cannotpost", "sub_poststatus_none", "announcement"),
-            canReply = if (perms.has("reply")) perms.optBoolean("reply") else postStatus !in setOf("sub_poststatus_cannotpost", "sub_poststatus_none"),
+            canPost = when { perms.has("can_post") -> perms.optBoolean("can_post"); perms.has("post") -> perms.optBoolean("post"); else -> postStatus !in setOf("sub_poststatus_cannotpost", "sub_poststatus_none", "announcement") },
+            canReply = when { perms.has("can_reply") -> perms.optBoolean("can_reply"); perms.has("reply") -> perms.optBoolean("reply"); else -> postStatus !in setOf("sub_poststatus_cannotpost", "sub_poststatus_none") },
             downloadArchives = perms.optBoolean("download_archives"), postStatus = postStatus,
             maxAttachmentSize = member.optLong("max_attachment_size").takeIf { it > 0 } ?: group.optLong("max_attachment_size").takeIf { it > 0 },
             defaultReplyPolicy = group.optString("reply_to").takeIf(String::isNotBlank), syncedAtMillis = System.currentTimeMillis()
@@ -334,11 +343,21 @@ internal class GroupsIoPhase2Api(private val transport: GroupsIoTransport = Grou
         val root = message(key, groupId, number)
         val message = root.optJSONObject("message") ?: root.optJSONObject("data") ?: root
         val values = message.optJSONArray("attachments") ?: root.optJSONArray("attachments") ?: JSONArray()
-        return (0 until values.length()).map { values.getJSONObject(it) }.map { value -> GroupsIoIncomingAttachment(
-            id = value.requiredLong("id", "attachment_id"), filename = groupsIoSanitizeFilename(value.optString("filename").ifBlank { "attachment" }),
-            mediaType = value.optString("content_type", "application/octet-stream"), size = value.optLong("size").takeIf { it >= 0 },
-            transientHttpsUrl = value.optString("url").takeIf(String::isNotBlank)
+        return (0 until values.length()).map { values.getJSONObject(it) }.mapIndexed { index, value ->
+            val filename = groupsIoSanitizeFilename(value.optString("filename").ifBlank { "attachment" })
+            val downloadUrl = value.firstString("download_url", "url")
+            val stableLocalId = groupsIoAttachmentId(value, filename, downloadUrl, index)
+            GroupsIoIncomingAttachment(
+            id = stableLocalId, filename = filename,
+            mediaType = value.firstString("media_type", "content_type").ifBlank { "application/octet-stream" }, size = value.firstLongOrNull("size", "byte_size"),
+            transientHttpsUrl = downloadUrl.takeIf(String::isNotBlank),
+            transientThumbnailHttpsUrl = value.firstString("image_thumbnail_url", "thumbnail_url").takeIf(String::isNotBlank)
         ) }
+    }
+
+    suspend fun downloadIncomingPreview(key: String, value: GroupsIoIncomingAttachment, partial: File): Long {
+        val url = value.transientThumbnailHttpsUrl ?: throw GroupsIoApiException("compatibility", "Groups.io did not provide an image preview")
+        return transport.binary(GroupsIoRequest("GET", "/attachment-preview", absoluteHttpsUrl = url), key, partial, 8L * 1024 * 1024)
     }
 
     suspend fun downloadIncomingAttachment(key: String, groupId: Long, number: Long, attachmentId: Long, partial: File): GroupsIoIncomingAttachment {
@@ -351,7 +370,7 @@ internal class GroupsIoPhase2Api(private val transport: GroupsIoTransport = Grou
     }
 
     suspend fun archivePage(key: String, groupId: Long, token: String? = null): JSONObject {
-        val values = linkedMapOf("group_id" to groupId.toString(), "limit" to "100"); token?.let { values["page_token"] = it }
+        val values = linkedMapOf("group_id" to groupId.toString(), "limit" to "100", "sort_dir" to "desc"); token?.let { values["page_token"] = it }
         return transport.json(GroupsIoRequest("GET", "/getmessages", query = values), key)
     }
 
@@ -360,6 +379,10 @@ internal class GroupsIoPhase2Api(private val transport: GroupsIoTransport = Grou
         return transport.binary(GroupsIoRequest("GET", "/downloadarchives", query = query), key, temporary, Long.MAX_VALUE)
     }
 }
+
+internal fun groupsIoAttachmentId(value: JSONObject, filename: String, downloadUrl: String, index: Int): Long =
+    value.firstLongOrNull("id", "attachment_id")
+        ?: ("$filename|$downloadUrl|$index".fold(1_125_899_906_842_597L) { hash, character -> hash * 31 + character.code } and Long.MAX_VALUE).coerceAtLeast(1L)
 
 internal class GroupsIoAttachmentStore(private val context: Context) {
     private val root = context.filesDir.resolve("GroupsIO")
@@ -385,6 +408,11 @@ internal class GroupsIoAttachmentStore(private val context: Context) {
 
     fun incomingFile(groupId: Long, messageNumber: Long, attachmentId: Long, name: String): Pair<File, File> {
         val final = root.resolve("attachments/$groupId/$messageNumber/${attachmentId}-${groupsIoSanitizeFilename(name)}")
+        return final.resolveSibling("${final.name}.partial") to final
+    }
+
+    fun incomingPreviewFile(groupId: Long, messageNumber: Long, attachmentId: Long, name: String): Pair<File, File> {
+        val final = root.resolve("previews/$groupId/$messageNumber/${attachmentId}-${groupsIoSanitizeFilename(name)}")
         return final.resolveSibling("${final.name}.partial") to final
     }
 

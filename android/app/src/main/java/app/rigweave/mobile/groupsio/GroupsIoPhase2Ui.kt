@@ -1,13 +1,18 @@
 package app.rigweave.mobile.groupsio
 
+import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -25,8 +30,20 @@ private fun GroupsIoAttachmentsDialog(controller: GroupsIoController) {
         text = { LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             if (controller.incomingAttachments.isEmpty()) item { Text(if (controller.connected) "No attachments reported" else "Reconnect to refresh secure download links") }
             items(controller.incomingAttachments, key = { it.id }) { value ->
-                ListItem(headlineContent = { Text(value.filename) }, supportingContent = { Text("${value.mediaType} · ${value.size?.let { "$it bytes" } ?: "size unknown"}") },
-                    trailingContent = { Button({ controller.downloadAttachment(value) }, enabled = controller.connected && !controller.busy) { Text("Download") } })
+                val imageFile = controller.attachmentFile(value.localRelativePath) ?: controller.attachmentFile(value.localPreviewRelativePath)
+                val bitmap = remember(imageFile?.path, imageFile?.lastModified()) { imageFile?.let { BitmapFactory.decodeFile(it.path) } }
+                Card { Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ListItem(headlineContent = { Text(value.filename) }, supportingContent = {
+                        Text("${value.mediaType} · ${value.size?.let { "$it bytes" } ?: "size unknown"}${if (value.localRelativePath != null) " · available offline" else ""}")
+                    }, trailingContent = {
+                        Button({ controller.downloadAttachment(value) }, enabled = controller.connected && !controller.busy && value.localRelativePath == null) {
+                            Text(if (value.localRelativePath == null) "Download" else "Saved")
+                        }
+                    })
+                    if (bitmap != null) Image(bitmap.asImageBitmap(), contentDescription = "Preview of ${value.filename}",
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp), contentScale = ContentScale.Fit)
+                    else if (value.mediaType.startsWith("image/")) Text(if (controller.busy) "Loading image preview…" else "Preview unavailable · download to view offline", style = MaterialTheme.typography.bodySmall)
+                } }
             }
         } }, confirmButton = { TextButton(controller::closeAttachments) { Text("Done") } })
 }
@@ -119,8 +136,15 @@ private fun GroupsIoDraftsOutboxDialog(controller: GroupsIoController) {
 @Composable
 internal fun GroupsIoOfflineDialog(controller: GroupsIoController, dismiss: () -> Unit) {
     val progress = controller.archiveProgress
+    var selectedRange by rememberSaveable { mutableIntStateOf(controller.archiveRangeDays ?: -1) }
+    val ranges = listOf(30 to "30 days", 90 to "90 days", 365 to "Past year", -1 to "Full history")
+    val selectedLabel = ranges.first { it.first == selectedRange }.second
     AlertDialog(onDismissRequest = dismiss, title = { Text("Group Offline Storage") },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Only the selected group is downloaded. Choose how much history to keep available offline.")
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                ranges.forEach { (days, label) -> FilterChip(selected = selectedRange == days, onClick = { selectedRange = days }, label = { Text(label) }) }
+            }
             Text("Archive state: ${progress.state}")
             Text("Downloaded this run: ${progress.downloaded}${progress.total?.let { "/$it" }.orEmpty()} messages")
             Text("Database/cache: ${controller.storageBytes / 1024} KiB")
@@ -128,7 +152,9 @@ internal fun GroupsIoOfflineDialog(controller: GroupsIoController, dismiss: () -
             Text("Official archive ZIP is permission-gated, manual only, and limited by Groups.io to one request per person/group per 24 hours. MBOX content is not parsed.", style = MaterialTheme.typography.bodySmall)
         } },
         confirmButton = { Column {
-            Button(controller::startCompleteArchiveDownload, enabled = controller.connected && controller.capabilities?.archivesVisible == true && !controller.busy) { Text(if (progress.state in setOf("partial", "paused", "failed")) "Resume Archive Download" else "Download Complete Offline Archive") }
+            Button({ controller.startArchiveDownload(selectedRange.takeIf { it > 0 }) }, enabled = controller.connected && controller.capabilities?.archivesVisible == true && !controller.busy) {
+                Text(if (progress.state in setOf("partial", "paused", "failed") && controller.archiveRangeDays == selectedRange.takeIf { it > 0 }) "Resume $selectedLabel" else "Sync $selectedLabel Offline")
+            }
             TextButton(controller::pauseArchiveDownload, enabled = controller.busy) { Text("Pause/Cancel") }
             OutlinedButton(controller::downloadOfficialArchive, enabled = controller.connected && controller.capabilities?.downloadArchives == true && !controller.busy) { Text("Download Official Archive ZIP") }
         } },

@@ -316,6 +316,7 @@ private fun DeliveryDialog(database: QsoDatabase, mutations: QsoMutationCoordina
     val qso = database.qso(record.qsoId)
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
+    val inAppBrowser = LocalInAppBrowserState.current
     var editing by remember { mutableStateOf(false) }
     if (editing && qso != null) {
         QsoCorrectionDialog(qso, mutations, controller) { editing = false }
@@ -356,7 +357,7 @@ private fun DeliveryDialog(database: QsoDatabase, mutations: QsoMutationCoordina
                         SyncProvider.CLUB_LOG -> "https://clublog.org"
                         SyncProvider.EQSL -> "https://www.eqsl.cc"
                     }
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    inAppBrowser?.open(url)
                 }) { Text("OPEN PROVIDER") }
                 TextButton(dismiss) { Text("CLOSE") }
             }

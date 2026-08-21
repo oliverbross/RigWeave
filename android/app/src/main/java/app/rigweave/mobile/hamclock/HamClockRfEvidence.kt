@@ -459,9 +459,9 @@ internal fun computeHamClockBandHealthSnapshot(
     return HamClockBandHealthSnapshot(preference, availability.toMap(), rows, historical, computed.contributors, ids, nowEpoch)
 }
 
-private fun bandSortKey(band: String): Int = listOf("2200m", "630m", "160m", "80m", "60m", "40m", "30m",
+private fun bandSortKey(band: String): Int = listOf("2190m", "630m", "160m", "80m", "60m", "40m", "30m",
     "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m", "70cm", "23cm")
-    .indexOf(band.lowercase(Locale.US)).let { if (it < 0) 999 else it }
+    .indexOf(if (band.equals("2200m", true)) "2190m" else band.lowercase(Locale.US)).let { if (it < 0) 999 else it }
 
 private fun greatCircleDistanceKm(a: GeoPoint, b: GeoPoint): Double {
     val p1 = Math.toRadians(a.latitude); val p2 = Math.toRadians(b.latitude)

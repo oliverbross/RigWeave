@@ -15,7 +15,18 @@ internal data class ProgressFilters(
     val period: ProgressPeriod = ProgressPeriod.ALL, val band: String = "", val mode: ProgressMode = ProgressMode.ALL,
     val submode: String = "", val operator: String = "", val confirmationSource: String = "",
     val portableProgram: String = "", val includeConflicted: Boolean = false, val includeDeleted: Boolean = false,
-)
+    val bands: Set<String> = emptySet(), val modeFamilies: Set<ProgressMode> = emptySet(),
+    val submodes: Set<String> = emptySet(), val operators: Set<String> = emptySet(),
+    val confirmationSources: Set<String> = emptySet(), val portablePrograms: Set<String> = emptySet(),
+) {
+    fun selectedBands() = bands.ifEmpty { band.takeIf(String::isNotBlank)?.let(::setOf).orEmpty() }
+    fun selectedModeFamilies() = modeFamilies.filterNot { it == ProgressMode.ALL }.toSet()
+        .ifEmpty { mode.takeIf { it != ProgressMode.ALL }?.let(::setOf).orEmpty() }
+    fun selectedSubmodes() = submodes.ifEmpty { submode.takeIf(String::isNotBlank)?.let(::setOf).orEmpty() }
+    fun selectedOperators() = operators.ifEmpty { operator.takeIf(String::isNotBlank)?.let(::setOf).orEmpty() }
+    fun selectedConfirmationSources() = confirmationSources.ifEmpty { confirmationSource.takeIf(String::isNotBlank)?.let(::setOf).orEmpty() }
+    fun selectedPortablePrograms() = portablePrograms.ifEmpty { portableProgram.takeIf(String::isNotBlank)?.let(::setOf).orEmpty() }
+}
 
 internal enum class ProgressGoalMetric(val label: String) {
     TOTAL_QSOS("Total QSOs"), DXCC_WORKED("Unique DXCC-style worked"),
@@ -116,6 +127,7 @@ internal data class ProgressSnapshot(
     val confirmationDetails: Map<String, ConfirmationProgress> = emptyMap(),
     val stationProfiles: Map<String, Int> = emptyMap(), val stationCallsigns: Map<String, Int> = emptyMap(),
     val radios: Map<String, Int> = emptyMap(), val awards: Map<AwardKind, AwardEstimate> = emptyMap(),
+    val detailed: Boolean = false,
 )
 
 internal val canonicalUsStates = setOf(
@@ -133,11 +145,17 @@ internal fun qsoBand(qso: Qso) = qso.band.trim().lowercase(Locale.US).ifBlank { 
 internal fun qsoMode(qso: Qso) = progressModeFamily(qso.submode.ifBlank { qso.mode })
 
 internal fun filterProgressQsos(qsos: List<Qso>, filters: ProgressFilters, now: Long): List<Qso> {
+    val bands = filters.selectedBands().map { it.lowercase(Locale.US) }.toSet()
+    val modes = filters.selectedModeFamilies().map { it.name }.toSet()
+    val submodes = filters.selectedSubmodes().map { it.uppercase(Locale.US) }.toSet()
+    val operators = filters.selectedOperators().map { it.uppercase(Locale.US) }.toSet()
+    val confirmations = filters.selectedConfirmationSources()
+    val programmes = filters.selectedPortablePrograms()
     val start = when (filters.period) {
         ProgressPeriod.DAYS_30 -> now - 30 * 86_400L
         ProgressPeriod.DAYS_90 -> now - 90 * 86_400L
         ProgressPeriod.MONTHS_12 -> Instant.ofEpochSecond(now).atZone(ZoneOffset.UTC).minusMonths(12).toEpochSecond()
-        ProgressPeriod.YEAR -> LocalDate.ofInstant(Instant.ofEpochSecond(now), ZoneOffset.UTC).withDayOfYear(1)
+        ProgressPeriod.YEAR -> Instant.ofEpochSecond(now).atZone(ZoneOffset.UTC).toLocalDate().withDayOfYear(1)
             .atStartOfDay().toEpochSecond(ZoneOffset.UTC)
         ProgressPeriod.ALL -> Long.MIN_VALUE
     }
@@ -148,12 +166,12 @@ internal fun filterProgressQsos(qsos: List<Qso>, filters: ProgressFilters, now: 
                 qso.stationCallsign.equals(filters.stationCallsign, true) ||
             filters.stationProfileId.isBlank() && filters.stationCallsign.isBlank()
         stationMatches && qso.createdAt >= start &&
-            (filters.band.isBlank() || qsoBand(qso) == filters.band.lowercase(Locale.US)) &&
-            (filters.mode == ProgressMode.ALL || qsoMode(qso) == filters.mode.name) &&
-            (filters.submode.isBlank() || qso.submode.ifBlank { qso.mode }.equals(filters.submode, true)) &&
-            (filters.operator.isBlank() || qso.operatorCallsign.equals(filters.operator, true)) &&
-            progressConfirmationMatches(qso, filters.confirmationSource) &&
-            progressPortableMatches(qso, filters.portableProgram) &&
+            (bands.isEmpty() || qsoBand(qso) in bands) &&
+            (modes.isEmpty() || qsoMode(qso) in modes) &&
+            (submodes.isEmpty() || qso.submode.ifBlank { qso.mode }.uppercase(Locale.US) in submodes) &&
+            (operators.isEmpty() || qso.operatorCallsign.uppercase(Locale.US) in operators) &&
+            (confirmations.isEmpty() || confirmations.any { progressConfirmationMatches(qso, it) }) &&
+            (programmes.isEmpty() || programmes.any { progressPortableMatches(qso, it) }) &&
             (filters.includeConflicted || !qso.syncState.equals("conflict", true)) &&
             (filters.includeDeleted || qso.syncState.lowercase(Locale.US) !in setOf("tombstone", "remote_deleted"))
     }
@@ -184,16 +202,19 @@ internal fun progressLogbookFilter(filters: ProgressFilters, now: Long = Instant
         ProgressPeriod.DAYS_30 -> now - 30 * 86_400L
         ProgressPeriod.DAYS_90 -> now - 90 * 86_400L
         ProgressPeriod.MONTHS_12 -> Instant.ofEpochSecond(now).atZone(ZoneOffset.UTC).minusMonths(12).toEpochSecond()
-        ProgressPeriod.YEAR -> LocalDate.ofInstant(Instant.ofEpochSecond(now), ZoneOffset.UTC).withDayOfYear(1).atStartOfDay().toEpochSecond(ZoneOffset.UTC)
+        ProgressPeriod.YEAR -> Instant.ofEpochSecond(now).atZone(ZoneOffset.UTC).toLocalDate().withDayOfYear(1).atStartOfDay().toEpochSecond(ZoneOffset.UTC)
         ProgressPeriod.ALL -> null
     }
     return LogbookFilter(
         fromEpochSeconds = start,
         stationProfile = filters.stationProfileId.takeUnless { filters.allStations }.orEmpty(),
         stationCallsign = filters.stationCallsign.takeIf { !filters.allStations && filters.stationProfileId.isBlank() }.orEmpty(),
-        band = filters.band, modeFamily = filters.mode.name.takeUnless { filters.mode == ProgressMode.ALL }.orEmpty(),
-        submode = filters.submode, operator = filters.operator, confirmationSource = filters.confirmationSource,
-        portableProgram = filters.portableProgram,
+        band = filters.selectedBands().singleOrNull().orEmpty(),
+        modeFamily = filters.selectedModeFamilies().singleOrNull()?.name.orEmpty(),
+        submode = filters.selectedSubmodes().singleOrNull().orEmpty(),
+        operator = filters.selectedOperators().singleOrNull().orEmpty(),
+        confirmationSource = filters.selectedConfirmationSources().singleOrNull().orEmpty(),
+        portableProgram = filters.selectedPortablePrograms().singleOrNull().orEmpty(),
         recordVisibility = when { filters.includeDeleted -> "ALL"; filters.includeConflicted -> "ACTIVE_AND_CONFLICTS"; else -> "ACTIVE" },
     )
 }

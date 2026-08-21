@@ -76,7 +76,12 @@ enum RigTheme {
 
 struct BrandHeader: View {
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .center, spacing: 10) {
+            Image("RigWeaveLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 38, height: 38)
+                .accessibilityHidden(true)
             Text("RIGWEAVE").font(.title.bold()).tracking(2).foregroundStyle(RigTheme.amber)
             Spacer()
             Text("Radio. Spectrum. Spots. Logs.").font(.caption).foregroundStyle(.secondary)

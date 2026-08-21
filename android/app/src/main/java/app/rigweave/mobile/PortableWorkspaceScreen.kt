@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -37,17 +38,17 @@ internal fun PortableWorkspaceScreen(portable: PortableController, activation: P
                     Text("NEXT PLAN", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                     Text(nextPlan?.let(::activationPlanSummary) ?: "No upcoming activation plan", maxLines = 1)
                 }
+                SingleChoiceSegmentedButtonRow(Modifier.width(if (compact) 230.dp else 360.dp)) {
+                    PortableMode.entries.forEachIndexed { index, item ->
+                        SegmentedButton(mode == item, { mode = item }, SegmentedButtonDefaults.itemShape(index, PortableMode.entries.size)) {
+                            Text(item.name)
+                        }
+                    }
+                }
                 TextButton(onOpenOperations) { Text("PLANNER") }
             }
         }
         PotaActivationStrip(activation, radio) { mode = PortableMode.ACTIVATE }
-        SingleChoiceSegmentedButtonRow(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-            PortableMode.entries.forEachIndexed { index, item ->
-                SegmentedButton(mode == item, { mode = item }, SegmentedButtonDefaults.itemShape(index, PortableMode.entries.size)) {
-                    Text(item.name)
-                }
-            }
-        }
         when (mode) {
             PortableMode.CHASE -> PortableChaseScreen(portable, radio, stationGrid, foreground, compact, onTune, onTuneAndLog,
                 activation.session?.state == PotaActivationState.ACTIVE, intelligenceNeeds) { spot -> activation.prepareP2p(spot); mode = PortableMode.ACTIVATE }

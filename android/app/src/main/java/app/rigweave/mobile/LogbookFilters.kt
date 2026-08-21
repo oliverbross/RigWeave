@@ -270,5 +270,5 @@ internal fun numericMatches(actual: Double, expression: String): Boolean {
     }
 }
 
-private fun bandRank(band: String) = listOf("2200m", "630m", "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m")
-    .indexOf(band.lowercase()).let { if (it < 0) Int.MAX_VALUE else it }
+private fun bandRank(band: String) = listOf("2190m", "630m", "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m")
+    .indexOf(canonicalSpotBand(band)).let { if (it < 0) Int.MAX_VALUE else it }

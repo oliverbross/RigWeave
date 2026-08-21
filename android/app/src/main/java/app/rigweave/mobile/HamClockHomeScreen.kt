@@ -725,7 +725,7 @@ internal fun HamClockHomeScreen(
         settingsCoordinator.updateSettings { it.copy(outlook = value) }
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize().background(HcBg).windowInsetsPadding(WindowInsets.safeDrawing).testTag("openhamclock-home")) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(HcBg).testTag("openhamclock-home")) {
         val wideThreshold = when (settingsDocument.settings.display.density) {
             HamClockDensity.COMPACT -> 900.dp; HamClockDensity.COMFORTABLE -> 960.dp; HamClockDensity.LARGE_TOUCH -> 1080.dp
         }
@@ -796,7 +796,8 @@ internal fun HamClockHomeScreen(
         activeSpotFilter?.let { dimension ->
             SpotFilterOverlay(dimension, spotFilters,
                 (spotModeOptions + mapSpots.map { canonicalSpotMode(it.mode) }).distinct().sorted(),
-                { activeSpotFilter = null }, { updateSpotFilters(it); activeSpotFilter = null }, Modifier.fillMaxSize())
+                { activeSpotFilter = null }, { updateSpotFilters(it); activeSpotFilter = null }, Modifier.fillMaxSize(), app,
+                hamClockHomeBandOptions, hamClockHomeBandPresets)
         }
         if (showShackDisplay) HamClockShackDisplay(
             stationCall, stationGrid, radio, pathPrediction, nativeStatus, finishLineWeather,
@@ -1445,9 +1446,10 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
         Column(Modifier.fillMaxSize().padding(9.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(Modifier.fillMaxWidth().heightIn(min = 32.dp).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
                 verticalAlignment = Alignment.CenterVertically) {
-                Text(title.uppercase(), color = HcAmber, fontWeight = FontWeight.Black, fontSize = 18.sp, modifier = Modifier.weight(1f))
+                Text(title.uppercase(), color = HcAmber, fontWeight = FontWeight.Black, fontSize = 18.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 if (subtitle.isNotBlank()) Text(subtitle, color = HcMuted, fontFamily = FontFamily.Monospace, fontSize = HcMetaSize,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End, modifier = Modifier.weight(1f))
             }
             HorizontalDivider(color = HcLine)
             content()
@@ -1744,7 +1746,7 @@ private fun SignalReport.gridOrDash() = locator.ifBlank { "—" }
                 Text("%.3f".format(Locale.US, spot.frequencyHz / 1_000_000.0), color = HcInk, fontFamily = FontFamily.Monospace)
             }
         }
-        Text("SOTA live feed requires provider approval", color = HcMuted, fontSize = 14.sp)
+        Text("SOTA live feed unavailable", color = HcMuted, fontSize = 14.sp)
     }
 }
 

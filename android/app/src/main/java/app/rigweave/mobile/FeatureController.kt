@@ -121,7 +121,7 @@ internal class FeatureUrlConnectionTransport : FeatureHttpTransport {
                 }
                 if (connection.contentLengthLong > maximumBytes) error("NOAA response is too large")
                 val bytes = (if (status in 200..299) connection.inputStream else connection.errorStream)
-                    ?.use { it.readNBytes(maximumBytes + 1) } ?: ByteArray(0)
+                    ?.use { it.readBoundedBytes(maximumBytes + 1) } ?: ByteArray(0)
                 if (bytes.size > maximumBytes) error("NOAA response is too large")
                 return FeatureHttpResponse(status, bytes, connection.contentType.orEmpty(), target.toString())
             } finally { connection.disconnect() }
