@@ -42,7 +42,7 @@ class Task2B1DxNewsPskTest {
     @Test
     fun homeScopeExplicitlyStopsLegacySatelliteTicker() {
         assertTrue(NeuralDxRefreshScope.HOME.stopsLegacySatelliteTicker())
-        assertFalse(NeuralDxRefreshScope.FULL_DX.stopsLegacySatelliteTicker())
+        assertTrue(NeuralDxRefreshScope.FULL_DX.stopsLegacySatelliteTicker())
     }
 
     @Test

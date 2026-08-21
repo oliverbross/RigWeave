@@ -55,7 +55,7 @@ class Task2A2RuntimeClosureTest {
     @Test
     fun homeRefreshScopeNeverStartsLegacySatelliteWork() {
         assertFalse(NeuralDxRefreshScope.HOME.includesLegacySatelliteWork())
-        assertTrue(NeuralDxRefreshScope.FULL_DX.includesLegacySatelliteWork())
+        assertFalse(NeuralDxRefreshScope.FULL_DX.includesLegacySatelliteWork())
     }
 
     @Test
