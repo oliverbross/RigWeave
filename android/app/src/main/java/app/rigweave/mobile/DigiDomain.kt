@@ -142,13 +142,13 @@ data class DigiSettingsDocument(
     val waterfall: DigiWaterfallSettings = DigiWaterfallSettings(),
     val rxOffsets: Map<String, Float> = emptyMap(),
     val txOffsets: Map<String, Float> = emptyMap(),
-    val txFirst: Boolean = true,
+    val ftTxParity: Int = 0,
     val holdTx: Boolean = false,
     val ftAutoSequence: Boolean = true,
     val ftAutoCq: Boolean = false,
     val ftAutoCqLimit: Int = 3,
+    val ftRetryLimit: Int = 3,
     val ftAutoLog: Boolean = false,
-    val txPeriod: String = "AUTO",
     val rttyCarrierHz: Float = 1_000f,
     val rttyReverse: Boolean = false,
     val rttyMacros: List<String> = listOf("CQ CQ DE {MYCALL} K", "{DXCALL} DE {MYCALL} 599 599 K", "TU 73 DE {MYCALL} SK"),
@@ -171,9 +171,9 @@ data class DigiSettingsDocument(
     val companionMode: Boolean = false,
 ) {
     fun toJson(): String = JSONObject().apply {
-        put("version", version); put("selectedMode", selectedMode); put("hiddenModeIds", JSONArray(hiddenModeIds.toList())); put("txFirst", txFirst); put("holdTx", holdTx)
-        put("ftAutoSequence", ftAutoSequence); put("ftAutoCq", ftAutoCq); put("ftAutoCqLimit", ftAutoCqLimit); put("ftAutoLog", ftAutoLog)
-        put("txPeriod", txPeriod); put("rttyCarrierHz", rttyCarrierHz); put("rttyReverse", rttyReverse); put("rttyMacros", JSONArray(rttyMacros)); put("rttyHelper", rttyHelper)
+        put("version", version); put("selectedMode", selectedMode); put("hiddenModeIds", JSONArray(hiddenModeIds.toList())); put("ftTxParity", ftTxParity); put("holdTx", holdTx)
+        put("ftAutoSequence", ftAutoSequence); put("ftAutoCq", ftAutoCq); put("ftAutoCqLimit", ftAutoCqLimit); put("ftRetryLimit", ftRetryLimit); put("ftAutoLog", ftAutoLog)
+        put("rttyCarrierHz", rttyCarrierHz); put("rttyReverse", rttyReverse); put("rttyMacros", JSONArray(rttyMacros)); put("rttyHelper", rttyHelper)
         put("pskCarrierHz", pskCarrierHz); put("pskMacros", JSONArray(pskMacros)); put("pskContinuousPreference", pskContinuousPreference); put("cwPitchHz", cwPitchHz); put("cwWpm", cwWpm)
         put("sstvMode", sstvMode); put("sstvAutoArm", sstvAutoArm); put("sstvCallsignOverlay", sstvCallsignOverlay); put("galleryQuotaMb", galleryQuotaMb)
         put("decodeRetentionDays", decodeRetentionDays); put("rawRecording", rawRecording); put("resumeExactRouteRx", resumeExactRouteRx)
@@ -202,10 +202,16 @@ data class DigiSettingsDocument(
                     window = runCatching { DigiAnalysisWindow.valueOf(wf?.optString("window").orEmpty()) }.getOrDefault(DigiAnalysisWindow.BALANCED),
                 ),
                 rxOffsets = floats("rxOffsets"), txOffsets = floats("txOffsets"),
-                txFirst = root.optBoolean("txFirst", true), holdTx = root.optBoolean("holdTx"),
+                ftTxParity = if (root.has("ftTxParity")) root.optInt("ftTxParity").coerceIn(0, 1) else when (root.optString("txPeriod", "AUTO").uppercase(Locale.US)) {
+                    "EVEN", "FIRST", "0" -> 0
+                    "ODD", "SECOND", "1" -> 1
+                    else -> if (root.optBoolean("txFirst", true)) 0 else 1
+                },
+                holdTx = root.optBoolean("holdTx"),
                 ftAutoSequence = root.optBoolean("ftAutoSequence", true), ftAutoCq = root.optBoolean("ftAutoCq"),
-                ftAutoCqLimit = root.optInt("ftAutoCqLimit", 3).coerceIn(1, 20), ftAutoLog = root.optBoolean("ftAutoLog"),
-                txPeriod = root.optString("txPeriod", "AUTO"), rttyCarrierHz = root.optDouble("rttyCarrierHz", 1_000.0).toFloat(),
+                ftAutoCqLimit = root.optInt("ftAutoCqLimit", 3).coerceIn(1, 20),
+                ftRetryLimit = root.optInt("ftRetryLimit", 3).coerceIn(0, 10), ftAutoLog = root.optBoolean("ftAutoLog"),
+                rttyCarrierHz = root.optDouble("rttyCarrierHz", 1_000.0).toFloat(),
                 rttyReverse = root.optBoolean("rttyReverse"), rttyMacros = strings("rttyMacros", DigiSettingsDocument().rttyMacros),
                 rttyHelper = root.optBoolean("rttyHelper", true), pskCarrierHz = root.optDouble("pskCarrierHz", 1_000.0).toFloat(),
                 pskMacros = strings("pskMacros", DigiSettingsDocument().pskMacros), pskContinuousPreference = root.optBoolean("pskContinuousPreference"),
@@ -220,7 +226,7 @@ data class DigiSettingsDocument(
     }
 }
 
-enum class FtMessageKind { CQ, GRID, REPORT, R_REPORT, RR73, FINAL_73, FREE }
+enum class FtMessageKind { CQ, GRID, REPORT, R_REPORT, RRR, RR73, FINAL_73, FREE }
 data class DigiFtMessage(val raw: String, val from: String = "", val to: String = "", val grid: String = "", val report: String = "", val kind: FtMessageKind = FtMessageKind.FREE)
 
 object DigiFtParser {
@@ -246,6 +252,7 @@ object DigiFtParser {
         val signal = tail.firstOrNull(report::matches).orEmpty()
         val kind = when {
             tail.any { it == "RR73" } -> FtMessageKind.RR73
+            tail.any { it == "RRR" } -> FtMessageKind.RRR
             tail.any { it == "73" } -> FtMessageKind.FINAL_73
             signal.startsWith("R") -> FtMessageKind.R_REPORT
             signal.isNotBlank() -> FtMessageKind.REPORT
@@ -253,48 +260,6 @@ object DigiFtParser {
             else -> FtMessageKind.FREE
         }
         return DigiFtMessage(raw, from, to, locator, signal, kind)
-    }
-}
-
-enum class FtSequenceState { IDLE, CQ_READY, CALLING_CQ, ANSWERING, REPORT_SENT, R_REPORT_SENT, RR73_SENT, FINAL_73, COMPLETE, FAILED, STOPPED }
-data class FtSequenceSnapshot(val state: FtSequenceState = FtSequenceState.IDLE, val lockedCall: String = "", val displayCall: String = "", val startedEpoch: Long = 0, val retries: Int = 0, val sentReport: String = "", val receivedReport: String = "")
-
-class DigiFtSequencer(private val myCall: () -> String) {
-    var snapshot = FtSequenceSnapshot(); private set
-    fun prepareCq() { snapshot = FtSequenceSnapshot(FtSequenceState.CQ_READY) }
-    fun startCq(now: Long) { snapshot = FtSequenceSnapshot(FtSequenceState.CALLING_CQ, startedEpoch = now) }
-    fun answer(call: String, now: Long) { snapshot = FtSequenceSnapshot(FtSequenceState.ANSWERING, DigiFtParser.baseCall(call), call, now) }
-    fun stop() { snapshot = snapshot.copy(state = FtSequenceState.STOPPED) }
-    fun fail() { snapshot = snapshot.copy(state = FtSequenceState.FAILED) }
-    fun transmitted() {
-        snapshot = snapshot.copy(state = when (snapshot.state) {
-            FtSequenceState.ANSWERING -> FtSequenceState.REPORT_SENT
-            FtSequenceState.REPORT_SENT -> FtSequenceState.R_REPORT_SENT
-            FtSequenceState.R_REPORT_SENT -> FtSequenceState.RR73_SENT
-            FtSequenceState.RR73_SENT -> FtSequenceState.FINAL_73
-            FtSequenceState.FINAL_73 -> FtSequenceState.COMPLETE
-            else -> snapshot.state
-        })
-    }
-    fun decode(message: DigiFtMessage): Boolean {
-        val mine = DigiFtParser.baseCall(myCall())
-        val remote = DigiFtParser.baseCall(message.from)
-        if (snapshot.state == FtSequenceState.CALLING_CQ && message.to.let(DigiFtParser::baseCall) == mine && remote.isNotBlank()) {
-            snapshot = snapshot.copy(state = FtSequenceState.ANSWERING, lockedCall = remote, displayCall = message.from,
-                receivedReport = message.report.ifBlank { snapshot.receivedReport })
-            return true
-        }
-        if (snapshot.lockedCall.isBlank() || remote != snapshot.lockedCall || DigiFtParser.baseCall(message.to) != mine) return false
-        val next = when (message.kind) {
-            FtMessageKind.GRID, FtMessageKind.REPORT -> FtSequenceState.REPORT_SENT
-            FtMessageKind.R_REPORT -> FtSequenceState.R_REPORT_SENT
-            FtMessageKind.RR73 -> FtSequenceState.FINAL_73
-            FtMessageKind.FINAL_73 -> FtSequenceState.COMPLETE
-            else -> snapshot.state
-        }
-        val changed = next != snapshot.state
-        snapshot = snapshot.copy(state = next, receivedReport = message.report.removePrefix("R").ifBlank { snapshot.receivedReport })
-        return changed
     }
 }
 

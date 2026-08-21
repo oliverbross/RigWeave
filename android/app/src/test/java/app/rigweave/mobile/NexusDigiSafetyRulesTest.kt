@@ -21,8 +21,10 @@ class NexusDigiSafetyRulesTest {
 
     @Test fun transmitRechecksModeFrequencyAndSessionEnableBeforePtt() {
         val controller = source("DigiController.kt")
-        assertTrue(controller.contains("!txEnabled || mode != selectedMode || dependencies.radioState().frequencyHz != selectedFrequency"))
-        assertTrue(controller.contains("withTimeout(capability.maximumTxMillis + 5_000L)"))
+        assertTrue(controller.contains("!txEnabled || mode != selectedMode || currentRadio.frequencyHz != selectedFrequency"))
+        assertTrue(controller.contains("currentRadio.identity != selectedIdentity || radioFamily() != selectedFamily"))
+        assertTrue(controller.contains("withTimeoutOrNull(DigiCapabilities.forMode(selectedMode).maximumTxMillis + 5_000L)"))
+        assertTrue(controller.contains("plan.remainsValid(System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime())"))
     }
 
     @Test fun qsoSaveUsesCanonicalMutationCoordinator() {

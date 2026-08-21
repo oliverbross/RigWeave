@@ -455,6 +455,22 @@ private fun WeakSignalDock(controller: DigiController) {
     ) {
         CockpitButton("CALL CQ", NexusGreen, filled = false, enabled = controller.mode in setOf(DigiMode.FT8, DigiMode.FT4) && controller.txEnabled) { controller.startCq() }
         if (controller.mode != DigiMode.WSPR) CockpitButton("CALL SELECTED", NexusBlue, filled = false, enabled = controller.mode in setOf(DigiMode.FT8, DigiMode.FT4) && controller.txEnabled) { controller.callSelected() }
+        if (controller.mode in setOf(DigiMode.FT8, DigiMode.FT4)) {
+            val sequenceActive = controller.ftSequence.state !in setOf(FtExchangeState.IDLE, FtExchangeState.STOPPED, FtExchangeState.COMPLETE, FtExchangeState.FAILED)
+            val parity = if (controller.ftSequence.role == FtExchangeRole.SEARCH_AND_POUNCE && sequenceActive) controller.ftSequence.operatorTxParity else controller.settings.ftTxParity
+            CockpitButton("TX FIRST / EVEN", if (parity == 0) NexusCyan else NexusMuted, filled = parity == 0, enabled = !sequenceActive) { controller.updateFtTxParity(0) }
+            CockpitButton("TX SECOND / ODD", if (parity == 1) NexusCyan else NexusMuted, filled = parity == 1, enabled = !sequenceActive) { controller.updateFtTxParity(1) }
+            CockpitButton(if (controller.settings.ftAutoCq) "AUTO CQ ON" else "AUTO CQ OFF", if (controller.settings.ftAutoCq) NexusGreen else NexusMuted, filled = false) {
+                controller.updateFtAutomation(!controller.settings.ftAutoCq, controller.settings.ftAutoCqLimit, controller.settings.ftRetryLimit)
+            }
+            CockpitButton("CQ LIMIT ${controller.settings.ftAutoCqLimit}", NexusBlue, filled = false) {
+                controller.updateFtAutomation(controller.settings.ftAutoCq, controller.settings.ftAutoCqLimit.mod(20) + 1, controller.settings.ftRetryLimit)
+            }
+            CockpitButton("RETRIES ${controller.settings.ftRetryLimit}", NexusBlue, filled = false) {
+                controller.updateFtAutomation(controller.settings.ftAutoCq, controller.settings.ftAutoCqLimit, (controller.settings.ftRetryLimit + 1).mod(11))
+            }
+            if (controller.txSlotCountdownMillis > 0) Text("${"%.1f".format(controller.txSlotCountdownMillis / 1_000.0)}s", color = NexusAmber, fontFamily = FontFamily.Monospace)
+        }
         VerticalDivider(Modifier.height(34.dp), color = NexusLine)
             CockpitButton(if (controller.txEnabled) "TX ENABLED" else "ENABLE TX", if (controller.txEnabled) NexusRed else NexusAmber, enabled = !controller.issSessionEnabled) { controller.updateTxEnabled(!controller.txEnabled) }
         CockpitButton(if (controller.txArmed) "TX ARMED" else "ARM TX", NexusAmber) { controller.arm() }
