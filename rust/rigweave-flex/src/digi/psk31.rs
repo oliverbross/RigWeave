@@ -132,9 +132,10 @@ fn decode_bits(bits: &[u8]) -> (String, usize) {
 
 /// Decode a complete recording. Timing phase is selected by maximizing valid
 /// Varicode characters, which also makes imported recordings deterministic.
-pub fn decode(samples: &[f32]) -> (String, f32) {
+pub fn decode_at(samples: &[f32], selected_carrier: Option<f32>) -> (String, f32) {
     if samples.len() < SYMBOL * 4 { return (String::new(), DEFAULT_CARRIER); }
-    let carrier = find_carrier(samples);
+    let carrier = selected_carrier.filter(|value| value.is_finite() && (200.0..=3_500.0).contains(value))
+        .unwrap_or_else(|| find_carrier(samples));
     let mut best = (String::new(), 0usize);
     for offset in (0..SYMBOL).step_by(8) {
         let mut phasors = Vec::new();
@@ -152,6 +153,8 @@ pub fn decode(samples: &[f32]) -> (String, f32) {
     }
     (best.0, carrier)
 }
+
+pub fn decode(samples: &[f32]) -> (String, f32) { decode_at(samples, None) }
 
 #[cfg(test)]
 mod tests {

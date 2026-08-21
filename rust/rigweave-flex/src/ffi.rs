@@ -4,6 +4,7 @@
 use crate::flexcat::{self, FlexFramer, FlexState};
 use crate::flexdisc;
 use crate::digi::{self, CwStreamDecoder, RttyStreamDecoder};
+use crate::digi::spectrum::WindowN;
 use std::ffi::{c_char, CStr};
 use tempo_sstv::{SstvDecoder, SstvEvent, SourceImage};
 use tempo_sstv::modespec::{for_mode, SstvMode};
@@ -229,6 +230,7 @@ pub extern "C" fn rw_digi_context_create(
     sample_rate: u32,
     cw_pitch_hz: f32,
     rtty_reverse: bool,
+    rtty_centre_hz: f32,
 ) -> *mut DigiContext {
     if sample_rate == 0 {
         return std::ptr::null_mut();
@@ -238,7 +240,7 @@ pub extern "C" fn rw_digi_context_create(
     };
     Box::into_raw(Box::new(DigiContext {
         cw: CwStreamDecoder::new(sample_rate as f32, cw_pitch_hz),
-        rtty: RttyStreamDecoder::new(rtty_reverse),
+        rtty: RttyStreamDecoder::new_at(rtty_reverse, rtty_centre_hz),
         sstv,
         sstv_mode: None,
         sstv_line: -1,
@@ -371,6 +373,37 @@ pub unsafe extern "C" fn rw_digi_decode_slot(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn rw_digi_spectrum(
+    samples: *const f32,
+    count: usize,
+    sample_rate: u32,
+    low_hz: f32,
+    high_hz: f32,
+    bins: usize,
+    window: i32,
+    output: *mut f32,
+    capacity: usize,
+) -> i32 {
+    if samples.is_null() || sample_rate == 0 || bins == 0 || bins > 512 ||
+        !low_hz.is_finite() || !high_hz.is_finite() || low_hz < 0.0 || high_hz <= low_hz ||
+        high_hz > sample_rate as f32 / 2.0
+    {
+        return -1;
+    }
+    let window = match window {
+        0 => WindowN::Fast,
+        1 => WindowN::Balanced,
+        2 => WindowN::Sharp,
+        _ => return -1,
+    };
+    let row = digi::spectrum::power_spectrum_n(
+        std::slice::from_raw_parts(samples, count), sample_rate as f32,
+        low_hz, high_hz, bins, window,
+    );
+    copy_samples(&row, output, capacity)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn rw_digi_encode_slot(
     mode: i32,
     text: *const c_char,
@@ -388,11 +421,12 @@ pub unsafe extern "C" fn rw_digi_encode_slot(
 pub unsafe extern "C" fn rw_digi_decode_psk31(
     samples: *const f32,
     count: usize,
+    carrier_hz: f32,
     output: *mut c_char,
     capacity: usize,
 ) -> i32 {
     if samples.is_null() { return -1; }
-    let (text, carrier) = digi::psk31::decode(std::slice::from_raw_parts(samples, count));
+    let (text, carrier) = digi::psk31::decode_at(std::slice::from_raw_parts(samples, count), Some(carrier_hz));
     copy_text(
         &format!("{{\"text\":{},\"carrierHz\":{carrier:.1}}}", json_string(&text)),
         output,
@@ -503,7 +537,7 @@ mod tests {
             unsafe { rw_digi_encode_cw(text.as_ptr(), 20, 700.0, 12_000, samples.as_mut_ptr(), samples.len()) },
             count
         );
-        let context = rw_digi_context_create(12_000, 700.0, false);
+        let context = rw_digi_context_create(12_000, 700.0, false, 2_210.0);
         assert!(!context.is_null());
         let mut padded = vec![0.0_f32; 1_200];
         padded.extend(samples);
@@ -524,7 +558,7 @@ mod tests {
         assert!(count > 1_000);
         let mut samples = vec![0.0_f32; count as usize];
         unsafe { rw_digi_encode_rtty(text.as_ptr(), 12_000, false, samples.as_mut_ptr(), samples.len()) };
-        let context = rw_digi_context_create(12_000, 700.0, false);
+        let context = rw_digi_context_create(12_000, 700.0, false, 2_210.0);
         let mut output = [0_i8; 4096];
         unsafe { rw_digi_feed_rtty(context, samples.as_ptr(), samples.len(), output.as_mut_ptr(), output.len()) };
         let decoded = unsafe { CStr::from_ptr(output.as_ptr()) }.to_string_lossy();
@@ -535,5 +569,22 @@ mod tests {
             -1
         );
         unsafe { rw_digi_context_destroy(context) };
+    }
+
+    #[test]
+    fn digital_spectrum_c_abi_is_bounded_and_monotonic_in_level() {
+        let quiet = vec![0.01_f32; 4096];
+        let loud = (0..4096).map(|n| {
+            (std::f32::consts::TAU * 1_000.0 * n as f32 / 12_000.0).sin() * 0.8
+        }).collect::<Vec<_>>();
+        let mut quiet_row = [0.0_f32; 384];
+        let mut loud_row = [0.0_f32; 384];
+        assert_eq!(unsafe { rw_digi_spectrum(quiet.as_ptr(), quiet.len(), 12_000, 0.0, 3_000.0,
+            quiet_row.len(), 1, quiet_row.as_mut_ptr(), quiet_row.len()) }, 384);
+        assert_eq!(unsafe { rw_digi_spectrum(loud.as_ptr(), loud.len(), 12_000, 0.0, 3_000.0,
+            loud_row.len(), 1, loud_row.as_mut_ptr(), loud_row.len()) }, 384);
+        assert!(loud_row.iter().copied().fold(0.0_f32, f32::max) >
+            quiet_row.iter().copied().fold(0.0_f32, f32::max));
+        assert!(loud_row.iter().all(|value| (0.0..=1.0).contains(value)));
     }
 }

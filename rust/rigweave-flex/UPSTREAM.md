@@ -55,3 +55,14 @@ The dependency lock is committed at `Cargo.lock`; generated libraries and Cargo 
   by the local acceptance tests through the same C ABI used by Android.
 - Excluded components remain: Tauri/React desktop UI, desktop audio backends,
   Hamlib, provider credentials, and the Fortran/C++ WSJT-X modem build itself.
+
+## Nexus Digi completion review
+
+- Current reviewed Nexus pin: commit
+  `57d11fd55f098dc9302b6aafed39e6cd4b6db216`, tree
+  `ed7ae002f93d996afaf4184cc572138ad1346b17`, UI package `1.7.5`.
+- The current review copied no Nexus source. RigWeave independently exposes its
+  existing spectrum implementation through a bounded C/JNI ABI and adds
+  selected-carrier entry points to existing RTTY/BPSK31 decoders.
+- `docs/nexus/UPSTREAM.json` is the provenance authority.
+  `scripts/check_nexus_upstream.py` compares read-only and never advances it.

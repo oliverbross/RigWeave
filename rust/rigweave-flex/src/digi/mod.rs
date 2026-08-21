@@ -77,6 +77,20 @@ impl RttyStreamDecoder {
         }
     }
 
+    pub fn new_at(reverse: bool, centre: f32) -> Self {
+        let centre = centre.clamp(300.0, 3_500.0);
+        let low = centre - 85.0;
+        let high = centre + 85.0;
+        let (mark_hz, space_hz) = if reverse { (high, low) } else { (low, high) };
+        Self {
+            candidates: vec![RttyCandidate {
+                inner: RttyDemodulator::new(RttyConfig { mark_hz, space_hz, ..RttyConfig::default() }),
+                transcript: String::new(), score: 0.0,
+            }],
+            best: 0,
+        }
+    }
+
     pub fn push(&mut self, samples: &[f32]) -> &str {
         for candidate in &mut self.candidates {
             for decoded in candidate.inner.feed(samples) {

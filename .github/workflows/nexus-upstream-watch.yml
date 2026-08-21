@@ -1,0 +1,35 @@
+name: Nexus upstream watch
+
+on:
+  schedule:
+    - cron: "37 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare reviewed Nexus pin
+        id: compare
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 scripts/check_nexus_upstream.py
+          --markdown-output nexus-upstream-report.md
+          --json-output nexus-upstream-report.json
+      - name: Publish comparison reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nexus-upstream-report
+          path: |
+            nexus-upstream-report.md
+            nexus-upstream-report.json
+      - name: Require human review for changed or failed comparison
+        if: steps.compare.outcome != 'success'
+        run: exit 1

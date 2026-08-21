@@ -18,14 +18,15 @@ int32_t rw_flex_frequency(uint32_t slice, uint64_t hz, char *output, size_t capa
 int32_t rw_flex_mode(uint32_t slice, const char *mode, char *output, size_t capacity);
 int32_t rw_flex_filter(const char *letter, int32_t low, int32_t high, char *output, size_t capacity);
 int32_t rw_flex_parse_discovery(const uint8_t *bytes, size_t count, char *output, size_t capacity);
-rw_digi_context *rw_digi_context_create(uint32_t sample_rate, float cw_pitch_hz, bool rtty_reverse);
+rw_digi_context *rw_digi_context_create(uint32_t sample_rate, float cw_pitch_hz, bool rtty_reverse, float rtty_centre_hz);
 void rw_digi_context_destroy(rw_digi_context *context);
 int32_t rw_digi_feed_cw(rw_digi_context *context, const float *samples, size_t count, char *output, size_t capacity);
 int32_t rw_digi_feed_rtty(rw_digi_context *context, const float *samples, size_t count, char *output, size_t capacity);
 int32_t rw_digi_feed_sstv(rw_digi_context *context, const float *samples, size_t count, char *output, size_t capacity);
 int32_t rw_digi_decode_slot(int32_t mode, const float *samples, size_t count, uint32_t sample_rate, char *output, size_t capacity);
+int32_t rw_digi_spectrum(const float *samples, size_t count, uint32_t sample_rate, float low_hz, float high_hz, size_t bins, int32_t window, float *output, size_t capacity);
 int32_t rw_digi_encode_slot(int32_t mode, const char *text, float base_hz, float *output, size_t capacity);
-int32_t rw_digi_decode_psk31(const float *samples, size_t count, char *output, size_t capacity);
+int32_t rw_digi_decode_psk31(const float *samples, size_t count, float carrier_hz, char *output, size_t capacity);
 int32_t rw_digi_encode_psk31(const char *text, float carrier_hz, float *output, size_t capacity);
 int32_t rw_digi_copy_sstv_image(const rw_digi_context *context, uint8_t *output, size_t capacity);
 int32_t rw_digi_encode_cw(const char *text, uint32_t wpm, float pitch_hz, uint32_t sample_rate, float *output, size_t capacity);
