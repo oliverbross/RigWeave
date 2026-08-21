@@ -139,9 +139,11 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val portable = remember { PortableController(context, database) }
     val activation = remember { PotaActivationController(context, database) }
     val features = remember { FeatureController(context) }
-    val neuralDx = remember { NeuralDxController(context, database) }
-    val wavelog = remember { WavelogController(context, database) }
     val app = remember { AppController(context) }
+    val wavelog = remember { WavelogController(context, database) }
+    val neuralDx = remember {
+        NeuralDxController(context, database, wavelog.selectedStation?.grid?.ifBlank { null } ?: app.stationGrid)
+    }
     val flex = remember { FlexRadioController(context, { app.preferredFlexStation }, app::savePreferredFlexStation) { app.manualFlexIp } }
     val syncHub = remember { SyncHubController(context, database, { wavelog.logMode }, { app.stationGrid }) }
     val callbook = remember { CallbookController(context) { app.stationCallsign } }
