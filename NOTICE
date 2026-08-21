@@ -105,3 +105,11 @@ report is incorporated because the reviewed headers contain conflicting use
 and reproduction language and no unambiguous redistribution permission was
 established. RigWeave's adapter boundary is independently written and does not
 claim ITU validation or scientific parity.
+
+Nexus by KD9TAW was reviewed for the Android Digi completion programme at
+commit 57d11fd55f098dc9302b6aafed39e6cd4b6db216 (tree
+ed7ae002f93d996afaf4184cc572138ad1346b17, package 1.7.5). Nexus is
+GPL-3.0-only. No source from that current review was copied. Existing historical
+RigWeave digital-mode provenance remains in rust/rigweave-flex/UPSTREAM.md. The
+new cockpit, storage, UDP owner, spectrum bridge and workflow code are
+independently written RigWeave code.

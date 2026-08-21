@@ -37,13 +37,12 @@ preferences. Arming and selected image pixels deliberately do not persist.
 
 ## Not exposed
 
-FT8, FT4, FT2, Q65, FST4/FST4W, MSK144, JT65, and WSPR are not exposed.
-Nexus routes these through `tempo-fast-sys`, which builds a large vendored
-WSJT-X/Decodium Fortran, C, and C++ modem with CMake, FFTW, and desktop-specific
-build branches. Nexus has no Android target. The examined Decodium C++ migration
-still carries Qt/FFTW requirements and unresolved Fortran-compatible symbols.
-Showing those modes before an Android engine passes upstream parity fixtures
-would be a placeholder and would violate RigWeave's product contract.
+Weak-signal modes are exposed on Android through RigWeave's GPL-compatible
+`mfsk-core` native bridge. The typed `DigiCapabilities` registry is the
+authority for picker visibility, variants, fixture status, sequencing,
+waterfall tuning, TX duration and ADIF mapping. FT8 and FT4 have the automatic
+operator sequencer and verified RX/TX fixture status. Other slotted modes remain
+manual even when native RX/TX exists; the UI does not imply FT8-style automation.
 
 ## Nexus feature audit
 
@@ -54,3 +53,18 @@ TQSL for certificate signing, which is not an Android implementation; only its
 LoTW report download is portable. Nexus Field Day has useful 2026 scoring and
 exchange domain logic, but it is a separate event workspace and was not mixed
 into Digi without its durable QSO/event model and tests.
+
+## Nexus Digi completion v2
+
+The cockpit owns one real native 384-bin spectrum, a bounded 90-second
+waterfall, typed USB/Flex health, exact click-to-net tuning, Classic/Roster
+decode views and separate `rigweave-digi.sqlite` storage. FT8/FT4 sequencing
+is operator-started, locks one base callsign, ignores bystanders and never
+persists arm/PTT/transmitting state. RTTY and BPSK31 remain truthful manual
+workflows; QPSK31 is excluded.
+
+SSTV includes exact prepared-image preview, atomic private PNG saves and an
+explicit receive-only ISS session. Logging uses `QsoMutationCoordinator` and
+the existing Wavelog outbox. WSJT-X UDP is disabled and loopback-only by
+default. See `docs/nexus/NEXUS_DIGI_INTEGRATION_V2.md` and the unperformed
+physical checklist in `docs/nexus/NEXUS_DIGI_LIVE_ACCEPTANCE.md`.

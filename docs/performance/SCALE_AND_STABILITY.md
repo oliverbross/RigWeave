@@ -92,3 +92,17 @@ Every map layer declares a maximum object count. DX points cap at 160, great-cir
 Schema 5 uses five-minute `evidence_bucket` rows with targeted UTC-matched indexes. Live evidence is station-scoped; cluster journal history is stored once under a shared global key. Exact call/receiver hash sets are each capped at 24. Live snapshots are deduplicated and coalesced at no more than one write per minute; a local five-minute heartbeat recomputes without a provider fetch. Backfill is off-main, restart-safe, one 1,000-row transaction before first publication and then at most one batch every five seconds. Verification is capped at 100 predictions, World at 72 cells, candidates at 12 and live input at 2,000 observations.
 
 Only eligible global forecasts persist on 15-minute station/window/band slots. Verified rows retain 14 days, pending rows and evidence retain 180 days, calibration aggregates remain durable, and prediction storage has a 100,000-row hard cap that removes verified rows before ended pending rows and never removes unended pending rows. Startup never vacuums. A deterministic disposable 30-active-day profile across all 16 bands and 30/60/120-minute windows produced 138,240 evidence rows, peaked at 69,344 prediction rows, finished with 64,736 predictions (224 pending), 60 calibration rows and a 43,061,248-byte SQLite file. Median 48-forecast recomputation was 469.96 ms and the 95th-percentile bounded verification cycle was 0.24 ms on the host. The generated database was deleted; timings are not tablet guarantees.
+
+## Nexus Digi v2 bounds
+
+- Spectrum publication is at most 10 Hz with 384 bins. The 900-row waterfall
+  holds about 90 seconds and 1.32 MiB of float payload, below 4 MiB.
+- Live UI history caps at 3,000 rows. `rigweave-digi.sqlite` defaults to seven
+  days/20,000 decodes; completed sessions and drafts prune after 90 days.
+- PSK31 retains at most 120 seconds of 12 kHz mono. Slotted decoding keeps one
+  bounded slot plus one replay slot.
+- Operator-started PCM16 WAV capture caps at 10 minutes, seven days and 100 MB.
+- SSTV PNGs use temporary-file/rename completion and a 100 MB default/250 MB
+  maximum quota; SQLite stores metadata, never pixels.
+- Background, route loss, radio identity/frequency change and close clear TX.
+  No lifecycle path restarts transmit.
