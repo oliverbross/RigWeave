@@ -74,8 +74,8 @@ enum class NeuralDxPage(val label: String) {
 
 enum class NeuralDxRefreshScope { HOME, FULL_DX }
 
-internal fun NeuralDxRefreshScope.includesLegacySatelliteWork(): Boolean = this == NeuralDxRefreshScope.FULL_DX
-internal fun NeuralDxRefreshScope.stopsLegacySatelliteTicker(): Boolean = this == NeuralDxRefreshScope.HOME
+internal fun NeuralDxRefreshScope.includesLegacySatelliteWork(): Boolean = false
+internal fun NeuralDxRefreshScope.stopsLegacySatelliteTicker(): Boolean = true
 
 data class NeuralWeather(
     val available: Boolean = false, val updatedEpoch: Long = 0, val temperatureC: Double? = null,
