@@ -167,7 +167,7 @@ fun NeuralDxScreen(
         val pageModifier = Modifier.fillMaxWidth().weight(1f).clipToBounds().testTag("dx-page-${page.name.lowercase()}")
         when (page) {
             NeuralDxPage.COCKPIT -> DxCockpit(controller, features, policySpots, database, wavelog, callbook, cty, stationGrid, tune,
-                requestReceiveTune, intelligenceNeeds, previousQsos, pageModifier)
+                requestReceiveTune, intelligenceNeeds, previousQsos, { page = NeuralDxPage.INSIGHT }, pageModifier)
             NeuralDxPage.MAP -> DxMap(controller, enrichedPolicySpots, features, cty, stationGrid,
                 database, wavelog, requestReceiveTune, previousQsos, pageModifier)
             NeuralDxPage.INSIGHT -> DxInsightPage(controller, policySpots, pageModifier)
@@ -430,6 +430,7 @@ fun NeuralDxScreen(
     wavelog: WavelogController, callbook: CallbookController, cty: CtyController, stationGrid: String,
     tune: (String) -> Unit, requestReceiveTune: (Long, String?, String, String) -> Unit,
     intelligenceNeeds: Map<String, List<String>>, previousQsos: (AndroidDXSpot) -> Unit,
+    openOutlook: () -> Unit,
     modifier: Modifier) {
     var mode by remember { mutableStateOf("COCKPIT") }; var band by remember { mutableStateOf("ALL") }
     var radioMode by remember { mutableStateOf("ALL") }; var watchOnly by remember { mutableStateOf(false) }
@@ -500,6 +501,14 @@ fun NeuralDxScreen(
             DxSpotFeed(rows, statuses, distances, cty, intelligenceNeeds, { selected = it; selectedRequiresReview = false }, previousQsos, Modifier.weight(1.55f).fillMaxHeight())
             LazyColumn(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 item { DxSection("ACTIVE BANDS · 24H") { controller.bandActivity.entries.take(12).forEach { DxBar(it.key, it.value, controller.bandActivity.values.maxOrNull() ?: 1) } } }
+                item { DxSection("NEXT 60 MIN", Modifier.clickable(onClick = openOutlook)) {
+                    val outlook = controller.outlook.snapshot
+                    outlook.topBands.take(3).forEach { row ->
+                        DxLine(row.band, "${row.label.name.replace('_', ' ')} · ${row.confidence} · ${row.sourceCount} sources", DxCyan)
+                    }
+                    if (outlook.topBands.isEmpty()) DxEmpty("Insufficient evidence · calibration collecting")
+                    Text("OPEN INSIGHT & OUTLOOK", color = DxAmber, fontWeight = FontWeight.Bold)
+                } }
                 item { DxSection("CURRENT OPPORTUNITIES") {
                     Text("Live ranking only · P = priority · E = evidence support · not a probability or forecast",color=DxMuted,fontSize=12.sp)
                     controller.currentOpportunities.take(6).forEach { opportunity ->
@@ -691,38 +700,75 @@ private fun signalReportSpot(report: SignalReport, cty: CtyController): AndroidD
 }
 
 @Composable private fun DxInsightPage(controller: NeuralDxController, policySpots: List<AndroidDXSpot>, modifier: Modifier){
-    val tactical=controller.insight.recommendations+controller.currentOpportunities.map{"${it.callsign} · ${it.country} · priority ${it.priority} · ${it.reason}"}
-    Row(modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
-        Column(Modifier.weight(1.1f).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(8.dp)){
-            DxSection("AI OPERATOR REPORT · ${controller.insight.source}",Modifier.weight(1.25f)){Text(controller.insight.title,color=DxCyan,fontSize=20.sp,fontWeight=FontWeight.Black);Column(Modifier.weight(1f).verticalScroll(rememberScrollState())){Text(controller.insight.report,color=DxInk,fontSize=15.sp,lineHeight=21.sp);if(controller.insight.bullets.isNotEmpty()){Spacer(Modifier.height(12.dp));Text("EVIDENCE / SIGNALS",color=DxAmber,fontWeight=FontWeight.Black);controller.insight.bullets.forEachIndexed{i,v->DxLine("${i+1}",v,DxCyan)}};controller.currentOpportunities.take(5).forEach{opportunity->DxLine("${opportunity.callsign} · ${opportunity.band}","P ${opportunity.priority} · E ${opportunity.evidenceScore}",if(opportunity.priority>=70)DxGreen else DxYellow)}};if(controller.insight.error.isNotBlank())Text(controller.insight.error,color=DxYellow)}
-            DxSection("LOG PERFORMANCE",Modifier.weight(.75f)){Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceAround){DxMiniValue("QSOs",controller.insight.log.qsos.toString());DxMiniValue("CALLS",controller.insight.log.calls.toString());DxMiniValue("DXCC",controller.insight.log.dxccs.toString());DxMiniValue("CONF",controller.insight.log.confirmedDxccs.toString())};HorizontalDivider(color=Color(0xFF374047));Text("Measured only from ${controller.insight.source.lowercase()} log scope · QSL/LoTW confirmation",color=DxMuted,fontSize=12.sp)}
+    val outlook = controller.outlook.snapshot
+    LazyColumn(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { DxSection("CURRENT EVIDENCE") {
+            DxLine("Observed opportunities", controller.currentOpportunities.size.toString(), DxCyan)
+            DxLine("Policy observations", policySpots.size.toString(), DxGreen)
+            outlook.sources.forEach { (source, state) ->
+                val age = outlook.sourceAgesSeconds[source]?.let { " · ${it / 60}m old" }.orEmpty()
+                DxLine(source.replace('_', ' '), state.name + age, if (state == OutlookSourceState.CURRENT) DxGreen else DxYellow)
+            }
+        } }
+        OutlookWindow.entries.forEach { window ->
+            item { DxSection("NEXT ${window.minutes} MINUTES") {
+        val rows = outlook.forecasts.filter { it.window == window }.sortedByDescending(OutlookForecast::supportScore).take(3)
+                if (rows.isEmpty()) DxEmpty(if (window == outlook.selectedWindow) "Insufficient evidence" else "Select this window in World for detail")
+                rows.take(5).forEach { row -> DxLine(row.band,
+                    "${row.label.name.replace('_', ' ')} · ${row.confidence} · support ${row.supportScore} · ${row.sourceCount} sources", DxCyan) }
+            } }
         }
-        DxSection("TACTICAL OPPORTUNITIES · NOW",Modifier.weight(1.15f).fillMaxHeight()){
-            LazyColumn(Modifier.fillMaxSize()){items(tactical.ifEmpty{listOf("No current recommendation")}){v->val idx=tactical.indexOf(v);Row(Modifier.fillMaxWidth().heightIn(min=48.dp).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){Text("${idx+1}",color=scoreColor(policySpots.getOrNull(idx)?.score?:0),fontSize=22.sp,fontWeight=FontWeight.Black,modifier=Modifier.width(34.dp));Text(v,color=if(tactical.isNotEmpty())DxInk else DxMuted,modifier=Modifier.weight(1f),maxLines=2)};HorizontalDivider(color=Color(0xFF303940))}}
-        }
-        Column(Modifier.weight(1f).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(8.dp)){
-            DxSection("BAND ANALYZER",Modifier.weight(1f)){controller.insight.log.bands.entries.take(10).forEach{DxBar(it.key,it.value,controller.insight.log.bands.values.maxOrNull()?:1)};if(controller.insight.log.bands.isEmpty())DxEmpty("No log distribution yet")}
-            DxSection("MODE ANALYZER",Modifier.weight(.72f)){controller.insight.log.modes.entries.take(7).forEach{DxBar(it.key,it.value,controller.insight.log.modes.values.maxOrNull()?:1)}}
-            DxSection("MODEL / DATA HONESTY",Modifier.weight(.55f)){DxLine("Current opportunities",controller.currentOpportunities.size.toString(),DxCyan);DxLine("Policy samples",policySpots.size.toString(),DxGreen);Text("Current opportunities are a deterministic live heuristic, not a probability or forecast. Missing measurements stay unavailable; optional AI never replaces local evidence.",color=DxMuted,fontSize=12.sp)}
-        }
+        item { DxSection("TOP REGIONS") {
+            outlook.world.filter { it.forecast.label != OutlookLabel.INSUFFICIENT_EVIDENCE }
+                .sortedByDescending { it.forecast.supportScore }.take(6).forEach { cell ->
+                    DxLine("${hemisphere(cell.latitude,"N","S")} ${hemisphere(cell.longitude,"E","W")}",
+                        "${cell.forecast.label.name.replace('_', ' ')} · ${cell.forecast.confidence} · n=${cell.forecast.baselineSamples}", DxCyan)
+                }
+            if (outlook.world.none { it.forecast.label != OutlookLabel.INSUFFICIENT_EVIDENCE }) DxEmpty("No supported region cells yet")
+        } }
+        item { DxSection("CANDIDATE OPPORTUNITIES") {
+            outlook.candidates.forEach { row -> DxLine(row.callsign, "${row.source.label}${row.band.takeIf(String::isNotBlank)?.let { " · $it ${row.mode}" }.orEmpty()}", DxYellow) }
+            if (outlook.candidates.isEmpty()) DxEmpty("No current, scheduled, watchlist, needed, or recent-pattern candidates")
+            Text("Scheduled candidates are calendar evidence, not predicted transmissions.", color = DxMuted, fontSize = 12.sp)
+        } }
+        item { DxSection("WHY") {
+            outlook.topBands.firstOrNull()?.reasons?.forEachIndexed { index, reason -> DxLine("${index + 1}", reason, DxCyan) }
+            Text("QSO history is personal context only and never counts as live evidence.", color = DxMuted, fontSize = 12.sp)
+        } }
+        item { DxSection("CALIBRATION") {
+            DxLine(outlook.calibration.state.name, outlook.calibration.label, DxAmber)
+            Text("A percentage appears only after 40 verified predictions in the window/band family and 15 in the score bin.", color = DxMuted, fontSize = 12.sp)
+        } }
+        item { DxSection("OPTIONAL AI BRIEFING · ${controller.insight.source}") {
+            Text(controller.insight.title, color = DxCyan, fontWeight = FontWeight.Black)
+            Text(controller.insight.report, color = DxInk, fontSize = 15.sp, lineHeight = 21.sp)
+            Text("Optional AI summarizes structured results only; it does not generate or overwrite the empirical score.", color = DxMuted, fontSize = 12.sp)
+        } }
     }
 }
 
 @Composable private fun DxWorldPage(controller: NeuralDxController, features: FeatureController, modifier: Modifier){
-    var anomaliesOnly by remember{mutableStateOf(false)};var greyline by remember{mutableStateOf(true)}
+    var anomaliesOnly by remember{mutableStateOf(false)};var greyline by remember{mutableStateOf(true)};var mode by remember{mutableStateOf("CURRENT")}
     val rows=controller.world.filter{!anomaliesOnly||(it.anomalyRatio?:0.0)>=1.8}
+    val outlook = controller.outlook.snapshot
     Column(modifier,verticalArrangement=Arrangement.spacedBy(8.dp)){
         Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(7.dp),verticalAlignment=Alignment.CenterVertically){
             DxSelect("BAND",controller.worldBand,DxBands){controller.setWorldFilter(controller.worldWindowMinutes,it)}
-            DxSelect("WINDOW","${controller.worldWindowMinutes}m",listOf("15m","30m","60m","180m","360m")){controller.setWorldFilter(it.removeSuffix("m").toInt(),controller.worldBand)}
+            DxSelect("MODE",mode,listOf("CURRENT","OUTLOOK 30","OUTLOOK 60","OUTLOOK 120")){ selected ->
+                mode=selected
+                if(selected!="CURRENT") controller.outlook.select(OutlookWindow.entries.first{it.minutes==selected.substringAfter(' ').toInt()},controller.worldBand.takeUnless{it=="ALL"}?:"20m")
+            }
+            if(mode=="CURRENT") DxSelect("WINDOW","${controller.worldWindowMinutes}m",listOf("15m","30m","60m","180m","360m")){controller.setWorldFilter(it.removeSuffix("m").toInt(),controller.worldBand)}
             FilterChip(anomaliesOnly,{anomaliesOnly=!anomaliesOnly},{Text("ANOMALIES ONLY")});FilterChip(greyline,{greyline=!greyline},{Text("GREY LINE")})
-            Text("${rows.size} ACTIVE CELLS",color=DxCyan,fontWeight=FontWeight.Black)
+            Text("${if(mode=="CURRENT")rows.size else outlook.world.size} CELLS",color=DxCyan,fontWeight=FontWeight.Black)
         }
         Row(Modifier.fillMaxSize(),horizontalArrangement=Arrangement.spacedBy(8.dp)){
-            DxWorldAnomalyCanvas(rows,greyline,Modifier.weight(2.2f).fillMaxHeight())
-            DxSection("ACTIVITY / ANOMALIES",Modifier.weight(1f).fillMaxHeight()){
-                Row(Modifier.fillMaxWidth().height(34.dp).background(DxRaised).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){DxFlexCell("CELL",.8f,DxInk,true);DxFlexCell("OBS / EXP",.8f,DxInk,true);DxFlexCell("RATIO",.5f,DxInk,true);DxFlexCell("CALLS",1.2f,DxInk,true)}
-                LazyColumn(Modifier.fillMaxSize()){items(rows){cell->Row(Modifier.fillMaxWidth().height(46.dp).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){DxFlexCell("${hemisphere(cell.latitude,"N","S")} ${hemisphere(cell.longitude,"E","W")}",.8f,DxCyan,true);DxFlexCell("${cell.observed} / ${cell.expected?.let{"%.1f".format(it)}?:"—"}",.8f,DxInk);DxFlexCell(cell.anomalyRatio?.let{"×%.1f".format(it)}?:"LEARN",.5f,if((cell.anomalyRatio?:0.0)>=1.8)DxRed else DxYellow,true);DxFlexCell(cell.calls.joinToString(),1.2f,DxMuted)};HorizontalDivider(color=Color(0xFF303940))}}
+            if(mode=="CURRENT") DxWorldAnomalyCanvas(rows,greyline,Modifier.weight(2.2f).fillMaxHeight())
+            else DxWorldOutlookCanvas(outlook.world,greyline,Modifier.weight(2.2f).fillMaxHeight())
+            DxSection(if(mode=="CURRENT")"ACTIVITY / ANOMALIES" else "EMPIRICAL OUTLOOK / LOW DATA",Modifier.weight(1f).fillMaxHeight()){
+                Row(Modifier.fillMaxWidth().height(34.dp).background(DxRaised).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){DxFlexCell("CELL",.8f,DxInk,true);DxFlexCell("OBS / EXP",.8f,DxInk,true);DxFlexCell("RATIO / STATE",1.2f,DxInk,true);DxFlexCell("EVIDENCE",.8f,DxInk,true)}
+                if(mode=="CURRENT") LazyColumn(Modifier.fillMaxSize()){items(rows){cell->Row(Modifier.fillMaxWidth().height(46.dp).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){DxFlexCell("${hemisphere(cell.latitude,"N","S")} ${hemisphere(cell.longitude,"E","W")}",.8f,DxCyan,true);DxFlexCell("${cell.observed} / ${cell.expected?.let{"%.1f".format(it)}?:"—"}",.8f,DxInk);DxFlexCell("${cell.anomalyRatio?.let{"×%.1f · ".format(it)}.orEmpty()}${cell.anomalyLabel}",1.2f,if(cell.anomalyLabel=="STRONG ANOMALY")DxRed else DxYellow,true);DxFlexCell("n=${cell.baselineSamples} · ${cell.sourceCount} src · ${cell.confidence}",.8f,DxMuted)};HorizontalDivider(color=Color(0xFF303940))}}
+                else LazyColumn(Modifier.fillMaxSize()){items(outlook.world.take(72)){cell->val f=cell.forecast;DxLine("${cell.row},${cell.column}","${f.label.name.replace('_',' ')} · ${f.confidence} · n=${f.baselineSamples}",if(f.label==OutlookLabel.INSUFFICIENT_EVIDENCE)DxMuted else DxCyan)}}
             }
         }
     }

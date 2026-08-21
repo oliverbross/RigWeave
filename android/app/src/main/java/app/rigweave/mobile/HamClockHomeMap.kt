@@ -256,6 +256,7 @@ internal fun buildHamClockMapSnapshot(
     satelliteFootprints: List<HamClockSatelliteFootprint> = emptyList(),
     contestQsos: List<HamClockContestQso> = emptyList(),
     aurora: HamClockAuroraSnapshot = HamClockAuroraSnapshot(),
+    outlook: NeuralOutlookSnapshot = NeuralOutlookSnapshot(),
 ): HamClockMapSnapshot {
     val station = maidenheadCenter(stationGrid)
     val points = mutableListOf<HamClockMapPoint>()
@@ -420,6 +421,26 @@ internal fun buildHamClockMapSnapshot(
                 GeoPoint((cell.latitude + half).coerceIn(-90.0, 90.0), cell.longitude - half),
                 GeoPoint((cell.latitude - half).coerceIn(-90.0, 90.0), cell.longitude - half),
             ), if (cell.probability >= 50) "#45e389" else if (cell.probability >= 25) "#7ccf6b" else "#5d9466")
+    }
+    outlook.world.take(72).forEach { cell ->
+        val halfLat = 15.0; val halfLon = 15.0
+        val forecast = cell.forecast
+        val color = when (forecast.label) {
+            OutlookLabel.STRONG -> "#43d17c"
+            OutlookLabel.FAVOURABLE -> "#42c7d8"
+            OutlookLabel.BUILDING -> "#f0ad35"
+            OutlookLabel.QUIET -> "#61727b"
+            OutlookLabel.DEGRADED -> "#e65b54"
+            OutlookLabel.INSUFFICIENT_EVIDENCE -> "#293940"
+        }
+        fills += HamClockMapFill("outlook-${cell.row}-${cell.column}", HamClockMapLayerId.NEURAL_OUTLOOK,
+            "${forecast.band} · ${forecast.label.name.replace('_', ' ')}",
+            "${outlook.modelVersion} · ${outlook.selectedWindow.minutes} min · ${forecast.confidence} · ${forecast.baselineSamples} matched buckets · ${forecast.sourceCount} sources · generated ${outlook.generatedEpoch}",
+            listOf(GeoPoint(cell.latitude - halfLat, cell.longitude - halfLon),
+                GeoPoint(cell.latitude - halfLat, cell.longitude + halfLon),
+                GeoPoint(cell.latitude + halfLat, cell.longitude + halfLon),
+                GeoPoint(cell.latitude + halfLat, cell.longitude - halfLon),
+                GeoPoint(cell.latitude - halfLat, cell.longitude - halfLon)), color)
     }
     val grayline = greylineArea(now)
     fills += HamClockMapFill("night", HamClockMapLayerId.GRAYLINE, "Night region", "Local UTC astronomy",

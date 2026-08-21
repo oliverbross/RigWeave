@@ -516,6 +516,23 @@ internal fun DxWorldAnomalyCanvas(rows: List<NeuralWorldCell>, greyline: Boolean
 }
 
 @Composable
+internal fun DxWorldOutlookCanvas(rows: List<OutlookWorldCell>, greyline: Boolean, modifier: Modifier) {
+    val markers = rows.take(72).map { cell ->
+        val forecast = cell.forecast
+        val color = when (forecast.label) {
+            OutlookLabel.STRONG -> MapGreen; OutlookLabel.FAVOURABLE -> MapCyan; OutlookLabel.BUILDING -> MapYellow
+            OutlookLabel.DEGRADED -> MapRed; OutlookLabel.QUIET -> MapMuted; OutlookLabel.INSUFFICIENT_EVIDENCE -> MapMuted
+        }
+        MapMarker(cell.latitude, cell.longitude, "${forecast.band} · ${forecast.label.name.replace('_', ' ')}",
+            "${forecast.confidence} · support ${forecast.supportScore} · ${forecast.baselineSamples} matched buckets\n${forecast.reasons.joinToString(" · ")}",
+            colorInt(color), if (forecast.confidence == OutlookConfidence.HIGH) 16 else 12, ring = true)
+    }
+    val areas = if (greyline) listOf(greylineArea(Instant.now())) else emptyList()
+    NativeNeuralMap(markers, emptyList(), areas, LatLng(20.0, 0.0), 1.35, NeuralBasemap.SATELLITE,
+        "EMPIRICAL OUTLOOK", "Bounded 6 × 12 future-window outlook · no CAT action", modifier)
+}
+
+@Composable
 internal fun DxSatelliteMap(rows: List<SatellitePosition>, stationGrid: String, selectedNorad: Int?, modifier: Modifier) {
     val qth = maidenheadCenter(stationGrid)
     val footprintSatellite = selectedNorad?.let { norad -> rows.firstOrNull { it.norad == norad } }

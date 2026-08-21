@@ -100,7 +100,9 @@ internal fun ProgressScreen(
     currentStationId: String,
     currentCallsign: String,
     compact: Boolean,
+    outlook: NeuralOutlookSnapshot,
     openDx: () -> Unit,
+    openOutlook: () -> Unit,
     openDxEvidence: (String) -> Unit,
     openPortable: () -> Unit,
     openLogbook: () -> Unit,
@@ -207,6 +209,20 @@ internal fun ProgressScreen(
                         OutlinedButton({ openDxEvidence(selected?.band.orEmpty()) }) { Text("DX RF EVIDENCE") }
                         OutlinedButton({ selected?.let { openLogbookFilter(progressLogbookFilter(filters).copy(band = it.band)) } },
                             enabled = selected != null) { Text("ADVANCED LOGBOOK") }
+                    }
+                    HorizontalDivider(color = ProgressRaised)
+                    Text("EMPIRICAL OPERATIONAL OUTLOOK", color = ProgressAmber, fontWeight = FontWeight.Bold)
+                    Text("NOT AWARD CREDIT · NOT P.533", color = ProgressMuted)
+                    val forecast = outlook.topBands.firstOrNull { filters.band.isNotBlank() && it.band.equals(filters.band, true) }
+                        ?: outlook.topBands.firstOrNull()
+                    Text(forecast?.let { "${it.window.minutes} min · ${it.band} · ${it.label.name.replace('_', ' ')} · ${it.confidence} · ${it.sourceCount} sources" }
+                        ?: "Insufficient evidence · ${outlook.calibration.label}", color = ProgressInk)
+                    Text("Calibration · ${outlook.calibration.label}", color = ProgressMuted)
+                    Text("Advanced Logbook history is context only; it cannot make live evidence or award credit.", color = ProgressMuted)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(openOutlook) { Text("INSIGHT & OUTLOOK") }
+                        OutlinedButton({ forecast?.let { openLogbookFilter(progressLogbookFilter(filters).copy(band = it.band)) } },
+                            enabled = forecast != null) { Text("ADVANCED LOGBOOK") }
                     }
                 }
             }

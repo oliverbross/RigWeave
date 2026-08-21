@@ -6,7 +6,7 @@ import java.util.Locale
 
 object HamClockSettingsCodec {
     const val SCHEMA = "rigweave.hamclock.settings"
-    const val CURRENT_VERSION = 6
+    const val CURRENT_VERSION = 7
     const val MAX_PROFILES = 24
     const val MAX_JSON_BYTES = 1_048_576
 
@@ -109,6 +109,11 @@ object HamClockSettingsCodec {
                 enabledSources = cleanTokens(value.bandHealth.enabledSources, 8) - "QSO_HISTORY",
                 visibleBands = cleanTokens(value.bandHealth.visibleBands, 24),
             ),
+            outlook = value.outlook.copy(
+                visibleBands = cleanTokens(value.outlook.visibleBands, 24),
+                worldOpacity = value.outlook.worldOpacity.takeIf(Float::isFinite)?.coerceIn(.15f, .9f) ?: .58f,
+                retentionDays = 180,
+            ),
             portable = value.portable.copy(
                 enabledPrograms = cleanTokens(value.portable.enabledPrograms, 12),
                 windowMinutes = value.portable.windowMinutes.coerceIn(1, 24 * 60),
@@ -178,6 +183,7 @@ object HamClockSettingsCodec {
             .put("wspr", encodeWspr(settings.wspr))
             .put("ibp", encodeIbp(settings.ibp))
             .put("band_health", encodeBandHealth(settings.bandHealth))
+            .put("outlook", encodeOutlook(settings.outlook))
             .put("portable", encodePortable(settings.portable))
             .put("satellites", encodeSatellites(settings.satellites))
             .put("display", encodeDisplay(settings.display))
@@ -197,6 +203,7 @@ object HamClockSettingsCodec {
         wspr = root.optJSONObject("wspr")?.let(::decodeWspr) ?: HamClockWsprPreference(),
         ibp = root.optJSONObject("ibp")?.let(::decodeIbp) ?: HamClockIbpPreference(),
         bandHealth = root.optJSONObject("band_health")?.let(::decodeBandHealth) ?: HamClockBandHealthPreference(),
+        outlook = root.optJSONObject("outlook")?.let(::decodeOutlook) ?: HamClockOutlookPreference(),
         portable = root.optJSONObject("portable")?.let(::decodePortable) ?: HamClockPortablePreference(),
         satellites = root.optJSONObject("satellites")?.let(::decodeSatellites) ?: HamClockSatellitePreference(),
         dxTarget = root.optJSONObject("dx_target")?.let(::decodeTarget),
@@ -234,6 +241,21 @@ object HamClockSettingsCodec {
         layers = row.optJSONArray("layers")?.objects { layer ->
             HamClockMapLayerPreference(layer.optString("id"), layer.optBoolean("visible", true), layer.optDouble("opacity", 1.0).toFloat())
         } ?: defaultHamClockMapLayers(),
+    )
+
+    private fun encodeOutlook(value: HamClockOutlookPreference) = JSONObject()
+        .put("enabled", value.enabled).put("default_window", value.defaultWindow.name)
+        .put("visible_bands", value.visibleBands.strings()).put("world_layer_enabled", value.worldLayerEnabled)
+        .put("world_opacity", value.worldOpacity.toDouble()).put("retention_days", 180)
+        .put("show_on_compact", value.showOnCompact)
+
+    private fun decodeOutlook(row: JSONObject) = HamClockOutlookPreference(
+        enabled = row.optBoolean("enabled", true),
+        defaultWindow = row.enum("default_window", HamClockOutlookWindow.MINUTES_60),
+        visibleBands = row.optJSONArray("visible_bands")?.stringSet() ?: HamClockOutlookPreference().visibleBands,
+        worldLayerEnabled = row.optBoolean("world_layer_enabled", false),
+        worldOpacity = row.optDouble("world_opacity", .58).toFloat(), retentionDays = 180,
+        showOnCompact = row.optBoolean("show_on_compact", false),
     )
 
     private fun encodeFilter(value: HamClockSpotFilter) = JSONObject()

@@ -208,6 +208,31 @@ internal fun HamClockHomeScreen(
         if (!homeForeground) return@LaunchedEffect
         while (true) { mapInstant = Instant.now(); delay(10_000) }
     }
+    LaunchedEffect(finishLineWeather, finishLineAurora, celestialFeed?.value?.xray?.currentClass) {
+        neuralDx.outlook.updateEnvironment(
+            celestialFeed?.value?.xray?.currentClass.orEmpty(),
+            finishLineWeather.solarWindSpeedKmS,
+            finishLineWeather.imfBzNt,
+            finishLineAurora.cells.any { it.probability >= 50 },
+        )
+    }
+    LaunchedEffect(settingsDocument.settings.outlook.defaultWindow, settingsDocument.settings.outlook.visibleBands,
+        settingsDocument.settings.outlook.worldLayerEnabled, settingsDocument.settings.outlook.worldOpacity) {
+        val window = when (settingsDocument.settings.outlook.defaultWindow) {
+            HamClockOutlookWindow.MINUTES_30 -> OutlookWindow.MINUTES_30
+            HamClockOutlookWindow.MINUTES_60 -> OutlookWindow.MINUTES_60
+            HamClockOutlookWindow.MINUTES_120 -> OutlookWindow.MINUTES_120
+        }
+        val band = neuralDx.outlook.selectedBand.takeIf { it in settingsDocument.settings.outlook.visibleBands }
+            ?: settingsDocument.settings.outlook.visibleBands.firstOrNull { it in NEURAL_OUTLOOK_BANDS } ?: "20m"
+        neuralDx.outlook.select(window, band)
+        val layer = settingsDocument.settings.map.layers.firstOrNull { it.id == HamClockMapLayerId.NEURAL_OUTLOOK }
+        if (layer != null && (layer.visible != settingsDocument.settings.outlook.worldLayerEnabled ||
+                layer.opacity != settingsDocument.settings.outlook.worldOpacity)) {
+            settingsCoordinator.setMapLayer(layer.copy(visible = settingsDocument.settings.outlook.worldLayerEnabled,
+                opacity = settingsDocument.settings.outlook.worldOpacity))
+        }
+    }
     DisposableEffect(operations.satellites, stationGrid, homeForeground) {
         operations.satellites.setHomeActive(homeForeground, stationGrid)
         onDispose { operations.satellites.setHomeActive(false, stationGrid) }
@@ -508,6 +533,11 @@ internal fun HamClockHomeScreen(
                     HamClockProviderTruth.UNAVAILABLE -> HamClockMapSourceState.UNAVAILABLE
                 }, finishLineAurora.forecastAtEpoch, finishLineAurora.source,
                 "${finishLineAurora.cells.size} bounded cells · ${finishLineAurora.error}"),
+            HamClockMapLayerId.NEURAL_OUTLOOK to HamClockMapSourceStatus(
+                if (neuralDx.outlook.snapshot.world.any { it.forecast.label != OutlookLabel.INSUFFICIENT_EVIDENCE })
+                    HamClockMapSourceState.CURRENT else HamClockMapSourceState.EMPTY,
+                neuralDx.outlook.snapshot.generatedEpoch, neuralDx.outlook.snapshot.modelVersion,
+                "${neuralDx.outlook.snapshot.selectedWindow.minutes} min · ${neuralDx.outlook.snapshot.selectedBand} · ${neuralDx.outlook.snapshot.calibration.label}"),
             HamClockMapLayerId.GRAYLINE to HamClockMapSourceStatus(HamClockMapSourceState.CURRENT, mapInstant.epochSecond, "Local UTC astronomy"),
             HamClockMapLayerId.SUN to HamClockMapSourceStatus(HamClockMapSourceState.CURRENT, mapInstant.epochSecond, "Local UTC astronomy"),
             HamClockMapLayerId.GRID to HamClockMapSourceStatus(HamClockMapSourceState.CURRENT, mapInstant.epochSecond, "Local Maidenhead geometry"),
@@ -527,7 +557,7 @@ internal fun HamClockHomeScreen(
         settingsDocument.settings.display.unitSystem, mapSourceStatus, rbnMapRows, neuralDx.wsprPersonal,
         ibpSchedule, settingsDocument.settings.rbn.showPaths, settingsDocument.settings.wspr.showPaths,
         settingsDocument.settings.ibp, operations.satellites.hamClockTracks, operations.satellites.hamClockFootprints,
-        contestQsos, finishLineAurora, settingsDocument.settings.satellites) {
+        contestQsos, finishLineAurora, settingsDocument.settings.satellites, neuralDx.outlook.snapshot) {
         val satelliteIds = settingsDocument.settings.satellites.trackedNoradIds
         val satellitePositions = operations.satellites.hamClockPositions.filter {
             satelliteIds.isEmpty() || it.noradId.toInt() in satelliteIds
@@ -545,7 +575,7 @@ internal fun HamClockHomeScreen(
             settingsDocument.settings.wspr.showPaths, settingsDocument.settings.ibp,
             satelliteTracks = satelliteTracks,
             satelliteFootprints = satelliteFootprints,
-            contestQsos = contestQsos, aurora = finishLineAurora)
+            contestQsos = contestQsos, aurora = finishLineAurora, outlook = neuralDx.outlook.snapshot)
     }
     fun updateMapPreference(value: HamClockMapPreference) = settingsCoordinator.updateSettings { it.copy(map = value) }
     fun openMapSelection(reference: HamClockMapFeatureRef) {
@@ -584,7 +614,9 @@ internal fun HamClockHomeScreen(
     }
     val visiblePanels = settingsDocument.settings.panels.filter { panel ->
         panel.visible && !(panel.id == HamClockPanelId.DX_NEWS && compactScreen &&
-            !settingsDocument.settings.dxNews.compactVisible)
+            !settingsDocument.settings.dxNews.compactVisible) &&
+            !(panel.id == HamClockPanelId.NEURAL_OUTLOOK && (!settingsDocument.settings.outlook.enabled ||
+                compactScreen && !settingsDocument.settings.outlook.showOnCompact))
     }
     val mapPanel = visiblePanels.firstOrNull { it.id == HamClockPanelId.MAP }
     val leftPanels = visiblePanels.filter { mapPanel != null && it.id != HamClockPanelId.MAP && it.column <= 0 && it.columnSpan == 1 }
@@ -632,12 +664,17 @@ internal fun HamClockHomeScreen(
             HamClockModuleRenderer.RBN -> RbnPanel(features.rbnObservations, features.rbnSourceSnapshot, open, modifier)
             HamClockModuleRenderer.WSPR -> WsprPanel(neuralDx.wsprPersonal, open, modifier)
             HamClockModuleRenderer.IBP -> IbpPanel(ibpSchedule, open, modifier)
-            HamClockModuleRenderer.BAND_HEALTH -> BandHealthPanel(bandHealth, open, modifier)
+            HamClockModuleRenderer.BAND_HEALTH -> BandHealthPanel(bandHealth, neuralDx.outlook.snapshot, {
+                neuralDx.requestPage(NeuralDxPage.INSIGHT); openDeepLink(HamClockDeepLink.DX)
+            }, open, modifier)
+            HamClockModuleRenderer.NEURAL_OUTLOOK -> NeuralOutlookPanel(neuralDx.outlook.snapshot, {
+                neuralDx.requestPage(NeuralDxPage.INSIGHT); openDeepLink(HamClockDeepLink.DX)
+            }, modifier)
             HamClockModuleRenderer.SOLAR -> SolarPanel(features, celestialFeed, modifier)
             HamClockModuleRenderer.DX_TARGET -> DxTargetPanel(resolvedDxTarget, stationGrid,
                 settingsDocument.settings.display.unitSystem, { configureTarget = true }, modifier)
             HamClockModuleRenderer.PROPAGATION -> VoacapPanel(resolvedDxTarget, features, pathPrediction,
-                settingsDocument.settings.display.unitSystem, modifier)
+                neuralDx.outlook.snapshot, settingsDocument.settings.display.unitSystem, modifier)
             HamClockModuleRenderer.PORTABLE -> PortablePanel(portable, open, modifier)
             HamClockModuleRenderer.SATELLITES -> SatellitePanel(operations.satellites, {
                 operations.openSection("SATELLITES"); open()
@@ -683,6 +720,9 @@ internal fun HamClockHomeScreen(
     fun mutateRfEvidence(rbn: HamClockRbnPreference, wspr: HamClockWsprPreference,
         ibp: HamClockIbpPreference, bandHealth: HamClockBandHealthPreference) {
         settingsCoordinator.updateSettings { it.copy(rbn = rbn, wspr = wspr, ibp = ibp, bandHealth = bandHealth) }
+    }
+    fun mutateOutlook(value: HamClockOutlookPreference) {
+        settingsCoordinator.updateSettings { it.copy(outlook = value) }
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(HcBg).windowInsetsPadding(WindowInsets.safeDrawing).testTag("openhamclock-home")) {
@@ -741,7 +781,7 @@ internal fun HamClockHomeScreen(
         if (configureDashboard) HamClockConfigDialog(settingsDocument, ::mutatePanel,
                 settingsCoordinator::resetPanel,
                 settingsCoordinator::resetLayout, ::mutateLayer, ::updateMapPreference,
-            ::mutateDisplay, ::mutateProviders, ::mutateRfEvidence, ::saveDashboardProfile, ::applyDashboardProfile,
+            ::mutateDisplay, ::mutateProviders, ::mutateRfEvidence, ::mutateOutlook, ::saveDashboardProfile, ::applyDashboardProfile,
                 settingsCoordinator::renameProfile,
                 settingsCoordinator::deleteProfile,
                 settingsCoordinator::clearActiveProfile,
@@ -803,11 +843,29 @@ internal fun HamClockHomeScreen(
     }
 }
 
-@Composable private fun BandHealthPanel(rows: List<HamClockBandHealthRow>, open: () -> Unit, modifier: Modifier) {
+@Composable private fun BandHealthPanel(rows: List<HamClockBandHealthRow>, outlook: NeuralOutlookSnapshot,
+    openOutlook: () -> Unit, open: () -> Unit, modifier: Modifier) {
     Module("Band Health", "MEASURED · EXPLAINABLE", modifier = modifier, onClick = open) {
         rows.take(9).forEach { row ->
             KeyValue(row.band, "${row.state} · n=${row.observations} · ${row.trend} · ${row.confidence}", HcInk)
         }
+        HorizontalDivider(color = HcLine)
+        Text("CURRENT EVIDENCE", color = HcMuted, fontSize = HcMetaSize)
+        Text("NEXT 60 MIN OUTLOOK", color = HcAmber, fontWeight = FontWeight.Bold,
+            modifier = Modifier.clickable(onClick = openOutlook))
+    }
+}
+
+@Composable private fun NeuralOutlookPanel(snapshot: NeuralOutlookSnapshot, open: () -> Unit, modifier: Modifier) {
+    Module("Neural outlook", "${snapshot.selectedWindow.minutes} MIN · EMPIRICAL", modifier = modifier, onClick = open) {
+        Text("Observed support · ${snapshot.modelVersion}", color = HcMuted, fontSize = HcMetaSize)
+        if (snapshot.topBands.isEmpty()) EmptyLine("Insufficient evidence · ${snapshot.calibration.label}")
+        snapshot.topBands.take(3).forEach { row ->
+            KeyValue(row.band, "${row.label.name.replace('_', ' ')} · ${row.confidence} · ${row.sourceCount} sources", HcInk)
+        }
+        Text(snapshot.calibration.label, color = HcAmber, fontSize = HcMetaSize)
+        val ageMinutes = if (snapshot.generatedEpoch > 0) ((Instant.now().epochSecond - snapshot.generatedEpoch).coerceAtLeast(0) / 60) else null
+        Text("Generated ${ageMinutes?.let { "${it}m ago" } ?: "waiting"} · OPEN INSIGHT & OUTLOOK", color = HcCyan, fontSize = HcMetaSize)
     }
 }
 
@@ -897,6 +955,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
     updateDisplay: (HamClockDisplayPreference) -> Unit,
     updateProviders: (HamClockClusterPreference, HamClockPskPreference) -> Unit,
     updateRfEvidence: (HamClockRbnPreference, HamClockWsprPreference, HamClockIbpPreference, HamClockBandHealthPreference) -> Unit,
+    updateOutlook: (HamClockOutlookPreference) -> Unit,
     saveProfile: (String, String?) -> Unit,
     applyProfile: (String) -> Unit,
     renameProfile: (String, String) -> Unit,
@@ -951,6 +1010,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 val wspr = settings.wspr
                 val ibp = settings.ibp
                 val health = settings.bandHealth
+                val outlook = settings.outlook
                 Text("LIVE RF SOURCES", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 15.sp)
                 ToggleRow("DX cluster connection and Home visibility", cluster.enabled) {
                     updateProviders(cluster.copy(enabled = it), psk)
@@ -1106,6 +1166,20 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 FilterTokenChips("Band Health visible bands", listOf("160M", "80M", "60M", "40M", "30M", "20M", "17M", "15M", "12M", "10M", "6M"), health.visibleBands) {
                     updateRfEvidence(rbn, wspr, ibp, health.copy(visibleBands = it))
                 }
+                HorizontalDivider(color = HcLine)
+                Text("EMPIRICAL OUTLOOK", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                ToggleRow("Outlook enabled", outlook.enabled) { updateOutlook(outlook.copy(enabled = it)) }
+                ToggleRow("Show module on compact layouts", outlook.showOnCompact) { updateOutlook(outlook.copy(showOnCompact = it)) }
+                EnumChips(HamClockOutlookWindow.entries, outlook.defaultWindow) { updateOutlook(outlook.copy(defaultWindow = it)) }
+                FilterTokenChips("Outlook visible bands", NEURAL_OUTLOOK_BANDS.map(String::uppercase), outlook.visibleBands) {
+                    updateOutlook(outlook.copy(visibleBands = it.map(String::lowercase).toSet()))
+                }
+                ToggleRow("World empirical outlook layer", outlook.worldLayerEnabled) {
+                    updateOutlook(outlook.copy(worldLayerEnabled = it))
+                }
+                Text("World outlook opacity", color = HcMuted, fontSize = 14.sp)
+                Slider(outlook.worldOpacity, { updateOutlook(outlook.copy(worldOpacity = it)) }, valueRange = .15f..9f / 10f)
+                Text("Evidence retention · 180 days fixed", color = HcMuted, fontSize = HcMetaSize)
                 HorizontalDivider(color = HcLine)
             }
             item {
@@ -1516,7 +1590,7 @@ private fun preferredDxTarget(spots: List<AndroidDXSpot>): AndroidDXSpot? = spot
 }
 
 @Composable private fun VoacapPanel(target: HamClockResolvedTarget?, features: FeatureController,
-    prediction: HamClockPropagationSnapshot, units: HamClockUnitSystem, modifier: Modifier) {
+    prediction: HamClockPropagationSnapshot, outlook: NeuralOutlookSnapshot, units: HamClockUnitSystem, modifier: Modifier) {
     val zone = when (target?.point?.longitude ?: 151.0) {
         in -170.0..-30.0 -> "AMERICAS"
         in -30.0..55.0 -> "EUROPE / AFRICA"
@@ -1524,8 +1598,8 @@ private fun preferredDxTarget(spots: List<AndroidDXSpot>): AndroidDXSpot? = spot
         else -> "OCEANIA"
     }
     val rows = prediction.bands.takeIf { it.isNotEmpty() }?.take(6)
-    val title = if (prediction.authoritative) "DX-target P.533" else "DX path estimate"
-    Module(title, target?.let { "${it.callsign} · ${it.source.name} · ${prediction.model.ifBlank { zone }}" } ?: zone, modifier = modifier) {
+    Module("Propagation", target?.let { "${it.callsign} · ${it.source.name} · ${prediction.model.ifBlank { zone }}" } ?: zone, modifier = modifier) {
+        Text("Remote propagation estimate", color = HcAmber, fontWeight = FontWeight.Bold)
         (rows?.map { it.band to it.reliability } ?: listOf("40m", "20m", "15m", "10m").map { band ->
             band to hamClockReliability(band, zone, features.solar.flux, features.solar.kpIndex)
         }).forEach { (band, reliability) ->
@@ -1544,6 +1618,13 @@ private fun preferredDxTarget(spots: List<AndroidDXSpot>): AndroidDXSpot? = spot
         Text(if (prediction.authoritative) "ITU-R P.533 path result · ${prediction.source}"
             else "ESTIMATE · ${prediction.source.ifBlank { prediction.error.ifBlank { "live SFI/Kp regional fallback" } }}",
             color = if (prediction.authoritative) HcGreen else HcMuted, fontSize = 14.sp, maxLines = 2)
+        HorizontalDivider(color = HcLine)
+        Text("Observed empirical outlook", color = HcAmber, fontWeight = FontWeight.Bold)
+        outlook.topBands.firstOrNull()?.let { row ->
+            Text("${row.band} · ${row.label.name.replace('_', ' ')} · ${row.confidence} · ${row.sourceCount} sources",
+                color = HcInk, fontSize = 14.sp)
+        } ?: Text("Insufficient evidence", color = HcMuted, fontSize = 14.sp)
+        Text("P.533 local engine unavailable · LICENSE_BLOCKED", color = HcMuted, fontSize = HcMetaSize)
     }
 }
 

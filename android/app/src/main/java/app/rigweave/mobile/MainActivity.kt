@@ -547,10 +547,61 @@ private fun navIcon(item: Destination) = when (item) {
     ) }
     val bandStationId = wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }
     val bandStationCall = wavelog.selectedStation?.callsign?.ifBlank { null } ?: app.stationCallsign
+    val bandStationGrid = wavelog.selectedStation?.grid?.ifBlank { null } ?: app.stationGrid
     LaunchedEffect(bandEvidence, bandAvailability, hamClockSettings.document.settings.bandHealth,
         database.changeToken(), bandStationId, bandStationCall) {
         progress.refreshBandHealth(bandEvidence, bandAvailability, hamClockSettings.document.settings.bandHealth,
             bandStationId, bandStationCall)
+    }
+    LaunchedEffect(clusterBandEvidenceSpots, features.rbnObservations, neuralDx.mySignal, neuralDx.wsprPersonal,
+        bandAvailability, bandStationId, bandStationCall, bandStationGrid, progress.snapshot.needs,
+        neuralDx.dxNewsSnapshot, features.solar, features.sunspotNumber, neuralDx.weather, neuralDx.lightning) {
+        fun sourceState(value: HamClockEvidenceAvailability) = when (value) {
+            HamClockEvidenceAvailability.CURRENT -> OutlookSourceState.CURRENT
+            HamClockEvidenceAvailability.STALE -> OutlookSourceState.STALE
+            HamClockEvidenceAvailability.DEGRADED -> OutlookSourceState.DEGRADED
+            HamClockEvidenceAvailability.DISABLED -> OutlookSourceState.DISABLED
+            HamClockEvidenceAvailability.ERROR, HamClockEvidenceAvailability.UNAVAILABLE -> OutlookSourceState.UNAVAILABLE
+        }
+        val observations = clusterBandEvidenceSpots.map { spot -> OutlookEvidence(
+            spot.id, "CLUSTER", spot.receivedEpoch, spot.callsign, spot.spotter, spot.band, spot.mode,
+            spot.latitude, spot.longitude, distanceKm = spot.distanceKm.takeIf { it > 0 }) } +
+            features.rbnObservations.map { row -> OutlookEvidence(
+                row.id, "RBN", row.observedEpoch, row.dxCall, row.skimmerCall, row.band, row.mode,
+                row.dxPoint?.latitude, row.dxPoint?.longitude, row.snr) } +
+            neuralDx.mySignal.reports.map { row -> OutlookEvidence(
+                signalReportReference(row), if (row.direction == SignalDirection.BEING_HEARD) "PSK_BEING_HEARD" else "PSK_HEARING",
+                row.epoch, row.callsign, row.receiverCallsign, row.band, row.mode, row.latitude, row.longitude, row.snr, row.distanceKm) } +
+            neuralDx.wsprPersonal.reports.map { row -> OutlookEvidence(
+                signalReportReference(row), if (row.direction == SignalDirection.BEING_HEARD) "WSPR_BEING_HEARD" else "WSPR_HEARING",
+                row.epoch, row.callsign, row.receiverCallsign, row.band, "WSPR", row.latitude, row.longitude, row.snr, row.distanceKm) }
+        val pskState = sourceState(bandAvailability["PSK"] ?: HamClockEvidenceAvailability.UNAVAILABLE)
+        val wsprState = sourceState(bandAvailability["WSPR"] ?: HamClockEvidenceAvailability.UNAVAILABLE)
+        val candidates = neuralDx.currentOpportunities.map { row -> OutlookCandidate(row.callsign,
+            OutlookCandidateSource.CURRENTLY_OBSERVED, row.band, row.mode, row.reason, row.observedEpoch) } +
+            clusterBandEvidenceSpots.filter(AndroidDXSpot::watchlisted).map { row -> OutlookCandidate(row.callsign,
+                OutlookCandidateSource.WATCHLIST, row.band, row.mode, row.reason, row.receivedEpoch) } +
+            progress.snapshot.needs.mapNotNull { need -> need.dxSpot?.let { row -> OutlookCandidate(row.callsign,
+                OutlookCandidateSource.NEEDED, row.band, row.mode, need.reasons.joinToString(" · "), row.receivedEpoch) } } +
+            neuralDx.dxNewsSnapshot.merged.filter { it.sourceId == "ng3k" || it.activityEndEpoch != null }
+                .flatMap { item -> item.callsigns.map { call -> OutlookCandidate(call,
+                OutlookCandidateSource.SCHEDULED, detail = item.title, epoch = item.publishedEpoch) } }
+        val logSummary = withContext(Dispatchers.IO) { database.neuralLogSummary(bandStationId) }
+        neuralDx.outlook.submit(NeuralOutlookInput(
+            stationProfileId = bandStationId.orEmpty(), stationCallsign = bandStationCall, stationGrid = bandStationGrid,
+            epoch = Instant.now().epochSecond, evidence = observations,
+            sourceStates = mapOf(
+                "CLUSTER" to sourceState(bandAvailability["CLUSTER"] ?: HamClockEvidenceAvailability.UNAVAILABLE),
+                "RBN" to sourceState(bandAvailability["RBN"] ?: HamClockEvidenceAvailability.UNAVAILABLE),
+                "PSK_BEING_HEARD" to pskState, "PSK_HEARING" to pskState,
+                "WSPR_BEING_HEARD" to wsprState, "WSPR_HEARING" to wsprState,
+            ),
+            sfi = features.solar.flux.takeIf { features.solar.valid }?.toDouble(), ssn = features.sunspotNumber?.toDouble(),
+            aIndex = features.solar.aIndex.takeIf { features.solar.valid }?.toDouble(),
+            kp = features.solar.kpIndex.takeIf { features.solar.valid }?.toDouble(),
+            tropoIndex = neuralDx.weather.tropoIndex, lightningCount = neuralDx.lightning.strikes.size,
+            qsoSummary = logSummary, candidates = candidates,
+        ))
     }
     when (destination) {
         Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, callbook,
@@ -592,7 +643,9 @@ private fun navIcon(item: Destination) = when (item) {
         }
         Destination.PROGRESS -> ProgressScreen(progress, features, portable, syncHub, cty,
             wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }.orEmpty(), app.stationCallsign, compact,
-            openDx = openDx, openDxEvidence = { band -> neuralDx.requestBandEvidence(band); openDx() }, openPortable = openPortable,
+            outlook = neuralDx.outlook.snapshot, openDx = openDx,
+            openOutlook = { neuralDx.requestPage(NeuralDxPage.INSIGHT); openDx() },
+            openDxEvidence = { band -> neuralDx.requestBandEvidence(band); openDx() }, openPortable = openPortable,
             openLogbook = openLogbook, openLogbookFilter = { filter -> progress.requestLogbook(filter); openLogbook() }, openSync = openSync)
         Destination.SYNC -> SyncHubScreen(database, mutations, syncHub, wavelog, wavelogNative, openLogbook)
         Destination.PRESETS -> PresetsScreen(radio, app, send)

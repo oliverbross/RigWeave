@@ -5,7 +5,7 @@ internal enum class HamClockModuleAvailability { ACTIVE, DELEGATED, UNAVAILABLE 
 internal enum class HamClockModuleRenderer {
     MAP, STATION, WEATHER, PSK_REPORTER, DX_NEWS, DX_EXPEDITIONS, BAND_ACTIVITY, DX_CLUSTER,
     SOLAR, DX_TARGET, PROPAGATION, PORTABLE, SATELLITES, CONTESTS, ANALOG_CLOCK,
-    RBN, WSPR, IBP, BAND_HEALTH, LEGACY,
+    RBN, WSPR, IBP, BAND_HEALTH, NEURAL_OUTLOOK, LEGACY,
 }
 internal enum class HamClockDeepLink { NONE, DX, PORTABLE, OPERATIONS, LOGBOOK, LOG_INTELLIGENCE, RADIO, DIGI }
 
@@ -109,6 +109,10 @@ internal val hamClockModuleRegistry: List<HamClockModuleSpec> = listOf(
         HamClockModuleCategory.RF, "measured-band-evidence", false, 2, 11, preferredHeightDp = 280,
         sourceLabel = "Cluster · PSK · RBN · personal WSPR", renderer = HamClockModuleRenderer.BAND_HEALTH,
         deepLink = HamClockDeepLink.DX, lowDataRepresentation = "Explainable per-band evidence rows"),
+    HamClockModuleSpec(HamClockPanelId.NEURAL_OUTLOOK, setOf("neural-outlook"), "Neural outlook",
+        HamClockModuleCategory.RF, "empirical-future-window", true, 2, 12, preferredHeightDp = 250,
+        sourceLabel = "RigWeave Empirical Outlook v1", renderer = HamClockModuleRenderer.NEURAL_OUTLOOK,
+        deepLink = HamClockDeepLink.DX, lowDataRepresentation = "Window, supported bands, confidence and calibration"),
     HamClockModuleSpec(HamClockPanelId.ANALOG_CLOCK, setOf("analog-clock"), "Analog clock",
         HamClockModuleCategory.STATION, "native-clock-face", false, 0, 4, preferredHeightDp = 220,
         sourceLabel = "Local time calculation", renderer = HamClockModuleRenderer.ANALOG_CLOCK,
@@ -226,6 +230,10 @@ internal val hamClockMapLayerRegistry = listOf(
     HamClockMapLayerSpec(HamClockMapLayerId.AURORA, "aurora", "Aurora", HamClockMapLayerCategory.SPACE,
         false, .6f, HamClockMapLayerAvailability.ACTIVE, sourceLabel = "NOAA SWPC OVATION Aurora Forecast",
         renderKinds = setOf(HamClockMapRenderKind.FILL), lowDataRepresentation = "Bounded regional probability summary", maximumObjectCount = 180),
+    HamClockMapLayerSpec(HamClockMapLayerId.NEURAL_OUTLOOK, "neural-outlook", "Empirical outlook", HamClockMapLayerCategory.FUTURE,
+        false, .58f, HamClockMapLayerAvailability.ACTIVE, sourceLabel = "RigWeave Empirical Outlook v1",
+        renderKinds = setOf(HamClockMapRenderKind.FILL), lowDataRepresentation = "72 bounded world-region cells",
+        maximumObjectCount = 72),
     HamClockMapLayerSpec(HamClockMapLayerId.MUF, "muf-map", "MUF map", HamClockMapLayerCategory.FUTURE,
         false, availability = HamClockMapLayerAvailability.UNAVAILABLE, unavailableReason = "No global MUF source",
         sourceLabel = "Not connected", renderKinds = emptySet(), lowDataRepresentation = "Unavailable", maximumObjectCount = 0),

@@ -21,6 +21,7 @@ object HamClockPanelId {
     const val WSPR = "wspr"
     const val IBP = "ibp"
     const val BAND_HEALTH = "band_health"
+    const val NEURAL_OUTLOOK = "neural_outlook"
 }
 
 object HamClockMapLayerId {
@@ -46,6 +47,7 @@ object HamClockMapLayerId {
     const val PROPAGATION_HEATMAP = "propagation_heatmap"
     const val WEATHER_RADAR = "weather_radar"
     const val WWBOTA = "wwbota"
+    const val NEURAL_OUTLOOK = "neural_outlook"
 }
 
 enum class HamClockBasemap { DARK, LIGHT, SATELLITE, TERRAIN }
@@ -60,6 +62,7 @@ enum class HamClockRbnMode { WHO_HEARS_ME, SKIMMER_VIEW, WATCHLIST, ALL_RBN }
 enum class HamClockDxTargetSource { MANUAL, AUTOMATIC }
 enum class HamClockNoiseEnvironment { QUIET_RURAL, RURAL, RESIDENTIAL, CITY, INDUSTRIAL }
 enum class HamClockShackTheme { STANDARD_DARK, AMBER_SHACK, RED_NIGHT }
+enum class HamClockOutlookWindow(val minutes: Int) { MINUTES_30(30), MINUTES_60(60), MINUTES_120(120) }
 
 data class HamClockPanelPreference(
     val id: String,
@@ -156,6 +159,16 @@ data class HamClockBandHealthPreference(
     val visibleBands: Set<String> = setOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"),
 )
 
+data class HamClockOutlookPreference(
+    val enabled: Boolean = true,
+    val defaultWindow: HamClockOutlookWindow = HamClockOutlookWindow.MINUTES_60,
+    val visibleBands: Set<String> = setOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m", "70cm", "23cm", "3cm"),
+    val worldLayerEnabled: Boolean = false,
+    val worldOpacity: Float = .58f,
+    val retentionDays: Int = 180,
+    val showOnCompact: Boolean = false,
+)
+
 data class HamClockPortablePreference(
     val enabledPrograms: Set<String> = setOf("POTA", "WWFF", "SOTA", "WWBOTA"),
     val windowMinutes: Int = 30,
@@ -234,6 +247,7 @@ data class HamClockUserSettings(
     val wspr: HamClockWsprPreference = HamClockWsprPreference(),
     val ibp: HamClockIbpPreference = HamClockIbpPreference(),
     val bandHealth: HamClockBandHealthPreference = HamClockBandHealthPreference(),
+    val outlook: HamClockOutlookPreference = HamClockOutlookPreference(),
     val portable: HamClockPortablePreference = HamClockPortablePreference(),
     val satellites: HamClockSatellitePreference = HamClockSatellitePreference(),
     val dxTarget: HamClockDxTarget? = null,
