@@ -251,6 +251,7 @@ internal fun PotaChaseScreen(
 
 @Composable internal fun PotaParks(controller: PotaController, stationGrid: String, modifier: Modifier) {
     val context = LocalContext.current
+    val inAppBrowser = LocalInAppBrowserState.current
     var query by rememberSaveable { mutableStateOf("") }; var location by rememberSaveable { mutableStateOf("") }; var grid by rememberSaveable { mutableStateOf(stationGrid) }; var nearby by rememberSaveable { mutableStateOf(false) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) lastDeviceGrid(context)?.let { grid = it; nearby = true; controller.searchParks(query, location, grid, true) } }
     LaunchedEffect(query, location, grid, nearby, controller.parkMetadata.ready) { delay(180); controller.searchParks(query, location, grid, nearby) }
@@ -272,7 +273,7 @@ internal fun PotaChaseScreen(
                 OutlinedButton({ if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) lastDeviceGrid(context)?.let { grid = it; nearby = true } else permission.launch(Manifest.permission.ACCESS_FINE_LOCATION) }, modifier = Modifier.heightIn(min = 48.dp)) { Icon(Icons.Outlined.MyLocation, "Use device location") }
             }
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(controller.parkResults, key = PotaPark::reference) { park ->
-                Row(Modifier.fillMaxWidth().background(PotaPanel, RoundedCornerShape(8.dp)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("${park.reference} · ${park.name}", color = PotaInk, fontWeight = FontWeight.Bold); Text(listOf(park.location, park.grid, park.distanceKm?.let { "%.1f km · %03d°".format(it, park.bearingDegrees ?: 0) }, if (park.active) "ACTIVE" else "INACTIVE").filterNotNull().filter(String::isNotBlank).joinToString(" · "), color = PotaMuted) }; IconButton({ context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://pota.app/#/park/${park.reference}"))) }) { Icon(Icons.Outlined.OpenInNew, "Open official POTA park page") } }
+                Row(Modifier.fillMaxWidth().background(PotaPanel, RoundedCornerShape(8.dp)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("${park.reference} · ${park.name}", color = PotaInk, fontWeight = FontWeight.Bold); Text(listOf(park.location, park.grid, park.distanceKm?.let { "%.1f km · %03d°".format(it, park.bearingDegrees ?: 0) }, if (park.active) "ACTIVE" else "INACTIVE").filterNotNull().filter(String::isNotBlank).joinToString(" · "), color = PotaMuted) }; IconButton({ inAppBrowser?.open("https://pota.app/#/park/${park.reference}") }) { Icon(Icons.Outlined.OpenInNew, "Open official POTA park page") } }
             } }
         }
     }

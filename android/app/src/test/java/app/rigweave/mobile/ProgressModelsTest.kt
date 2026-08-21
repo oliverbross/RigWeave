@@ -31,6 +31,14 @@ class ProgressModelsTest {
         assertEquals(4, filterProgressQsos(rows, ProgressFilters(allStations=true), now).size)
     }
 
+    @Test fun includingDeletedRowsDoesNotCollapseTheSqlDataset() {
+        assertNull(progressDeletedSqlClause(includeDeleted = true))
+        assertEquals(
+            "p.sync_state NOT IN ('TOMBSTONE','REMOTE_DELETED')",
+            progressDeletedSqlClause(includeDeleted = false),
+        )
+    }
+
     @Test fun modeFamiliesReuseRigWeaveNormalisation() {
         assertEquals("CW", progressModeFamily("CW-R")); assertEquals("PHONE", progressModeFamily("USB"))
         assertEquals("DIGITAL", progressModeFamily("FT8")); assertEquals("OTHER", progressModeFamily("SSTV"))

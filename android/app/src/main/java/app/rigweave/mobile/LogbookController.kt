@@ -31,8 +31,15 @@ class LogbookController(private val repository: LogbookRepository) {
     var stationId:String?=null;private set
     var pageSize by mutableStateOf(50);private set
     var pageIndex by mutableStateOf(0);private set
+    var refreshing by mutableStateOf(false);private set
+    var refreshError by mutableStateOf("");private set
 
-    fun apply(filter:LogbookFilter,station:String?=stationId){appliedFilter=filter.copy(limit=filter.limit.coerceIn(1,250));stationId=station;pageSize=appliedFilter.limit;load(reset=true,debounceMs=250)}
+    fun apply(filter:LogbookFilter,station:String?=stationId){
+        val normalised=filter.copy(limit=filter.limit.coerceIn(1,250))
+        if(normalised==appliedFilter&&station==stationId&&state !is LogbookQueryState.Idle)return
+        appliedFilter=normalised;stationId=station;pageSize=appliedFilter.limit;load(reset=true,debounceMs=250)
+    }
+    fun refresh()=load(reset=true,preserveRows=true)
     fun retry()=load(reset=true)
     fun reset(){selectedIds=emptySet();apply(LogbookFilter(limit=50),stationId)}
     fun loadNext(){val ready=state as? LogbookQueryState.Ready?:return;if(!ready.hasMore)return;load(reset=false)}
@@ -40,10 +47,13 @@ class LogbookController(private val repository: LogbookRepository) {
     fun toggleSelection(id:String){selectedIds=if(id in selectedIds)selectedIds-id else selectedIds+id}
     fun clearSelection(){selectedIds=emptySet()}
 
-    private fun load(reset:Boolean,debounceMs:Long=0){
+    private fun load(reset:Boolean,debounceMs:Long=0,preserveRows:Boolean=false){
         val request=generation.incrementAndGet();signal?.cancel();job?.cancel();signal=CancellationSignal()
         val existing=(state as? LogbookQueryState.Ready)?.rows.orEmpty()
-        if(reset){cursor=null;pages.clear();cursors.clear();pageIndex=0;exactTotal=null;state=LogbookQueryState.LoadingFirstPage}else state=LogbookQueryState.LoadingAnotherPage(existing)
+        val preserving=reset&&preserveRows&&existing.isNotEmpty()
+        refreshError="";refreshing=preserving
+        if(reset){cursor=null;pageIndex=0;if(!preserving){pages.clear();cursors.clear();exactTotal=null;state=LogbookQueryState.LoadingFirstPage}}
+        else state=LogbookQueryState.LoadingAnotherPage(existing)
         job=scope.launch{
             try{
                 if(debounceMs>0)delay(debounceMs)
@@ -53,11 +63,12 @@ class LogbookController(private val repository: LogbookRepository) {
                     offsetPage=if(reset)0 else pageIndex+1,exactCount=reset,signal=signal)}
                 if(request!=generation.get())return@launch
                 cursor=page.nextCursor
-                if(reset){pages+=page.rows;cursors+=page.nextCursor}else{pageIndex++;if(pages.size>pageIndex)pages[pageIndex]=page.rows else pages+=page.rows;if(cursors.size>pageIndex)cursors[pageIndex]=page.nextCursor else cursors+=page.nextCursor}
+                if(reset){pages.clear();cursors.clear();pages+=page.rows;cursors+=page.nextCursor}else{pageIndex++;if(pages.size>pageIndex)pages[pageIndex]=page.rows else pages+=page.rows;if(cursors.size>pageIndex)cursors[pageIndex]=page.nextCursor else cursors+=page.nextCursor}
                 exactTotal=page.exactTotal?:exactTotal;more=page.hasMore
                 state=if(page.rows.isEmpty())LogbookQueryState.Empty else LogbookQueryState.Ready(page.rows,exactTotal,page.hasMore)
-            }catch(_:CancellationException){if(request==generation.get())state=LogbookQueryState.Cancelled}
-            catch(error:Throwable){if(request==generation.get())state=LogbookQueryState.RecoverableError(error.message?:"Logbook query failed")}
+            }catch(_:CancellationException){if(request==generation.get()&&!preserving)state=LogbookQueryState.Cancelled}
+            catch(error:Throwable){if(request==generation.get()){if(preserving){refreshError=error.message?:"Logbook refresh failed";state=LogbookQueryState.Ready(existing,exactTotal,more)}else state=LogbookQueryState.RecoverableError(error.message?:"Logbook query failed")}}
+            finally{if(request==generation.get())refreshing=false}
         }
     }
 

@@ -64,7 +64,7 @@ internal class HamClockPropagationRepository(context: Context) {
                 try {
                     require(connection.responseCode in 200..299) { "Propagation HTTP ${connection.responseCode}" }
                     require(connection.contentLengthLong <= MAX_RESPONSE_BYTES) { "Propagation response is too large" }
-                    val bytes = connection.inputStream.use { it.readNBytes(MAX_RESPONSE_BYTES + 1) }
+                    val bytes = connection.inputStream.use { it.readBoundedBytes(MAX_RESPONSE_BYTES + 1) }
                     require(bytes.size <= MAX_RESPONSE_BYTES) { "Propagation response is too large" }
                     val raw = bytes.toString(Charsets.UTF_8)
                     parseHamClockPropagation(raw, now).also { writeCache(key, raw, now) }

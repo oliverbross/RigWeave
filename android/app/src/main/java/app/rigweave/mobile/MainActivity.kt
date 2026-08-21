@@ -131,7 +131,8 @@ private enum class Destination(val label: String) {
 }
 private enum class SettingsSection(val label: String) {
     RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
-    AUDIO("Audio"), DIGI("Digi"), INTEGRATIONS("Integrations"), HEALTH("Health"), DIAG("Diag"), ABOUT("About")
+    AUDIO("Audio"), DIGI("Digi"), INTEGRATIONS("Integrations"), COLOURS("Colours"),
+    HEALTH("Health"), DIAG("Diag"), ABOUT("About")
 }
 private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Station"), GENERAL("General"), NOTES("Notes"), QSL("QSL") }
 
@@ -169,7 +170,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val context = LocalContext.current
     val core = remember { NativeCore.create() }
     val transport = remember { UsbRadioTransport(context) }
-    val database = remember { QsoDatabase(context) }
+    val database = remember { QsoDatabase.shared(context) }
     LaunchedEffect(database) {
         StabilityDiagnostics.refreshDatabaseFacts(database)
         while (withContext(Dispatchers.IO) { database.backfillProjectionBatch() }) {
@@ -399,7 +400,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     DisposableEffect(Unit) { onDispose {
         app.disarmAll(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close(); groupsIo.close()
         scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelogNative.close(); wavelog.close(); callbook.close(); cty.close()
-        portable.close(); progress.close(); operations.close(); syncHub.close(); NativeCore.destroy(core); database.close()
+        portable.close(); progress.close(); operations.close(); syncHub.close(); NativeCore.destroy(core)
     } }
     pendingRisk?.let { command ->
         val cwMacro = command.startsWith("KY ")
@@ -454,10 +455,19 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val requestVoice: (Int) -> Unit = { slot ->
         if (app.voiceMacrosArmed && voiceArmedMode == radio.mode) voiceTx.send(slot) else pendingVoiceSlot = slot
     }
-    BoxWithConstraints(Modifier.fillMaxSize().background(Chassis)) {
+    val inAppBrowser = rememberInAppBrowserState()
+    CompositionLocalProvider(LocalInAppBrowserState provides inAppBrowser) {
+    BoxWithConstraints(
+        Modifier.fillMaxSize().background(Chassis).windowInsetsPadding(WindowInsets.safeDrawing),
+    ) {
         if (maxWidth >= 700.dp) Row(Modifier.fillMaxSize()) {
             NavigationRail(containerColor = Panel) {
-                Text("RW", color = Amber, fontWeight = FontWeight.Black, modifier = Modifier.padding(18.dp))
+                Image(
+                    painter = painterResource(R.drawable.rigweave_logo_mark),
+                    contentDescription = "RigWeave",
+                    modifier = Modifier.padding(vertical = 12.dp).size(42.dp),
+                    contentScale = ContentScale.Fit,
+                )
                 Destination.entries.filterNot { item ->
                     item == Destination.SYNC ||
                     (item == Destination.GROUPS_IO && !groupsIoDestinationVisible(groupsIo.enabled, compact = false)) ||
@@ -491,6 +501,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 pendingHomeQsoId, { pendingHomeQsoId = null },
                 { id -> pendingHomeQsoId = id; destination = Destination.LOGBOOK })
         } }
+    }
+    InAppBrowserDialog(inAppBrowser)
     }
 }
 
@@ -698,8 +710,16 @@ private fun navIcon(item: Destination) = when (item) {
 
 @Composable private fun Header(title: String, state: RadioState? = null) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Column { Text("RIGWEAVE", color = Amber, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
-            Text(title.uppercase(), color = Muted, style = MaterialTheme.typography.labelSmall) }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Image(
+                painter = painterResource(R.drawable.rigweave_logo_mark),
+                contentDescription = null,
+                modifier = Modifier.size(34.dp),
+                contentScale = ContentScale.Fit,
+            )
+            Column { Text("RIGWEAVE", color = Amber, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+                Text(title.uppercase(), color = Muted, style = MaterialTheme.typography.labelSmall) }
+        }
         state?.let { StatusChip(if (it.connected) "RADIO LIVE" else "RADIO OFFLINE", it.connected) }
     }
 }
@@ -784,7 +804,7 @@ private fun navIcon(item: Destination) = when (item) {
             else wavelog.stationId.takeIf(String::isNotBlank) ?: "__NO_SELECTED_WAVELOG_STATION__"
         stationInsight = withContext(Dispatchers.IO) { database.stationInsight(current.record, stationScope) }
     }
-    BoxWithConstraints(Modifier.fillMaxSize().background(Color(0xFF090B0C)).navigationBarsPadding().padding(10.dp)) {
+    Box(Modifier.fillMaxSize().background(Color(0xFF090B0C)).navigationBarsPadding().padding(10.dp)) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.fillMaxWidth().weight(1.25f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 KxStatusRail(app.radioFamily, state, detail, connect, direct)
@@ -818,7 +838,7 @@ private fun navIcon(item: Destination) = when (item) {
                             CallbookIdentityOverlay(insight.record, { identityVisible = false }, Modifier.fillMaxSize())
                         }
                     }
-                    LiveSpotsPanel(features, database, wavelog, callbook, cty, send, stationInsight,
+                    LiveSpotsPanel(features, database, wavelog, callbook, cty, app, send, stationInsight,
                         Modifier.fillMaxWidth().weight(3f))
                 }
             }
@@ -1699,7 +1719,7 @@ private val callbookImageCache = object : LruCache<String, androidx.compose.ui.g
                 connection.connectTimeout = 7_000; connection.readTimeout = 10_000
                 connection.instanceFollowRedirects = true
                 connection.inputStream.use { input ->
-                    val bytes = input.readNBytes(5 * 1024 * 1024)
+                    val bytes = input.readBoundedBytes(5 * 1024 * 1024)
                     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
                     var sample = 1
@@ -1728,7 +1748,8 @@ private enum class RadioActivityTab(val label: String) {
 }
 
 @Composable private fun LiveSpotsPanel(features: FeatureController, database: QsoDatabase, wavelog: WavelogController,
-    callbook: CallbookController, cty: CtyController, send: (String) -> Unit, insight: StationInsight?, modifier: Modifier = Modifier) {
+    callbook: CallbookController, cty: CtyController, app: AppController, send: (String) -> Unit,
+    insight: StationInsight?, modifier: Modifier = Modifier) {
     var selected by remember { mutableStateOf(RadioActivityTab.SPOTS) }
     var logPage by remember { mutableStateOf(QsoPage(emptyList(), 0, 0, 50)) }
     var page by remember { mutableIntStateOf(0) }
@@ -1852,20 +1873,20 @@ private enum class RadioActivityTab(val label: String) {
             }
             Box(Modifier.fillMaxSize()) {
                 when (selected) {
-                    RadioActivityTab.SPOTS -> LiveSpotTable(visibleSpots, spotStatuses, cty, send,
+                    RadioActivityTab.SPOTS -> LiveSpotTable(visibleSpots, spotStatuses, cty, app, send,
                         { previousQsoRecord = it.previousQsoRecord(cty) }, { activeSpotFilter = it },
                         if (features.liveSpots.isEmpty()) "No live spots yet · configured clusters connect automatically"
                         else "No live spots match the selected filters", Modifier.fillMaxSize())
                     RadioActivityTab.LOG -> RadioLogTable(logPage.rows, { previousQsoRecord = it.previousQsoRecord() }, Modifier.fillMaxSize())
                     RadioActivityTab.DETAILS -> QrzQsoDetails(insight, Modifier.fillMaxSize())
                     RadioActivityTab.SEARCH -> SpotSearchPanel(spotSearchQuery, { spotSearchQuery = it }, spotFilters,
-                        { activeSpotFilter = it }, visibleSearchSpots, spotStatuses, cty, send,
+                        { activeSpotFilter = it }, visibleSearchSpots, spotStatuses, cty, app, send,
                         { previousQsoRecord = it.previousQsoRecord(cty) }, Modifier.fillMaxSize())
                 }
                 activeSpotFilter?.let { dimension ->
                     SpotFilterOverlay(dimension, spotFilters, modeOptions, { activeSpotFilter = null }, {
                         spotFilters = it; spotPage = 0; searchPage = 0; activeSpotFilter = null
-                    }, Modifier.fillMaxSize())
+                    }, Modifier.fillMaxSize(), app)
                 }
             }
         }
@@ -2206,7 +2227,7 @@ private data class SpotColumn(val label: String, val width: Dp, val mono: Boolea
 
 @Composable private fun SpotSearchPanel(query: String, updateQuery: (String) -> Unit, filters: SpotFilters,
     openFilter: (SpotFilterDimension) -> Unit, spots: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>,
-    cty: CtyController, send: (String) -> Unit, previousQsos: (AndroidDXSpot) -> Unit,
+    cty: CtyController, app: AppController, send: (String) -> Unit, previousQsos: (AndroidDXSpot) -> Unit,
     modifier: Modifier = Modifier) {
     BoxWithConstraints(modifier) {
         val compact = maxWidth < 720.dp
@@ -2227,7 +2248,7 @@ private data class SpotColumn(val label: String, val width: Dp, val mono: Boolea
                     SpotFilterButtons(filters, openFilter, false)
                 }
             }
-            LiveSpotTable(spots, statuses, cty, send, previousQsos, openFilter,
+            LiveSpotTable(spots, statuses, cty, app, send, previousQsos, openFilter,
                 "No spots match this callsign/entity and filter combination", Modifier.fillMaxWidth().weight(1f))
         }
     }
@@ -2257,9 +2278,12 @@ private data class SpotColumn(val label: String, val width: Dp, val mono: Boolea
 
 @Composable internal fun SpotFilterOverlay(dimension: SpotFilterDimension, filters: SpotFilters,
     modeOptions: List<String>, dismiss: () -> Unit, apply: (SpotFilters) -> Unit,
-    modifier: Modifier = Modifier) {
+    modifier: Modifier = Modifier, app: AppController? = null,
+    bandOptions: List<String> = spotBandOptions,
+    bandPresets: List<Pair<String, Set<String>>> = emptyList(),
+) {
     val options = when (dimension) {
-        SpotFilterDimension.BAND -> spotBandOptions
+        SpotFilterDimension.BAND -> bandOptions
         SpotFilterDimension.MODE -> modeOptions
         SpotFilterDimension.CALL_STATUS -> spotCallStatusOptions
         SpotFilterDimension.DXCC_STATUS -> spotDxccStatusOptions
@@ -2268,10 +2292,13 @@ private data class SpotColumn(val label: String, val width: Dp, val mono: Boolea
     BoxWithConstraints(modifier.background(Color.Black.copy(alpha = .62f)).clickable(onClick = dismiss),
         contentAlignment = Alignment.Center) {
         val modalInteraction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-        val modalHeight = maxHeight * .94f
+        val columns = if (dimension == SpotFilterDimension.BAND) 4 else 3
+        val rowCount = (options.size + columns - 1) / columns
+        val modalHeight = minOf((174 + rowCount * 52).dp, maxHeight * .84f)
+        val modalWidth = minOf(if (dimension == SpotFilterDimension.BAND) 660.dp else 540.dp, maxWidth * .9f)
         Surface(color = Color(0xFF171D20), shape = RoundedCornerShape(8.dp),
             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF59636A)), shadowElevation = 12.dp,
-            modifier = Modifier.widthIn(min = 390.dp, max = 680.dp).height(modalHeight)
+            modifier = Modifier.width(modalWidth).height(modalHeight)
                 .clickable(interactionSource = modalInteraction, indication = null) {}) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -2282,9 +2309,14 @@ private data class SpotColumn(val label: String, val width: Dp, val mono: Boolea
                     }
                     IconButton(dismiss) { Icon(Icons.Outlined.Close, "Close filter") }
                 }
-                SpotFilterChoice("ALL", draft.isEmpty(), { draft = emptySet() }, Modifier.fillMaxWidth())
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SpotFilterChoice("ALL", draft.isEmpty(), { draft = emptySet() }, Amber, Modifier.weight(1f))
+                    if (dimension == SpotFilterDimension.BAND) bandPresets.forEach { (label, values) ->
+                        SpotFilterChoice(label, draft == values, { draft = values },
+                            spotFilterAccent(dimension, values.first(), app), Modifier.weight(1f))
+                    }
+                }
                 HorizontalDivider(color = Color(0xFF3A4348))
-                val columns = if (dimension == SpotFilterDimension.BAND) 4 else 3
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                     options.chunked(columns).forEach { row ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2293,7 +2325,7 @@ private data class SpotColumn(val label: String, val width: Dp, val mono: Boolea
                                     draft = if (draft.isEmpty()) setOf(option)
                                     else if (option in draft) (draft - option).ifEmpty { emptySet() }
                                     else draft + option
-                                }, Modifier.weight(1f))
+                                }, spotFilterAccent(dimension, option, app), Modifier.weight(1f))
                             }
                             repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                         }
@@ -2309,12 +2341,26 @@ private data class SpotColumn(val label: String, val width: Dp, val mono: Boolea
     }
 }
 
-@Composable private fun SpotFilterChoice(label: String, checked: Boolean, select: () -> Unit,
+private fun spotFilterAccent(dimension: SpotFilterDimension, option: String, app: AppController?): Color = when (dimension) {
+    SpotFilterDimension.BAND -> Color(android.graphics.Color.parseColor(hamClockBandColor(option)))
+    SpotFilterDimension.MODE -> when (canonicalSpotMode(option)) {
+        "CW" -> Color(0xFF43C7D9); "SSB" -> Color(0xFFE9A72B); "FM" -> Color(0xFF42C77B)
+        "AM" -> Color(0xFFF58B3A); else -> Color(0xFF9C6ADE)
+    }
+    SpotFilterDimension.CALL_STATUS -> Color(app?.spotStatusColour(SPOT_STATUS_CS, option)
+        ?: defaultSpotStatusColour(SPOT_STATUS_CS, option))
+    SpotFilterDimension.DXCC_STATUS -> Color(app?.spotStatusColour(SPOT_STATUS_DS, option)
+        ?: defaultSpotStatusColour(SPOT_STATUS_DS, option))
+}
+
+@Composable private fun SpotFilterChoice(label: String, checked: Boolean, select: () -> Unit, accent: Color,
     modifier: Modifier = Modifier) {
-    Row(modifier.heightIn(min = 48.dp).clickable(role = Role.Checkbox, onClick = select).padding(horizontal = 6.dp),
+    Row(modifier.heightIn(min = 48.dp).background(if (checked) accent.copy(alpha = .12f) else Color.Transparent,
+            RoundedCornerShape(7.dp)).clickable(role = Role.Checkbox, onClick = select).padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Checkbox(checked, onCheckedChange = null)
-        Text(label, color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1,
+        Checkbox(checked, onCheckedChange = null, colors = CheckboxDefaults.colors(checkedColor = accent,
+            uncheckedColor = accent.copy(alpha = .72f)))
+        Text(label, color = if (checked) accent else Ink, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1,
             overflow = TextOverflow.Ellipsis)
     }
 }
@@ -2332,7 +2378,7 @@ private fun spotFilterOptionLabel(dimension: SpotFilterDimension, option: String
 }
 
 @Composable private fun LiveSpotTable(spots: List<AndroidDXSpot>, statuses: Map<String, SpotLogStatus>,
-    cty: CtyController, send: (String) -> Unit, previousQsos: (AndroidDXSpot) -> Unit,
+    cty: CtyController, app: AppController, send: (String) -> Unit, previousQsos: (AndroidDXSpot) -> Unit,
     openFilter: (SpotFilterDimension) -> Unit, emptyMessage: String, modifier: Modifier = Modifier) {
     BoxWithConstraints(modifier) {
         val minimumWidth = 760.dp
@@ -2380,8 +2426,10 @@ private fun spotFilterOptionLabel(dimension: SpotFilterDimension, option: String
                         SpotTableCell(entity?.country.orEmpty().ifBlank { spot.country }, columns[6], OperationalCountry)
                         SpotTableCell(cq, columns[7])
                         SpotTableCell(spot.spotter, columns[8])
-                        SpotTableCell(status?.callStatus.orEmpty(), columns[9], spotStatusColor(status?.callStatus))
-                        SpotTableCell(status?.dxccStatus.orEmpty(), columns[10], spotStatusColor(status?.dxccStatus))
+                        SpotTableCell(status?.callStatus.orEmpty(), columns[9],
+                            Color(app.spotStatusColour(SPOT_STATUS_CS, status?.callStatus)))
+                        SpotTableCell(status?.dxccStatus.orEmpty(), columns[10],
+                            Color(app.spotStatusColour(SPOT_STATUS_DS, status?.dxccStatus)))
                         SpotTableCell(spot.comment, columns[11])
                     }
                     HorizontalDivider(color = Color(0xFF303940))
@@ -2393,13 +2441,6 @@ private fun spotFilterOptionLabel(dimension: SpotFilterDimension, option: String
 
 private fun formatSpotFrequency(frequencyHz: Long): String = "%d.%03d.%02d".format(
     java.util.Locale.US, frequencyHz / 1_000_000, (frequencyHz / 1_000) % 1_000, (frequencyHz / 10) % 100)
-
-private fun spotStatusColor(status: String?): Color = when (status) {
-    "C" -> Healthy
-    "NC", "ATNO" -> Hold
-    "NB", "NM", "W/NB", "C/NB" -> Amber
-    else -> Ink
-}
 
 @Composable private fun RowScope.SpotTableCell(value: String, column: SpotColumn, color: Color = Ink,
     bold: Boolean = false, header: Boolean = false, onClick: (() -> Unit)? = null, actionLabel: String = "") {
@@ -3224,7 +3265,6 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
     var editingQso by remember { mutableStateOf<Qso?>(null) }
     var exportRequest by remember { mutableStateOf<Pair<LogbookFilter?,List<String>?>?>(null) }
     var actionStatus by remember { mutableStateOf("") }
-    var refreshGeneration by remember { mutableIntStateOf(0) }
     var previousQsoRecord by remember { mutableStateOf<AndroidCallbookRecord?>(null) }
     val context = LocalContext.current
     val logbookScope = rememberCoroutineScope()
@@ -3264,12 +3304,11 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
             if (wavelog.configured && wavelog.stations.isEmpty()) wavelog.loadStations()
             wavelog.syncTwoWay()
         }
-        refreshGeneration++
     }
     LaunchedEffect(wavelog.status) {
-        if (wavelog.status.startsWith("Two-way sync complete")) refreshGeneration++
+        if (wavelog.status.startsWith("Two-way sync complete")) logbookController.refresh()
     }
-    LaunchedEffect(applied, wavelog.logMode, wavelog.stationId, refreshGeneration) {
+    LaunchedEffect(applied, wavelog.logMode, wavelog.stationId) {
         logbookController.apply(applied,wavelog.stationId.takeIf { wavelog.logMode==LogMode.WAVELOG })
     }
     val selected = pageData.rows.firstOrNull { it.id == selectedId }
@@ -3315,7 +3354,7 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                         dxcc = record.dxcc, continent = record.continent, cqZone = record.cqZone, ituZone = record.ituZone,
                         state = record.state, email = record.email))
                     actionStatus = "Callbook fields updated locally; eligible Wavelog update queued."
-                    refreshGeneration++
+                    logbookController.refresh()
                 }
             } } }, enabled = selected != null, modifier = Modifier.heightIn(min = 48.dp)) { Text("UPDATE CALLBOOK") }
             val selectedOutbox = selected?.let { qso -> wavelogNative.outbox.firstOrNull { it.entry.localQsoId == qso.id && it.entry.state != WavelogOutboxState.ACCEPTED } }
@@ -3328,7 +3367,7 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                 val cleared = LogbookFilter(limit = applied.limit)
                 draft = cleared; applied = cleared; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
             }, modifier = Modifier.heightIn(min = 48.dp)) { Icon(Icons.Outlined.Clear, null); Spacer(Modifier.width(5.dp)); Text("CLEAR FILTERS") }
-            OutlinedButton({ if (wavelog.logMode == LogMode.WAVELOG) wavelog.syncTwoWay(); refreshGeneration++ }, modifier = Modifier.heightIn(min = 48.dp)) {
+            OutlinedButton({ if (wavelog.logMode == LogMode.WAVELOG) wavelog.syncTwoWay() else logbookController.refresh() }, modifier = Modifier.heightIn(min = 48.dp)) {
                 Icon(Icons.Outlined.Refresh, null); Spacer(Modifier.width(6.dp)); Text(if (wavelog.logMode == LogMode.WAVELOG) "SYNC" else "REFRESH")
             }
             Button(openSync, modifier = Modifier.heightIn(min = 48.dp)) {
@@ -3338,12 +3377,14 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                 Icon(Icons.Outlined.Insights, null); Spacer(Modifier.width(6.dp)); Text("PROGRESS")
             }
             Text("${pageData.rows.size} / ${pageData.total} RESULTS", color = Ink, fontWeight = FontWeight.Black, fontSize = 16.sp)
+            if (logbookController.refreshing) Text("UPDATING…", color = Hold, fontWeight = FontWeight.Bold)
             CompactPager(pageData, applied.limit, { limit ->
                 draft = draft.copy(limit = limit); applied = applied.copy(limit = limit); selectedId = null
             }, { logbookController.loadPrevious(); selectedId = null },
                 { logbookController.loadNext(); selectedId = null })
         }
         if (actionStatus.isNotBlank()) Text(actionStatus, color = Hold, style = MaterialTheme.typography.bodySmall)
+        if (logbookController.refreshError.isNotBlank()) Text("Background refresh: ${logbookController.refreshError}. Existing rows remain visible.", color = Danger, style = MaterialTheme.typography.bodySmall)
         val deliveryStates = syncHub.records.filter { record -> pageData.rows.any { it.id == record.qsoId } }
             .groupBy { it.qsoId }.mapValues { entry -> entry.value.associate { it.provider to it.state } }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
@@ -3384,14 +3425,14 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                     val cleared = LogbookFilter(limit = applied.limit)
                     draft = cleared; applied = cleared; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
                 }, onDismiss = { showFilters = false })
-    if (showFastEntry) FastEntryDialog(mutations, wavelog, callbook, app.stationCallsign, { _, _ -> refreshGeneration++ }) {
+    if (showFastEntry) FastEntryDialog(mutations, wavelog, callbook, app.stationCallsign, { _, _ -> logbookController.refresh() }) {
             showFastEntry = false
         }
         deleteQso?.let { qso -> DeleteQsoDialog(qso, mutations, onDeleted = {
-            deleteQso = null; selectedId = null; refreshGeneration++
+            deleteQso = null; selectedId = null; logbookController.refresh()
         }, onDismiss = { deleteQso = null }) }
         editingQso?.let { qso -> QsoCorrectionDialog(qso, mutations, syncHub) {
-            editingQso = null; selectedId = null; refreshGeneration++
+            editingQso = null; selectedId = null; logbookController.refresh()
         } }
     }
     previousQsoRecord?.let { record ->
@@ -3793,6 +3834,93 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
 
 @Composable private fun FilterChoice(label: String, value: String, choices: List<Pair<String, String>>, change: (String) -> Unit) =
     ChoiceField(label, choices.firstOrNull { it.first == value }?.second ?: value, choices, value, change, Modifier.fillMaxWidth())
+
+private data class StatusColourSwatch(val name: String, val argb: Int)
+
+private val statusColourPalette = listOf(
+    StatusColourSwatch("Ink", 0xFFF4F0E7.toInt()), StatusColourSwatch("Silver", 0xFFA5ADB2.toInt()),
+    StatusColourSwatch("Slate", 0xFF6F7B83.toInt()), StatusColourSwatch("Graphite", 0xFF4A555D.toInt()),
+    StatusColourSwatch("Red", 0xFFE4544D.toInt()), StatusColourSwatch("Coral", 0xFFF06F5B.toInt()),
+    StatusColourSwatch("Orange", 0xFFF58B3A.toInt()), StatusColourSwatch("Amber", 0xFFE9A72B.toInt()),
+    StatusColourSwatch("Yellow", 0xFFF4C94E.toInt()), StatusColourSwatch("Lime", 0xFFA9D451.toInt()),
+    StatusColourSwatch("Green", 0xFF42C77B.toInt()), StatusColourSwatch("Teal", 0xFF35B7A6.toInt()),
+    StatusColourSwatch("Cyan", 0xFF43C7D9.toInt()), StatusColourSwatch("Sky", 0xFF5DADE2.toInt()),
+    StatusColourSwatch("Blue", 0xFF5B8FF9.toInt()), StatusColourSwatch("Indigo", 0xFF6977D8.toInt()),
+    StatusColourSwatch("Violet", 0xFF9C6ADE.toInt()), StatusColourSwatch("Purple", 0xFFC481D8.toInt()),
+    StatusColourSwatch("Magenta", 0xFFE06BB1.toInt()), StatusColourSwatch("Pink", 0xFFF08BA7.toInt()),
+)
+
+internal fun spotColourHex(argb: Int): String = String.format(Locale.US, "%06X", argb and 0xFFFFFF)
+
+internal fun parseSpotColourHex(value: String): Int? {
+    val normalized = value.trim().removePrefix("#")
+    if (normalized.length != 6 || normalized.any { it !in "0123456789abcdefABCDEF" }) return null
+    return (normalized.toLong(16) or 0xFF000000L).toInt()
+}
+
+private fun statusColourForeground(argb: Int): Color {
+    val red = (argb shr 16) and 0xFF
+    val green = (argb shr 8) and 0xFF
+    val blue = argb and 0xFF
+    return if ((red * 299 + green * 587 + blue * 114) / 1000 >= 155) Color.Black else Color.White
+}
+
+@Composable private fun StatusColourSettingsGroup(app: AppController, dimension: String, options: List<String>) {
+    val filterDimension = if (dimension == SPOT_STATUS_CS) SpotFilterDimension.CALL_STATUS else SpotFilterDimension.DXCC_STATUS
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val columns = if (maxWidth >= 900.dp) 2 else 1
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            options.chunked(columns).forEach { row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    row.forEach { status ->
+                        StatusColourEditor(app, dimension, status, spotFilterOptionLabel(filterDimension, status), Modifier.weight(1f))
+                    }
+                    repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun StatusColourEditor(app: AppController, dimension: String, status: String, label: String,
+    modifier: Modifier = Modifier) {
+    val current = app.spotStatusColour(dimension, status)
+    var hex by remember(current) { mutableStateOf(spotColourHex(current)) }
+    val parsed = parseSpotColourHex(hex)
+    Column(modifier.padding(vertical = 5.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, color = Ink, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            Surface(color = Color(current), shape = RoundedCornerShape(7.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = .35f))) {
+                Text(status, color = statusColourForeground(current), fontWeight = FontWeight.Black,
+                    fontFamily = FontFamily.Monospace, modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp))
+            }
+        }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            statusColourPalette.forEach { swatch ->
+                Surface(onClick = { app.setSpotStatusColour(dimension, status, swatch.argb) },
+                    color = Color(swatch.argb), shape = RoundedCornerShape(9.dp),
+                    border = androidx.compose.foundation.BorderStroke(if (current == swatch.argb) 3.dp else 1.dp,
+                        if (current == swatch.argb) Ink else Color.White.copy(alpha = .28f)),
+                    modifier = Modifier.size(48.dp).semantics {
+                        contentDescription = "Set $dimension $status colour to ${swatch.name}"
+                    }) {
+                    if (current == swatch.argb) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Outlined.Check, null, tint = statusColourForeground(swatch.argb), modifier = Modifier.size(22.dp))
+                    }
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(hex, { hex = it.removePrefix("#").uppercase().filter { ch -> ch.isDigit() || ch in 'A'..'F' }.take(6) },
+                label = { Text("Custom hex") }, prefix = { Text("#") }, singleLine = true,
+                isError = hex.isNotBlank() && parsed == null, modifier = Modifier.width(150.dp))
+            Button({ parsed?.let { app.setSpotStatusColour(dimension, status, it) } }, enabled = parsed != null,
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("SET") }
+        }
+        HorizontalDivider(color = Color(0xFF354047))
+    }
+}
 
 @Composable private fun SettingsScreen(state: RadioState, detail: String, database: QsoDatabase,
     mutations: QsoMutationCoordinator, features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController,
@@ -4396,9 +4524,10 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             val snapshot = stability
             if (snapshot == null) LinearProgressIndicator(Modifier.fillMaxWidth()) else {
                 val health = snapshot.projection
+                val visibleProjectionRows = if (health.state == ProjectionState.READY) health.projectionRows else health.processedRows
                 Text("DB · ${"%.1f".format(snapshot.databaseBytes / 1_048_576.0)} MiB", color = Muted)
                 Text("QSO · ${health.canonicalRows} canonical · ${health.projectionRows} projected · ${health.referenceRows} references", color = Muted)
-                Text("PROJECTION · ${health.state} · ${health.processedRows}/${health.canonicalRows}", color = if (health.state == ProjectionState.READY) Healthy else Hold)
+                Text("PROJECTION · ${health.state} · $visibleProjectionRows/${health.canonicalRows}", color = if (health.state == ProjectionState.READY) Healthy else Hold)
                 if (health.lastError.isNotBlank()) Text("LAST PROJECTION ERROR · ${health.lastError.take(160)}", color = Danger)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton({ settingsScope.launch { withContext(Dispatchers.IO) { database.verifyProjection() }; systemMessage = "Projection verified"; refreshStability() } }) { Text("VERIFY") }
@@ -4444,6 +4573,24 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         }
         if (section == SettingsSection.INTEGRATIONS) SettingsCard("GROUPS.IO") {
             GroupsIoSettingsPanel(groupsIo, openGroupsIo)
+        }
+        if (section == SettingsSection.COLOURS) SettingsCard("SPOT STATUS COLOURS") {
+            Text("Choose CS and DS colours independently. The same palette is used in live spots and the DX feed; text labels remain the source of truth.",
+                color = Muted)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                OutlinedButton(app::resetSpotStatusColours, modifier = Modifier.heightIn(min = 48.dp)) {
+                    Text("RESET DEFAULTS")
+                }
+            }
+        }
+        if (section == SettingsSection.COLOURS) SettingsCard("CALL STATUS · CS") {
+            Text("NC new call · NB new band · NM new mode · W worked · C confirmed", color = Muted)
+            StatusColourSettingsGroup(app, SPOT_STATUS_CS, spotCallStatusOptions)
+        }
+        if (section == SettingsSection.COLOURS) SettingsCard("DXCC STATUS · DS") {
+            Text("ATNO new entity · W/NB worked on another band · C/NB confirmed on another band · W worked · C confirmed",
+                color = Muted)
+            StatusColourSettingsGroup(app, SPOT_STATUS_DS, spotDxccStatusOptions)
         }
         if (section == SettingsSection.ABOUT) SettingsCard("ABOUT RIGWEAVE") {
             Text("Radio. Spectrum. Spots. Logs.", color = Amber)

@@ -114,6 +114,29 @@ class NeuralDxStoreInstrumentedTest {
         outlook.close()
     }
 
+    @Test fun historySearchAggregatesByCallsignAndUsesTheCallTimeIndex() {
+        val now = Instant.now().epochSecond
+        store.ingest(listOf(
+            spot("history-one", "N0AN", 60, 50, 3).copy(receivedEpoch = now - 3_600, band = "20m", mode = "FT8"),
+            spot("history-two", "N0AN", 65, 55, 4).copy(receivedEpoch = now - 60, spotter = "K1ABC", band = "40m", mode = "CW"),
+            spot("history-other", "N0ZZ", 55, 45, 2).copy(receivedEpoch = now - 30),
+        ))
+
+        val rows = store.searchHistory("N0A")
+        assertEquals(1, rows.size)
+        assertEquals("N0AN", rows.single().callsign)
+        assertEquals(2, rows.single().observations)
+        assertEquals(listOf("20m", "40m"), rows.single().bands)
+        assertEquals(listOf("CW", "FT8"), rows.single().modes)
+        assertEquals(2, rows.single().spotters)
+
+        val plan = store.readableDatabase.rawQuery(
+            "EXPLAIN QUERY PLAN SELECT call,COUNT(*) FROM spot WHERE call>=? AND call<? GROUP BY call",
+            arrayOf("N0A", "N0A\uFFFF"),
+        ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(3)) } }
+        assertTrue(plan.any { it.contains("spot_call_ts_idx") })
+    }
+
     @Test fun backfillUnionsExactKeysAcrossBatchBoundaryAndIsIdempotent() {
         val bucket = (Instant.now().epochSecond / 300L) * 300L
         val db = store.writableDatabase

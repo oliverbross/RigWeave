@@ -105,7 +105,7 @@ internal fun insightMode(mode: String, submode: String = ""): String {
 }
 
 fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
-    in 135_700L..137_800L -> "2200m"; in 472_000L..479_000L -> "630m"
+    in 135_700L..137_800L -> "2190m"; in 472_000L..479_000L -> "630m"
     in 1_800_000L..2_000_000L -> "160m"; in 3_500_000L..4_000_000L -> "80m"
     in 5_250_000L..5_450_000L -> "60m"; in 7_000_000L..7_300_000L -> "40m"
     in 10_100_000L..10_150_000L -> "30m"; in 14_000_000L..14_350_000L -> "20m"
@@ -117,7 +117,15 @@ fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
     in 10_000_000_000L..10_499_999_999L -> "3cm"; else -> ""
 }
 
-class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 13) {
+class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 16) {
+    companion object {
+        @Volatile private var sharedInstance: QsoDatabase? = null
+
+        fun shared(context:Context):QsoDatabase = sharedInstance ?: synchronized(this) {
+            sharedInstance ?: QsoDatabase(context.applicationContext).also { sharedInstance = it }
+        }
+    }
+
     private val changeRevision = AtomicLong(0)
     var operatorSaveHandler: ((Qso) -> Unit)? = null
     init { setWriteAheadLoggingEnabled(true) }
@@ -152,6 +160,9 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         if (oldVersion < 11) createAdvancedLogbookIndexes(db)
         if (oldVersion < 12) QsoProjectionStore.createSchema(db, ProjectionState.OPTIMISING)
         if (oldVersion < 13) QsoProjectionStore.migrateV2(db)
+        if (oldVersion < 14) QsoProjectionStore.migrateV3(db)
+        if (oldVersion < 15) QsoProjectionStore.migrateV4(db)
+        if (oldVersion < 16) QsoProjectionStore.migrateV5(db)
     }
 
     private fun createPagingIndexes(db: SQLiteDatabase) {

@@ -6,15 +6,16 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.location.LocationManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -28,16 +29,29 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.delay
+import org.maplibre.android.MapLibre
+import org.maplibre.android.annotations.IconFactory
+import org.maplibre.android.annotations.MarkerOptions
+import org.maplibre.android.camera.CameraPosition
+import org.maplibre.android.camera.CameraUpdateFactory
+import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.MapView
+import org.maplibre.android.maps.Style
 import java.io.File
 import java.time.Instant
 import java.time.ZoneId
@@ -49,6 +63,9 @@ private val OpsAmber = Color(0xFFE9A72B)
 private val OpsPanel = Color(0xFF1B2228)
 private val OpsInk = Color(0xFFF4F0E7)
 private val OpsMuted = Color(0xFFA5ADB2)
+private val OpsHealthy = Color(0xFF42C77B)
+private val OpsDanger = Color(0xFFE47D72)
+private val OpsBlue = Color(0xFF65A6C7)
 
 @Composable
 internal fun OperationsScreen(
@@ -90,7 +107,7 @@ internal fun OperationsScreen(
             "ACTIVATION PLANNER" -> ActivationPlanner(controller, portable, activation, app, openPortable)
             "SATELLITES" -> SatelliteOperationsScreen(controller.satellites, app.stationCallsign, app.stationGrid, controller.nextPlan?.grid,
                 mutations, wavelog, callbook, progress, openLogbook, tuneReceive, normalSatelliteLogger)
-            else -> DxOperations(controller, features, progress, cty, openDx, openLogbook)
+            else -> DxOperations(controller, features, progress, cty, wavelog, openDx, openLogbook)
         }
     }
 }
@@ -98,7 +115,7 @@ internal fun OperationsScreen(
 @Composable private fun ProviderStrip(metadata: OperationsCacheMetadata) {
     Surface(color = OpsPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(9.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            AssistChip({}, { Text(metadata.state.label) }, enabled = false)
+            OpsBadge(metadata.state.label, if (metadata.error.isBlank() && metadata.lastSuccessEpoch > 0) OpsHealthy else OpsAmber)
             Text(metadata.source, color = OpsInk, modifier = Modifier.weight(1f))
             Text(if (metadata.lastSuccessEpoch > 0) "Saved ${localTime(metadata.lastSuccessEpoch)}" else "No successful fetch", color = OpsMuted)
         }
@@ -107,8 +124,9 @@ internal fun OperationsScreen(
 }
 
 @Composable private fun DxOperations(controller: OperationsController, features: FeatureController, progress: ProgressController,
-    cty: CtyController, openDx: () -> Unit, openLogbook: () -> Unit) {
+    cty: CtyController, wavelog: WavelogController, openDx: () -> Unit, openLogbook: () -> Unit) {
     val context = LocalContext.current
+    val inAppBrowser = LocalInAppBrowserState.current
     var search by rememberSaveable { mutableStateOf(controller.focusDxCall) }
     LaunchedEffect(controller.focusDxCall) { if (controller.focusDxCall.isNotBlank()) { search = controller.focusDxCall; controller.clearFocus() } }
     var group by rememberSaveable { mutableStateOf("ALL") }
@@ -119,12 +137,16 @@ internal fun OperationsScreen(
     }
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { ProviderStrip(controller.dxMetadata) }
-        item { OutlinedTextField(search, { search = it }, label = { Text("Call, entity, date or status") }, modifier = Modifier.fillMaxWidth()) }
-        item { Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            listOf("ALL", "ACTIVE NOW", "STARTING SOON", "UPCOMING", "RECENTLY ENDED").forEach { value ->
-                FilterChip(group == value, { group = value }, { Text(value) })
+        item {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(search, { search = it }, label = { Text("Call, entity, date or status") },
+                    modifier = Modifier.width(430.dp), singleLine = true)
+                listOf("ALL", "ACTIVE NOW", "STARTING SOON", "UPCOMING", "RECENTLY ENDED").forEach { value ->
+                    FilterChip(group == value, { group = value }, { Text(value) })
+                }
             }
-        } }
+        }
         if (rows.isEmpty()) item { EmptyOperations("No DX calendar entries match. Provider state is shown above.") }
         items(rows, key = DxCalendarItem::id) { item ->
             val entity = cty.lookup(item.callsign)
@@ -133,19 +155,35 @@ internal fun OperationsScreen(
             val entityCount = progress.snapshot.geography.firstOrNull { it.code==dxcc }?.count?.worked ?: 0
             val live = features.liveSpots.firstOrNull { it.callsign.equals(item.callsign, true) }
             val needs = progress.snapshot.needs.firstOrNull { it.dxSpot?.callsign.equals(item.callsign, true) }?.reasons.orEmpty()
-            Surface(color = OpsPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth().border(1.dp, OpsAmber.copy(.25f), RoundedCornerShape(8.dp))) {
-                Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Row { Text(item.callsign, color = OpsAmber, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f)); Text(dxGroup(item, now), color = OpsInk) }
-                    Text(listOf(item.entity.ifBlank { entity?.country.orEmpty() }, item.dateText, item.modes.joinToString(), item.bands.joinToString()).filter(String::isNotBlank).joinToString(" · "), color = OpsInk)
-                    Text("LOCAL HISTORY · exact ${exact.qsos} · confirmed ${exact.confirmed} · entity $entityCount · DXCC ${dxcc.ifBlank { "unresolved" }}", color = OpsMuted)
-                    if (needs.isNotEmpty()) Text("NEEDS · ${needs.joinToString()}", color = OpsAmber)
-                    Text("${item.provider} · ${item.status}${item.qsl.takeIf(String::isNotBlank)?.let { " · QSL $it" }.orEmpty()}", color = OpsMuted)
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            val status = dxGroup(item, now)
+            val sourceLabel = if (wavelog.logMode == LogMode.WAVELOG) "WAVELOG" else "LOCAL LOG"
+            Surface(color = OpsPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth().border(1.dp, operationStatusColor(status).copy(.35f), RoundedCornerShape(8.dp))) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(item.callsign, color = OpsAmber, fontWeight = FontWeight.Black, fontSize = 24.sp)
+                            Text(listOf(item.entity.ifBlank { entity?.country.orEmpty() }, item.dateText, item.modes.joinToString(), item.bands.joinToString())
+                                .filter(String::isNotBlank).joinToString(" · "), color = OpsInk, modifier = Modifier.weight(1f),
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                            OpsBadge(sourceLabel, OpsBlue)
+                            OpsCountBadge("${exact.qsos} exact", exact.qsos)
+                            OpsCountBadge("${exact.confirmed} confirmed", exact.confirmed)
+                            OpsCountBadge("$entityCount entity", entityCount)
+                            OpsBadge("DXCC ${dxcc.ifBlank { "unresolved" }}", if (dxcc.isBlank()) OpsDanger else OpsBlue)
+                            needs.takeIf { it.isNotEmpty() }?.let { OpsBadge("NEEDS ${it.joinToString()}", OpsAmber) }
+                            Text("${item.provider}${item.qsl.takeIf(String::isNotBlank)?.let { " · QSL $it" }.orEmpty()}", color = OpsMuted, maxLines = 1)
+                        }
+                    }
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                         TextButton({ progress.requestLogbook(logbookFilterForDimension("callsign", item.callsign)); openLogbook() }) { Text("LOGBOOK") }
-                        TextButton({ features.setWatchlist((features.watchlistText.lineSequence().toList() + item.callsign).joinToString("\n")) }) { Text("WATCH IN DX") }
-                        TextButton({ copyText(context, "DX callsign", item.callsign) }) { Text("COPY CALL") }
-                        if (item.sourceUrl.startsWith("https://")) TextButton({ openUrl(context, item.sourceUrl) }) { Text("SOURCE") }
-                        if (live != null) TextButton(openDx) { Text("LIVE SPOT") }
+                        TextButton({ features.setWatchlist((features.watchlistText.lineSequence().toList() + item.callsign).joinToString("\n")) }) { Text("WATCH DX") }
+                        TextButton({ copyText(context, "DX callsign", item.callsign) }) { Text("COPY") }
+                        if (item.sourceUrl.startsWith("https://")) TextButton({ inAppBrowser?.open(item.sourceUrl) }) { Text("SOURCE") }
+                        if (live != null) TextButton(openDx) { Text("LIVE") }
+                        OpsBadge(status, operationStatusColor(status))
                     }
                 }
             }
@@ -160,9 +198,26 @@ private fun dxGroup(item: DxCalendarItem, now: Long): String = when {
     else -> "UPCOMING"
 }
 
+private fun operationStatusColor(status: String): Color = when (status) {
+    "ACTIVE NOW", "TODAY" -> OpsHealthy
+    "STARTING SOON", "THIS WEEKEND", "NEXT 7 DAYS" -> OpsAmber
+    "UPCOMING", "LATER" -> OpsBlue
+    else -> OpsMuted
+}
+
+@Composable private fun OpsBadge(label: String, color: Color) {
+    Surface(color = color.copy(alpha = .14f), shape = RoundedCornerShape(6.dp), border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = .6f))) {
+        Text(label, color = color, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp))
+    }
+}
+
+@Composable private fun OpsCountBadge(label: String, value: Int) = OpsBadge(label, if (value > 0) OpsHealthy else OpsDanger)
+
 @Composable private fun ContestOperations(controller: OperationsController, progress: ProgressController, mutations: QsoMutationCoordinator,
     wavelog: WavelogController, callbook: CallbookController, app: AppController, openLogbook: () -> Unit) {
     val context = LocalContext.current
+    val inAppBrowser = LocalInAppBrowserState.current
     var search by rememberSaveable { mutableStateOf("") }; var mode by rememberSaveable { mutableStateOf("ALL") }
     var group by rememberSaveable { mutableStateOf("ALL") }; var utc by rememberSaveable { mutableStateOf(false) }
     var fastDraft by remember { mutableStateOf<String?>(null) }
@@ -173,8 +228,8 @@ private fun dxGroup(item: DxCalendarItem, now: Long): String = when {
     }
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { ProviderStrip(controller.contestMetadata) }
-        item { OutlinedTextField(search, { search = it }, label = { Text("Search contests") }, modifier = Modifier.fillMaxWidth()) }
-        item { Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        item { Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(search, { search = it }, label = { Text("Search contests") }, modifier = Modifier.width(430.dp), singleLine = true)
             listOf("ALL", "ACTIVE NOW", "TODAY", "THIS WEEKEND", "NEXT 7 DAYS", "LATER").forEach { value -> FilterChip(group == value, { group = value }, { Text(value) }) }
         } }
         item { Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -184,13 +239,21 @@ private fun dxGroup(item: DxCalendarItem, now: Long): String = when {
         if (rows.isEmpty()) item { EmptyOperations("No contests match. Malformed and expired provider rows are skipped.") }
         items(rows, key = ContestCalendarItem::id) { item ->
             val qsoCount = item.contestId.takeIf(String::isNotBlank)?.let { controller.contestLocal[it.uppercase()] }
-            Surface(color = OpsPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Row { Text(item.name, color = OpsAmber, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f)); Text(contestGroup(item, now), color = OpsInk) }
-                Text("${formatContestTime(item.startEpoch, utc)} → ${formatContestTime(item.endEpoch, utc)} · ${item.mode}", color = OpsInk)
-                Text("${item.provider} · ${((item.endEpoch - item.startEpoch) / 3600.0).let { "%.1f h".format(Locale.US, it) }}" +
-                    (item.contestId.takeIf(String::isNotBlank)?.let { " · ADIF $it · local QSOs ${qsoCount ?: 0}" } ?: " · ADIF contest ID not deterministically known"), color = OpsMuted)
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (item.sourceUrl.startsWith("https://")) TextButton({ openUrl(context, item.sourceUrl) }) { Text("RULES") }
+            val status = contestGroup(item, now)
+            Surface(color = OpsPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth().border(1.dp, operationStatusColor(status).copy(.35f), RoundedCornerShape(8.dp))) {
+                Row(Modifier.fillMaxWidth().padding(11.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text(item.name, color = OpsAmber, fontWeight = FontWeight.Black, fontSize = 20.sp)
+                    Text("${formatContestTime(item.startEpoch, utc)} → ${formatContestTime(item.endEpoch, utc)} · ${item.mode}", color = OpsInk)
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OpsBadge(if (wavelog.logMode == LogMode.WAVELOG) "WAVELOG" else "LOCAL LOG", OpsBlue)
+                        item.contestId.takeIf(String::isNotBlank)?.let { OpsBadge("ADIF $it", OpsBlue); OpsCountBadge("${qsoCount ?: 0} QSOs", qsoCount ?: 0) }
+                        Text("${item.provider} · ${((item.endEpoch - item.startEpoch) / 3600.0).let { "%.1f h".format(Locale.US, it) }}" +
+                            if (item.contestId.isBlank()) " · ADIF contest ID unavailable" else "", color = OpsMuted)
+                    }
+                }
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (item.sourceUrl.startsWith("https://")) TextButton({ inAppBrowser?.open(item.sourceUrl) }) { Text("RULES") }
                     TextButton({ copyText(context, "Contest", "${item.name}\n${formatContestTime(item.startEpoch, true)}–${formatContestTime(item.endEpoch, true)} UTC") }) { Text("COPY") }
                     TextButton({ shareContestIcs(context, item) }) { Text("SHARE ICS") }
                     TextButton({ fastDraft = "DATE ${Instant.ofEpochSecond(item.startEpoch).atZone(ZoneOffset.UTC).toLocalDate()}\n" +
@@ -198,10 +261,10 @@ private fun dxGroup(item: DxCalendarItem, now: Long): String = when {
                     if (item.contestId.isNotBlank()) TextButton({
                         progress.requestLogbook(logbookFilterForDimension("contest", item.contestId)); openLogbook()
                     }) { Text("LOGBOOK") }
+                    OpsBadge(status, operationStatusColor(status))
                 }
-            } }
+            } } }
         }
-    }
     fastDraft?.let { initial -> FastEntryDialog(mutations, wavelog, callbook, app.stationCallsign,
         { _, _ -> controller.refresh(false) }, initialDraft = initial) { fastDraft = null } }
 }
@@ -227,6 +290,17 @@ private fun dxGroup(item: DxCalendarItem, now: Long): String = when {
         val p = if (ref.latitude != null && ref.longitude != null) GeoPoint(ref.latitude, ref.longitude) else null
         p?.let { ref to distanceKm(point, it) }
     }.filter { it.second <= radius }
+    val mapReferences = buildList {
+        if ((program == "ALL" || program == "POTA") && pota) nearbyPota.forEach { row ->
+            if (row.latitude != null && row.longitude != null) add(PlanningMapReference("POTA", row.reference, row.name, GeoPoint(row.latitude, row.longitude)))
+        }
+        if ((program == "ALL" || program == "SOTA") && sota) nearbySota.forEach { row ->
+            if (row.latitude != null && row.longitude != null) add(PlanningMapReference("SOTA", row.code, row.name, GeoPoint(row.latitude, row.longitude)))
+        }
+        if ((program == "ALL" || program == "WWFF") && wwff) nearbyWwff.forEach { (row, _) ->
+            add(PlanningMapReference("WWFF", row.code, row.name, GeoPoint(row.latitude!!, row.longitude!!)))
+        }
+    }
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             OutlinedTextField(grid, { grid = it.uppercase(Locale.US).take(8) }, label = { Text("Grid") }, modifier = Modifier.weight(1f))
@@ -236,7 +310,7 @@ private fun dxGroup(item: DxCalendarItem, now: Long): String = when {
                 else locationPermission.launch(Manifest.permission.ACCESS_FINE_LOCATION)
             }, modifier = Modifier.heightIn(min = 56.dp)) { Icon(Icons.Outlined.MyLocation, null); Text(" USE LOCATION") }
         } }
-        item { WorldPlanningMap(point, grid) { selected -> point = selected; grid = maidenheadGrid(selected.latitude, selected.longitude) } }
+        item { ActivationPlanningMap(point, grid, radius, mapReferences) { selected -> point = selected; grid = maidenheadGrid(selected.latitude, selected.longitude) } }
         item { Text("${"%.5f".format(point.latitude)}, ${"%.5f".format(point.longitude)} · ${distanceBearing(app.stationGrid, point)}", color = OpsInk) }
         item { Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             listOf("ALL", "POTA", "SOTA", "WWFF").forEach { value -> FilterChip(program == value, { program = value }, { Text(value) }) }
@@ -252,9 +326,9 @@ private fun dxGroup(item: DxCalendarItem, now: Long): String = when {
         if ((program == "ALL" || program == "WWFF") && wwff) items(nearbyWwff.take(20), key = { "W${it.first.code}" }) { (row, distance) -> ReferenceRow("WWFF", row.code, row.name, distance, initialBearingDegrees(point, GeoPoint(row.latitude!!, row.longitude!!)), "RECENT SPOT/AGENDA CACHE") { editing = planFor("WWFF", row.code, row.name, row.grid.ifBlank { grid }, row.latitude!!, row.longitude!!) } }
         item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("SAVED PLANS", color = OpsAmber, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f)); Button({ editing = planFor("GENERAL", "", "New activation", grid, point.latitude, point.longitude) }) { Text("NEW PLAN") } } }
         if (controller.plans.isEmpty()) item { EmptyOperations("No saved activation plans. Plans are local and survive app upgrades.") }
-        items(controller.plans, key = ActivationPlan::id) { plan -> Surface(color = OpsPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(10.dp)) {
-            Text(plan.title, color = OpsInk, fontWeight = FontWeight.Bold); Text(activationPlanSummary(plan), color = OpsMuted)
-            Row(Modifier.horizontalScroll(rememberScrollState())) {
+        items(controller.plans, key = ActivationPlan::id) { plan -> Surface(color = OpsPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) { Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) { Text(plan.title, color = OpsInk, fontWeight = FontWeight.Bold); Text(activationPlanSummary(plan), color = OpsMuted); OpsBadge(plan.program, OpsBlue) }
+            Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
                 TextButton({ editing = plan }) { Text("EDIT") }; TextButton({ controller.duplicate(plan) }) { Text("DUPLICATE") }
                 TextButton({ sharePlanIcs(context, plan) }) { Text("SHARE") }; TextButton({ copyText(context, "Activation plan", activationPlanSummary(plan)) }) { Text("COPY") }
                 TextButton({ delete = plan }) { Text("DELETE") }
@@ -270,23 +344,79 @@ private fun dxGroup(item: DxCalendarItem, now: Long): String = when {
         confirmButton = { Button({ controller.delete(plan.id); delete = null }) { Text("DELETE") } }, dismissButton = { TextButton({ delete = null }) { Text("CANCEL") } }) }
 }
 
-@Composable private fun WorldPlanningMap(point: GeoPoint, grid: String, select: (GeoPoint) -> Unit) {
-    Canvas(Modifier.fillMaxWidth().height(220.dp).background(Color(0xFF15262B), RoundedCornerShape(8.dp)).border(1.dp, OpsAmber.copy(.45f), RoundedCornerShape(8.dp))
-        .pointerInput(Unit) { detectTapGestures { tap -> select(GeoPoint(90.0 - tap.y / size.height * 180.0, tap.x / size.width * 360.0 - 180.0)) } }) {
-        for (lon in -120..120 step 60) drawLine(Color(0xFF31515A), Offset(((lon + 180) / 360f) * size.width, 0f), Offset(((lon + 180) / 360f) * size.width, size.height))
-        for (lat in -60..60 step 30) drawLine(Color(0xFF31515A), Offset(0f, ((90 - lat) / 180f) * size.height), Offset(size.width, ((90 - lat) / 180f) * size.height))
-        maidenheadCell(grid)?.let { cell ->
-            val left = ((cell.west + 180) / 360f * size.width).toFloat(); val right = ((cell.east + 180) / 360f * size.width).toFloat()
-            val top = ((90 - cell.north) / 180f * size.height).toFloat(); val bottom = ((90 - cell.south) / 180f * size.height).toFloat()
-            drawRect(OpsAmber, Offset(left, top), androidx.compose.ui.geometry.Size(right - left, bottom - top), style = Stroke(3f))
+private data class PlanningMapReference(val program:String,val code:String,val name:String,val point:GeoPoint)
+
+@Composable private fun ActivationPlanningMap(point:GeoPoint,grid:String,radius:Double,references:List<PlanningMapReference>,select:(GeoPoint)->Unit) {
+    val context=LocalContext.current
+    val lifecycle=LocalLifecycleOwner.current.lifecycle
+    val currentSelect by rememberUpdatedState(select)
+    val mapView=remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null) } }
+    var map by remember { mutableStateOf<MapLibreMap?>(null) }
+    var styled by remember { mutableStateOf(false) }
+    DisposableEffect(mapView,lifecycle) {
+        val observer=LifecycleEventObserver { _,event -> when(event) {
+            Lifecycle.Event.ON_START -> mapView.onStart()
+            Lifecycle.Event.ON_RESUME -> mapView.onResume()
+            Lifecycle.Event.ON_PAUSE -> mapView.onPause()
+            Lifecycle.Event.ON_STOP -> mapView.onStop()
+            else -> Unit
+        } }
+        lifecycle.addObserver(observer)
+        mapView.getMapAsync { ready ->
+            map=ready
+            ready.uiSettings.isAttributionEnabled=true
+            ready.uiSettings.isLogoEnabled=true
+            ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { styled=true }
+            ready.addOnMapClickListener { location -> currentSelect(GeoPoint(location.latitude,location.longitude)); true }
         }
-        drawCircle(Color(0xFFE4544D), 7f, Offset(((point.longitude + 180) / 360f * size.width).toFloat(), ((90 - point.latitude) / 180f * size.height).toFloat()))
+        onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map=null }
+    }
+    val referenceHash=references.joinToString { "${it.program}:${it.code}:${it.point.latitude}:${it.point.longitude}" }
+    LaunchedEffect(map,styled,point,grid,radius,referenceHash) {
+        val ready=map ?: return@LaunchedEffect
+        if(!styled)return@LaunchedEffect
+        ready.clear()
+        ready.addMarker(MarkerOptions().position(LatLng(point.latitude,point.longitude)).title("Selected grid $grid").snippet("Tap the map to move the activation plan")
+            .icon(planningMarker(context,android.graphics.Color.rgb(233,167,43))))
+        references.take(200).forEach { row ->
+            val color=when(row.program) { "POTA" -> android.graphics.Color.rgb(66,199,123); "SOTA" -> android.graphics.Color.rgb(101,166,199); else -> android.graphics.Color.rgb(196,129,216) }
+            ready.addMarker(MarkerOptions().position(LatLng(row.point.latitude,row.point.longitude)).title("${row.program} ${row.code}").snippet(row.name)
+                .icon(planningMarker(context,color)))
+        }
+        val positions=listOf(LatLng(point.latitude,point.longitude))+references.take(200).map { LatLng(it.point.latitude,it.point.longitude) }
+        if(positions.size>1) runCatching { ready.animateCamera(CameraUpdateFactory.newLatLngBounds(LatLngBounds.Builder().includes(positions).build(),70),450) }
+        else ready.cameraPosition=CameraPosition.Builder().target(positions.first()).zoom(when { radius<=25 -> 9.5; radius<=50 -> 8.5; radius<=100 -> 7.5; else -> 6.5 }).build()
+    }
+    Box(Modifier.fillMaxWidth().height(330.dp).background(Color(0xFF15262B),RoundedCornerShape(8.dp)).border(1.dp,OpsAmber.copy(.45f),RoundedCornerShape(8.dp))) {
+        AndroidView({ mapView },Modifier.fillMaxSize())
+        Surface(color=Color(0xE6192228),shape=RoundedCornerShape(5.dp),modifier=Modifier.align(Alignment.TopStart).padding(8.dp)) {
+            Text("$grid · ${radius.toInt()} km · ${references.size} nearby references\nPOTA green · SOTA blue · WWFF violet · tap map to select",
+                color=OpsInk,fontSize=11.sp,modifier=Modifier.padding(7.dp))
+        }
     }
 }
 
+private fun planningMarker(context:Context,color:Int):org.maplibre.android.annotations.Icon {
+    val size=25*context.resources.displayMetrics.density
+    val bitmap=Bitmap.createBitmap(size.toInt(),size.toInt(),Bitmap.Config.ARGB_8888)
+    val canvas=Canvas(bitmap)
+    val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color=color }
+    canvas.drawCircle(size/2,size/2,size*.34f,paint)
+    paint.style=Paint.Style.STROKE;paint.strokeWidth=size*.09f;paint.color=android.graphics.Color.WHITE
+    canvas.drawCircle(size/2,size/2,size*.34f,paint)
+    return IconFactory.getInstance(context).fromBitmap(bitmap)
+}
+
 @Composable private fun ReferenceRow(program: String, code: String, name: String, distance: Double?, bearing: Int?, status: String, add: () -> Unit) {
-    ListItem(headlineContent = { Text("$program · $code · $name", fontWeight = FontWeight.Bold) }, supportingContent = { Text("${distance?.let { "%.0f km".format(it) } ?: "distance unknown"} · ${bearing?.let { "$it°" } ?: "bearing unknown"} · $status") },
-        trailingContent = { TextButton(add) { Text("PLAN") } }, colors = ListItemDefaults.colors(containerColor = OpsPanel))
+    Surface(color = OpsPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OpsBadge(program, when (program) { "POTA" -> OpsHealthy; "SOTA" -> OpsBlue; else -> Color(0xFFC481D8) })
+            Column(Modifier.weight(1f)) { Text("$code · $name", color = OpsInk, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${distance?.let { "%.0f km".format(it) } ?: "distance unknown"} · ${bearing?.let { "$it°" } ?: "bearing unknown"}", color = OpsMuted) }
+            OpsBadge(status, if (status.startsWith("ACTIVE")) OpsHealthy else if (status.contains("RETIRED") || status.contains("EXPIRED")) OpsDanger else OpsAmber)
+            TextButton(add) { Text("PLAN") }
+        }
+    }
 }
 
 @Composable private fun PlanEditor(initial: ActivationPlan, save: (ActivationPlan) -> Unit, dismiss: () -> Unit) {
@@ -316,8 +446,6 @@ private fun formatContestTime(epoch: Long, utc: Boolean) = Instant.ofEpochSecond
 private fun distanceBearing(stationGrid: String, target: GeoPoint): String = maidenheadCenter(stationGrid)?.let { "%.0f km · %03d° from %s".format(distanceKm(it, target), initialBearingDegrees(it, target), stationGrid) } ?: "station grid unavailable"
 
 private fun copyText(context: Context, label: String, value: String) { (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText(label, value)) }
-private fun openUrl(context: Context, url: String) { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } }
-
 private fun shareContestIcs(context: Context, item: ContestCalendarItem) {
     val plan = ActivationPlan(id = "contest-${item.id}", title = item.name, program = "CONTEST", grid = "AA00AA", latitude = 0.0, longitude = 0.0,
         startEpoch = item.startEpoch, durationMinutes = ((item.endEpoch - item.startEpoch) / 60).toInt().coerceAtLeast(1), notes = item.sourceUrl)

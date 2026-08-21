@@ -105,6 +105,9 @@ class EqAudioController(private val context: Context, private val routes: AudioM
         val rate = listOf(48_000, 44_100).firstOrNull { AudioRecord.getMinBufferSize(it, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT) > 0 }
             ?: run { status = "No supported 48/44.1 kHz capture path"; finishCapture(); return }
         val minimum = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            status = "Microphone permission is required for EQ capture"; finishCapture(); return
+        }
         val record = runCatching { AudioRecord.Builder().setAudioSource(sourceKind)
             .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(rate)
                 .setChannelMask(AudioFormat.CHANNEL_IN_MONO).build())

@@ -113,6 +113,7 @@ internal class ProgressController(context: Context, private val database: QsoDat
     private val bandHealthQueue = LatestWinsRequestQueue<BandHealthRefreshRequest>()
     private val bandHistoryCache = BandHistoryCache()
     private var completedBandHealthKey: Any? = null
+    private var fastSnapshotKey: Any? = null
     private var bandHealthGeneration = 0L
     var snapshot by mutableStateOf(ProgressSnapshot()); private set
     var bandHealthSnapshot by mutableStateOf(HamClockBandHealthSnapshot()); private set
@@ -182,14 +183,25 @@ internal class ProgressController(context: Context, private val database: QsoDat
         refreshJob = scope.launch {
             busy = true
             try {
+                val databaseToken=database.changeToken()
+                val requestedFastKey=listOf(databaseToken,filters,goalStore.goals,syncAttention)
+                if (requestedFastKey != fastSnapshotKey) {
+                    val fast=withContext(Dispatchers.IO) {
+                        StabilityDiagnostics.timedQuery("LOG_INTELLIGENCE_FAST", filters.hashCode().toUInt().toString(16), "PROJECTION_CORE", { it.totalQsos }) {
+                            repository.fastSnapshot(filters,goalStore.goals,syncAttention)
+                        }
+                    }
+                    snapshot=fast
+                    fastSnapshotKey=requestedFastKey
+                }
                 val result=withContext(Dispatchers.IO){
-                val built=StabilityDiagnostics.timedQuery("LOG_INTELLIGENCE", filters.hashCode().toUInt().toString(16), "PROJECTION_AGGREGATES", { it.totalQsos }) {
-                    repository.snapshot(filters,goalStore.goals,dxSpots,portableSpots,syncAttention,cty::lookup)
+                    StabilityDiagnostics.timedQuery("LOG_INTELLIGENCE", filters.hashCode().toUInt().toString(16), "PROJECTION_AGGREGATES", { it.totalQsos }) {
+                        repository.snapshot(filters,goalStore.goals,dxSpots,portableSpots,syncAttention,cty::lookup)
+                    }
                 }
-                    listOf(repository.stationProfiles(),repository.stationCallsigns(),repository.operators(),repository.submodes()) to built
-                }
-                stationProfiles=result.first[0];stationCallsigns=result.first[1];operators=result.first[2];submodes=result.first[3]
-                snapshot=result.second
+                stationProfiles=result.stationProfiles.keys.sorted();stationCallsigns=result.stationCallsigns.keys.sorted()
+                operators=result.operators.keys.sorted();submodes=result.submodes.keys.sorted()
+                snapshot=result
             } finally {
                 busy = false
                 refreshJob = null

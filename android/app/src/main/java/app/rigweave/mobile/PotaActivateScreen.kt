@@ -314,6 +314,7 @@ private fun PotaFastLogger(controller: PotaActivationController, session: PotaAc
 private fun PotaSessionSummary(controller: PotaActivationController, session: PotaActivationSession, progress: PotaActivationProgress,
     now: Long, radio: RadioState, modifier: Modifier, onOpenLogbook: () -> Unit) {
     val context = LocalContext.current
+    val inAppBrowser = LocalInAppBrowserState.current
     var confirmFinish by remember { mutableStateOf(false) }; var confirmAbandon by remember { mutableStateOf(false) }
     Column(modifier.background(ActivatePanel).verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("CURRENT SESSION", color = ActivateAmber, fontWeight = FontWeight.Black)
@@ -327,7 +328,7 @@ private fun PotaSessionSummary(controller: PotaActivationController, session: Po
         recent.forEach { Text("${it.callsign} · ${it.band} ${it.mode}${if (it.potaRefs.isNotEmpty()) " · P2P ${it.potaRefs.joinToString()}" else ""}", color = ActivateInk) }
         if (recent.isEmpty()) Text("No QSOs saved in this session.", color = ActivateMuted)
         OutlinedButton(onOpenLogbook, modifier = Modifier.fillMaxWidth()) { Text("CORRECT IN LOGBOOK") }
-        OutlinedButton({ copySpotSummary(context, session, radio); context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://pota.app/"))) }, modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton({ copySpotSummary(context, session, radio); inAppBrowser?.open("https://pota.app/") }, modifier = Modifier.fillMaxWidth()) {
             Text("OPEN POTA SPOTTING")
         }
         Button({ confirmFinish = true }, modifier = Modifier.fillMaxWidth()) { Text("FINISH & REVIEW") }
@@ -340,6 +341,7 @@ private fun PotaSessionSummary(controller: PotaActivationController, session: Po
 @Composable
 private fun PotaReview(controller: PotaActivationController, radio: RadioState, compact: Boolean) {
     val context = LocalContext.current; val session = controller.session ?: return; val qsos = controller.qsos()
+    val inAppBrowser = LocalInAppBrowserState.current
     val result = remember(session, qsos) { buildPotaExports(session, qsos) }
     var pendingFile by remember { mutableStateOf<PotaAdifFile?>(null) }
     val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
@@ -367,7 +369,7 @@ private fun PotaReview(controller: PotaActivationController, radio: RadioState, 
         }
         if (result.files.isNotEmpty()) item {
             Button({ shareFiles(context, result.files) }, Modifier.fillMaxWidth()) { Text("SHARE ALL") }
-            OutlinedButton({ context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://pota.app/"))) }, Modifier.fillMaxWidth()) { Text("OPEN POTA · CHOOSE MY LOG UPLOADS") }
+            OutlinedButton({ inAppBrowser?.open("https://pota.app/") }, Modifier.fillMaxWidth()) { Text("OPEN POTA · CHOOSE MY LOG UPLOADS") }
         }
         item { Text("Files are generated from the local journal and kept separate from it. No direct upload is performed.", color = ActivateMuted)
             TextButton({ controller.dismissReview() }, Modifier.fillMaxWidth()) { Text("CLOSE REVIEW") } }

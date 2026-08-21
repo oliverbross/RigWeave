@@ -1,5 +1,6 @@
 package app.rigweave.mobile.hamclock
 
+import app.rigweave.mobile.readBoundedBytes
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -59,7 +60,7 @@ internal class HamClockUrlConnectionClient : HamClockHttpClient {
             if (code !in 200..299) throw HamClockHttpException(code,
                 connection.getHeaderField("Retry-After")?.toLongOrNull())
             if (connection.contentLengthLong > request.maxBytes) throw IllegalStateException("Provider response is too large")
-            val bytes = connection.inputStream.use { it.readNBytes(request.maxBytes + 1) }
+            val bytes = connection.inputStream.use { it.readBoundedBytes(request.maxBytes + 1) }
             if (bytes.size > request.maxBytes) throw IllegalStateException("Provider response is too large")
             return HamClockHttpResponse(
                 body = bytes.toString(Charsets.UTF_8),
@@ -140,16 +141,16 @@ internal class HamClockInFlightCoalescer(
                 executor.execute {
                     try {
                         val result = block()
+                        active.remove(key, future)
                         future.complete(result)
                     } catch (error: Throwable) {
-                        future.completeExceptionally(error)
-                    } finally {
                         active.remove(key, future)
+                        future.completeExceptionally(error)
                     }
                 }
             } catch (error: Throwable) {
-                future.completeExceptionally(error)
                 active.remove(key, future)
+                future.completeExceptionally(error)
             }
         }
         return try {

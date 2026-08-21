@@ -97,6 +97,8 @@ class VoiceMacroAudioController(
             AudioRecord.getMinBufferSize(it, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT) > 0
         } ?: return failAndIdle("No supported built-in microphone sample rate")
         val minimum = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
+            return failAndIdle("Microphone permission is required to record a voice macro")
         val record = runCatching {
             AudioRecord.Builder().setAudioSource(source)
                 .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(rate)

@@ -72,6 +72,12 @@ internal fun satelliteCacheState(count: Int, error: String, now: Long, fetched: 
     else -> SatelliteCacheState.CURRENT
 }
 
+internal fun localSatelliteTimerMetadata(now: Long) = SatelliteProviderMetadata(
+    source = "Local SGP4 pass timers · no external provider required",
+    fetchedAt = now,
+    state = SatelliteCacheState.CURRENT,
+)
+
 internal class SatelliteProviderRepository(context: Context) {
     companion object {
         const val CELESTRAK_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=AMATEUR&FORMAT=CSV"
@@ -181,9 +187,7 @@ internal class SatelliteProviderRepository(context: Context) {
     }
 
     fun timers(now: Long = Instant.now().epochSecond): SatelliteProviderData<SatelliteTimer> {
-        return SatelliteProviderData(emptyList(), SatelliteProviderMetadata(
-            "Timers unsupported · no stable machine-readable provider contract", 0, null,
-            SatelliteCacheState.EMPTY, "UNSUPPORTED_MACHINE_CONTRACT"))
+        return SatelliteProviderData(emptyList(), localSatelliteTimerMetadata(now))
     }
 
     fun refreshTimers(force: Boolean = false, now: Long = Instant.now().epochSecond): SatelliteProviderData<SatelliteTimer> {

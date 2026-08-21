@@ -1,5 +1,6 @@
 package app.rigweave.mobile.hamclock.finishline
 
+import app.rigweave.mobile.readBoundedBytes
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import java.io.File
@@ -44,7 +45,7 @@ internal class HamClockSolarImageRepository(cacheDirectory: File) {
                 require(connection.responseCode in 200..299) { "Solar image HTTP ${connection.responseCode}" }
                 require(connection.contentType.orEmpty().lowercase().startsWith("image/")) { "Solar image payload was not an image" }
                 require(connection.contentLengthLong <= MAX_BYTES) { "Solar image payload is too large" }
-                val bytes = connection.inputStream.use { it.readNBytes(MAX_BYTES + 1) }
+                val bytes = connection.inputStream.use { it.readBoundedBytes(MAX_BYTES + 1) }
                 require(bytes.size <= MAX_BYTES) { "Solar image payload is too large" }
                 val bitmap = decodeBoundedSolarImage(bytes)
                 val target = imageFile(channel)

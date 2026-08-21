@@ -265,7 +265,7 @@ class CtyController(context: Context) {
             connection.instanceFollowRedirects = true
             require(connection.responseCode in 200..299)
             require(connection.contentLengthLong <= MAX_CTY_BYTES || connection.contentLengthLong < 0L)
-            val data = connection.inputStream.use { it.readNBytes(MAX_CTY_BYTES + 1) }
+            val data = connection.inputStream.use { it.readBoundedBytes(MAX_CTY_BYTES + 1) }
             require(data.size <= MAX_CTY_BYTES)
             DownloadedCtyFile(data, connection.getHeaderFieldDate("Last-Modified", 0L), connection.contentLengthLong)
         } finally { connection.disconnect() }

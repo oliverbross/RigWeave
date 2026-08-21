@@ -23,8 +23,8 @@ class GroupsIoContractTest {
     }
 
     @Test fun messageBodyNormalisationRemovesExecutableMarkupWithoutInventingContent() {
-        val value = normaliseBody("<p>Hello &amp; 73</p><script>steal()</script><iframe src='x'>bad</iframe><br>Second line")
-        assertEquals("Hello & 73\n\nSecond line", value)
+        val value = normaliseBody("<p>Hello &amp; &#34;73&#34;</p><script>steal()</script><iframe src='x'>bad</iframe><br>Second line")
+        assertEquals("Hello & \"73\"\n\nSecond line", value)
         assertFalse(value.contains("steal"))
     }
 
@@ -33,6 +33,14 @@ class GroupsIoContractTest {
         assertEquals("permission", GroupsIoApiException.from(403, """{"object":"error","type":"inadequate_permissions"}""").category)
         assertEquals("rate_limited", GroupsIoApiException.from(429, "{}").category)
         assertFalse(GroupsIoApiException.from(401, fixture("error-unauthorized.json")).message.contains("Bearer"))
+    }
+
+    @Test fun attachmentWithoutServerIdGetsStablePrivateIdentity() {
+        val value = JSONObject("""{"filename":"front panel.png","download_url":"https://example.invalid/signed"}""")
+        val first = groupsIoAttachmentId(value, "front panel.png", "https://example.invalid/signed", 0)
+        assertTrue(first > 0)
+        assertEquals(first, groupsIoAttachmentId(value, "front panel.png", "https://example.invalid/signed", 0))
+        assertEquals(73L, groupsIoAttachmentId(JSONObject("""{"id":73}"""), "front panel.png", "https://example.invalid/signed", 0))
     }
 
     private fun fixture(name: String): String = requireNotNull(javaClass.classLoader?.getResource(name)).readText()

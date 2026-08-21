@@ -7,6 +7,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.net.Uri
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -53,6 +54,8 @@ private val PortableInk = Color(0xFFF4F0E7)
 private val PortableMuted = Color(0xFFA5ADB2)
 private val PortableAmber = Color(0xFFE9A72B)
 private val PortableHealthy = Color(0xFF42C77B)
+private val PortableBlue = Color(0xFF65A6C7)
+private val PortableViolet = Color(0xFFC481D8)
 private val PortableDanger = Color(0xFFE4544D)
 
 private enum class PortablePage(val label: String) { ON_AIR("On Air"), MAP("Map"), PLACES("Places") }
@@ -126,17 +129,24 @@ internal fun PortableChaseScreen(
     }
 
     Column(Modifier.fillMaxSize().background(PortableChassis).padding(if (compact) 8.dp else 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        PortableHeader(controller, radio, now)
-        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) { PortablePage.entries.forEachIndexed { index, item -> SegmentedButton(page == item, { page = item }, SegmentedButtonDefaults.itemShape(index, PortablePage.entries.size)) { Text(item.label) } } }
-        ProgrammeSelector(program, { program = it }, controller, now)
+        PortableHeader(controller, radio, page, { page = it }, compact)
+        if (compact) {
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) { PortablePage.entries.forEachIndexed { index, item -> SegmentedButton(page == item, { page = item }, SegmentedButtonDefaults.itemShape(index, PortablePage.entries.size)) { Text(item.label) } } }
+            ProgrammeSelector(program, { program = it }, controller, Modifier.fillMaxWidth())
+        } else {
+            PortableControlBar(program, { program = it }, controller, search, { search = it }, band, { band = it }, mode,
+                { mode = it }, newOnly, { newOnly = it }, sort, { sort = it })
+        }
         when (page) {
             PortablePage.MAP -> PortableMap(filtered, selectedId, { selectedId = it; page = PortablePage.ON_AIR }, Modifier.weight(1f))
             PortablePage.PLACES -> PortablePlaces(controller, stationGrid, program, Modifier.weight(1f))
             PortablePage.ON_AIR -> BoxWithConstraints(Modifier.weight(1f)) {
                 if (!compact && maxWidth >= 900.dp) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PortableFilters(search, { search = it }, band, { band = it }, mode, { mode = it }, newOnly, { newOnly = it }, sort, { sort = it }, Modifier.width(220.dp).fillMaxHeight())
-                    PortableList(filtered, selectedId, { selectedId = it }, intelligenceNeeds, Modifier.weight(1.2f).fillMaxHeight())
-                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) { PortableMap(filtered, selectedId, { selectedId = it }, Modifier.weight(1f)); PortableDetail(selected, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true }, potaActivationActive, onP2p, intelligenceNeeds, Modifier.weight(.9f)) }
+                    PortableList(filtered, selectedId, { selectedId = it }, intelligenceNeeds, Modifier.weight(1f).fillMaxHeight())
+                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PortableMap(filtered, selectedId, { selectedId = it }, Modifier.weight(1.25f))
+                        PortableDetail(selected, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true }, potaActivationActive, onP2p, intelligenceNeeds, Modifier.weight(.75f))
+                    }
                 } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     PortableCompactFilters(search, { search = it }, band, { band = it }, mode, { mode = it }, newOnly, { newOnly = it }, sort, { sort = it })
                     PortableList(filtered, selectedId, { selectedId = it }, intelligenceNeeds, Modifier.weight(1f)); selected?.let { PortableDetail(it, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true }, potaActivationActive, onP2p, intelligenceNeeds, Modifier.heightIn(min = 190.dp, max = 320.dp)) }
@@ -146,21 +156,52 @@ internal fun PortableChaseScreen(
     }
 }
 
-@Composable private fun PortableHeader(controller: PortableController, radio: RadioState, now: Long) {
+@Composable private fun PortableHeader(
+    controller: PortableController, radio: RadioState, page: PortablePage, changePage: (PortablePage) -> Unit, compact: Boolean,
+) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Column(Modifier.weight(1f)) { Text("PORTABLE CHASE", color = PortableAmber, fontWeight = FontWeight.Black, letterSpacing = 1.5.sp); Text("Live portable activity → useful decision → Tune & Log", color = PortableMuted, fontSize = 12.sp) }
+        Text("PORTABLE CHASE", color = PortableAmber, fontWeight = FontWeight.Black, letterSpacing = 1.5.sp,
+            modifier = if (compact) Modifier.weight(1f) else Modifier)
+        if (!compact) SingleChoiceSegmentedButtonRow(Modifier.weight(1f)) {
+            PortablePage.entries.forEachIndexed { index, item ->
+                SegmentedButton(page == item, { changePage(item) }, SegmentedButtonDefaults.itemShape(index, PortablePage.entries.size)) {
+                    Text(item.label)
+                }
+            }
+        }
         PortableStatus(if (radio.connected) "CAT LIVE" else "CAT OFFLINE", radio.connected)
         IconButton(controller::refreshAll, modifier = Modifier.size(48.dp)) { Icon(Icons.Outlined.Refresh, "Refresh portable activity") }
     }
-    val errors = PortableProgram.entries.map { controller.providerStatus(it) }.mapNotNull { it.error.takeIf(String::isNotBlank) }.distinct()
-    if (errors.isNotEmpty()) Text(errors.joinToString(" · "), color = PortableAmber, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
 }
 
-@Composable private fun ProgrammeSelector(selected: String, change: (String) -> Unit, controller: PortableController, now: Long) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+@Composable private fun ProgrammeSelector(selected: String, change: (String) -> Unit, controller: PortableController, modifier: Modifier) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         listOf("ALL" to null, "POTA" to PortableProgram.POTA, "SOTA" to PortableProgram.SOTA, "WWFF" to PortableProgram.WWFF).forEach { (label, provider) ->
-            val status = provider?.let(controller::providerStatus); FilterChip(selected == label, { change(label) }, { Text(if (status == null) label else "$label ${status.kind.label} · ${status.count}", fontSize = 10.sp) }, modifier = Modifier.heightIn(min = 48.dp))
+            val status = provider?.let(controller::providerStatus)
+            FilterChip(selected == label, { change(label) }, {
+                Text(if (status == null) label else "$label · ${status.count}", fontSize = 11.sp)
+            }, modifier = Modifier.heightIn(min = 48.dp))
         }
+    }
+}
+
+@Composable private fun PortableControlBar(
+    program: String, changeProgram: (String) -> Unit, controller: PortableController,
+    search: String, changeSearch: (String) -> Unit, band: String, changeBand: (String) -> Unit,
+    mode: String, changeMode: (String) -> Unit, newOnly: Boolean, changeNew: (Boolean) -> Unit,
+    sort: PortableSort, changeSort: (PortableSort) -> Unit,
+) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        ProgrammeSelector(program, changeProgram, controller, Modifier)
+        Spacer(Modifier.width(8.dp))
+        OutlinedTextField(search, changeSearch, label = { Text("Call / park / summit") },
+            leadingIcon = { Icon(Icons.Outlined.Search, null) }, singleLine = true, modifier = Modifier.width(280.dp))
+        Box(Modifier.width(125.dp)) { PortableChoice("Band", band, listOf("ALL", "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"), changeBand) }
+        Box(Modifier.width(135.dp)) { PortableChoice("Mode", mode, listOf("ALL", "CW", "SSB", "FT8", "FT4", "RTTY", "DIGITAL", "FM", "AM"), changeMode) }
+        Box(Modifier.width(175.dp)) { PortableChoice("Sort", sort.label, PortableSort.entries.map(PortableSort::label)) {
+            changeSort(PortableSort.entries.first { item -> item.label == it })
+        } }
+        FilterChip(newOnly, { changeNew(!newOnly) }, { Text("New") }, modifier = Modifier.heightIn(min = 48.dp))
     }
 }
 
@@ -188,13 +229,46 @@ internal fun PortableChaseScreen(
     intelligenceNeeds: Map<String, List<String>>, modifier: Modifier) {
     if (rows.isEmpty()) Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No matching active portable activity", color = PortableMuted) }
     else LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(5.dp), contentPadding = PaddingValues(bottom = 8.dp)) { items(rows, key = { it.spot.id }) { row -> val spot = row.spot; val selected = selectedId == spot.id
-        Row(Modifier.fillMaxWidth().background(if (selected) PortableAmber.copy(alpha = .13f) else PortablePanel, RoundedCornerShape(8.dp)).border(1.dp, if (selected) PortableAmber else PortableRaised, RoundedCornerShape(8.dp)).clickable { select(spot.id) }.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text(spot.callsign, color = PortableInk, fontWeight = FontWeight.Black, fontSize = 18.sp); Text("${portableMHz(spot.frequencyHz)} · ${spot.mode}", color = PortableAmber, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) }
-                Text(spot.references.joinToString("  ") { "${it.program.label} ${it.code}" }, color = PortableInk, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(listOf(spot.primary.name.ifBlank { "Name unavailable" }, portableAge(spot.spottedAt), row.distanceKm?.let { "%.0f km · %03d°".format(it, row.bearingDegrees ?: 0) }).filterNotNull().joinToString(" · "), color = PortableMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) { (intelligenceNeeds[spot.id].orEmpty() + row.worked.flatMap { (p, w) -> w.labels(p) } + row.reasons.map(String::uppercase)).distinct().take(4).forEach { SuggestionChip({}, { Text(it, fontSize = 9.sp) }) } }
-            }; Icon(Icons.Outlined.ChevronRight, null, tint = PortableMuted)
+        Column(Modifier.fillMaxWidth().background(if (selected) PortableAmber.copy(alpha = .13f) else PortablePanel, RoundedCornerShape(8.dp))
+            .border(1.dp, if (selected) PortableAmber else PortableRaised, RoundedCornerShape(8.dp))
+            .clickable { select(spot.id) }.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            val tags = (spot.programs.map(PortableProgram::label) + intelligenceNeeds[spot.id].orEmpty() +
+                row.worked.flatMap { (programme, worked) -> worked.labels(programme) } + row.reasons.map(String::uppercase)).distinct().take(4)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(spot.callsign, color = PortableInk, fontWeight = FontWeight.Black, fontSize = 20.sp)
+                Row(Modifier.weight(1f), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    tags.forEach { tag -> Box(Modifier.padding(horizontal = 2.dp)) { PortableOpportunityTag(tag) } }
+                }
+                Icon(Icons.Outlined.ChevronRight, null, tint = PortableMuted)
+            }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(spot.references.joinToString("  ") { "${it.program.label} ${it.code} · ${it.name.ifBlank { "Name unavailable" }}" }, color = PortableInk,
+                    fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${portableMHz(spot.frequencyHz)} MHz · ${spot.mode}", color = PortableAmber, fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold)
+            }
+            Text(listOf(portableAge(spot.spottedAt),
+                row.distanceKm?.let { "%.0f km · %03d°".format(it, row.bearingDegrees ?: 0) }).filterNotNull().joinToString(" · "),
+                color = PortableMuted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     } }
+}
+
+@Composable private fun PortableOpportunityTag(label: String) {
+    val color = when {
+        label == "POTA" || label.contains("PARK") -> PortableHealthy
+        label == "SOTA" || label.contains("SUMMIT") -> PortableBlue
+        label == "WWFF" || label.contains("REFERENCE") -> PortableViolet
+        label.contains("FRESH") -> PortableAmber
+        label.contains("BAND") -> PortableBlue
+        label.contains("MODE") -> PortableViolet
+        label.contains("WORKED") -> PortableMuted
+        else -> PortableAmber
+    }
+    Surface(color = color.copy(alpha = .16f), shape = RoundedCornerShape(5.dp), border = BorderStroke(1.dp, color.copy(alpha = .55f))) {
+        Text(label.lowercase().replaceFirstChar(Char::uppercase), color = color, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp), maxLines = 1)
+    }
 }
 
 @Composable private fun PortableDetail(row: PortableOpportunity?, radio: RadioState, tune: (PortableOpportunity) -> Unit, tuneLog: (PortableOpportunity) -> Unit,
@@ -219,14 +293,14 @@ internal fun PortableChaseScreen(
 }
 
 @Composable private fun SotaPlaces(catalogue: SotaCatalogue, stationGrid: String, modifier: Modifier) {
-    val context = LocalContext.current; var query by rememberSaveable { mutableStateOf("") }; var association by rememberSaveable { mutableStateOf("") }; var region by rememberSaveable { mutableStateOf("") }; var grid by rememberSaveable { mutableStateOf(stationGrid) }; var nearby by rememberSaveable { mutableStateOf(false) }
+    val context = LocalContext.current; val inAppBrowser = LocalInAppBrowserState.current; var query by rememberSaveable { mutableStateOf("") }; var association by rememberSaveable { mutableStateOf("") }; var region by rememberSaveable { mutableStateOf("") }; var grid by rememberSaveable { mutableStateOf(stationGrid) }; var nearby by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(query, association, region, grid, nearby, catalogue.metadata.ready) { delay(180); catalogue.search(query, association, region, grid, nearby) }
     Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) { Surface(color = PortablePanel, shape = RoundedCornerShape(10.dp), border = androidx.compose.foundation.BorderStroke(1.dp, PortableRaised)) { Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Column { Text(if (catalogue.metadata.ready) "SOTA SUMMIT DATABASE ${if (catalogue.metadata.stale) "STALE" else "READY"}" else "DOWNLOAD OFFICIAL SOTA SUMMITS", color = PortableAmber, fontWeight = FontWeight.Black); Text(if (catalogue.metadata.ready) "${catalogue.metadata.rowCount} summits · offline search available" else "Explicit, staged app-private import from SOTA", color = PortableMuted) }; if (catalogue.busy) OutlinedButton(catalogue::cancelUpdate) { Text("Cancel") } else Button(catalogue::update) { Text(if (catalogue.metadata.ready) "Update now" else "Download") } }; if (catalogue.busy) LinearProgressIndicator({ catalogue.progress / 100f }, Modifier.fillMaxWidth()); if (catalogue.metadata.failure.isNotBlank()) Text(catalogue.metadata.failure, color = PortableAmber); Text("Summit data © Summits on the Air. RigWeave is independent.", color = PortableMuted, fontSize = 11.sp) } }
-        if (catalogue.metadata.ready) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) { OutlinedTextField(query, { query = it.uppercase() }, label = { Text("Reference or summit") }, modifier = Modifier.weight(2f), singleLine = true); OutlinedTextField(association, { association = it }, label = { Text("Association") }, modifier = Modifier.weight(1f), singleLine = true); OutlinedTextField(region, { region = it }, label = { Text("Region") }, modifier = Modifier.weight(1f), singleLine = true); OutlinedTextField(grid, { grid = it.uppercase().take(8) }, label = { Text("Station / manual grid") }, modifier = Modifier.width(160.dp), singleLine = true); FilterChip(nearby, { nearby = !nearby }, { Text("Nearby") }, leadingIcon = { Icon(Icons.Outlined.NearMe, null) }) }; LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(catalogue.results, key = SotaSummit::code) { summit -> Row(Modifier.fillMaxWidth().background(PortablePanel, RoundedCornerShape(8.dp)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("${summit.code} · ${summit.name}", color = PortableInk, fontWeight = FontWeight.Bold); Text(listOf(summit.association, summit.region, summit.altitudeM?.let { "$it m" }, summit.points?.let { "$it points" }, summit.distanceKm?.let { "%.1f km · %03d°".format(it, summit.bearingDegrees ?: 0) }, if (summit.active) "VALID" else "RETIRED").filterNotNull().filter(String::isNotBlank).joinToString(" · "), color = PortableMuted) }; IconButton({ context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.sotadata.org.uk/en/summit/${summit.code}"))) }) { Icon(Icons.Outlined.OpenInNew, "Open official SOTA summit page") } } } } }
+        if (catalogue.metadata.ready) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) { OutlinedTextField(query, { query = it.uppercase() }, label = { Text("Reference or summit") }, modifier = Modifier.weight(2f), singleLine = true); OutlinedTextField(association, { association = it }, label = { Text("Association") }, modifier = Modifier.weight(1f), singleLine = true); OutlinedTextField(region, { region = it }, label = { Text("Region") }, modifier = Modifier.weight(1f), singleLine = true); OutlinedTextField(grid, { grid = it.uppercase().take(8) }, label = { Text("Station / manual grid") }, modifier = Modifier.width(160.dp), singleLine = true); FilterChip(nearby, { nearby = !nearby }, { Text("Nearby") }, leadingIcon = { Icon(Icons.Outlined.NearMe, null) }) }; LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(catalogue.results, key = SotaSummit::code) { summit -> Row(Modifier.fillMaxWidth().background(PortablePanel, RoundedCornerShape(8.dp)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("${summit.code} · ${summit.name}", color = PortableInk, fontWeight = FontWeight.Bold); Text(listOf(summit.association, summit.region, summit.altitudeM?.let { "$it m" }, summit.points?.let { "$it points" }, summit.distanceKm?.let { "%.1f km · %03d°".format(it, summit.bearingDegrees ?: 0) }, if (summit.active) "VALID" else "RETIRED").filterNotNull().filter(String::isNotBlank).joinToString(" · "), color = PortableMuted) }; IconButton({ inAppBrowser?.open("https://www.sotadata.org.uk/en/summit/${summit.code}") }) { Icon(Icons.Outlined.OpenInNew, "Open official SOTA summit page") } } } } }
     }
 }
 
-@Composable private fun WwffPlaces(controller: PortableController, modifier: Modifier) { val context = LocalContext.current; var query by rememberSaveable { mutableStateOf("") }; val rows = remember(controller.wwffSpots, query) { controller.recentWwff(query) }; Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) { Surface(color = PortablePanel, shape = RoundedCornerShape(10.dp), border = androidx.compose.foundation.BorderStroke(1.dp, PortableRaised)) { Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) { Text("WWFF LIVE-CACHE PLACES", color = PortableAmber, fontWeight = FontWeight.Black); Text("Search covers only recently seen Spotline references. The full WWFF Directory is not stored because programme permission is required.", color = PortableMuted); Button({ context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://wwff.co/directory/"))) }) { Icon(Icons.Outlined.OpenInNew, null); Spacer(Modifier.width(6.dp)); Text("Open official WWFF Directory") } } }; OutlinedTextField(query, { query = it.uppercase() }, label = { Text("Recent reference or name") }, leadingIcon = { Icon(Icons.Outlined.Search, null) }, modifier = Modifier.fillMaxWidth(), singleLine = true); LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(rows, key = PortableReference::code) { ref -> Row(Modifier.fillMaxWidth().background(PortablePanel, RoundedCornerShape(8.dp)).padding(10.dp)) { Column { Text("${ref.code} · ${ref.name.ifBlank { "Name unavailable" }}", color = PortableInk, fontWeight = FontWeight.Bold); if (ref.activeAgenda.isNotBlank()) Text("ACTIVE AGENDA · ${ref.activeAgenda}", color = PortableMuted) } } } } } }
+@Composable private fun WwffPlaces(controller: PortableController, modifier: Modifier) { val inAppBrowser = LocalInAppBrowserState.current; var query by rememberSaveable { mutableStateOf("") }; val rows = remember(controller.wwffSpots, query) { controller.recentWwff(query) }; Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) { Surface(color = PortablePanel, shape = RoundedCornerShape(10.dp), border = androidx.compose.foundation.BorderStroke(1.dp, PortableRaised)) { Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) { Text("WWFF LIVE-CACHE PLACES", color = PortableAmber, fontWeight = FontWeight.Black); Text("Search covers only recently seen Spotline references. The full WWFF Directory is not stored because programme permission is required.", color = PortableMuted); Button({ inAppBrowser?.open("https://wwff.co/directory/") }) { Icon(Icons.Outlined.OpenInNew, null); Spacer(Modifier.width(6.dp)); Text("Open official WWFF Directory") } } }; OutlinedTextField(query, { query = it.uppercase() }, label = { Text("Recent reference or name") }, leadingIcon = { Icon(Icons.Outlined.Search, null) }, modifier = Modifier.fillMaxWidth(), singleLine = true); LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(rows, key = PortableReference::code) { ref -> Row(Modifier.fillMaxWidth().background(PortablePanel, RoundedCornerShape(8.dp)).padding(10.dp)) { Column { Text("${ref.code} · ${ref.name.ifBlank { "Name unavailable" }}", color = PortableInk, fontWeight = FontWeight.Bold); if (ref.activeAgenda.isNotBlank()) Text("ACTIVE AGENDA · ${ref.activeAgenda}", color = PortableMuted) } } } } } }
 
 @Composable private fun PortableMap(rows: List<PortableOpportunity>, selectedId: String?, select: (String) -> Unit, modifier: Modifier) {
     val valid = rows.filter { it.spot.latitude != null && it.spot.longitude != null }
@@ -242,9 +316,18 @@ internal fun PortableChaseScreen(
 }
 
 @Composable private fun PortableNativeMap(rows: List<PortableOpportunity>, selectedId: String?, select: (String) -> Unit, modifier: Modifier) {
-    val context = LocalContext.current; val lifecycle = LocalLifecycleOwner.current.lifecycle; val currentRows by rememberUpdatedState(rows); val currentSelect by rememberUpdatedState(select); val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null) } }; var map by remember { mutableStateOf<MapLibreMap?>(null) }; var styleReady by remember { mutableStateOf(false) }; var userMoved by remember { mutableStateOf(false) }
-    DisposableEffect(mapView, lifecycle) { val observer = LifecycleEventObserver { _, event -> when (event) { Lifecycle.Event.ON_START -> mapView.onStart(); Lifecycle.Event.ON_RESUME -> mapView.onResume(); Lifecycle.Event.ON_PAUSE -> mapView.onPause(); Lifecycle.Event.ON_STOP -> mapView.onStop(); else -> Unit } }; lifecycle.addObserver(observer); mapView.getMapAsync { ready -> map = ready; ready.uiSettings.isAttributionEnabled = true; ready.uiSettings.isLogoEnabled = true; ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { styleReady = true }; ready.addOnCameraMoveStartedListener { reason -> if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }; ready.setOnMarkerClickListener { marker -> currentRows.firstOrNull { marker.title.startsWith(it.spot.id + "|") }?.let { currentSelect(it.spot.id) }; false } }; onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null } }
-    val markerHash = rows.joinToString { it.spot.id }; LaunchedEffect(map, styleReady, markerHash, selectedId) { val ready = map ?: return@LaunchedEffect; if (!styleReady) return@LaunchedEffect; ready.clear(); rows.groupBy { "${floor(it.spot.latitude!! / 3)}:${floor(it.spot.longitude!! / 3)}" }.values.forEach { group -> val chosen = group.firstOrNull { it.spot.id == selectedId } ?: group.first(); val color = when { chosen.spot.id == selectedId -> android.graphics.Color.rgb(233, 167, 43); chosen.spot.programs.size > 1 -> android.graphics.Color.rgb(244, 201, 78); chosen.spot.programs.contains(PortableProgram.POTA) -> android.graphics.Color.rgb(66, 199, 123); chosen.spot.programs.contains(PortableProgram.SOTA) -> android.graphics.Color.rgb(101, 166, 199); else -> android.graphics.Color.rgb(196, 129, 216) }; ready.addMarker(MarkerOptions().position(LatLng(group.map { it.spot.latitude!! }.average(), group.map { it.spot.longitude!! }.average())).title(chosen.spot.id + "|" + if (group.size > 1) "${group.size} portable activities" else "${chosen.spot.callsign} · ${chosen.spot.references.joinToString { it.code }}").snippet(chosen.spot.primary.name).icon(portableMarker(context, color, group.size > 1))) } }
+    val context = LocalContext.current; val lifecycle = LocalLifecycleOwner.current.lifecycle; val currentSelect by rememberUpdatedState(select); val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null) } }; val markerSelections = remember { mutableMapOf<Long, String>() }; var map by remember { mutableStateOf<MapLibreMap?>(null) }; var styleReady by remember { mutableStateOf(false) }; var userMoved by remember { mutableStateOf(false) }
+    DisposableEffect(mapView, lifecycle) { val observer = LifecycleEventObserver { _, event -> when (event) { Lifecycle.Event.ON_START -> mapView.onStart(); Lifecycle.Event.ON_RESUME -> mapView.onResume(); Lifecycle.Event.ON_PAUSE -> mapView.onPause(); Lifecycle.Event.ON_STOP -> mapView.onStop(); else -> Unit } }; lifecycle.addObserver(observer); mapView.getMapAsync { ready -> map = ready; ready.uiSettings.isAttributionEnabled = true; ready.uiSettings.isLogoEnabled = true; ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { styleReady = true }; ready.addOnCameraMoveStartedListener { reason -> if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }; ready.setOnMarkerClickListener { marker -> markerSelections[marker.id]?.let(currentSelect); false } }; onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null } }
+    val markerHash = rows.joinToString { it.spot.id }; LaunchedEffect(map, styleReady, markerHash, selectedId) { val ready = map ?: return@LaunchedEffect; if (!styleReady) return@LaunchedEffect; ready.clear(); markerSelections.clear(); rows.groupBy { "${floor(it.spot.latitude!! / 3)}:${floor(it.spot.longitude!! / 3)}" }.values.forEach { group -> val chosen = group.firstOrNull { it.spot.id == selectedId } ?: group.first(); val isSelected = chosen.spot.id == selectedId; val color = when { isSelected -> android.graphics.Color.rgb(233, 167, 43); chosen.spot.programs.size > 1 -> android.graphics.Color.rgb(244, 201, 78); chosen.spot.programs.contains(PortableProgram.POTA) -> android.graphics.Color.rgb(66, 199, 123); chosen.spot.programs.contains(PortableProgram.SOTA) -> android.graphics.Color.rgb(101, 166, 199); else -> android.graphics.Color.rgb(196, 129, 216) }; val title = if (isSelected || group.size == 1) chosen.spot.callsign else "${group.size} portable activities"; val place = chosen.spot.references.joinToString(" · ") { "${it.program.label} ${it.code} · ${it.name.ifBlank { "Name unavailable" }}" }; val marker = ready.addMarker(MarkerOptions().position(LatLng(group.map { it.spot.latitude!! }.average(), group.map { it.spot.longitude!! }.average())).title(title).snippet(place).icon(portableMarker(context, color, group.size > 1))); markerSelections[marker.id] = chosen.spot.id; if (isSelected) marker.showInfoWindow(ready, mapView) } }
+    LaunchedEffect(map, styleReady, selectedId) {
+        val ready = map ?: return@LaunchedEffect
+        if (!styleReady) return@LaunchedEffect
+        val selected = rows.firstOrNull { it.spot.id == selectedId } ?: return@LaunchedEffect
+        val latitude = selected.spot.latitude ?: return@LaunchedEffect
+        val longitude = selected.spot.longitude ?: return@LaunchedEffect
+        userMoved = false
+        ready.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(latitude, longitude), 8.0), 450)
+    }
     LaunchedEffect(map, styleReady, markerHash) { val ready = map ?: return@LaunchedEffect; if (!styleReady || rows.isEmpty() || userMoved) return@LaunchedEffect; if (rows.size == 1) ready.cameraPosition = CameraPosition.Builder().target(LatLng(rows[0].spot.latitude!!, rows[0].spot.longitude!!)).zoom(6.0).build() else runCatching { val bounds = LatLngBounds.Builder().also { b -> rows.forEach { b.include(LatLng(it.spot.latitude!!, it.spot.longitude!!)) } }.build(); ready.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, 70), 500) } }; AndroidView({ mapView }, modifier)
 }
 
