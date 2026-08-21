@@ -26,6 +26,17 @@ class QsoDatabaseInstrumentedTest {
         context.deleteDatabase(databaseName)
     }
 
+    @Test fun opensDatabaseWithRuntimePragmasConfigured() {
+        database.readableDatabase.rawQuery("PRAGMA busy_timeout", null).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.getInt(0) > 0)
+        }
+        database.readableDatabase.rawQuery("PRAGMA synchronous", null).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1, cursor.getInt(0))
+        }
+    }
+
     @Test fun savesCompleteQsoAndRoundTripsAdifWithoutDuplicates() {
         val qso = Qso(
             id = "instrumented-qso", callsign = "VK0TEST", frequencyHz = 14_200_000, mode = "USB",
@@ -214,6 +225,20 @@ class QsoDatabaseInstrumentedTest {
         assertEquals("504", insight.record.dxcc)
     }
 
+    @Test fun bandHistoryUsesCompactStationScopedProjectionAggregate() {
+        val now = 1_700_000_000L
+        assertTrue(database.save(Qso(id = "history-aggregate-1", callsign = "VK8AAA", frequencyHz = 14_074_000,
+            mode = "FT8", rstSent = "-10", rstReceived = "-12", createdAt = now - 86_400,
+            band = "20m", stationCallsign = "OM0RX", lotwReceived = "Y")))
+        assertTrue(database.save(Qso(id = "history-aggregate-2", callsign = "VK8BBB", frequencyHz = 14_074_000,
+            mode = "FT8", rstSent = "-08", rstReceived = "-09", createdAt = now - 7 * 86_400,
+            band = "20m", stationCallsign = "OM0RX")))
+        val row = LogIntelligenceRepository(database).bandHistory(null, "OM0RX", now)
+            .single { it.band == "20M" && it.modeFamily == "DIGITAL" }
+        assertEquals(2, row.qsoCount); assertEquals(2, row.uniqueCalls); assertEquals(1, row.confirmedCount)
+        assertTrue(row.comparableWindowCount in 0..row.qsoCount)
+    }
+
     @Test fun deliveryRowsRoundTripIndependentlyAndAcceptanceTouchesOnlyMatchingFlag() {
         val qso = Qso(id = "delivery-qso", callsign = "VK8ABC", frequencyHz = 14_200_000, mode = "SSB",
             rstSent = "59", rstReceived = "59", createdAt = 1_700_000_000, stationCallsign = "OM0RX",
@@ -283,6 +308,30 @@ class QsoDatabaseInstrumentedTest {
         assertEquals("VK8OLD", database.qso("legacy")?.callsign)
         assertTrue(database.enqueueDelivery("legacy", SyncProvider.EQSL))
         assertEquals(DeliveryState.QUEUED, database.deliveries().single().state)
+    }
+
+    @Test fun nativeWavelogStatePersistsUnknownAdifAndAtomicOutbox() {
+        val binding = WavelogBinding(
+            baseUrl = "https://example.invalid/index.php", credentialAlias = "wavelog-v2",
+            apiGeneration = WavelogApiGeneration.V2,
+            capabilities = WavelogCapabilities(setOf("qso:read", "qso:write"), true, true),
+            remoteStationId = "11",
+        )
+        val store = WavelogSyncStore(database)
+        store.saveBinding(binding)
+        val qso = Qso(id = "native-sync", callsign = "OM0RX", frequencyHz = 14_060_000, mode = "CW",
+            rstSent = "599", rstReceived = "599", createdAt = 1_700_000_300,
+            extraAdifFields = mapOf("APP_VENDOR_PRIVATE" to "preserved"))
+
+        assertTrue(QsoMutationCoordinator(database, store).save(qso))
+        assertEquals(binding.id, store.activeBinding()?.id)
+        assertEquals(WavelogOperation.CREATE, store.pending(binding.id).single().operation)
+        assertTrue(database.exportADIF().contains("<APP_VENDOR_PRIVATE:9>preserved"))
+
+        database.close()
+        database = QsoDatabase(context, databaseName)
+        assertEquals("preserved", database.qso(qso.id)?.extraAdifFields?.get("APP_VENDOR_PRIVATE"))
+        assertEquals(1, WavelogSyncStore(database).pending(binding.id).size)
     }
 
     companion object { private const val databaseName = "rigweave-instrumented.sqlite" }

@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/ITU-R-Study-Group-3/ITU-R-HF",
+  "tag": "v14.3",
+  "commit": "cd172be56dc04b154e5d2fa91cbaa6ecf5284305",
+  "tree": "b4f8f1ed9b31f1e3adc64793bfde831afaefecd6",
+  "source_inventory_sha256": "11cf23fdab4463b13578ea5acda87216ac32dff8746d6818db9273ed78073bfc",
+  "data_inventory_sha256": "696d68edf43976aff555caa284a01f4798f543027dc0c2eb7f9915f94e4f914f",
+  "candidate_installed_bytes": 564856257,
+  "candidate_gzip_bytes": 383264044,
+  "vendored_files": [],
+  "status": "LICENSE_BLOCKED",
+  "reason": "Upstream headers prohibit reproduction without written ITU permission; no unambiguous redistribution grant was found."
+}
+

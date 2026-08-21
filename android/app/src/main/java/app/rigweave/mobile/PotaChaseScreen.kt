@@ -283,7 +283,7 @@ internal fun PotaChaseScreen(
     Box(modifier.fillMaxSize().background(Color(0xFF06151C), RoundedCornerShape(10.dp)).border(1.dp, PotaRaised, RoundedCornerShape(10.dp))) {
         if (valid.isNotEmpty()) PotaNativeMap(valid, selectedId, select, Modifier.fillMaxSize())
         else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No filtered spots have coordinates", color = PotaMuted) }
-        Surface(color = Color(0xE6192228), shape = RoundedCornerShape(5.dp), modifier = Modifier.align(Alignment.TopStart).padding(8.dp)) { Text("${valid.size} mapped · ${rows.size - valid.size} without coordinates\n© CARTO · © OpenStreetMap contributors", color = PotaMuted, fontSize = 10.sp, modifier = Modifier.padding(6.dp)) }
+        Surface(color = Color(0xE6192228), shape = RoundedCornerShape(5.dp), modifier = Modifier.align(Alignment.TopStart).padding(8.dp)) { Text("${valid.size} mapped · ${rows.size - valid.size} without coordinates\nOpenFreeMap © OpenMapTiles · OpenStreetMap", color = PotaMuted, fontSize = 10.sp, modifier = Modifier.padding(6.dp)) }
     }
 }
 
@@ -295,7 +295,7 @@ internal fun PotaChaseScreen(
     DisposableEffect(mapView, lifecycle) {
         val observer = LifecycleEventObserver { _, event -> when (event) { Lifecycle.Event.ON_START -> mapView.onStart(); Lifecycle.Event.ON_RESUME -> mapView.onResume(); Lifecycle.Event.ON_PAUSE -> mapView.onPause(); Lifecycle.Event.ON_STOP -> mapView.onStop(); else -> Unit } }
         lifecycle.addObserver(observer); if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) mapView.onStart(); if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) mapView.onResume()
-        mapView.getMapAsync { ready -> map = ready; ready.uiSettings.isAttributionEnabled = false; ready.uiSettings.isLogoEnabled = false; ready.setStyle(Style.Builder().fromJson(potaMapStyle())) { styleReady = true }; ready.setOnMarkerClickListener { marker -> currentRows.firstOrNull { marker.title.startsWith(it.spot.id + "|") }?.let { currentSelect(it.spot.id) }; false } }
+        mapView.getMapAsync { ready -> map = ready; ready.uiSettings.isAttributionEnabled = true; ready.uiSettings.isLogoEnabled = true; ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { styleReady = true }; ready.setOnMarkerClickListener { marker -> currentRows.firstOrNull { marker.title.startsWith(it.spot.id + "|") }?.let { currentSelect(it.spot.id) }; false } }
         onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null }
     }
     val markerHash = rows.joinToString { it.spot.id }
@@ -324,7 +324,6 @@ private fun potaMarker(context: Context, color: Int, cluster: Boolean): org.mapl
     return IconFactory.getInstance(context).fromBitmap(bitmap)
 }
 
-private fun potaMapStyle() = """{"version":8,"name":"RigWeave POTA","sources":{"carto":{"type":"raster","tiles":["https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png"],"tileSize":256,"maxzoom":20},"labels":{"type":"raster","tiles":["https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png"],"tileSize":256,"maxzoom":20}},"layers":[{"id":"background","type":"background","paint":{"background-color":"#06151c"}},{"id":"carto","type":"raster","source":"carto"},{"id":"labels","type":"raster","source":"labels"}]}"""
 private fun formatPotaMHz(hz: Long) = if (hz > 0) "%.3f".format(Locale.US, hz / 1_000_000.0) else "—.———"
 private fun ageText(epoch: Long, now: Long): String { if (epoch <= 0) return "never updated"; val seconds = (now - epoch).coerceAtLeast(0); return when { seconds < 60 -> "just now"; seconds < 3600 -> "${seconds / 60}m ago"; seconds < 86_400 -> "${seconds / 3600}h ago"; else -> "${seconds / 86_400}d ago" } }
 private fun parkStatus(meta: PotaParkMetadata) = when { !meta.ready -> "park DB not downloaded"; meta.failure.isNotBlank() -> "park update failed"; meta.stale -> "park DB stale"; meta.updateAvailable -> "park update available"; else -> "${meta.rowCount} parks offline" }

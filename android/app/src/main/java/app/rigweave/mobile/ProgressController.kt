@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -16,6 +17,49 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
+import java.util.Locale
+import app.rigweave.mobile.hamclock.HamClockBandEvidence
+import app.rigweave.mobile.hamclock.HamClockBandHealthPreference
+import app.rigweave.mobile.hamclock.HamClockBandHealthSnapshot
+import app.rigweave.mobile.hamclock.HamClockEvidenceAvailability
+import app.rigweave.mobile.hamclock.computeHamClockBandHealthSnapshot
+
+private const val BAND_HISTORY_CONTRACT = "one-year-comparable-utc-hour-v1"
+
+internal data class BandHistoryCacheKey(
+    val databaseChangeToken: Long,
+    val stationProfileId: String,
+    val stationCallsign: String,
+    val utcHourBucket: Long,
+    val contract: String = BAND_HISTORY_CONTRACT,
+)
+
+internal class BandHistoryCache(private val maximumEntries: Int = 4) {
+    private val rows = object : LinkedHashMap<BandHistoryCacheKey, List<app.rigweave.mobile.hamclock.HamClockBandHistoricalRow>>(8, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<BandHistoryCacheKey, List<app.rigweave.mobile.hamclock.HamClockBandHistoricalRow>>?) =
+            size > maximumEntries.coerceAtLeast(1)
+    }
+
+    fun getOrLoad(
+        key: BandHistoryCacheKey,
+        loader: () -> List<app.rigweave.mobile.hamclock.HamClockBandHistoricalRow>,
+    ): List<app.rigweave.mobile.hamclock.HamClockBandHistoricalRow> {
+        synchronized(rows) { rows[key]?.let { return it } }
+        val loaded = loader()
+        synchronized(rows) { rows[key] = loaded }
+        return loaded
+    }
+
+    internal fun size(): Int = synchronized(rows) { rows.size }
+}
+
+internal class LatestWinsRequestQueue<T> {
+    private var active = false
+    private var pending: T? = null
+    fun submit(value: T): T? = if (active) { pending = value; null } else { active = true; value }
+    fun complete(): T? = pending.also { pending = null; active = it != null }
+    fun isActive(): Boolean = active
+}
 
 internal class ProgressGoalStore(context: Context) {
     private val file = AtomicFile(File(context.filesDir, "progress-goals.json"))
@@ -58,14 +102,66 @@ internal fun decodeProgressGoals(raw: String): List<ProgressGoal> {
 }
 
 internal class ProgressController(context: Context, private val database: QsoDatabase) {
+    private val repository = LogIntelligenceRepository(database)
     val goalStore = ProgressGoalStore(context.applicationContext)
+    private val preferences = context.applicationContext.getSharedPreferences("rigweave-log-intelligence", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var refreshJob: Job? = null
+    private var pendingRefresh: (() -> Unit)? = null
     private var lastKey: Any? = null
+    private var bandHealthJob: Job? = null
+    private val bandHealthQueue = LatestWinsRequestQueue<BandHealthRefreshRequest>()
+    private val bandHistoryCache = BandHistoryCache()
+    private var completedBandHealthKey: Any? = null
+    private var bandHealthGeneration = 0L
     var snapshot by mutableStateOf(ProgressSnapshot()); private set
+    var bandHealthSnapshot by mutableStateOf(HamClockBandHealthSnapshot()); private set
+    var bandHealthMessage by mutableStateOf(""); private set
     var busy by mutableStateOf(false); private set
     var stationProfiles by mutableStateOf<List<String>>(emptyList()); private set
     var stationCallsigns by mutableStateOf<List<String>>(emptyList()); private set
+    var operators by mutableStateOf<List<String>>(emptyList()); private set
+    var submodes by mutableStateOf<List<String>>(emptyList()); private set
+    var filters by mutableStateOf(loadFilters()); private set
+    var selectedAward by mutableStateOf(runCatching {
+        AwardKind.valueOf(preferences.getString("selected_award", AwardKind.DXCC.name).orEmpty())
+    }.getOrDefault(AwardKind.DXCC)); private set
+    var logbookRequest by mutableStateOf<LogbookFilter?>(null); private set
+
+    fun requestLogbook(filter: LogbookFilter) { logbookRequest = filter }
+    fun consumeLogbookRequest() { logbookRequest = null }
+
+    fun updateFilters(value: ProgressFilters) {
+        val applied = value.copy(includeDeleted = false)
+        filters = applied
+        preferences.edit()
+            .putBoolean("all_stations", applied.allStations).putString("station_profile", applied.stationProfileId)
+            .putString("station_callsign", applied.stationCallsign).putString("period", applied.period.name)
+            .putString("band", applied.band).putString("mode", applied.mode.name).putString("submode", applied.submode)
+            .putString("operator", applied.operator).putString("confirmation", applied.confirmationSource)
+            .putString("portable_program", applied.portableProgram).putBoolean("include_conflicted", applied.includeConflicted)
+            .putBoolean("include_deleted", false).apply()
+        lastKey = null
+    }
+
+    fun selectAward(value: AwardKind) {
+        selectedAward = value
+        preferences.edit().putString("selected_award", value.name).apply()
+    }
+
+    private fun loadFilters() = ProgressFilters(
+        allStations = preferences.getBoolean("all_stations", false),
+        stationProfileId = preferences.getString("station_profile", "").orEmpty(),
+        stationCallsign = preferences.getString("station_callsign", "").orEmpty(),
+        period = runCatching { ProgressPeriod.valueOf(preferences.getString("period", ProgressPeriod.ALL.name).orEmpty()) }.getOrDefault(ProgressPeriod.ALL),
+        band = preferences.getString("band", "").orEmpty(),
+        mode = runCatching { ProgressMode.valueOf(preferences.getString("mode", ProgressMode.ALL.name).orEmpty()) }.getOrDefault(ProgressMode.ALL),
+        submode = preferences.getString("submode", "").orEmpty(), operator = preferences.getString("operator", "").orEmpty(),
+        confirmationSource = preferences.getString("confirmation", "").orEmpty(),
+        portableProgram = preferences.getString("portable_program", "").orEmpty(),
+        includeConflicted = preferences.getBoolean("include_conflicted", false),
+        includeDeleted = false,
+    )
 
     fun refresh(
         filters: ProgressFilters,
@@ -76,29 +172,102 @@ internal class ProgressController(context: Context, private val database: QsoDat
         sotaCatalogue: SotaCatalogue,
     ) {
         val key = listOf(database.changeToken(), filters, goalStore.goals, syncAttention, cty.dataRevision,
-            dxSpots.size, dxSpots.maxOfOrNull(AndroidDXSpot::receivedEpoch),
-            portableSpots.size, portableSpots.maxOfOrNull(PortableSpot::spottedAt))
+            progressSpotIdentity(dxSpots, portableSpots))
         if (key == lastKey) return
+        if (refreshJob?.isActive == true) {
+            pendingRefresh = { refresh(filters, dxSpots, portableSpots, syncAttention, cty, sotaCatalogue) }
+            return
+        }
         lastKey = key
-        refreshJob?.cancel()
         refreshJob = scope.launch {
             busy = true
-            val (rows, summits) = withContext(Dispatchers.IO) {
-                val qsos = database.all()
-                val references = qsos.map { normalizeSotaReference(it.sotaRef) }.filter(String::isNotBlank).toSet()
-                qsos to sotaCatalogue.lookup(references)
+            try {
+                val result=withContext(Dispatchers.IO){
+                val built=StabilityDiagnostics.timedQuery("LOG_INTELLIGENCE", filters.hashCode().toUInt().toString(16), "PROJECTION_AGGREGATES", { it.totalQsos }) {
+                    repository.snapshot(filters,goalStore.goals,dxSpots,portableSpots,syncAttention,cty::lookup)
+                }
+                    listOf(repository.stationProfiles(),repository.stationCallsigns(),repository.operators(),repository.submodes()) to built
+                }
+                stationProfiles=result.first[0];stationCallsigns=result.first[1];operators=result.first[2];submodes=result.first[3]
+                snapshot=result.second
+            } finally {
+                busy = false
+                refreshJob = null
+                pendingRefresh.also { pendingRefresh = null }?.invoke()
             }
-            val built = withContext(Dispatchers.Default) {
-                buildProgressSnapshot(rows, filters, goalStore.goals, dxSpots, portableSpots, summits, syncAttention,
-                    ctyLookup = cty::lookup)
-            }
-            stationProfiles = rows.map(Qso::stationProfileId).filter(String::isNotBlank).distinct().sorted()
-            stationCallsigns = rows.map(Qso::stationCallsign).filter(String::isNotBlank).distinctBy(String::uppercase).sorted()
-            snapshot = built
-            busy = false
         }
     }
 
     fun goalsChanged() { lastKey = null }
+
+    fun refreshBandHealth(
+        evidence: List<HamClockBandEvidence>,
+        availability: Map<String, HamClockEvidenceAvailability>,
+        preference: HamClockBandHealthPreference,
+        stationProfileId: String?,
+        stationCall: String,
+        nowEpoch: Long = java.time.Instant.now().epochSecond,
+    ) {
+        val identity = evidence.fold(1L) { value, row -> 31L * value + row.id.hashCode() }
+        val databaseToken = database.changeToken()
+        val key = listOf(databaseToken, identity, availability, preference, stationProfileId, stationCall,
+            nowEpoch / 60L)
+        if (key == completedBandHealthKey && !bandHealthQueue.isActive()) return
+        val request = BandHealthRefreshRequest(key, ++bandHealthGeneration, evidence, availability, preference,
+            stationProfileId, stationCall, nowEpoch, BandHistoryCacheKey(databaseToken,
+                stationProfileId.orEmpty(), stationCall.trim().uppercase(Locale.US), nowEpoch / 3_600L))
+        bandHealthQueue.submit(request)?.let(::startBandHealthRefresh)
+    }
+
+    private fun startBandHealthRefresh(request: BandHealthRefreshRequest) {
+        bandHealthJob = scope.launch {
+            try {
+                val built = withContext(Dispatchers.IO) {
+                    val historical = bandHistoryCache.getOrLoad(request.historyKey) {
+                        repository.bandHistory(request.stationProfileId, request.stationCall, request.nowEpoch)
+                    }
+                    computeHamClockBandHealthSnapshot(request.evidence, request.availability, request.preference,
+                        historical, request.nowEpoch)
+                }
+                if (request.generation == bandHealthGeneration) {
+                    bandHealthSnapshot = built
+                    bandHealthMessage = ""
+                    completedBandHealthKey = request.key
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (request.generation == bandHealthGeneration) {
+                    bandHealthMessage = error.message.orEmpty()
+                        .replace(Regex("https?://\\S+|(?i)(token|key|password)=[^\\s]+"), "[redacted]")
+                        .take(160).ifBlank { "Band Health refresh unavailable; retry remains enabled" }
+                    bandHealthSnapshot = bandHealthSnapshot.copy(message = bandHealthMessage)
+                }
+            } finally {
+                bandHealthJob = null
+                bandHealthQueue.complete()?.let(::startBandHealthRefresh)
+            }
+        }
+    }
+
+    private data class BandHealthRefreshRequest(
+        val key: Any,
+        val generation: Long,
+        val evidence: List<HamClockBandEvidence>,
+        val availability: Map<String, HamClockEvidenceAvailability>,
+        val preference: HamClockBandHealthPreference,
+        val stationProfileId: String?,
+        val stationCall: String,
+        val nowEpoch: Long,
+        val historyKey: BandHistoryCacheKey,
+    )
     fun close() = scope.cancel()
+}
+
+internal fun progressSpotIdentity(dx: List<AndroidDXSpot>, portable: List<PortableSpot>): Long {
+    var hash = -0x340d631b7bdddcdbL
+    fun add(value: Any?) { value.toString().forEach { hash = (hash xor it.code.toLong()) * 0x100000001b3L }; hash = (hash xor 0xff) * 0x100000001b3L }
+    dx.sortedBy(AndroidDXSpot::id).forEach { add(it.id);add(it.callsign);add(it.frequencyHz);add(it.mode);add(it.band);add(it.receivedEpoch);add(it.score) }
+    portable.sortedBy(PortableSpot::id).forEach { row -> add(row.id);add(row.callsign);add(row.frequencyHz);add(row.mode);add(row.spottedAt);add(row.expiresAt);row.references.sortedBy { it.program.name+it.code }.forEach { add(it.program);add(it.code) } }
+    return hash
 }

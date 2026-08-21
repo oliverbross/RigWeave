@@ -26,13 +26,13 @@ class HamClockSettingsStoreTest {
             map = HamClockMapPreference(HamClockBasemap.SATELLITE, false, -33.865, 151.209, 5.75, layers),
             cluster = HamClockClusterPreference(false, 45, 20, 333,
                 HamClockSpotFilter(setOf("20m", "6m"), setOf("FT8", "CW"), setOf("EU", "OC"), "vk9", -18)),
-            pskReporter = HamClockPskPreference(true, HamClockPskDirection.HEARD, 120, 90, 444,
+            pskReporter = HamClockPskPreference(true, HamClockPskDirection.BEING_HEARD, 120, 300, 444,
                 HamClockSpotFilter(setOf("40m"), setOf("FT4"), setOf("NA"), "n0call", -22)),
             portable = HamClockPortablePreference(setOf("POTA", "SOTA"), 60, 321, true, true),
             satellites = HamClockSatellitePreference(setOf(25544, 43017), 48, 20, false, true, true),
             dxTarget = HamClockDxTarget("vk9xy", "QF56ab", -31.0, 159.0, true),
             display = HamClockDisplayPreference(HamClockDensity.LARGE_TOUCH, HamClockTimeZoneMode.UTC,
-                HamClockHourFormat.H12, HamClockUnitSystem.IMPERIAL, true),
+                HamClockHourFormat.H12, HamClockUnitSystem.IMPERIAL, true, true),
         )
         val document = HamClockSettingsDocument(settings = settings, activeProfileId = "travel", profiles = listOf(
             HamClockNamedProfile("travel", "Travel", settings, 100, 200)
@@ -65,6 +65,24 @@ class HamClockSettingsStoreTest {
         reloaded.deleteProfile("field-day")
         assertTrue(reloaded.profiles().isEmpty())
         assertNull(reloaded.snapshot().activeProfileId)
+    }
+
+    @Test
+    fun resetAndClearOperationsArePersisted() {
+        val store = HamClockSettingsStore(FakePersistence(), Clock.systemUTC(), { "profile" })
+        val solar = store.settings().panels.first { it.id == HamClockPanelId.SOLAR }
+        store.setPanel(solar.copy(visible = false, rowSpan = 4))
+        store.saveProfile("Changed")
+        store.clearActiveProfile()
+        assertNull(store.snapshot().activeProfileId)
+        assertFalse(store.settings().panels.first { it.id == HamClockPanelId.SOLAR }.visible)
+
+        store.resetPanel(HamClockPanelId.SOLAR)
+        assertEquals(defaultHamClockPanels().first { it.id == HamClockPanelId.SOLAR },
+            store.settings().panels.first { it.id == HamClockPanelId.SOLAR })
+        store.setPanel(HamClockPanelPreference("future.panel"))
+        store.resetPanel("future.panel")
+        assertFalse(store.settings().panels.any { it.id == "future.panel" })
     }
 
     @Test
@@ -112,7 +130,8 @@ class HamClockSettingsStoreTest {
         val normalized = HamClockSettingsCodec.normalizeSettings(custom)
 
         assertTrue(normalized.panels.any { it.id == "future.panel" })
-        assertEquals(7, normalized.panels.first { it.id == "future.panel" }.column)
+        assertEquals(2, normalized.panels.first { it.id == "future.panel" }.column)
+        assertEquals(3, normalized.panels.first { it.id == "future.panel" }.columnSpan)
         assertTrue(normalized.map.layers.any { it.id == "future.layer" })
         assertEquals(1f, normalized.map.layers.first { it.id == "future.layer" }.opacity)
         assertEquals(90.0, normalized.map.centerLatitude, 0.0)
@@ -158,6 +177,39 @@ class HamClockSettingsStoreTest {
         assertEquals(2, settings.panels.first { it.id == HamClockPanelId.SOLAR }.column)
         assertEquals(2, settings.panels.first { it.id == HamClockPanelId.DX_TARGET }.column)
         assertEquals(2, settings.panels.first { it.id == HamClockPanelId.VOACAP }.column)
+    }
+
+    @Test
+    fun knownPanelsNormalizeToRegistryLayoutCapabilities() {
+        val malformed = HamClockUserSettings(panels = listOf(
+            HamClockPanelPreference(HamClockPanelId.MAP, column = 7, columnSpan = 8, rowSpan = 99, collapsed = true),
+            HamClockPanelPreference(HamClockPanelId.STATION, column = 1, columnSpan = 7, collapsed = true),
+        ))
+        val normalized = HamClockSettingsCodec.normalizeSettings(malformed)
+        val map = normalized.panels.first { it.id == HamClockPanelId.MAP }
+        val station = normalized.panels.first { it.id == HamClockPanelId.STATION }
+        assertEquals(1, map.column)
+        assertEquals(2, map.columnSpan)
+        assertEquals(4, map.rowSpan)
+        assertFalse(map.collapsed)
+        assertTrue(station.column in hamClockModuleSpec(HamClockPanelId.STATION)!!.allowedColumns)
+        assertEquals(1, station.columnSpan)
+    }
+
+    @Test
+    fun hiddenMapSurvivesProfileApplyExportAndImport() {
+        val persistence = FakePersistence()
+        val store = HamClockSettingsStore(persistence, Clock.systemUTC(), { "hidden-map" })
+        val map = store.settings().panels.first { it.id == HamClockPanelId.MAP }
+        store.setPanel(map.copy(visible = false))
+        store.saveProfile("No map")
+        store.setPanel(map.copy(visible = true))
+        store.applyProfile("hidden-map")
+        assertFalse(store.settings().panels.first { it.id == HamClockPanelId.MAP }.visible)
+
+        val imported = HamClockSettingsStore(FakePersistence(), Clock.systemUTC(), { "unused" })
+        imported.importJson(store.exportJson(true))
+        assertFalse(imported.settings().panels.first { it.id == HamClockPanelId.MAP }.visible)
     }
 
     private class FakePersistence(

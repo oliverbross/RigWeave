@@ -72,13 +72,15 @@ internal fun PotaActivationStrip(controller: PotaActivationController, radio: Ra
 
 @Composable
 internal fun PotaActivateScreen(controller: PotaActivationController, pota: PotaController, radio: RadioState,
-    app: AppController, database: QsoDatabase, wavelog: WavelogController, callbook: CallbookController, cty: CtyController,
+    app: AppController, database: QsoDatabase, mutations: QsoMutationCoordinator,
+    wavelog: WavelogController, callbook: CallbookController, cty: CtyController,
     compact: Boolean, onOpenLogbook: () -> Unit) {
     LaunchedEffect(radio.frequencyHz, radio.mode, radio.connected, controller.recovered) {
         if (radio.connected && !controller.recovered) controller.updateRadio(radio.frequencyHz, radio.mode)
     }
     when (controller.session?.state) {
-        PotaActivationState.ACTIVE -> if (controller.recovered) PotaRecovery(controller) else PotaOperating(controller, radio, app, database, wavelog, callbook, cty, compact, onOpenLogbook)
+        PotaActivationState.ACTIVE -> if (controller.recovered) PotaRecovery(controller) else
+            PotaOperating(controller, radio, app, database, mutations, wavelog, callbook, cty, compact, onOpenLogbook)
         PotaActivationState.FINISHED -> PotaReview(controller, radio, compact)
         null -> PotaSetup(controller, pota, radio, app)
     }
@@ -103,21 +105,23 @@ internal fun PotaActivateScreen(controller: PotaActivationController, pota: Pota
 
 @Composable
 private fun PotaSetup(controller: PotaActivationController, pota: PotaController, radio: RadioState, app: AppController) {
-    var station by rememberSaveable { mutableStateOf(app.stationCallsign) }
-    var operator by rememberSaveable { mutableStateOf(app.stationCallsign) }
-    var refsText by rememberSaveable { mutableStateOf("") }
-    var primary by rememberSaveable { mutableStateOf("") }
-    var grid by rememberSaveable { mutableStateOf(app.stationGrid) }
-    var location by rememberSaveable { mutableStateOf(app.stationName) }
-    var state by rememberSaveable { mutableStateOf("") }
-    var profile by rememberSaveable { mutableStateOf("") }
-    var power by rememberSaveable { mutableStateOf(radio.powerW.takeIf { it > 0 }?.toString().orEmpty()) }
-    var antenna by rememberSaveable { mutableStateOf("") }
-    var notes by rememberSaveable { mutableStateOf("") }
-    var startUtc by rememberSaveable { mutableStateOf(DateTimeFormatter.ISO_INSTANT.format(Instant.now())) }
+    val prepared = controller.pendingPlan
+    var station by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.stationCallsign ?: app.stationCallsign) }
+    var operator by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.operatorCallsign ?: app.stationCallsign) }
+    var refsText by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.references?.joinToString(", ").orEmpty()) }
+    var primary by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.primaryReference.orEmpty()) }
+    var grid by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.stationGrid ?: app.stationGrid) }
+    var location by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.location ?: app.stationName) }
+    var state by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.state.orEmpty()) }
+    var profile by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.stationProfileId.orEmpty()) }
+    var power by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.txPowerW?.takeIf { it > 0 }?.toString() ?: radio.powerW.takeIf { it > 0 }?.toString().orEmpty()) }
+    var antenna by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.antenna.orEmpty()) }
+    var notes by rememberSaveable(prepared?.startAt) { mutableStateOf(prepared?.notes.orEmpty()) }
+    var startUtc by rememberSaveable(prepared?.startAt) { mutableStateOf(DateTimeFormatter.ISO_INSTANT.format(Instant.ofEpochSecond(prepared?.startAt ?: Instant.now().epochSecond))) }
     var acknowledged by rememberSaveable { mutableStateOf(false) }
     var search by rememberSaveable { mutableStateOf("") }
     val refs = normalizePotaReferences(refsText.split(',', ' ', '\n'))
+    LaunchedEffect(prepared?.startAt) { if (prepared != null) controller.consumePlan() }
     LaunchedEffect(search) { if (search.length >= 2) { delay(250); pota.searchParks(search) } }
     LaunchedEffect(refsText) { if (primary !in refs) primary = refs.firstOrNull().orEmpty() }
 
@@ -185,14 +189,15 @@ private fun PotaSetup(controller: PotaActivationController, pota: PotaController
 }
 
 @Composable
-private fun PotaOperating(controller: PotaActivationController, radio: RadioState, app: AppController, database: QsoDatabase,
-    wavelog: WavelogController, callbook: CallbookController, cty: CtyController, compact: Boolean, onOpenLogbook: () -> Unit) {
+private fun PotaOperating(controller: PotaActivationController, radio: RadioState, app: AppController,
+    database: QsoDatabase, mutations: QsoMutationCoordinator, wavelog: WavelogController,
+    callbook: CallbookController, cty: CtyController, compact: Boolean, onOpenLogbook: () -> Unit) {
     val session = controller.session ?: return
     var now by remember { mutableLongStateOf(Instant.now().epochSecond) }
     LaunchedEffect(session.id) { while (true) { delay(1_000); now = Instant.now().epochSecond } }
     val progress = controller.progress(now) ?: return
     val content: @Composable () -> Unit = {
-        PotaFastLogger(controller, session, radio, app, database, wavelog, callbook, cty, onOpenLogbook)
+        PotaFastLogger(controller, session, radio, app, database, mutations, wavelog, callbook, cty, onOpenLogbook)
     }
     if (compact) Column(Modifier.fillMaxSize()) {
         PotaSessionHeader(session, progress, now, radio)
@@ -221,8 +226,9 @@ private fun PotaSessionHeader(session: PotaActivationSession, progress: PotaActi
 }
 
 @Composable
-private fun PotaFastLogger(controller: PotaActivationController, session: PotaActivationSession, radio: RadioState, app: AppController,
-    database: QsoDatabase, wavelog: WavelogController, callbook: CallbookController, cty: CtyController, onOpenLogbook: () -> Unit) {
+private fun PotaFastLogger(controller: PotaActivationController, session: PotaActivationSession,
+    radio: RadioState, app: AppController, database: QsoDatabase, mutations: QsoMutationCoordinator,
+    wavelog: WavelogController, callbook: CallbookController, cty: CtyController, onOpenLogbook: () -> Unit) {
     var call by rememberSaveable { mutableStateOf("") }
     var frequency by rememberSaveable { mutableStateOf(if (radio.frequencyHz > 0) "%.6f".format(Locale.US, radio.frequencyHz / 1_000_000.0) else "") }
     var mode by rememberSaveable { mutableStateOf(radio.mode) }
@@ -268,9 +274,10 @@ private fun PotaFastLogger(controller: PotaActivationController, session: PotaAc
             ituZone = callbookRow?.ituZone.orEmpty().ifBlank { ctyRow?.ituZone.orEmpty() }, state = callbookRow?.state.orEmpty(),
             antennaPath = session.setup.antenna, syncState = if (wavelog.logMode == LogMode.WAVELOG) "pending" else "local",
             activationSessionId = session.id, activationProgram = "POTA", myPotaRefs = session.setup.references, potaRefs = otherRefs)
-        if (!database.save(qso)) { status = "DUPLICATE NOT SAVED"; return }
+        if (!mutations.save(qso)) { status = "DUPLICATE NOT SAVED"; return }
         controller.recordQso(id)
-        if (wavelog.logMode == LogMode.WAVELOG) { wavelog.enqueue(id, database.toADIF(qso)); status = "SAVED · WAVELOG QUEUED WITH PRIMARY OWN PARK" }
+        if (mutations.isMapped(qso)) status = "SAVED · NATIVE WAVELOG QUEUED WITH PRIMARY OWN PARK"
+        else if (wavelog.logMode == LogMode.WAVELOG) { wavelog.enqueue(id, database.toADIF(qso)); status = "SAVED · LEGACY WAVELOG QUEUED WITH PRIMARY OWN PARK" }
         else status = "SAVED · LOCAL JOURNAL"
         call = ""; notes = ""; p2p = ""; enrichment = null; sent = defaultActivationRst(mode); received = sent; focus.requestFocus()
     }

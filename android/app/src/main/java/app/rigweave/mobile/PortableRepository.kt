@@ -53,12 +53,17 @@ internal data class SotaCatalogueMetadata(
 ) { val stale get() = ready && importedAt > 0 && Instant.now().epochSecond - importedAt > 14 * 86_400L }
 
 internal class PortableController(context: Context, private val qsoDatabase: QsoDatabase) {
+    var requestedSpotId by mutableStateOf<String?>(null); private set
+
+    fun requestSpot(id: String) { requestedSpotId = id }
+    fun consumeRequestedSpot() { requestedSpotId = null }
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("rigweave-portable", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val wwffMutex = Mutex()
     private val wwffCache = File(appContext.filesDir, "wwff-spots.json")
     private val wwffAgendaCache = File(appContext.filesDir, "wwff-agendas.json")
+    private val logRepository=PortableLogRepository(qsoDatabase)
     val pota = PotaController(appContext, qsoDatabase)
     val sotaCatalogue = SotaCatalogue(appContext)
 
@@ -68,23 +73,21 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
     var wwffStatus by mutableStateOf(ProviderStatus()); private set
     var lastQsoRevision by mutableLongStateOf(qsoDatabase.changeToken()); private set
     var rankedOpportunities by mutableStateOf<List<PortableOpportunity>>(emptyList()); private set
-    private var qsoSnapshot: List<Qso> = emptyList()
-    private var qsoRefreshJob: Job? = null
     private var opportunityJob: Job? = null
     private var opportunityKey: Any? = null
 
-    init { refreshQsoSnapshot(); loadWwffCache() }
+    init { loadWwffCache() }
 
     fun close() { scope.cancel(); pota.close(); sotaCatalogue.close() }
     fun refreshAll() { pota.refreshSpots(); refreshWwff() }
     fun refreshWwff() { scope.launch { refreshWwffNow() } }
-    fun notifyQsoChanged() { refreshQsoSnapshot() }
+    fun notifyQsoChanged() { lastQsoRevision=qsoDatabase.changeToken();opportunityKey=null;pota.notifyQsoChanged() }
 
     fun markForegroundAge(now: Long = Instant.now().epochSecond) {
         pota.markForegroundAge(now)
         if (wwffStatus.kind == PortableFeedKind.LIVE && now - wwffStatus.fetchedAt > 90) wwffStatus = wwffStatus.copy(kind = PortableFeedKind.CACHED)
         if (wwffStatus.fetchedAt > 0 && now - wwffStatus.fetchedAt > 60 * 60) wwffStatus = wwffStatus.copy(kind = PortableFeedKind.STALE)
-        if (qsoDatabase.changeToken() != lastQsoRevision) refreshQsoSnapshot()
+        if (qsoDatabase.changeToken() != lastQsoRevision) notifyQsoChanged()
     }
 
     fun providerStatus(program: PortableProgram): ProviderStatus = when (program) {
@@ -104,11 +107,11 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
         opportunityKey = key
         opportunityJob?.cancel()
         val raw = pota.spots.map(PotaSpot::toPortable) + sotaSpots + wwffSpots
-        val qsos = qsoSnapshot
         opportunityJob = scope.launch {
+            val worked=withContext(Dispatchers.IO){logRepository.states(raw,now)}
             rankedOpportunities = withContext(Dispatchers.Default) {
                 val station = maidenheadCenter(stationGrid)
-                groupPortableSpots(raw).map { rankPortableSpot(it, qsos, now, radioFrequencyHz, station) }
+                groupPortableSpots(raw).map { rankPortableSpot(it, worked[it.id].orEmpty(), now, radioFrequencyHz, station) }
             }
         }
     }
@@ -117,17 +120,6 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
         val q = query.trim().uppercase(Locale.US)
         return wwffSpots.flatMap(PortableSpot::references).filter { it.program == PortableProgram.WWFF &&
             (q.isBlank() || it.code.contains(q) || it.name.uppercase(Locale.US).contains(q)) }.distinctBy(PortableReference::code).take(100)
-    }
-
-    private fun refreshQsoSnapshot() {
-        qsoRefreshJob?.cancel()
-        qsoRefreshJob = scope.launch {
-            val revision = qsoDatabase.changeToken()
-            val rows = withContext(Dispatchers.IO) { qsoDatabase.all() }
-            qsoSnapshot = rows
-            lastQsoRevision = revision
-            opportunityKey = null
-        }
     }
 
     private suspend fun refreshWwffNow(now: Long = Instant.now().epochSecond) = wwffMutex.withLock {

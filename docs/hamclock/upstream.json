@@ -1,0 +1,203 @@
+{
+  "schema_version": 2,
+  "upstream": {
+    "owner": "accius",
+    "repository": "openhamclock",
+    "url": "https://github.com/accius/openhamclock"
+  },
+  "stable": {
+    "branch": "main",
+    "sha": "d4a50eaaa61d3432a1de5f80cbe61790739930a5",
+    "package_version": "26.5.0",
+    "latest_release": "v26.5.0"
+  },
+  "release": {
+    "tag": "v26.5.0",
+    "commit": "cc2415e70cce5f9a583fa32efaf1c66792d030df",
+    "package_version": "26.5.0",
+    "licence_sha256": "93d70a638444f963c10c1e4c67324bcdb4617952b2cf0c74f1bd483570ef6877"
+  },
+  "preview": {
+    "branch": "Staging",
+    "sha": "36e5c1262dfde2057b2b4e6483be8c2215c70ad4",
+    "merge_base_with_stable": "1f3d8f77eba8627e36162b78a417d4c235ef2436",
+    "relationship_to_stable": "diverged",
+    "ahead_by": 36,
+    "behind_by": 51
+  },
+  "licence": {
+    "spdx_identifier": "MIT",
+    "file": "LICENSE",
+    "git_blob_sha": "78302056526493030aa30491b7abf0a9419708d0",
+    "sha256": "93d70a638444f963c10c1e4c67324bcdb4617952b2cf0c74f1bd483570ef6877",
+    "copyright_notice": "Copyright (c) 2024-2026 OpenHamClock Contributors"
+  },
+  "audit_date": "2026-08-20",
+  "watched_source_paths": {
+    "inventory": [
+      "src/DockableApp.jsx",
+      "src/plugins/layerRegistry.js",
+      "src/plugins/layers/"
+    ],
+    "providers": [
+      "server.js",
+      "server/routes/",
+      "server/services/",
+      "server/utils/upstream-manager.js",
+      "src/services/",
+      "package.json",
+      "package-lock.json"
+    ],
+    "task2b1_dx_news_psk": [
+      "src/components/DXNewsTicker.jsx",
+      "server/routes/dxNewsSources/dxWorld.js",
+      "server/routes/dxNewsSources/dxnews.js",
+      "server/routes/dxNewsSources/ng3k.js",
+      "server/utils/dxNewsMerge.js",
+      "src/components/PSKReporterPanel.jsx",
+      "src/hooks/usePSKReporter.js",
+      "server/routes/pskreporter.js",
+      "src/hooks/useWSPR.js"
+    ],
+    "task2b2_rbn_wspr_ibp_band_health": [
+      "src/plugins/layers/useRBN.js",
+      "server/routes/rbn.js",
+      "src/plugins/layers/useWSPR.js",
+      "src/components/IBPPanel.jsx",
+      "src/hooks/useIBP.js",
+      "src/hooks/useIBPRBN.js",
+      "src/utils/ibp.js",
+      "src/components/BandHealthPanel.jsx",
+      "src/hooks/useBandHealth.js",
+      "src/DockableApp.jsx",
+      "src/plugins/layerRegistry.js"
+    ],
+    "propagation_algorithms": [
+      "server/utils/propagationPhysics.js",
+      "iturhfprop-service/",
+      "src/components/PropagationPanel.jsx",
+      "src/plugins/layers/useVOACAPHeatmap.js",
+      "src/plugins/layers/useMUFMap.js"
+    ],
+    "security": [
+      "SECURITY.md",
+      "server/middleware/",
+      "server/utils/ssrf.js",
+      ".github/workflows/",
+      "package.json",
+      "package-lock.json"
+    ],
+    "licence": [
+      "LICENSE"
+    ]
+  },
+  "rigweave_implementation_owners": {
+    "home": [
+      "android/app/src/main/java/app/rigweave/mobile/HamClockHomeScreen.kt",
+      "android/app/src/main/java/app/rigweave/mobile/HamClockAnalogClock.kt"
+    ],
+    "home_map": [
+      "android/app/src/main/java/app/rigweave/mobile/HamClockHomeMap.kt",
+      "android/app/src/main/java/app/rigweave/mobile/NeuralDxMap.kt"
+    ],
+    "settings": [
+      "android/app/src/main/java/app/rigweave/mobile/hamclock/HamClockRegistries.kt",
+      "android/app/src/main/java/app/rigweave/mobile/hamclock/HamClockSettingsModels.kt",
+      "android/app/src/main/java/app/rigweave/mobile/hamclock/HamClockSettingsCodec.kt",
+      "android/app/src/main/java/app/rigweave/mobile/hamclock/HamClockSettingsStore.kt",
+      "android/app/src/main/java/app/rigweave/mobile/hamclock/HamClockSettingsTruth.kt"
+    ],
+    "home_log_projection": [
+      "android/app/src/main/java/app/rigweave/mobile/QsoDatabase.kt",
+      "android/app/src/main/java/app/rigweave/mobile/LogIntelligenceRepository.kt",
+      "android/app/src/main/java/app/rigweave/mobile/ProgressController.kt",
+      "android/app/src/main/java/app/rigweave/mobile/ProgressScreen.kt"
+    ],
+    "public_providers": [
+      "android/app/src/main/java/app/rigweave/mobile/hamclock/HamClockPublicProviders.kt",
+      "android/app/src/main/java/app/rigweave/mobile/hamclock/HamClockProviderSupport.kt",
+      "android/app/src/main/java/app/rigweave/mobile/hamclock/DxNewsPskRepository.kt"
+    ],
+    "propagation": [
+      "android/app/src/main/java/app/rigweave/mobile/HamClockPropagationRepository.kt"
+    ],
+    "portable": [
+      "android/app/src/main/java/app/rigweave/mobile/PortableRepository.kt",
+      "android/app/src/main/java/app/rigweave/mobile/PotaRepository.kt"
+    ],
+    "satellite": [
+      "android/app/src/main/java/app/rigweave/mobile/SatelliteOperationsController.kt",
+      "android/app/src/main/java/app/rigweave/mobile/SatelliteProviders.kt"
+    ]
+  },
+  "provider_contracts": [
+    {
+      "id": "openhamclock-propagation",
+      "endpoint": "https://openhamclock.com/api/propagation",
+      "method": "GET",
+      "response": "JSON object with a non-empty currentBands array; each row requires band, freq, reliability, snr and status",
+      "maximum_response_bytes": 1000000,
+      "depends_on_openhamclock_com": true
+    },
+    {
+      "id": "wa7bnm-contests",
+      "endpoint": "https://www.contestcalendar.com/calendar.rss",
+      "method": "GET",
+      "response": "RSS/XML contest items",
+      "maximum_response_bytes": 1500000,
+      "depends_on_openhamclock_com": false
+    },
+    {
+      "id": "ng3k-dxpeditions",
+      "endpoint": "https://www.ng3k.com/Misc/adxoplain.html",
+      "method": "GET",
+      "response": "HTML/text ADXO schedule",
+      "maximum_response_bytes": 2000000,
+      "depends_on_openhamclock_com": false
+    },
+    {
+      "id": "dxworld-news",
+      "endpoint": "https://www.dx-world.net/feed/",
+      "method": "GET",
+      "response": "RSS/XML news items with title, link and publication time",
+      "maximum_response_bytes": 1000000,
+      "depends_on_openhamclock_com": false
+    },
+    {
+      "id": "pskreporter-direct",
+      "endpoint": "https://retrieve.pskreporter.info/query",
+      "method": "GET",
+      "response": "JSONP reception reports queried by senderCallsign or receiverCallsign",
+      "maximum_response_bytes": 2000000,
+      "depends_on_openhamclock_com": false
+    },
+    {
+      "id": "noaa-goes-xray",
+      "endpoint": "https://services.swpc.noaa.gov/json/goes/primary/xrays-3-day.json",
+      "method": "GET",
+      "response": "JSON array of GOES X-ray observations",
+      "maximum_response_bytes": 5000000,
+      "depends_on_openhamclock_com": false
+    }
+  ],
+  "last_stable_comparison": {
+    "checked_at": "2026-08-21",
+    "outcome": "UNCHANGED",
+    "observed_sha": "d4a50eaaa61d3432a1de5f80cbe61790739930a5",
+    "observed_package_version": "26.5.0",
+    "observed_licence_sha256": "93d70a638444f963c10c1e4c67324bcdb4617952b2cf0c74f1bd483570ef6877"
+  },
+  "last_preview_comparison": {
+    "checked_at": "2026-08-21",
+    "outcome": "REVIEW_REQUIRED_NOT_ABSORBED",
+    "observed_sha": "99913f2df574b8588ddaff703581b8f341f46761",
+    "relationship_to_stable": "diverged",
+    "merge_base": "1f3d8f77eba8627e36162b78a417d4c235ef2436",
+    "ahead_by": 2,
+    "behind_by": 0,
+    "changed_paths": [
+      "src/plugins/layers/useSatelliteLayer.js",
+      "src/utils/satelliteTelemetry.test.js"
+    ]
+  }
+}

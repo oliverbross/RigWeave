@@ -19,6 +19,10 @@ internal fun AndroidDXSpot.toSpotLogIdentity(entity: AndroidCtyRecord?): SpotLog
     id, callsign, entity?.dxcc.orEmpty().ifBlank { dxcc }, entity?.country.orEmpty().ifBlank { country }, band, mode,
 )
 
+internal fun SignalReport.toSpotLogIdentity(entity: AndroidCtyRecord?): SpotLogIdentity = spotLogIdentity(
+    signalReportReference(this), callsign, entity?.dxcc.orEmpty(), entity?.country.orEmpty(), band, mode,
+)
+
 data class WorkedDimensions(
     val any: Boolean = false,
     val confirmedAny: Boolean = false,

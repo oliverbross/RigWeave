@@ -51,6 +51,23 @@ class HamClockSettingsStore private constructor(
     }
 
     @Synchronized
+    fun removePanel(id: String): HamClockSettingsDocument = updateSettings { settings ->
+        settings.copy(panels = settings.panels.filterNot { it.id == id })
+    }
+
+    @Synchronized
+    fun resetPanel(id: String): HamClockSettingsDocument {
+        val default = defaultHamClockPanels().firstOrNull { it.id == id }
+            ?: return removePanel(id)
+        return setPanel(default)
+    }
+
+    @Synchronized
+    fun resetLayout(): HamClockSettingsDocument = updateSettings { settings ->
+        settings.copy(panels = defaultHamClockPanels())
+    }
+
+    @Synchronized
     fun setMapLayer(preference: HamClockMapLayerPreference): HamClockSettingsDocument = updateSettings { settings ->
         settings.copy(map = settings.map.copy(layers = settings.map.layers.filterNot { it.id == preference.id } + preference))
     }
@@ -82,6 +99,10 @@ class HamClockSettingsStore private constructor(
             ?: throw IllegalArgumentException("Unknown HamClock profile: $id")
         return persist(document.copy(settings = profile.settings, activeProfileId = profile.id))
     }
+
+    @Synchronized
+    fun clearActiveProfile(): HamClockSettingsDocument =
+        persist(document.copy(activeProfileId = null))
 
     @Synchronized
     fun renameProfile(id: String, name: String): HamClockNamedProfile {

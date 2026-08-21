@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.22.1)
 project(rigweave_jni LANGUAGES CXX)
 
 set(CORE_ROOT ../../../../../core)
+file(GLOB RIGWEAVE_SGP4_SOURCES CONFIGURE_DEPENDS ${CORE_ROOT}/third_party/sgp4/libsgp4/*.cc)
 get_filename_component(FLEX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../rust/rigweave-flex" ABSOLUTE)
 if(ANDROID_ABI STREQUAL "armeabi-v7a")
     set(FLEX_RUST_TARGET armv7-linux-androideabi)
@@ -19,8 +20,11 @@ set_target_properties(rigweave_flex PROPERTIES IMPORTED_LOCATION
     ${FLEX_ROOT}/target/${FLEX_RUST_TARGET}/release/librigweave_flex.a)
 add_library(rigweave SHARED
     native_bridge.cpp
+    hamclock_propagation_bridge.cpp
     ${CORE_ROOT}/src/core.cpp
     ${CORE_ROOT}/src/features.cpp
+    ${CORE_ROOT}/src/satellite.cpp
+    ${CORE_ROOT}/src/propagation/p533.cpp
     ${CORE_ROOT}/portable/src/adif.cpp
     ${CORE_ROOT}/portable/src/cat_parser.cpp
     ${CORE_ROOT}/portable/src/cty.cpp
@@ -30,8 +34,9 @@ add_library(rigweave SHARED
     ${CORE_ROOT}/portable/src/protocol.cpp
     ${CORE_ROOT}/portable/src/spot.cpp
     ${CORE_ROOT}/portable/src/sync_queue.cpp
-    ${CORE_ROOT}/portable/src/wsjtx_protocol.cpp)
-target_include_directories(rigweave PRIVATE ${CORE_ROOT}/include ${CORE_ROOT}/portable/include ${FLEX_ROOT}/include)
+    ${CORE_ROOT}/portable/src/wsjtx_protocol.cpp
+    ${RIGWEAVE_SGP4_SOURCES})
+target_include_directories(rigweave PRIVATE ${CORE_ROOT}/include ${CORE_ROOT}/portable/include ${CORE_ROOT}/third_party/sgp4/libsgp4 ${FLEX_ROOT}/include)
 target_link_libraries(rigweave PRIVATE rigweave_flex log)
 target_compile_features(rigweave PRIVATE cxx_std_17)
 target_compile_options(rigweave PRIVATE -Wall -Wextra -Wpedantic)

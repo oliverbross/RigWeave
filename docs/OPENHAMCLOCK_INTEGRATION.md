@@ -49,7 +49,7 @@ secrets by schema and are included in RigWeave recovery data.
 - NOAA solar indices and GOES X-ray class, NASA SDO image metadata, moon phase
   and illumination, and local sunrise/sunset calculations;
 - local weather, PSK Reporter summary, POTA/WWFF activity, band activity,
-  WSPR/propagation intelligence and satellite-pass panels;
+  personal WSPR evidence, local IBP schedule, explainable Band Health and satellite-pass panels;
 - versioned settings with panel position/size state, map state and opacity,
   provider view preferences, DX target, named profiles, validated import/export
   and legacy migration.
@@ -64,7 +64,7 @@ stay visibly unavailable or labelled as estimates until their real authority exi
 
 - native ITU-R P.533/VOACAP engine and map heatmap;
 - real-time PSK Reporter MQTT/SSE Heard/Hearing stream;
-- RBN, IBP, MUF, WSPR-grid, Winlink and contest-QSO map layers;
+- MUF, regional WSPR-grid, Winlink and contest-QSO map layers; personal WSPR, retail-cluster RBN and IBP schedule layers are implemented;
 - aurora/radar/storm/wildfire/earthquake/aircraft/ATC/user map layers;
 - satellite tracks, footprints and Doppler controls;
 - rendered solar product selector, N0NBH panel, analog clock, DX ticker, On-Air

@@ -460,15 +460,15 @@ class SyncHubController(
         } else publish("QRZ STATUS failed · ${outcome.message}")
     }
 
-    fun queueExisting(qsos: List<Qso>, providers: Set<SyncProvider>) {
+    fun queueExisting(qsoIds: Collection<String>, providers: Set<SyncProvider>) {
         val now = System.currentTimeMillis() / 1_000
-        qsos.forEach { qso ->
+        qsoIds.forEach { qsoId ->
             providers.forEach { provider ->
                 val state = if (provider == SyncProvider.QRZ) DeliveryState.QUEUED else DeliveryState.BATCH_QUEUED
-                database.enqueueDelivery(qso.id, provider, if (authority() == LogMode.LOCAL && isResumed(provider)) state else DeliveryState.PAUSED_AUTHORITY, now)
+                database.enqueueDelivery(qsoId, provider, if (authority() == LogMode.LOCAL && isResumed(provider)) state else DeliveryState.PAUSED_AUTHORITY, now)
             }
         }
-        status = "${qsos.size} existing QSOs selected · ${providers.joinToString { it.shortLabel }}"
+        status = "${qsoIds.size} existing QSOs selected · ${providers.joinToString { it.shortLabel }}"
         refresh()
         syncNow()
     }

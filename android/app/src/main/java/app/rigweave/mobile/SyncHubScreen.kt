@@ -51,6 +51,8 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneOffset
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -67,14 +69,17 @@ private enum class OutboxFilter { ALL, QUEUED, ATTENTION, DELIVERED }
 @Composable
 fun SyncHubScreen(
     database: QsoDatabase,
+    mutations: QsoMutationCoordinator,
     controller: SyncHubController,
     wavelog: WavelogController,
+    nativeWavelog: WavelogNativeController,
     onBack: () -> Unit,
 ) {
     var filter by remember { mutableStateOf(OutboxFilter.ALL) }
     var configure by remember { mutableStateOf<SyncProvider?>(null) }
     var selected by remember { mutableStateOf<DeliveryRecord?>(null) }
     var catchUp by remember { mutableStateOf(false) }
+    var nativeOpen by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { controller.syncNow() }
 
     val visible = controller.records.filter { record ->
@@ -101,6 +106,8 @@ fun SyncHubScreen(
             }
             AssistChip({ controller.syncNow() }, { Text(if (controller.busy) "SENDING" else "SYNC NOW") },
                 leadingIcon = { Icon(Icons.Outlined.Refresh, null) })
+            AssistChip({ nativeOpen = true }, { Text("WAVELOG LINK") },
+                leadingIcon = { Icon(Icons.Outlined.Settings, null) })
         }
         Surface(color = if (wavelog.logMode == LogMode.LOCAL) SyncRaised else Color(0xFF49371E),
             shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
@@ -127,8 +134,9 @@ fun SyncHubScreen(
     }
 
     configure?.let { ProviderConfigDialog(it, controller) { configure = null } }
-    selected?.let { DeliveryDialog(database, controller, it) { selected = null } }
+    selected?.let { DeliveryDialog(database, mutations, controller, it) { selected = null } }
     if (catchUp) CatchUpDialog(database, controller) { catchUp = false }
+    if (nativeOpen) WavelogNativeDialog(nativeWavelog, wavelog) { nativeOpen = false }
 }
 
 @Composable
@@ -303,13 +311,14 @@ private fun ProviderConfigDialog(provider: SyncProvider, controller: SyncHubCont
 }
 
 @Composable
-private fun DeliveryDialog(database: QsoDatabase, controller: SyncHubController, record: DeliveryRecord, dismiss: () -> Unit) {
+private fun DeliveryDialog(database: QsoDatabase, mutations: QsoMutationCoordinator,
+    controller: SyncHubController, record: DeliveryRecord, dismiss: () -> Unit) {
     val qso = database.qso(record.qsoId)
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var editing by remember { mutableStateOf(false) }
     if (editing && qso != null) {
-        QsoCorrectionDialog(qso, database, controller) { editing = false }
+        QsoCorrectionDialog(qso, mutations, controller) { editing = false }
         return
     }
     AlertDialog(onDismissRequest = dismiss,
@@ -355,7 +364,8 @@ private fun DeliveryDialog(database: QsoDatabase, controller: SyncHubController,
 }
 
 @Composable
-private fun QsoCorrectionDialog(qso: Qso, database: QsoDatabase, controller: SyncHubController, dismiss: () -> Unit) {
+internal fun QsoCorrectionDialog(qso: Qso, mutations: QsoMutationCoordinator,
+    controller: SyncHubController, dismiss: () -> Unit) {
     val initial = Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC)
     var callsign by remember { mutableStateOf(qso.callsign) }
     var station by remember { mutableStateOf(qso.stationCallsign) }
@@ -391,7 +401,7 @@ private fun QsoCorrectionDialog(qso: Qso, database: QsoDatabase, controller: Syn
         },
         confirmButton = {
             Button({
-                database.updateLocal(qso.copy(callsign = callsign.trim(), stationCallsign = station.trim(),
+                mutations.update(qso.copy(callsign = callsign.trim(), stationCallsign = station.trim(),
                     frequencyHz = hz!!, band = bandForFrequency(hz), mode = mode.trim(), createdAt = epoch!!,
                     myGrid = grid.trim(), notes = notes))
                 controller.refreshNow()
@@ -410,10 +420,8 @@ private fun CatchUpDialog(database: QsoDatabase, controller: SyncHubController, 
     var confirm by remember { mutableStateOf(false) }
     val fromDate = runCatching { LocalDate.parse(from) }.getOrNull()
     val toDate = runCatching { LocalDate.parse(to) }.getOrNull()
-    val candidates = if (fromDate == null || toDate == null || fromDate > toDate) emptyList() else database.all().filter { qso ->
-        val day = Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC).toLocalDate()
-        day >= fromDate && day <= toDate && (station.isBlank() || qso.stationCallsign.equals(station.trim(), true))
-    }
+    var candidates by remember { mutableStateOf<List<QsoCatchUpCandidate>>(emptyList()) }
+    LaunchedEffect(fromDate,toDate,station){candidates=if(fromDate==null||toDate==null||fromDate>toDate)emptyList()else withContext(Dispatchers.IO){database.catchUpCandidates(fromDate.atStartOfDay().toEpochSecond(ZoneOffset.UTC),toDate.plusDays(1).atStartOfDay().toEpochSecond(ZoneOffset.UTC),station)}}
     val callsigns = candidates.map { it.stationCallsign.ifBlank { "station not set" } }.distinct().sorted()
     AlertDialog(onDismissRequest = dismiss,
         title = { Text("QUEUE EXISTING QSOS") },
@@ -441,7 +449,7 @@ private fun CatchUpDialog(database: QsoDatabase, controller: SyncHubController, 
             }
         },
         confirmButton = {
-            Button({ controller.queueExisting(candidates, providers); dismiss() },
+            Button({ controller.queueExisting(candidates.map(QsoCatchUpCandidate::id), providers); dismiss() },
                 enabled = confirm && candidates.isNotEmpty() && providers.isNotEmpty()) { Text("QUEUE ${candidates.size} QSOS") }
         },
         dismissButton = { TextButton(dismiss) { Text("CANCEL") } })

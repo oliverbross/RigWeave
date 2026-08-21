@@ -7,6 +7,8 @@ import app.rigweave.mobile.groupsio.groupsIoDestinationVisible
 
 import android.Manifest
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
 import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.util.LruCache
@@ -94,13 +96,16 @@ import java.time.format.DateTimeFormatter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.InputStream
 import java.util.Locale
 import kotlin.math.abs
+import app.rigweave.mobile.hamclock.*
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        StabilityDiagnostics.install(this)
         setContent { RigWeaveTheme { RigWeaveApp() } }
     }
 }
@@ -122,7 +127,7 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), DIGI("Digi"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Progress"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), GROUPS_IO("Groups.io"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), DIGI("Digi"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Progress"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), OPERATIONS("Operations"), GROUPS_IO("Groups.io"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
@@ -130,20 +135,64 @@ private enum class SettingsSection(val label: String) {
 }
 private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Station"), GENERAL("General"), NOTES("Notes"), QSL("QSL") }
 
+internal data class HomeReceiveTuneReview(
+    val frequencyHz: Long,
+    val mode: String?,
+    val source: String,
+    val reason: String,
+)
+
+internal data class HomeReceiveTuneDecision(
+    val pending: HomeReceiveTuneReview?,
+    val dispatch: HomeReceiveTuneReview?,
+)
+
+internal fun decideHomeReceiveTune(review: HomeReceiveTuneReview, confirm: Boolean): HomeReceiveTuneDecision =
+    HomeReceiveTuneDecision(pending = null, dispatch = review.takeIf { confirm })
+
+internal data class GeneralRadioCommand(
+    val raw: String,
+    val frequencyHz: Long?,
+    val mode: String?,
+)
+
+internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
+    val command = raw.uppercase(Locale.US)
+    val frequency = Regex("FA(\\d{11});").find(command)?.groupValues?.get(1)?.toLongOrNull()
+    val mode = Regex("MD([1-5]);").find(command)?.groupValues?.get(1)?.let { code ->
+        mapOf("1" to "LSB", "2" to "USB", "3" to "CW", "4" to "FM", "5" to "AM")[code]
+    }
+    return GeneralRadioCommand(raw, frequency, mode)
+}
+
 @Composable private fun RigWeaveApp() {
     val context = LocalContext.current
     val core = remember { NativeCore.create() }
     val transport = remember { UsbRadioTransport(context) }
     val database = remember { QsoDatabase(context) }
+    LaunchedEffect(database) {
+        StabilityDiagnostics.refreshDatabaseFacts(database)
+        while (withContext(Dispatchers.IO) { database.backfillProjectionBatch() }) {
+            StabilityDiagnostics.refreshDatabaseFacts(database)
+            delay(25)
+        }
+        StabilityDiagnostics.refreshDatabaseFacts(database)
+    }
+    val mutations = remember { QsoMutationCoordinator(database) }
     val progress = remember { ProgressController(context, database) }
+    val publicProviders = remember { app.rigweave.mobile.hamclock.HamClockPublicProviders(File(context.filesDir, "hamclock-public")) }
+    val hamClockSettings = remember { HamClockSettingsCoordinator(context) }
+    val operations = remember { OperationsController(context, publicProviders, database) }
     val portable = remember { PortableController(context, database) }
     val activation = remember { PotaActivationController(context, database) }
     val features = remember { FeatureController(context) }
     val app = remember { AppController(context) }
     val wavelog = remember { WavelogController(context, database) }
     val neuralDx = remember {
-        NeuralDxController(context, database, wavelog.selectedStation?.grid?.ifBlank { null } ?: app.stationGrid)
+        NeuralDxController(context, database, publicProviders, operations.satellites,
+            wavelog.selectedStation?.grid?.ifBlank { null } ?: app.stationGrid)
     }
+    val wavelogNative = remember { WavelogNativeController(database, wavelog, mutations) }
     val flex = remember { FlexRadioController(context, { app.preferredFlexStation }, app::savePreferredFlexStation) { app.manualFlexIp } }
     val syncHub = remember { SyncHubController(context, database, { wavelog.logMode }, { app.stationGrid }) }
     val callbook = remember { CallbookController(context) { app.stationCallsign } }
@@ -182,6 +231,8 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     }
     var pendingPortableDraft by remember { mutableStateOf<PortableLogDraft?>(null) }
     var pendingRisk by remember { mutableStateOf<String?>(null) }
+    var pendingHomeReceiveTune by remember { mutableStateOf<HomeReceiveTuneReview?>(null) }
+    var pendingHomeQsoId by remember { mutableStateOf<String?>(null) }
     var pendingVoiceSlot by remember { mutableStateOf<Int?>(null) }
     var voiceArmedMode by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -215,13 +266,10 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         else if (risky) pendingRisk = command else direct(command)
     }
     val send: (String) -> Unit = { raw ->
-        if (app.radioFamily.isElecraft) sendKx(raw) else {
-            val frequency = Regex("FA(\\d{11});").find(raw.uppercase())?.groupValues?.get(1)?.toLongOrNull()
-            val mode = Regex("MD([1-5]);").find(raw.uppercase())?.groupValues?.get(1)?.let { code ->
-                mapOf("1" to "LSB", "2" to "USB", "3" to "CW", "4" to "FM", "5" to "AM")[code]
-            }
-            val target = frequency ?: flex.snapshot.selected(flex.selectedSliceIndex)?.frequencyHz
-            if (target != null) scope.launch { flex.tune(ReceiveTuneRequest(target, mode)) }
+        val command = parseGeneralRadioCommand(raw)
+        if (app.radioFamily.isElecraft) sendKx(command.raw) else {
+            val target = command.frequencyHz ?: flex.snapshot.selected(flex.selectedSliceIndex)?.frequencyHz
+            if (target != null) scope.launch { flex.tune(ReceiveTuneRequest(target, command.mode)) }
         }
     }
     LaunchedEffect(transport, app.radioFamily) {
@@ -239,9 +287,44 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
             while (app.radioFamily == RadioFamily.FLEXRADIO) { radio = flex.state; delay(120) }
         }
     }
-    LaunchedEffect(features) { features.connectConfiguredCluster() }
     LaunchedEffect(features, database, wavelog, cty) {
         features.startWorkedLogSync(database, wavelog, cty)
+    }
+    val hamClockStationCall = wavelog.selectedStation?.callsign?.ifBlank { null }
+        ?: app.stationCallsign.ifBlank { features.clusterCallsign }
+    val hamClockStationGrid = wavelog.selectedStation?.grid?.ifBlank { null } ?: app.stationGrid
+    LaunchedEffect(hamClockSettings.document.settings.cluster.enabled, hamClockSettings.document.settings.rbn, foreground, hamClockStationCall) {
+        features.setForeground(foreground)
+        features.applyRbnPreference(hamClockSettings.document.settings.rbn, hamClockStationCall)
+        if (!foreground || !hamClockSettings.document.settings.cluster.enabled) features.disconnectCluster(disabled = true)
+        else if (features.clusterConnection.state in setOf(ClusterConnectionState.DISABLED, ClusterConnectionState.DISCONNECTED)) {
+            features.connectConfiguredCluster()
+        }
+    }
+    LaunchedEffect(hamClockStationGrid) { neuralDx.updateSignalGeometry(hamClockStationGrid) }
+    LaunchedEffect(hamClockSettings.document.settings.wspr, foreground, hamClockStationCall, hamClockStationGrid) {
+        val preference = hamClockSettings.document.settings.wspr
+        neuralDx.applyWsprPreference(preference)
+        if (!foreground || !preference.personalEnabled) return@LaunchedEffect
+        while (true) {
+            val now = Instant.now().epochSecond
+            if (neuralDx.wsprPersonal.fetchedEpoch == 0L || now - neuralDx.wsprPersonal.fetchedEpoch >= 300L) {
+                neuralDx.refreshWspr(hamClockStationCall, hamClockStationGrid)
+            }
+            delay(60_000)
+        }
+    }
+    LaunchedEffect(hamClockSettings.document.settings.pskReporter, foreground, hamClockStationCall, hamClockStationGrid) {
+        val preference = hamClockSettings.document.settings.pskReporter
+        neuralDx.applyPskPreference(preference)
+        if (!foreground || !preference.enabled) return@LaunchedEffect
+        while (true) {
+            val now = Instant.now().epochSecond
+            if (neuralDx.mySignal.fetchedEpoch == 0L || now - neuralDx.mySignal.fetchedEpoch >= preference.refreshSeconds) {
+                neuralDx.refreshPsk(hamClockStationCall, hamClockStationGrid)
+            }
+            delay(60_000)
+    }
     }
     LaunchedEffect(wavelog.logMode) { syncHub.setAuthority(wavelog.logMode) }
     LaunchedEffect(transport, radio.mode) {
@@ -265,9 +348,11 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event -> when (event) {
-            Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> { foreground = true; syncHub.setForeground(true) }
+            Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> {
+                foreground = true; features.setForeground(true); syncHub.setForeground(true); neuralDx.setForeground(true); wavelogNative.onForeground()
+            }
             Lifecycle.Event.ON_STOP, Lifecycle.Event.ON_DESTROY -> {
-                foreground = false; syncHub.setForeground(false); app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
+                foreground = false; features.setForeground(false); syncHub.setForeground(false); neuralDx.setForeground(false); app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
                 digi.stopRx("App left foreground · RX stopped")
                 digi.disarm()
                 voiceTx.stop("App left foreground; defensive RX cleanup requested")
@@ -278,11 +363,19 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+    val connectivity = remember { context.getSystemService(ConnectivityManager::class.java) }
+    DisposableEffect(connectivity) {
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) { wavelogNative.onConnectivityAvailable() }
+        }
+        connectivity.registerDefaultNetworkCallback(callback)
+        onDispose { runCatching { connectivity.unregisterNetworkCallback(callback) } }
+    }
     LaunchedEffect(voiceAudio) { voiceAudio.onFailure = { app.updateVoiceMacrosArmed(false) } }
     DisposableEffect(Unit) { onDispose {
         app.disarmAll(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close(); groupsIo.close()
-        scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelog.close(); callbook.close(); cty.close()
-        portable.close(); progress.close(); syncHub.close(); NativeCore.destroy(core); database.close()
+        scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelogNative.close(); wavelog.close(); callbook.close(); cty.close()
+        portable.close(); progress.close(); operations.close(); syncHub.close(); NativeCore.destroy(core); database.close()
     } }
     pendingRisk?.let { command ->
         val cwMacro = command.startsWith("KY ")
@@ -303,6 +396,25 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
         } },
         dismissButton = { TextButton({ pendingRisk = null }) { Text("Cancel") } },
     ) }
+    pendingHomeReceiveTune?.let { review ->
+        AlertDialog(
+            onDismissRequest = { pendingHomeReceiveTune = decideHomeReceiveTune(review, false).pending },
+            title = { Text("Review receive tune") },
+            text = { Text("${"%.6f".format(java.util.Locale.US, review.frequencyHz / 1_000_000.0)} MHz" +
+                review.mode?.takeIf(String::isNotBlank)?.let { " · $it" }.orEmpty() +
+                "\n${review.source}\n${review.reason}\nRadio: ${app.radioFamily.displayName}\n\nReceive frequency only. This does not key PTT or start TUNE.") },
+            confirmButton = { Button({
+                val decision = decideHomeReceiveTune(review, true)
+                decision.dispatch?.let { approved ->
+                    if (app.radioFamily.isElecraft) {
+                        direct("FA${approved.frequencyHz.toString().padStart(11, '0')};")
+                    } else scope.launch { flex.tune(ReceiveTuneRequest(approved.frequencyHz, approved.mode)) }
+                }
+                pendingHomeReceiveTune = decision.pending
+            }, enabled = radio.connected && review.frequencyHz in 100_000L..77_000_000_000L) { Text("Confirm receive tune") } },
+            dismissButton = { TextButton({ pendingHomeReceiveTune = decideHomeReceiveTune(review, false).pending }) { Text("Cancel") } },
+        )
+    }
     pendingVoiceSlot?.let { slot ->
         val item = voiceStore.slots.getOrNull(slot)
         AlertDialog(onDismissRequest = { pendingVoiceSlot = null }, title = { Text("Arm & send voice macro?") },
@@ -330,22 +442,30 @@ private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Statio
                 }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
-            Screen(destination, radio, usbDetail, database, progress, features, neuralDx, wavelog, syncHub, callbook, cty, audio,
+            Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
                 voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.GROUPS_IO })
+                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.GROUPS_IO }, { destination = Destination.OPERATIONS },
+                { row -> pendingPortableDraft = operations.satellites.normalLoggerDraft(row); destination = Destination.RADIO },
+                { frequency, mode, source, reason -> pendingHomeReceiveTune = HomeReceiveTuneReview(frequency, mode, source, reason) },
+                pendingHomeQsoId, { pendingHomeQsoId = null },
+                { id -> pendingHomeQsoId = id; destination = Destination.LOGBOOK })
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
-            Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.GROUPS_IO }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
+            Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.OPERATIONS || it == Destination.GROUPS_IO }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
-            Screen(destination, radio, usbDetail, database, progress, features, neuralDx, wavelog, syncHub, callbook, cty, audio,
+            Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
                 voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.GROUPS_IO })
+                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.GROUPS_IO }, { destination = Destination.OPERATIONS },
+                { row -> pendingPortableDraft = operations.satellites.normalLoggerDraft(row); destination = Destination.RADIO },
+                { frequency, mode, source, reason -> pendingHomeReceiveTune = HomeReceiveTuneReview(frequency, mode, source, reason) },
+                pendingHomeQsoId, { pendingHomeQsoId = null },
+                { id -> pendingHomeQsoId = id; destination = Destination.LOGBOOK })
         } }
     }
 }
@@ -363,22 +483,80 @@ private fun navIcon(item: Destination) = when (item) {
     Destination.DX -> Icons.Outlined.Public
     Destination.PORTABLE -> Icons.Outlined.Hiking
     Destination.GROUPS_IO -> Icons.Outlined.Forum
+    Destination.OPERATIONS -> Icons.Outlined.EventNote
     Destination.SETTINGS -> Icons.Outlined.Settings
 }
 
-@Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase, progress: ProgressController,
-    features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, syncHub: SyncHubController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
+@Composable private fun Screen(destination: Destination, radio: RadioState, detail: String, database: QsoDatabase,
+    mutations: QsoMutationCoordinator, progress: ProgressController, operations: OperationsController,
+    publicProviders: app.rigweave.mobile.hamclock.HamClockPublicProviders,
+    hamClockSettings: HamClockSettingsCoordinator,
+    features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, wavelogNative: WavelogNativeController,
+    syncHub: SyncHubController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
     portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
     transport: UsbRadioTransport, flex: FlexRadioController, digi: DigiController, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
     eqStudio: EqStudioController, groupsIo: GroupsIoController, compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
     tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openDx: () -> Unit, openPortable: () -> Unit,
     openActivation: () -> Unit, openLogbook: () -> Unit, openSync: () -> Unit, openProgress: () -> Unit, openDigi: () -> Unit,
-    openGroupsIo: () -> Unit) {
+    openGroupsIo: () -> Unit, openOperations: () -> Unit, prepareSatelliteLogger: (SatellitePassRow) -> Unit,
+    requestHomeReceiveTune: (Long, String?, String, String) -> Unit,
+    homeQsoId: String?, consumeHomeQso: () -> Unit, openHomeQso: (String) -> Unit) {
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
+    val intelligencePortableSpots = portable.pota.spots.map(PotaSpot::toPortable) + portable.sotaSpots + portable.wwffSpots
+    val deliveredStates = setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED)
+    val intelligenceAttention = syncHub.records.count { it.state !in deliveredStates }
+    LaunchedEffect(destination, progress.filters, database.changeToken(), features.liveSpots, intelligencePortableSpots,
+        intelligenceAttention, cty.dataRevision, progress.goalStore.goals) {
+        progress.refresh(progress.filters, features.liveSpots, intelligencePortableSpots, intelligenceAttention, cty, portable.sotaCatalogue)
+    }
+    val clusterBandEvidenceSpots = remember(features.liveSpots, hamClockSettings.document.settings.cluster,
+        Instant.now().epochSecond / 60) {
+        filterClusterPresentation(features.liveSpots, hamClockSettings.document.settings.cluster, Instant.now().epochSecond)
+    }
+    val bandEvidence = remember(clusterBandEvidenceSpots, neuralDx.mySignal, features.rbnObservations, neuralDx.wsprPersonal) {
+        clusterBandEvidenceSpots.map { HamClockBandEvidence("CLUSTER", it.band, it.mode, it.callsign, it.spotter,
+            observedEpoch = it.receivedEpoch, frequencyHz = it.frequencyHz, id = "cluster:${it.id}") } +
+            neuralDx.mySignal.reports.map { HamClockBandEvidence("PSK", it.band, it.mode, it.callsign,
+                it.receiverCallsign, it.snr, it.epoch, it.frequencyHz, "psk:${signalReportReference(it)}") } +
+            features.rbnObservations.map { HamClockBandEvidence("RBN", it.band, it.mode, it.dxCall,
+                it.skimmerCall, it.snr, it.observedEpoch, it.frequencyHz, "rbn:${it.id}") } +
+            neuralDx.wsprPersonal.reports.map { HamClockBandEvidence("WSPR", it.band, "WSPR", it.callsign,
+                it.receiverCallsign, it.snr, it.epoch, it.frequencyHz, "wspr:${signalReportReference(it)}") }
+    }
+    fun signalAvailability(state: HamClockFeedState) = when (state) {
+        HamClockFeedState.LIVE, HamClockFeedState.CACHED -> HamClockEvidenceAvailability.CURRENT
+        HamClockFeedState.DEGRADED -> HamClockEvidenceAvailability.DEGRADED
+        HamClockFeedState.STALE -> HamClockEvidenceAvailability.STALE
+        HamClockFeedState.UNAVAILABLE -> HamClockEvidenceAvailability.UNAVAILABLE
+    }
+    val bandAvailability = remember(features.clusterConnection, features.rbnSourceSnapshot, neuralDx.mySignal,
+        neuralDx.wsprPersonal, hamClockSettings.document.settings) { mapOf(
+        "CLUSTER" to if (features.clusterConnection.state == ClusterConnectionState.CONNECTED) HamClockEvidenceAvailability.CURRENT else HamClockEvidenceAvailability.UNAVAILABLE,
+        "PSK" to if (!hamClockSettings.document.settings.pskReporter.enabled) HamClockEvidenceAvailability.DISABLED else signalAvailability(
+            combinedSignalFeedState(neuralDx.mySignal.beingHeardState, neuralDx.mySignal.hearingState)),
+        "RBN" to when (features.rbnSourceSnapshot.state) {
+            HamClockRbnSourceState.CURRENT, HamClockRbnSourceState.EMPTY -> HamClockEvidenceAvailability.CURRENT
+            HamClockRbnSourceState.STALE -> HamClockEvidenceAvailability.STALE
+            HamClockRbnSourceState.ERROR -> HamClockEvidenceAvailability.ERROR
+            HamClockRbnSourceState.DISABLED -> HamClockEvidenceAvailability.DISABLED
+            else -> HamClockEvidenceAvailability.UNAVAILABLE
+        },
+        "WSPR" to if (!hamClockSettings.document.settings.wspr.personalEnabled) HamClockEvidenceAvailability.DISABLED
+            else signalAvailability(neuralDx.wsprPersonal.sourceState),
+    ) }
+    val bandStationId = wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }
+    val bandStationCall = wavelog.selectedStation?.callsign?.ifBlank { null } ?: app.stationCallsign
+    LaunchedEffect(bandEvidence, bandAvailability, hamClockSettings.document.settings.bandHealth,
+        database.changeToken(), bandStationId, bandStationCall) {
+        progress.refreshBandHealth(bandEvidence, bandAvailability, hamClockSettings.document.settings.bandHealth,
+            bandStationId, bandStationCall)
+    }
     when (destination) {
-        Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, send,
-            openDx, openPortable, openProgress)
+        Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, callbook,
+            publicProviders, hamClockSettings, operations, progress.bandHealthSnapshot, send, openDx, openPortable, openProgress, openOperations,
+            openLogbook, closeEq, openDigi, foreground, requestHomeReceiveTune,
+            openHomeQso)
         Destination.RADIO -> Column(Modifier.fillMaxSize()) {
             if (compact) SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
                 SegmentedButton(true, {}, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Radio") }
@@ -387,7 +565,7 @@ private fun navIcon(item: Destination) = when (item) {
             PotaActivationStrip(activation, radio, openActivation)
             Box(Modifier.weight(1f)) {
                 if (app.radioFamily == RadioFamily.FLEXRADIO) FlexRadioScreen(flex, openLogbook)
-                else if (!compact || !app.panadapterEnabled) RadioScreen(radio, detail, app, database, wavelog, callbook, cty,
+                else if (!compact || !app.panadapterEnabled) RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty,
                     features, voiceStore, voiceTx, connect, send, direct, requestVoice, clearCwDecode,
                     portableDraft, consumePortableDraft, portable::notifyQsoChanged)
                 else Column(Modifier.fillMaxSize()) {
@@ -396,7 +574,7 @@ private fun navIcon(item: Destination) = when (item) {
                         SegmentedButton(compactPanadapter, { compactPanadapter = true }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("Panadapter") }
                     }
                     if (compactPanadapter) PanadapterScreen(panadapter, radio, features.liveSpots, true) { compactPanadapter = false }
-                    else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx,
+                    else RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty, features, voiceStore, voiceTx,
                         connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
                 }
             }
@@ -404,25 +582,40 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.DIGI -> DigiScreen(digi, radio, compact)
         Destination.PANADAPTER -> if (app.panadapterEnabled && app.radioFamily.isElecraft)
             PanadapterScreen(panadapter, radio, features.liveSpots, compact)
-        else RadioScreen(radio, detail, app, database, wavelog, callbook, cty, features, voiceStore, voiceTx,
+        else RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty, features, voiceStore, voiceTx,
             connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
         Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
         Destination.LOGBOOK -> Column(Modifier.fillMaxSize()) {
             PotaActivationStrip(activation, radio, openActivation)
-            Box(Modifier.weight(1f)) { LogbookScreen(radio, database, wavelog, syncHub, callbook, app, openSync, openProgress) }
+            Box(Modifier.weight(1f)) { LogbookScreen(radio, database, mutations, wavelog, wavelogNative, syncHub, callbook, app,
+                openSync, openProgress, progress.logbookRequest, progress::consumeLogbookRequest, homeQsoId, consumeHomeQso) }
         }
         Destination.PROGRESS -> ProgressScreen(progress, features, portable, syncHub, cty,
             wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }.orEmpty(), app.stationCallsign, compact,
-            openDx = openDx, openPortable = openPortable,
-            openLogbook = openLogbook, openSync = openSync)
-        Destination.SYNC -> SyncHubScreen(database, syncHub, wavelog, openLogbook)
+            openDx = openDx, openDxEvidence = { band -> neuralDx.requestBandEvidence(band); openDx() }, openPortable = openPortable,
+            openLogbook = openLogbook, openLogbookFilter = { filter -> progress.requestLogbook(filter); openLogbook() }, openSync = openSync)
+        Destination.SYNC -> SyncHubScreen(database, mutations, syncHub, wavelog, wavelogNative, openLogbook)
         Destination.PRESETS -> PresetsScreen(radio, app, send)
-        Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app, send)
+        Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app,
+            hamClockSettings.document.settings.cluster, hamClockSettings.document.settings.dxNews,
+            hamClockSettings.document.settings.bandHealth, progress.bandHealthSnapshot,
+            { value -> hamClockSettings.updateSettings { it.copy(dxNews = value) } },
+            { value -> hamClockSettings.updateSettings { it.copy(bandHealth = value) } }, progress.snapshot.needs,
+            operations, openOperations, send, requestHomeReceiveTune) { callsign ->
+            progress.requestLogbook(logbookFilterForDimension("callsign", callsign)); openLogbook()
+        }
         Destination.PORTABLE -> PortableWorkspaceScreen(portable, activation, radio, app.stationGrid, foreground, compact,
-            app, database, wavelog, callbook, cty, tunePortable, tuneLogPortable, openLogbook)
+            app, database, mutations, wavelog, callbook, cty, tunePortable, tuneLogPortable,
+            progress.snapshot.needs.mapNotNull { need -> need.portableSpot?.id?.let { it to need.reasons } }.toMap(), openLogbook,
+            operations.nextPlan, openOperations)
         Destination.GROUPS_IO -> GroupsIoScreen(groupsIo, compact)
-        Destination.SETTINGS -> SettingsScreen(radio, detail, database, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
-            transport, flex, voiceStore, voiceAudio, voiceTx, groupsIo, { openEq() }, { openSync() }, openGroupsIo, connect, direct)
+        Destination.OPERATIONS -> OperationsScreen(operations, portable, activation, features, progress, mutations, wavelog, callbook, cty,
+            app, compact, openDx, openPortable, openLogbook, { frequency, mode ->
+                requestHomeReceiveTune(frequency, mode, "Operations satellite receive preview",
+                    "Review receive-only downlink change")
+            }, prepareSatelliteLogger)
+        Destination.SETTINGS -> SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
+            transport, flex, voiceStore, voiceAudio, voiceTx, groupsIo, openEq, openSync, openGroupsIo, connect, direct)
     }
 }
 
@@ -472,6 +665,7 @@ private fun navIcon(item: Destination) = when (item) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable private fun RadioScreen(state: RadioState, detail: String, app: AppController, database: QsoDatabase,
+    mutations: QsoMutationCoordinator,
     wavelog: WavelogController, callbook: CallbookController, cty: CtyController, features: FeatureController,
     voiceStore: VoiceMacroStore, voiceTx: VoiceMacroTransmitController, connect: () -> Unit, send: (String) -> Unit,
     direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
@@ -528,7 +722,7 @@ private fun navIcon(item: Destination) = when (item) {
                         isVoiceMacroMode(state.mode) -> VoiceMacroStrip(state, voiceStore, voiceTx, requestVoice,
                             Modifier.fillMaxWidth().heightIn(min = 54.dp))
                     }
-                CompactLogger(state, database, wavelog, callbook, cty, app, send, portableDraft, consumePortableDraft, onQsoSaved,
+            CompactLogger(state, database, mutations, wavelog, callbook, cty, app, send, portableDraft, consumePortableDraft, onQsoSaved,
                         onInsight = { stationInsight = it; identityVisible = true },
                         onInsightCleared = { stationInsight = null; identityVisible = false },
                         modifier = Modifier.weight(1f).fillMaxWidth())
@@ -2306,7 +2500,8 @@ private fun spotStatusColor(status: String?): Color = when (status) {
     }
 }
 
-@Composable private fun CompactLogger(state: RadioState, database: QsoDatabase, wavelog: WavelogController,
+@Composable private fun CompactLogger(state: RadioState, database: QsoDatabase, mutations: QsoMutationCoordinator,
+    wavelog: WavelogController,
     callbook: CallbookController, cty: CtyController, app: AppController, send: (String) -> Unit,
     portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, onQsoSaved: () -> Unit,
     onInsight: (StationInsight) -> Unit, onInsightCleared: () -> Unit, modifier: Modifier = Modifier) {
@@ -2319,6 +2514,8 @@ private fun spotStatusColor(status: String?): Color = when (status) {
     var region by remember { mutableStateOf("") }; var cqZone by remember { mutableStateOf("") }; var ituZone by remember { mutableStateOf("") }
     var stateName by remember { mutableStateOf("") }; var email by remember { mutableStateOf("") }
     var propagation by remember { mutableStateOf("") }; var antennaPath by remember { mutableStateOf("") }
+    var satelliteName by remember { mutableStateOf("") }; var satelliteMode by remember { mutableStateOf("") }
+    var draftFrequencyRxHz by remember { mutableLongStateOf(0) }; var draftObserverGrid by remember { mutableStateOf("") }
     var qslSent by remember { mutableStateOf("N") }; var qslMethod by remember { mutableStateOf("") }
     var qslVia by remember { mutableStateOf("") }; var qslMessage by remember { mutableStateOf("") }
     var enrichment by remember { mutableStateOf("Enter a callsign") }; var status by remember { mutableStateOf("LOCAL FIRST") }
@@ -2326,6 +2523,7 @@ private fun spotStatusColor(status: String?): Color = when (status) {
     var logFrequencyMHz by remember { mutableStateOf(if (state.frequencyHz > 0) "%.6f".format(Locale.US, state.frequencyHz / 1_000_000.0) else "") }
     var logMode by remember { mutableStateOf(state.mode.takeUnless { it == "--" }.orEmpty()) }
     var portableChaseDraft by remember { mutableStateOf(false) }
+    var satelliteDraft by remember { mutableStateOf(false) }
     val lookupScope = rememberCoroutineScope()
     val selectedStation = wavelog.selectedStation
     val utc = wavelog.synchronizedNow().atZone(ZoneOffset.UTC)
@@ -2333,13 +2531,13 @@ private fun spotStatusColor(status: String?): Color = when (status) {
         lookupGeneration++
         call = ""; sent = "59"; received = "59"; name = ""; qth = ""; grid = ""; iota = ""; sota = ""; wwff = ""; pota = ""
         comment = ""; notes = ""; country = ""; dxcc = ""; continent = ""; region = ""; cqZone = ""; ituZone = ""
-        stateName = ""; email = ""; propagation = ""; antennaPath = ""; qslSent = "N"; qslMethod = ""; qslVia = ""; qslMessage = ""
-        logFrequencyMHz = if (state.frequencyHz > 0) "%.6f".format(Locale.US, state.frequencyHz / 1_000_000.0) else ""; logMode = state.mode.takeUnless { it == "--" }.orEmpty(); portableChaseDraft = false
+        stateName = ""; email = ""; propagation = ""; antennaPath = ""; satelliteName = ""; satelliteMode = ""; draftFrequencyRxHz = 0; draftObserverGrid = ""; qslSent = "N"; qslMethod = ""; qslVia = ""; qslMessage = ""
+        logFrequencyMHz = if (state.frequencyHz > 0) "%.6f".format(Locale.US, state.frequencyHz / 1_000_000.0) else ""; logMode = state.mode.takeUnless { it == "--" }.orEmpty(); portableChaseDraft = false; satelliteDraft = false
         enrichment = "Enter a callsign"; tab = QsoEditorTab.QSO
         onInsightCleared()
     }
-    LaunchedEffect(state.frequencyHz, state.mode, portableChaseDraft) {
-        if (!portableChaseDraft) {
+    LaunchedEffect(state.frequencyHz, state.mode, portableChaseDraft, satelliteDraft) {
+        if (!portableChaseDraft && !satelliteDraft) {
             if (state.frequencyHz > 0) logFrequencyMHz = "%.6f".format(Locale.US, state.frequencyHz / 1_000_000.0)
             if (state.mode.isNotBlank() && state.mode != "--") logMode = state.mode
         }
@@ -2347,8 +2545,11 @@ private fun spotStatusColor(status: String?): Color = when (status) {
     LaunchedEffect(portableDraft?.token) {
         val draft = portableDraft ?: return@LaunchedEffect
         call = draft.callsign; pota = draft.potaRef; sota = draft.sotaRef; wwff = draft.wwffRef; qth = draft.referenceNames
-        comment = draft.comment; logFrequencyMHz = "%.6f".format(Locale.US, draft.frequencyHz / 1_000_000.0); logMode = draft.mode
-        portableChaseDraft = true; status = "PORTABLE CHASE DRAFT · REVIEW BEFORE SAVE"; tab = QsoEditorTab.QSO
+        comment = draft.comment; logFrequencyMHz = draft.frequencyHz.takeIf { it > 0 }?.let { "%.6f".format(Locale.US, it / 1_000_000.0) }.orEmpty(); logMode = draft.mode
+        propagation = draft.propagationMode; satelliteName = draft.satelliteName; satelliteMode = draft.satelliteMode
+        draftFrequencyRxHz = draft.frequencyRxHz; draftObserverGrid = draft.observerGrid
+        satelliteDraft = draft.satelliteName.isNotBlank(); portableChaseDraft = !satelliteDraft
+        status = if (satelliteDraft) "SATELLITE DRAFT · REVIEW BEFORE SAVE" else "PORTABLE CHASE DRAFT · REVIEW BEFORE SAVE"; tab = QsoEditorTab.QSO
         consumePortableDraft()
     }
     fun applyCty(): Boolean {
@@ -2464,6 +2665,10 @@ private fun spotStatusColor(status: String?): Color = when (status) {
                             ChoiceField("Antenna path", antennaPathLabel(antennaPath), antennaPathChoices, antennaPath, { antennaPath = it }, Modifier.weight(1f))
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            LogField("Satellite name", satelliteName, { satelliteName = it.uppercase() }, Modifier.weight(1f))
+                            LogField("Satellite mode", satelliteMode, { satelliteMode = it.uppercase() }, Modifier.weight(1f))
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             LogField("State", stateName, { stateName = it.uppercase() }, Modifier.weight(1f)); LogField("E-mail", email, { email = it }, Modifier.weight(1f))
                         }
                         LogField("Country", country, { country = it }, Modifier.fillMaxWidth())
@@ -2485,20 +2690,23 @@ private fun spotStatusColor(status: String?): Color = when (status) {
                     applyCty(); val station = wavelog.selectedStation
                     val qso = Qso(id, call, qsoFrequency, qsoMode, sent, received, now.epochSecond, name, qth, notes, country,
                         band = bandForFrequency(qsoFrequency), grid = grid, iota = iota, sotaRef = sota, wwffRef = wwff, potaRef = pota,
-                        comment = comment, frequencyRxHz = qsoFrequency, bandRx = bandForFrequency(qsoFrequency), txPowerW = state.powerW,
+                        comment = comment, frequencyRxHz = if (satelliteDraft) draftFrequencyRxHz else draftFrequencyRxHz.takeIf { it > 0 } ?: qsoFrequency,
+                        bandRx = if (satelliteDraft) bandForFrequency(draftFrequencyRxHz) else bandForFrequency(draftFrequencyRxHz.takeIf { it > 0 } ?: qsoFrequency), txPowerW = state.powerW,
                         operatorCallsign = app.stationCallsign.ifBlank { station?.callsign.orEmpty() }, stationCallsign = station?.callsign ?: app.stationCallsign,
                         stationProfileId = if (wavelog.logMode == LogMode.WAVELOG) wavelog.stationId else "", stationLocation = station?.name ?: app.stationName,
-                        myGrid = station?.grid ?: app.stationGrid, myCountry = station?.country.orEmpty(), myDxcc = station?.dxcc.orEmpty(),
+                        myGrid = draftObserverGrid.ifBlank { station?.grid ?: app.stationGrid }, myCountry = station?.country.orEmpty(), myDxcc = station?.dxcc.orEmpty(),
                         myCqZone = station?.cqZone.orEmpty(), myItuZone = station?.ituZone.orEmpty(), myState = station?.state.orEmpty(),
                         myIota = station?.iota.orEmpty(), mySotaRef = if (portableChaseDraft) "" else station?.sotaRef.orEmpty(), myWwffRef = if (portableChaseDraft) "" else station?.wwffRef.orEmpty(), myPotaRef = if (portableChaseDraft) "" else station?.potaRef.orEmpty(),
                         radioModel = app.radioFamily.displayName, dxcc = dxcc, continent = continent, region = region, cqZone = cqZone,
                         ituZone = ituZone, state = stateName, email = email, propagationMode = propagation, antennaPath = antennaPath,
                         qslSent = qslSent, qslMethod = qslMethod, qslVia = qslVia, qslMessage = qslMessage,
-                        syncState = if (wavelog.logMode == LogMode.WAVELOG) "pending" else "local")
+                        syncState = if (wavelog.logMode == LogMode.WAVELOG) "pending" else "local",
+                        extraAdifFields = buildMap { if (satelliteName.isNotBlank()) put("SAT_NAME", satelliteName); if (satelliteMode.isNotBlank()) put("SAT_MODE", satelliteMode) })
                     if (call.isBlank() || !state.connected || qsoFrequency <= 0 || qsoMode.isBlank()) status = "CALL / FREQUENCY / MODE / LIVE CAT REQUIRED"
-                    else if (!database.save(qso)) status = "DUPLICATE NOT SAVED"
+                    else if (!mutations.save(qso)) status = "DUPLICATE NOT SAVED"
                     else {
-                        if (wavelog.logMode == LogMode.WAVELOG) { wavelog.enqueue(id, database.toADIF(qso)); status = "SAVED · TWO-WAY SYNC QUEUED" }
+                        if (mutations.isMapped(qso)) status = "SAVED · NATIVE WAVELOG OUTBOX QUEUED"
+                        else if (wavelog.logMode == LogMode.WAVELOG) { wavelog.enqueue(id, database.toADIF(qso)); status = "SAVED · LEGACY WAVELOG QUEUED" }
                         else status = "SAVED · LOCAL ADIF"
                         onQsoSaved(); clear()
                     }
@@ -2889,13 +3097,33 @@ private fun modeCode(mode: String) = when (mode.uppercase()) { "LSB" -> "1"; "US
 private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
 
 @Composable private fun DXScreen(neuralDx: NeuralDxController, features: FeatureController, database: QsoDatabase,
-    wavelog: WavelogController, callbook: CallbookController, cty: CtyController, app: AppController, send: (String) -> Unit) {
-    var previousQsoRecord by remember { mutableStateOf<AndroidCallbookRecord?>(null) }
-    NeuralDxScreen(neuralDx, features, database, wavelog, callbook, cty, app, send) { spot ->
-        previousQsoRecord = spot.previousQsoRecord(cty)
-    }
-    previousQsoRecord?.let { record ->
-        PreviousQsosDialog(record, database, wavelog, callbook) { previousQsoRecord = null }
+    wavelog: WavelogController, callbook: CallbookController, cty: CtyController, app: AppController,
+    clusterPreference: app.rigweave.mobile.hamclock.HamClockClusterPreference,
+    dxNewsPreference: app.rigweave.mobile.hamclock.HamClockDxNewsPreference,
+    bandHealthPreference: app.rigweave.mobile.hamclock.HamClockBandHealthPreference,
+    bandHealthSnapshot: app.rigweave.mobile.hamclock.HamClockBandHealthSnapshot,
+    updateDxNewsPreference: (app.rigweave.mobile.hamclock.HamClockDxNewsPreference) -> Unit,
+    updateBandHealthPreference: (app.rigweave.mobile.hamclock.HamClockBandHealthPreference) -> Unit,
+    needs: List<ProgressNeed>, operations: OperationsController, openOperations: () -> Unit, send: (String) -> Unit,
+    requestReceiveTune: (Long, String?, String, String) -> Unit, openHistory: (String) -> Unit) {
+    val calendarByCall = operations.dxItems.associateBy { it.callsign.uppercase(Locale.US) }
+    val calendarNeeds = features.liveSpots.mapNotNull { spot -> calendarByCall[spot.callsign.uppercase(Locale.US)]?.let { row ->
+        spot.id to listOf("DX CALENDAR · ${row.status.replace('_', ' ')}") } }.toMap()
+    val dxNeeds = needs.mapNotNull { need -> need.dxSpot?.id?.let { it to need.reasons } }.toMap() + calendarNeeds
+    Column(Modifier.fillMaxSize()) {
+        Surface(color = Panel, modifier = Modifier.fillMaxWidth().clickable(onClick = openOperations)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("DX CALENDAR · ${calendarNeeds.size} live matches", color = Amber, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                TextButton(openOperations) { Text("OPEN CALENDAR") }
+            }
+        }
+        Box(Modifier.weight(1f)) {
+            NeuralDxScreen(neuralDx, features, database, wavelog, callbook, cty, app, clusterPreference,
+                dxNewsPreference, updateDxNewsPreference, send, requestReceiveTune, dxNeeds,
+                bandHealthPreference, bandHealthSnapshot, updateBandHealthPreference, { call -> openHistory(call) }) { spot ->
+                openHistory(spot.callsign)
+            }
+        }
     }
 }
 
@@ -2904,34 +3132,68 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
         trailingContent = { Text(trailing, color = if (alert) Hold else Muted) }, colors = ListItemDefaults.colors(containerColor = Color.Transparent))
 }
 
-@Composable private fun LogbookScreen(state: RadioState, database: QsoDatabase, wavelog: WavelogController,
-    syncHub: SyncHubController, callbook: CallbookController, app: AppController, openSync: () -> Unit, openProgress: () -> Unit) {
+@Composable private fun LogbookScreen(state: RadioState, database: QsoDatabase, mutations: QsoMutationCoordinator,
+    wavelog: WavelogController, wavelogNative: WavelogNativeController,
+    syncHub: SyncHubController, callbook: CallbookController, app: AppController, openSync: () -> Unit, openProgress: () -> Unit,
+    initialFilter: LogbookFilter? = null, consumeInitialFilter: () -> Unit = {},
+    initialQsoId: String? = null, consumeInitialQso: () -> Unit = {}) {
     var showFilters by remember { mutableStateOf(false) }
-    var draft by remember { mutableStateOf(LogbookFilter()) }
-    var applied by remember { mutableStateOf(LogbookFilter()) }
-    var fromDate by remember { mutableStateOf("") }; var toDate by remember { mutableStateOf("") }
-    var filterError by remember { mutableStateOf("") }; var selectedId by remember { mutableStateOf<String?>(null) }
-    var page by remember { mutableIntStateOf(0) }
-    var pageData by remember { mutableStateOf(QsoPage(emptyList(), 0, 0, applied.limit)) }
+    var showFastEntry by remember { mutableStateOf(false) }
+    var draft by rememberSaveable { mutableStateOf(LogbookFilter()) }
+    var applied by rememberSaveable { mutableStateOf(LogbookFilter()) }
+    var fromDate by rememberSaveable { mutableStateOf("") }; var toDate by rememberSaveable { mutableStateOf("") }
+    var filterError by rememberSaveable { mutableStateOf("") }; var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
+    var deleteQso by remember { mutableStateOf<Qso?>(null) }
+    var editingQso by remember { mutableStateOf<Qso?>(null) }
+    var exportRequest by remember { mutableStateOf<Pair<LogbookFilter?,List<String>?>?>(null) }
+    var actionStatus by remember { mutableStateOf("") }
     var refreshGeneration by remember { mutableIntStateOf(0) }
     var previousQsoRecord by remember { mutableStateOf<AndroidCallbookRecord?>(null) }
+    val context = LocalContext.current
+    val logbookScope = rememberCoroutineScope()
+    val logbookController=remember(database){LogbookController(LogbookRepository(database))}
+    DisposableEffect(logbookController){onDispose(logbookController::close)}
+    val queryState=logbookController.state
+    val ready=queryState as? LogbookQueryState.Ready
+    val pageRows=ready?.rows.orEmpty()
+    val pageData=QsoPage(pageRows,ready?.exactTotal?:pageRows.size,logbookController.pageIndex,applied.limit)
+    val pageLoading=queryState is LogbookQueryState.LoadingFirstPage||queryState is LogbookQueryState.LoadingAnotherPage
+    val pageError=(queryState as? LogbookQueryState.RecoverableError)?.message.orEmpty()
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-adif")) { uri ->
+        val request=exportRequest;exportRequest=null
+        if(uri!=null&&request!=null)logbookScope.launch { runCatching { withContext(Dispatchers.IO) {
+            context.contentResolver.openOutputStream(uri)?.use { output -> database.streamExportADIF(output,request.first?:LogbookFilter(),
+                wavelog.stationId.takeIf { wavelog.logMode==LogMode.WAVELOG },request.second) } ?: error("Export destination could not be opened")
+        } }.onSuccess { actionStatus="ADIF export saved." }.onFailure { actionStatus="ADIF export failed: ${it.message}" } }
+    }
+
+    LaunchedEffect(initialFilter) {
+        initialFilter?.let { requested ->
+            draft = requested; applied = requested; selectedId = null
+            fromDate = requested.fromEpochSeconds?.let { Instant.ofEpochSecond(it).atZone(ZoneOffset.UTC).toLocalDate().toString() }.orEmpty()
+            toDate = requested.toEpochSecondsExclusive?.let { Instant.ofEpochSecond(it - 1).atZone(ZoneOffset.UTC).toLocalDate().toString() }.orEmpty()
+            consumeInitialFilter()
+        }
+    }
+    LaunchedEffect(initialQsoId) {
+        initialQsoId?.let { id ->
+            withContext(Dispatchers.IO) { database.qso(id) }?.let { editingQso = it; selectedId = id }
+            consumeInitialQso()
+        }
+    }
 
     LaunchedEffect(wavelog.logMode, wavelog.stationId) {
         if (wavelog.logMode == LogMode.WAVELOG) {
             if (wavelog.configured && wavelog.stations.isEmpty()) wavelog.loadStations()
             wavelog.syncTwoWay()
         }
-        page = 0; refreshGeneration++
+        refreshGeneration++
     }
     LaunchedEffect(wavelog.status) {
         if (wavelog.status.startsWith("Two-way sync complete")) refreshGeneration++
     }
-    LaunchedEffect(applied, page, wavelog.logMode, wavelog.stationId, refreshGeneration) {
-        pageData = withContext(Dispatchers.IO) {
-            database.page(page, applied.limit, applied,
-                wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG })
-        }
-        if (page != pageData.page) page = pageData.page
+    LaunchedEffect(applied, wavelog.logMode, wavelog.stationId, refreshGeneration) {
+        logbookController.apply(applied,wavelog.stationId.takeIf { wavelog.logMode==LogMode.WAVELOG })
     }
     val selected = pageData.rows.firstOrNull { it.id == selectedId }
     val stationLabel = wavelog.selectedStation?.label?.ifBlank { null }
@@ -2951,18 +3213,43 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                 Icon(Icons.Outlined.FilterAlt, null); Spacer(Modifier.width(6.dp))
                 Text("FILTERS${activeLogbookFilterCount(applied).takeIf { it > 0 }?.let { " · $it" }.orEmpty()}", fontWeight = FontWeight.Black)
             }
+            OutlinedButton({ showFastEntry = true }, modifier = Modifier.heightIn(min = 48.dp)) { Text("FAST ENTRY") }
             QuickFilterMenu(selected) { key ->
                 val updated = quickFilter(applied, selected ?: return@QuickFilterMenu, key)
                 if (key == "date") {
                     val date = Instant.ofEpochSecond(selected.createdAt).atZone(ZoneOffset.UTC).toLocalDate().toString()
                     fromDate = date; toDate = date
                 }
-                draft = updated; applied = updated; page = 0; selectedId = null
+                draft = updated; applied = updated; selectedId = null
             }
+            OutlinedButton({ selected?.let { deleteQso = it } }, enabled = selected != null,
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("DELETE QSO") }
+            OutlinedButton({ selected?.let { editingQso = it } }, enabled = selected != null,
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("EDIT QSO") }
+            OutlinedButton({ selected?.let { qso -> exportRequest=null to listOf(qso.id); exportLauncher.launch("rigweave-${qso.callsign}.adi") } },
+                enabled = selected != null, modifier = Modifier.heightIn(min = 48.dp)) { Text("EXPORT SELECTED") }
+            OutlinedButton({
+                exportRequest = applied to null
+                exportLauncher.launch("rigweave-filtered-${LocalDate.now(ZoneOffset.UTC)}.adi")
+            }, enabled = pageData.total > 0, modifier = Modifier.heightIn(min = 48.dp)) { Text("EXPORT FILTERED") }
+            OutlinedButton({ selected?.let { qso -> callbook.lookup(qso.callsign) { record ->
+                if (record == null) actionStatus = "No callbook record found for ${qso.callsign}." else {
+                    mutations.update(qso.copy(name = record.name, qth = record.qth, country = record.country, grid = record.grid,
+                        dxcc = record.dxcc, continent = record.continent, cqZone = record.cqZone, ituZone = record.ituZone,
+                        state = record.state, email = record.email))
+                    actionStatus = "Callbook fields updated locally; eligible Wavelog update queued."
+                    refreshGeneration++
+                }
+            } } }, enabled = selected != null, modifier = Modifier.heightIn(min = 48.dp)) { Text("UPDATE CALLBOOK") }
+            val selectedOutbox = selected?.let { qso -> wavelogNative.outbox.firstOrNull { it.entry.localQsoId == qso.id && it.entry.state != WavelogOutboxState.ACCEPTED } }
+            OutlinedButton({ selectedOutbox?.let(wavelogNative::retryOutbox) }, enabled = selectedOutbox != null && !wavelogNative.busy,
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("RETRY WAVELOG") }
+            OutlinedButton(wavelogNative::fullReconcile, enabled = wavelogNative.binding != null && !wavelogNative.busy,
+                modifier = Modifier.heightIn(min = 48.dp)) { Text("RECONCILE") }
             LogbookColumnMenu(app)
             if (activeLogbookFilterCount(applied) > 0) OutlinedButton({
                 val cleared = LogbookFilter(limit = applied.limit)
-                draft = cleared; applied = cleared; page = 0; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
+                draft = cleared; applied = cleared; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
             }, modifier = Modifier.heightIn(min = 48.dp)) { Icon(Icons.Outlined.Clear, null); Spacer(Modifier.width(5.dp)); Text("CLEAR FILTERS") }
             OutlinedButton({ if (wavelog.logMode == LogMode.WAVELOG) wavelog.syncTwoWay(); refreshGeneration++ }, modifier = Modifier.heightIn(min = 48.dp)) {
                 Icon(Icons.Outlined.Refresh, null); Spacer(Modifier.width(6.dp)); Text(if (wavelog.logMode == LogMode.WAVELOG) "SYNC" else "REFRESH")
@@ -2975,18 +3262,30 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
             }
             Text("${pageData.rows.size} / ${pageData.total} RESULTS", color = Ink, fontWeight = FontWeight.Black, fontSize = 16.sp)
             CompactPager(pageData, applied.limit, { limit ->
-                draft = draft.copy(limit = limit); applied = applied.copy(limit = limit); page = 0; selectedId = null
-            }, { page = (page - 1).coerceAtLeast(0); selectedId = null },
-                { page = (page + 1).coerceAtMost(pageData.pageCount - 1); selectedId = null })
+                draft = draft.copy(limit = limit); applied = applied.copy(limit = limit); selectedId = null
+            }, { logbookController.loadPrevious(); selectedId = null },
+                { logbookController.loadNext(); selectedId = null })
         }
+        if (actionStatus.isNotBlank()) Text(actionStatus, color = Hold, style = MaterialTheme.typography.bodySmall)
         val deliveryStates = syncHub.records.filter { record -> pageData.rows.any { it.id == record.qsoId } }
             .groupBy { it.qsoId }.mapValues { entry -> entry.value.associate { it.provider to it.state } }
-        LogbookTable(pageData.rows, deliveryStates, selectedId, { selectedId = it }, applied, app.visibleLogbookColumns,
-            { previousQsoRecord = it.previousQsoRecord() }, Modifier.weight(1f)) { sort ->
-            val direction = if (applied.sort == sort && applied.direction == LogbookSortDirection.DESCENDING)
-                LogbookSortDirection.ASCENDING else LogbookSortDirection.DESCENDING
-            draft = draft.copy(sort = sort, direction = direction)
-            applied = applied.copy(sort = sort, direction = direction); page = 0; selectedId = null
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            if (pageLoading) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            else if (pageError.isNotBlank()) Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(pageError, color = Danger); TextButton(logbookController::retry) { Text("RETRY") }
+            }
+            else if(queryState is LogbookQueryState.ProjectionOptimising) Column(Modifier.align(Alignment.Center),horizontalAlignment=Alignment.CenterHorizontally){
+                CircularProgressIndicator(progress={queryState.progress});Text("Optimising local log index · ${(queryState.progress*100).toInt()}%",color=Muted)
+            }
+            else if (maxWidth < 720.dp) CompactLogbookList(pageData.rows, deliveryStates, selectedId, { selectedId = it },
+                { previousQsoRecord = it.previousQsoRecord() }, Modifier.fillMaxSize())
+            else LogbookTable(pageData.rows, deliveryStates, selectedId, { selectedId = it }, applied, app.visibleLogbookColumns,
+                { previousQsoRecord = it.previousQsoRecord() }, Modifier.fillMaxSize()) { sort ->
+                val direction = if (applied.sort == sort && applied.direction == LogbookSortDirection.DESCENDING)
+                    LogbookSortDirection.ASCENDING else LogbookSortDirection.DESCENDING
+                draft = draft.copy(sort = sort, direction = direction)
+                applied = applied.copy(sort = sort, direction = direction); selectedId = null
+            }
         }
         if (showFilters) LogbookFilterDialog(draft, { draft = it }, fromDate, { fromDate = it }, toDate, { toDate = it },
             filterError, onPreset = { preset ->
@@ -3002,16 +3301,50 @@ private enum class DXView { LIVE, SMART, BANDMAP, PULSE, WORLD, WATCH }
                         filterError = ""
                         applied = draft.copy(fromEpochSeconds = from?.atStartOfDay()?.toEpochSecond(ZoneOffset.UTC),
                             toEpochSecondsExclusive = to?.plusDays(1)?.atStartOfDay()?.toEpochSecond(ZoneOffset.UTC))
-                        draft = applied; page = 0; selectedId = null; showFilters = false
+                        draft = applied; selectedId = null; showFilters = false
                     }
                 }, onClear = {
                     val cleared = LogbookFilter(limit = applied.limit)
-                    draft = cleared; applied = cleared; page = 0; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
+                    draft = cleared; applied = cleared; selectedId = null; fromDate = ""; toDate = ""; filterError = ""
                 }, onDismiss = { showFilters = false })
+    if (showFastEntry) FastEntryDialog(mutations, wavelog, callbook, app.stationCallsign, { _, _ -> refreshGeneration++ }) {
+            showFastEntry = false
+        }
+        deleteQso?.let { qso -> DeleteQsoDialog(qso, mutations, onDeleted = {
+            deleteQso = null; selectedId = null; refreshGeneration++
+        }, onDismiss = { deleteQso = null }) }
+        editingQso?.let { qso -> QsoCorrectionDialog(qso, mutations, syncHub) {
+            editingQso = null; selectedId = null; refreshGeneration++
+        } }
     }
     previousQsoRecord?.let { record ->
         PreviousQsosDialog(record, database, wavelog, callbook) { previousQsoRecord = null }
     }
+}
+
+@Composable private fun DeleteQsoDialog(qso: Qso, mutations: QsoMutationCoordinator,
+    onDeleted: () -> Unit, onDismiss: () -> Unit) {
+    val unavailable = mutations.remoteDeleteUnavailableReason(qso)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("DELETE ${qso.callsign} QSO?") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Choose the deletion intent explicitly. Both choices remove the local QSO.")
+            Text("LOCAL ONLY keeps remote identity metadata so Wavelog can be shown, re-imported, or relinked later.")
+            Text(if (unavailable == null)
+                "DELETE REMOTE IF UNCHANGED verifies the Wavelog QSO still matches its accepted baseline before deleting it. A changed remote QSO becomes a conflict."
+            else "Remote deletion unavailable: $unavailable", color = if (unavailable == null) Ink else Muted)
+        } },
+        confirmButton = {
+            Button({ mutations.delete(qso.id, QsoDeleteIntent.LOCAL_ONLY); onDeleted() }) { Text("LOCAL ONLY") }
+        },
+        dismissButton = { Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            if (unavailable == null) OutlinedButton({
+                mutations.delete(qso.id, QsoDeleteIntent.DELETE_REMOTE_IF_UNCHANGED); onDeleted()
+            }) { Text("DELETE REMOTE IF UNCHANGED") }
+            TextButton(onDismiss) { Text("CANCEL") }
+        } },
+    )
 }
 
 @Composable private fun LogbookColumnMenu(app: AppController) {
@@ -3099,10 +3432,8 @@ private fun quickFilter(base: LogbookFilter, qso: Qso, key: String): LogbookFilt
         base.copy(fromEpochSeconds = day.atStartOfDay().toEpochSecond(ZoneOffset.UTC),
             toEpochSecondsExclusive = day.plusDays(1).atStartOfDay().toEpochSecond(ZoneOffset.UTC))
     }
-    "callsign" -> base.copy(callsign = qso.callsign); "dxcc" -> base.copy(dxcc = qso.dxcc)
-    "state" -> base.copy(state = qso.state); "grid" -> base.copy(grid = qso.grid); "mode" -> base.copy(mode = qso.mode)
-    "band" -> base.copy(band = qso.band); "iota" -> base.copy(iota = qso.iota); "sota" -> base.copy(sota = qso.sotaRef)
-    "pota" -> base.copy(pota = qso.potaRef); "wwff" -> base.copy(wwff = qso.wwffRef)
+    "callsign", "dxcc", "state", "grid", "mode", "band", "iota", "sota", "pota", "wwff" ->
+        logbookFilterForDimension(key, quickFilterValue(qso, key), base)
     "operator" -> base.copy(operator = qso.operatorCallsign); else -> base
 }
 
@@ -3114,6 +3445,30 @@ private fun logbookDatePreset(preset: String, today: LocalDate = LocalDate.now(Z
     "This Year" -> today.withDayOfYear(1) to today
     "Last Year" -> today.minusYears(1).withDayOfYear(1) to today.withDayOfYear(1).minusDays(1)
     else -> today to today
+}
+
+@Composable private fun CompactLogbookList(records: List<Qso>, deliveries: Map<String, Map<SyncProvider, DeliveryState>>,
+    selectedId: String?, select: (String) -> Unit, previousQsos: (Qso) -> Unit, modifier: Modifier = Modifier) {
+    if (records.isEmpty()) Box(modifier, contentAlignment = Alignment.Center) {
+        Text("No QSOs match the current station and filters.", color = Muted)
+    } else LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        items(records, key = Qso::id) { qso ->
+            ElevatedCard(Modifier.fillMaxWidth().combinedClickable(onClick = { select(qso.id) }, onDoubleClick = { previousQsos(qso) }),
+                colors = CardDefaults.elevatedCardColors(containerColor = if (qso.id == selectedId) Raised else Panel)) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(qso.callsign, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                        Text("${qso.band} ${qso.submode.ifBlank { qso.mode }}", color = Hold, fontWeight = FontWeight.Bold)
+                    }
+                    Text("${Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))} UTC · ${"%.6f".format(Locale.US, qso.frequencyHz / 1_000_000.0)} MHz")
+                    Text(listOf(qso.name, qso.qth, qso.grid, qso.country).filter(String::isNotBlank).joinToString(" · ").ifBlank { "No station detail" },
+                        color = Muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    val sync = deliveries[qso.id].orEmpty().entries.joinToString(" · ") { "${it.key.name}: ${it.value.name}" }
+                    Text(listOf(qso.syncState, sync).filter(String::isNotBlank).joinToString(" · "), style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    }
 }
 
 @Composable private fun LogbookTable(records: List<Qso>, deliveries: Map<String, Map<SyncProvider, DeliveryState>>,
@@ -3219,6 +3574,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
     draft: LogbookFilter, update: (LogbookFilter) -> Unit, fromDate: String, updateFrom: (String) -> Unit,
     toDate: String, updateTo: (String) -> Unit, error: String, onPreset: (String) -> Unit,
     onApply: () -> Unit, onClear: () -> Unit, onDismiss: () -> Unit) {
+    var compactTab by rememberSaveable { mutableIntStateOf(0) }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxWidth(.94f).fillMaxHeight(.9f), color = Panel, shape = RoundedCornerShape(14.dp),
             border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF4A555D))) {
@@ -3228,15 +3584,24 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                         Text("General and QSL criteria apply together", color = Muted, fontSize = 15.sp) }
                     Spacer(Modifier.weight(1f)); IconButton(onDismiss) { Icon(Icons.Outlined.Close, "Close filters") }
                 }
-                Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Column(Modifier.weight(1.55f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("GENERAL", color = Hold, fontWeight = FontWeight.Black, fontSize = 17.sp)
-                        GeneralLogbookFilters(draft, update, fromDate, updateFrom, toDate, updateTo, onPreset, Modifier.weight(1f))
-                    }
-                    VerticalDivider(color = Color(0xFF465159))
-                    Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("QSL & SERVICES", color = Hold, fontWeight = FontWeight.Black, fontSize = 17.sp)
-                        QslLogbookFilters(draft, update, Modifier.weight(1f))
+                BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+                    if (maxWidth >= 850.dp) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Column(Modifier.weight(1.55f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("GENERAL", color = Hold, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                            GeneralLogbookFilters(draft, update, fromDate, updateFrom, toDate, updateTo, onPreset, Modifier.weight(1f))
+                        }
+                        VerticalDivider(color = Color(0xFF465159))
+                        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("QSL & SERVICES", color = Hold, fontWeight = FontWeight.Black, fontSize = 17.sp)
+                            QslLogbookFilters(draft, update, Modifier.weight(1f))
+                        }
+                    } else Column(Modifier.fillMaxSize()) {
+                        PrimaryTabRow(compactTab) {
+                            Tab(compactTab == 0, { compactTab = 0 }, text = { Text("GENERAL") })
+                            Tab(compactTab == 1, { compactTab = 1 }, text = { Text("QSL & SYNC") })
+                        }
+                        if (compactTab == 0) GeneralLogbookFilters(draft, update, fromDate, updateFrom, toDate, updateTo, onPreset, Modifier.weight(1f))
+                        else QslLogbookFilters(draft, update, Modifier.weight(1f))
                     }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -3253,9 +3618,9 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
 @Composable private fun GeneralLogbookFilters(filter: LogbookFilter, update: (LogbookFilter) -> Unit,
     fromDate: String, updateFrom: (String) -> Unit, toDate: String, updateTo: (String) -> Unit,
     preset: (String) -> Unit, modifier: Modifier = Modifier) {
-    val modes = listOf("" to "All") + listOf("CW", "SSB", "USB", "LSB", "AM", "FM", "RTTY", "DATA", "FT8", "FT4", "PSK31")
+    val modes = listOf("" to "All") + listOf("CW", "SSB", "USB", "LSB", "AM", "FM", "RTTY", "DATA", "FT8", "FT4", "JS8", "JT65", "MFSK", "PSK", "PSK31", "PSK63", "DSTAR", "FREEDV", "SSTV")
         .map { it to it }
-    val bands = listOf("" to "All") + listOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m")
+    val bands = listOf("" to "All") + listOf("2190m", "630m", "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m", "1.25m", "70cm", "33cm", "23cm", "13cm", "sat")
         .map { it to it }
     LazyVerticalGrid(GridCells.Adaptive(210.dp), modifier, horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 4.dp)) {
@@ -3270,11 +3635,24 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         }
         item { FilterText("From · YYYY-MM-DD", fromDate, updateFrom) }; item { FilterText("To · YYYY-MM-DD", toDate, updateTo) }
         item { FilterText("Dx / callsign", filter.callsign) { update(filter.copy(callsign = it.uppercase())) } }
+        item { FilterText("Station profile", filter.stationProfile) { update(filter.copy(stationProfile = it)) } }
+        item { FilterText("Station callsign", filter.stationCallsign) { update(filter.copy(stationCallsign = it.uppercase())) } }
+        item { FilterChoice("Provenance", filter.provenance, listOf("" to "All", "LOCAL" to "Local", "REMOTE" to "Remote / linked")) { update(filter.copy(provenance = it)) } }
+        item { FilterText("Name", filter.name) { update(filter.copy(name = it)) } }
+        item { FilterText("QTH", filter.qth) { update(filter.copy(qth = it)) } }
+        item { FilterText("Email", filter.email) { update(filter.copy(email = it)) } }
         item { FilterText("DXCC", filter.dxcc) { update(filter.copy(dxcc = it)) } }
+        item { FilterText("Country", filter.country) { update(filter.copy(country = it)) } }
         item { FilterText("State", filter.state) { update(filter.copy(state = it.uppercase())) } }
         item { FilterText("Gridsquare", filter.grid) { update(filter.copy(grid = it.uppercase())) } }
+        item { FilterText("CQ zone", filter.cqZone) { update(filter.copy(cqZone = it)) } }
+        item { FilterText("ITU zone", filter.ituZone) { update(filter.copy(ituZone = it)) } }
         item { FilterChoice("Mode", filter.mode, modes) { update(filter.copy(mode = it)) } }
+        item { FilterText("Submode", filter.submode) { update(filter.copy(submode = it.uppercase())) } }
         item { FilterChoice("Band", filter.band, bands) { update(filter.copy(band = it)) } }
+        item { FilterText("Frequency · MHz", filter.frequency) { update(filter.copy(frequency = it)) } }
+        item { FilterText("RX frequency · MHz", filter.frequencyRx) { update(filter.copy(frequencyRx = it)) } }
+        item { FilterChoice("RX band", filter.bandRx, bands) { update(filter.copy(bandRx = it)) } }
         item { FilterChoice("Propagation", filter.propagation, listOf("" to "All") + propagationChoices.drop(1)) { update(filter.copy(propagation = it)) } }
         item { FilterText("County", filter.county) { update(filter.copy(county = it)) } }
         item { FilterText("DOK", filter.dok) { update(filter.copy(dok = it.uppercase())) } }
@@ -3285,7 +3663,11 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         item { FilterText("Operator", filter.operator) { update(filter.copy(operator = it.uppercase())) } }
         item { FilterText("Contest", filter.contest) { update(filter.copy(contest = it.uppercase())) } }
         item { FilterChoice("Continent", filter.continent, listOf("" to "All") + continentChoices) { update(filter.copy(continent = it)) } }
+        item { FilterText("Satellite", filter.satellite) { update(filter.copy(satellite = it)) } }
+        item { FilterText("Satellite mode", filter.satelliteMode) { update(filter.copy(satelliteMode = it)) } }
+        item { FilterText("Orbit", filter.orbit) { update(filter.copy(orbit = it)) } }
         item { FilterText("Comment", filter.comment) { update(filter.copy(comment = it)) } }
+        item { FilterText("Notes", filter.notes) { update(filter.copy(notes = it)) } }
         item { FilterText("Distance · km", filter.distance) { update(filter.copy(distance = it)) } }
         item { FilterText("Duration · minutes", filter.duration) { update(filter.copy(duration = it)) } }
         item { FilterChoice("Sort column", filter.sort.name, LogbookSort.entries.map { it.name to it.name.lowercase().replaceFirstChar { char -> char.uppercase() } }) {
@@ -3318,6 +3700,14 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         item { FilterText("QSL via", filter.qslVia) { update(filter.copy(qslVia = it)) } }
         item { FilterChoice("QSL images", filter.qslImages, listOf("" to "All", "Y" to "Has images", "N" to "No images")) {
             update(filter.copy(qslImages = it)) } }
+        item { FilterText("QSL message", filter.qslMessage) { update(filter.copy(qslMessage = it)) } }
+        item { FilterChoice("Record validity", filter.recordState, listOf("" to "All", "VALID" to "Valid", "INCOMPLETE" to "Incomplete / invalid")) {
+            update(filter.copy(recordState = it)) } }
+        item { FilterChoice("Duplicate candidates", filter.duplicateState, listOf("" to "All", "CANDIDATE" to "Same call/frequency/mode within 15s")) {
+            update(filter.copy(duplicateState = it)) } }
+        item { FilterChoice("Wavelog relation", filter.syncRelation, listOf("" to "All", "LOCAL_ONLY" to "Local only", "LINKED" to "Remote linked",
+            "OUTBOX" to "Queued / retry", "CONFLICT" to "Conflict")) {
+            update(filter.copy(syncRelation = it)) } }
     }
 }
 
@@ -3327,7 +3717,8 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
 @Composable private fun FilterChoice(label: String, value: String, choices: List<Pair<String, String>>, change: (String) -> Unit) =
     ChoiceField(label, choices.firstOrNull { it.first == value }?.second ?: value, choices, value, change, Modifier.fillMaxWidth())
 
-@Composable private fun SettingsScreen(state: RadioState, detail: String, database: QsoDatabase, features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController,
+@Composable private fun SettingsScreen(state: RadioState, detail: String, database: QsoDatabase,
+    mutations: QsoMutationCoordinator, features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController,
     callbook: CallbookController, cty: CtyController,
     audio: AudioMonitorController, panadapter: PanadapterController, app: AppController, transport: UsbRadioTransport,
     flex: FlexRadioController, voiceStore: VoiceMacroStore,
@@ -3385,6 +3776,10 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         if (!catSelectionDirty) pendingCatKey = transport.selected?.sessionKey
     }
     var restorePayload by remember { mutableStateOf<String?>(null) }; val context = LocalContext.current
+    var stability by remember { mutableStateOf<StabilitySnapshot?>(null) }
+    var confirmProjectionRebuild by remember { mutableStateOf(false) }
+    fun refreshStability() { settingsScope.launch { stability = withContext(Dispatchers.IO) { StabilityDiagnostics.snapshot(context, database) } } }
+    LaunchedEffect(section) { if (section == SettingsSection.DIAG) refreshStability() }
     val exportRecovery = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         uri?.let { runCatching { context.contentResolver.openOutputStream(it)?.bufferedWriter()?.use { writer -> writer.write(app.recoveryText()) } }
             .onSuccess { systemMessage = "Recovery file exported" }.onFailure { error -> systemMessage = "Export failed: ${error.message}" } }
@@ -3395,13 +3790,13 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             .onFailure { error -> systemMessage = "Restore review failed: ${error.message}" } }
     }
     val exportAdif = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-adif")) { uri ->
-        uri?.let { runCatching { context.contentResolver.openOutputStream(it)?.bufferedWriter()?.use { writer -> writer.write(database.exportADIF()) } }
-            .onSuccess { systemMessage = "ADIF exported from tablet database" }.onFailure { error -> systemMessage = "ADIF export failed: ${error.message}" } }
+        uri?.let { target -> settingsScope.launch { runCatching { withContext(Dispatchers.IO) { context.contentResolver.openOutputStream(target)?.use { database.streamExportADIF(it) } ?: error("Export destination could not be opened") } }
+            .onSuccess { systemMessage = "ADIF exported from tablet database" }.onFailure { error -> systemMessage = "ADIF export failed: ${error.message}" } } }
     }
     val importAdif = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { runCatching { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader -> database.importADIF(reader.readText()) } ?: (0 to 0) }
-            .onSuccess { result -> systemMessage = "ADIF import · ${result.first} added · ${result.second} skipped" }
-            .onFailure { error -> systemMessage = "ADIF import failed: ${error.message}" } }
+        uri?.let { target -> settingsScope.launch { runCatching { withContext(Dispatchers.IO) { context.contentResolver.openInputStream(target)?.use { mutations.importADIF(it) } ?: AdifImportProgress(0,0,0,1) } }
+            .onSuccess { result -> systemMessage = "ADIF import · ${result.inserted} added · ${result.duplicates+result.invalid} skipped" }
+            .onFailure { error -> systemMessage = "ADIF import failed: ${error.message}" } } }
     }
     val importVoice = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val slot = pendingImportSlot
@@ -3414,6 +3809,28 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
         pendingRecordSlot = null
         if (granted && slot != null) voiceAudio.startRecording(slot) else if (!granted) systemMessage = "Microphone permission was not granted"
     }
+    if (confirmProjectionRebuild) AlertDialog(
+        onDismissRequest = { confirmProjectionRebuild = false },
+        title = { Text("Rebuild QSO projection?") },
+        text = { Text("Canonical QSOs are preserved. The indexed projection will be reset and rebuilt in resumable batches.") },
+        confirmButton = { Button({
+            confirmProjectionRebuild = false
+            settingsScope.launch {
+                withContext(Dispatchers.IO) { database.rebuildProjection() }
+                systemMessage = "Projection rebuild started; canonical QSOs preserved"
+                while (withContext(Dispatchers.IO) { database.backfillProjectionBatch() }) {
+                    val progress = withContext(Dispatchers.IO) { database.projectionHealth() }
+                    systemMessage = "Projection rebuild · ${progress.processedRows}/${progress.canonicalRows}"
+                    delay(25)
+                }
+                val completed = withContext(Dispatchers.IO) { database.verifyProjection() }
+                systemMessage = if (completed.state == ProjectionState.READY) "Projection rebuild complete and verified"
+                    else "Projection rebuild stopped · ${completed.state} · ${completed.lastError}"
+                refreshStability()
+            }
+        }) { Text("REBUILD") } },
+        dismissButton = { TextButton({ confirmProjectionRebuild = false }) { Text("CANCEL") } },
+    )
     SettingsPage {
         Header("Complete station settings", state)
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -3892,6 +4309,34 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
             Column(Modifier.testTag("settings-default-cty"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 CtyUpdatePanel(cty)
             }
+        }
+        if (section == SettingsSection.DIAG) SettingsCard("DATABASE & STABILITY") {
+            val snapshot = stability
+            if (snapshot == null) LinearProgressIndicator(Modifier.fillMaxWidth()) else {
+                val health = snapshot.projection
+                Text("DB · ${"%.1f".format(snapshot.databaseBytes / 1_048_576.0)} MiB", color = Muted)
+                Text("QSO · ${health.canonicalRows} canonical · ${health.projectionRows} projected · ${health.referenceRows} references", color = Muted)
+                Text("PROJECTION · ${health.state} · ${health.processedRows}/${health.canonicalRows}", color = if (health.state == ProjectionState.READY) Healthy else Hold)
+                if (health.lastError.isNotBlank()) Text("LAST PROJECTION ERROR · ${health.lastError.take(160)}", color = Danger)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton({ settingsScope.launch { withContext(Dispatchers.IO) { database.verifyProjection() }; systemMessage = "Projection verified"; refreshStability() } }) { Text("VERIFY") }
+                    OutlinedButton({ settingsScope.launch { systemMessage = "Projection repair running…"; val repaired = withContext(Dispatchers.IO) { database.repairProjectionFully() }; systemMessage = if (repaired.state == ProjectionState.READY) "Projection repair complete and verified" else "Projection repair incomplete · ${repaired.lastError}"; refreshStability() } }) { Text("REPAIR & VERIFY") }
+                    OutlinedButton({ confirmProjectionRebuild = true }) { Text("REBUILD") }
+                    OutlinedButton({ StabilityDiagnostics.clear(context); systemMessage = "Diagnostic history cleared"; refreshStability() }) { Text("CLEAR HISTORY") }
+                }
+                Text("SLOW QUERIES · category/hash/timing only", color = Amber, fontWeight = FontWeight.Bold)
+                if (snapshot.slowQueries.isEmpty()) Text("No slow queries recorded", color = Muted)
+                snapshot.slowQueries.takeLast(6).asReversed().forEach { row ->
+                    Text("${row.category} · ${row.elapsedMs} ms · ${row.rowCount} rows · ${row.planLabel}${if (row.cancelled) " · CANCELLED" else ""}", color = Muted, fontFamily = FontFamily.Monospace)
+                }
+                Text("LAST CRASH · sanitised local summary", color = Amber, fontWeight = FontWeight.Bold)
+                snapshot.crashes.lastOrNull()?.let { crash ->
+                    Text("${crash.exceptionClass} · ${crash.projectionState.ifBlank { "state unavailable" }} · memory ${crash.freeMemoryCategory}", color = Muted, fontFamily = FontFamily.Monospace)
+                    crash.frames.take(3).forEach { Text(it, color = Muted, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                } ?: Text("No crash summary recorded", color = Muted)
+                Text("Private bounded journal: no credentials, notes, comments, QSL messages, raw ADIF, SQL text, or provider payloads.", color = Muted)
+            }
+            Text(systemMessage, color = Muted)
         }
         if (section == SettingsSection.DIAG) SettingsCard("CAT DIAGNOSTICS") {
             Text("CAT · ${transport.selected?.label ?: "not selected"}", color = Muted)

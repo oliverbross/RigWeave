@@ -11,9 +11,9 @@ import java.util.Locale
 internal class DxpeditionScheduleProvider(
     cacheDirectory: File,
     private val http: HamClockHttpClient = HamClockUrlConnectionClient(),
+    private val coalescer: HamClockInFlightCoalescer = HamClockInFlightCoalescer(),
 ) {
     private val cache = HamClockLastGoodCache(cacheDirectory, "dxpeditions-ng3k")
-    private val flight = HamClockSingleFlight<HamClockFeed<List<HamClockDxpedition>>>()
 
     fun cached(nowEpoch: Long = Instant.now().epochSecond): HamClockFeed<List<HamClockDxpedition>> =
         cache.read()?.let { entry ->
@@ -23,7 +23,8 @@ internal class DxpeditionScheduleProvider(
             }
         } ?: HamClockFeed(emptyList(), HamClockFeedState.UNAVAILABLE, SOURCE, error = "No saved DXpedition schedule")
 
-    fun refresh(force: Boolean = false, nowEpoch: Long = Instant.now().epochSecond): HamClockFeed<List<HamClockDxpedition>> = flight.run {
+    fun refresh(force: Boolean = false, nowEpoch: Long = Instant.now().epochSecond): HamClockFeed<List<HamClockDxpedition>> =
+        coalescer.run("dxpedition-schedule") {
         val saved = cache.read()
         if (!force && saved != null && nowEpoch - saved.fetchedAtEpoch < TTL_SECONDS) {
             val rows = runCatching { dxpeditionsFromJson(saved.body, nowEpoch) }.getOrNull()
@@ -47,7 +48,7 @@ internal class DxpeditionScheduleProvider(
             if (fallback != null) HamClockFeed(fallback, HamClockFeedState.STALE, SOURCE, saved.fetchedAtEpoch, providerError(error))
             else HamClockFeed(emptyList(), HamClockFeedState.UNAVAILABLE, SOURCE, error = providerError(error))
         }
-    }
+        }
 
     private companion object {
         const val URL = "https://www.ng3k.com/Misc/adxoplain.html"
@@ -71,7 +72,7 @@ internal fun parseNg3kDxpeditions(html: String, nowEpoch: Long): List<HamClockDx
     val today = Instant.ofEpochSecond(nowEpoch).atZone(ZoneOffset.UTC).toLocalDate()
     return entryPattern.findAll(text).flatMap { match ->
         parseNg3kEntry(match.value, today).asSequence()
-    }.filter { row -> row.endEpoch == null || row.endEpoch >= today.atStartOfDay(ZoneOffset.UTC).toEpochSecond() }
+    }.filter { row -> row.endEpoch == null || row.endEpoch >= today.minusDays(14).atStartOfDay(ZoneOffset.UTC).toEpochSecond() }
         .distinctBy { it.callsign }
         .sortedWith(compareBy<HamClockDxpedition>({ it.status.ordinal }, { it.startEpoch ?: Long.MAX_VALUE }, { it.callsign }))
         .take(80)
@@ -99,6 +100,7 @@ private fun parseNg3kEntry(entry: String, today: LocalDate): List<HamClockDxpedi
     val status = when {
         dates == null -> HamClockDxpeditionStatus.UNDATED
         !today.isBefore(dates.first) && !today.isAfter(dates.second) -> HamClockDxpeditionStatus.ACTIVE
+        today.isAfter(dates.second) -> HamClockDxpeditionStatus.RECENTLY_ENDED
         else -> HamClockDxpeditionStatus.UPCOMING
     }
     val bands = Regex("\\b(?:2200|630|160|80|60|40|30|20|17|15|12|10|8|6|4|2)m\\b", RegexOption.IGNORE_CASE)
@@ -157,14 +159,15 @@ private fun dxpeditionsToJson(rows: List<HamClockDxpedition>) = JSONArray(rows.m
 
 private fun dxpeditionsFromJson(body: String, nowEpoch: Long): List<HamClockDxpedition> {
     val todayStart = Instant.ofEpochSecond(nowEpoch).atZone(ZoneOffset.UTC).toLocalDate().atStartOfDay(ZoneOffset.UTC).toEpochSecond()
+    val recentStart = Instant.ofEpochSecond(nowEpoch).atZone(ZoneOffset.UTC).toLocalDate().minusDays(14).atStartOfDay(ZoneOffset.UTC).toEpochSecond()
     val array = JSONArray(body)
     return buildList {
         for (index in 0 until array.length()) {
             val row = array.getJSONObject(index)
             val start = row.optLong("start").takeIf { row.has("start") && !row.isNull("start") }
             val end = row.optLong("end").takeIf { row.has("end") && !row.isNull("end") }
-            if (end != null && end < todayStart) continue
-            val status = when { start == null || end == null -> HamClockDxpeditionStatus.UNDATED; nowEpoch in start..end -> HamClockDxpeditionStatus.ACTIVE; else -> HamClockDxpeditionStatus.UPCOMING }
+            if (end != null && end < recentStart) continue
+            val status = when { start == null || end == null -> HamClockDxpeditionStatus.UNDATED; nowEpoch in start..end -> HamClockDxpeditionStatus.ACTIVE; end < todayStart -> HamClockDxpeditionStatus.RECENTLY_ENDED; else -> HamClockDxpeditionStatus.UPCOMING }
             fun strings(name: String): Set<String> = row.optJSONArray(name)?.let { values ->
                 buildSet { for (i in 0 until values.length()) values.optString(i).takeIf(String::isNotBlank)?.let(::add) }
             }.orEmpty()

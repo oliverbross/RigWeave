@@ -18,9 +18,17 @@ import org.json.JSONTokener
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
+import java.net.HttpURLConnection
 import java.net.Socket
 import java.net.URL
 import java.time.Instant
+import java.time.YearMonth
+import app.rigweave.mobile.hamclock.HamClockRbnObservation
+import app.rigweave.mobile.hamclock.HamClockRbnPreference
+import app.rigweave.mobile.hamclock.HamClockRbnSourceSnapshot
+import app.rigweave.mobile.hamclock.HamClockRbnSourceState
+import app.rigweave.mobile.hamclock.boundedRbnObservations
+import app.rigweave.mobile.hamclock.parseRbnClusterLine
 
 data class AndroidDXSpot(
     val id: String, val callsign: String, val spotter: String, val frequencyHz: Long,
@@ -74,6 +82,64 @@ data class AndroidDXBand(val band: String, val spots5m: Int, val spots60m: Int, 
 data class AndroidDXRegion(val region: String, val spots15m: Int, val spots60m: Int,
     val uniqueCalls: Int, val activityPercent: Int, val anomaly: Boolean)
 
+enum class ClusterConnectionState { DISABLED, DISCONNECTED, CONNECTING, CONNECTED, RETRYING, ERROR }
+data class ClusterConnectionTruth(
+    val state: ClusterConnectionState = ClusterConnectionState.DISCONNECTED,
+    val activeEndpoint: String = "",
+    val connectedSinceEpoch: Long = 0,
+    val stateChangedEpoch: Long = Instant.now().epochSecond,
+    val latestSpotEpoch: Long = 0,
+    val error: String = "",
+)
+
+internal fun shouldRunRbnMaintenance(
+    foreground: Boolean,
+    rbnEnabled: Boolean,
+    clusterState: ClusterConnectionState,
+): Boolean = foreground && rbnEnabled && clusterState != ClusterConnectionState.DISABLED
+
+internal data class FeatureHttpResponse(val status: Int, val body: ByteArray, val contentType: String,
+    val effectiveUrl: String)
+internal fun interface FeatureHttpTransport { fun get(url: String, maximumBytes: Int): FeatureHttpResponse }
+internal class FeatureUrlConnectionTransport : FeatureHttpTransport {
+    override fun get(url: String, maximumBytes: Int): FeatureHttpResponse {
+        var target = URL(url)
+        repeat(4) { redirects ->
+            require(target.protocol.equals("https", true)) { "NOAA transport requires HTTPS" }
+            val connection = target.openConnection() as HttpURLConnection
+            try {
+                connection.connectTimeout = 10_000; connection.readTimeout = 10_000
+                connection.instanceFollowRedirects = false
+                connection.setRequestProperty("User-Agent", "RigWeave-Android/0.1 NOAA")
+                connection.setRequestProperty("Accept", "application/json")
+                val status = connection.responseCode
+                if (status in 300..399) {
+                    require(redirects < 3) { "NOAA redirect limit exceeded" }
+                    target = URL(target, connection.getHeaderField("Location") ?: error("NOAA redirect omitted Location"))
+                    require(target.protocol.equals("https", true)) { "NOAA redirected outside HTTPS" }
+                    return@repeat
+                }
+                if (connection.contentLengthLong > maximumBytes) error("NOAA response is too large")
+                val bytes = (if (status in 200..299) connection.inputStream else connection.errorStream)
+                    ?.use { it.readNBytes(maximumBytes + 1) } ?: ByteArray(0)
+                if (bytes.size > maximumBytes) error("NOAA response is too large")
+                return FeatureHttpResponse(status, bytes, connection.contentType.orEmpty(), target.toString())
+            } finally { connection.disconnect() }
+        }
+        error("NOAA redirect limit exceeded")
+    }
+}
+
+internal fun boundedFeatureText(transport: FeatureHttpTransport, url: String, maximumBytes: Int): String {
+    require(url.startsWith("https://")) { "NOAA transport requires HTTPS" }
+    val response = transport.get(url, maximumBytes)
+    require(response.effectiveUrl.startsWith("https://")) { "NOAA redirected outside HTTPS" }
+    require(response.status in 200..299) { "NOAA returned HTTP ${response.status}" }
+    require(response.contentType.isBlank() || response.contentType.contains("json", true)) { "NOAA returned unexpected content type" }
+    require(response.body.size <= maximumBytes) { "NOAA response is too large" }
+    return response.body.toString(Charsets.UTF_8)
+}
+
 internal fun parseNoaaSummaryValue(text: String, keys: List<String>): Float? {
     val parsed = JSONTokener(text).nextValue()
     val rows = when(parsed) { is JSONObject -> listOf(parsed); is JSONArray -> (0 until parsed.length()).mapNotNull(parsed::optJSONObject); else -> emptyList() }
@@ -84,7 +150,33 @@ internal fun parseNoaaSummaryValue(text: String, keys: List<String>): Float? {
     return null
 }
 
-class FeatureController(private val context: Context) {
+internal fun parseLatestNoaaSunspot(
+    body: String,
+    currentMonth: YearMonth = YearMonth.now(java.time.Clock.systemUTC()),
+): Pair<Float, String> {
+    val rows = JSONArray(body)
+    val latest = (0 until rows.length()).asSequence().mapNotNull(rows::optJSONObject).mapNotNull { row ->
+        val month = runCatching { YearMonth.parse(row.optString("time-tag")) }.getOrNull() ?: return@mapNotNull null
+        val value = row.optDouble("observed_swpc_ssn", Double.NaN)
+        if (!value.isFinite() || value !in 0.0..1000.0 || month.isAfter(currentMonth)) null
+        else Triple(month, value.toFloat(), row.getString("time-tag"))
+    }.maxByOrNull { it.first } ?: error("NOAA returned no usable observed sunspot number")
+    return latest.second to latest.third
+}
+
+internal suspend fun completeSolarRefresh(
+    publishCore: suspend () -> Unit,
+    refreshOptionalSunspot: suspend () -> Unit,
+    reportSunspotFailure: (String) -> Unit,
+) {
+    publishCore()
+    runCatching { refreshOptionalSunspot() }.onFailure { error ->
+        reportSunspotFailure(error.message.orEmpty()
+            .replace(Regex("https?://\\S+|(?i)(token|key|password)=[^\\s]+"), "[redacted]").take(120))
+    }
+}
+
+class FeatureController internal constructor(private val context: Context, private val http: FeatureHttpTransport = FeatureUrlConnectionTransport()) {
     private val handle = NativeCore.featureCreate()
     private val nativeLock = Any()
     private val scope = CoroutineScope(Job() + Dispatchers.IO)
@@ -93,6 +185,16 @@ class FeatureController(private val context: Context) {
     private var clusterSocket: Socket? = null
     private var clusterGeneration = 0
     private val prefs = context.getSharedPreferences("dx_cluster", Context.MODE_PRIVATE)
+    private val rbnBuffer = ArrayDeque<HamClockRbnObservation>()
+    private var rbnPreference = HamClockRbnPreference(enabled = false)
+    private var rbnPublishJob: Job? = null
+    private var rbnMaintenanceJob: Job? = null
+    private var rbnMaintenanceGeneration = 0
+    private var rbnStationCall = ""
+    private var foreground = true
+    private var closed = false
+    private var lastRbnObservedEpoch = 0L
+    @Volatile private var rbnDirty = false
 
     var clusterHost by mutableStateOf(prefs.getString("host", RigWeaveDefaults.CLUSTER_HOST) ?: RigWeaveDefaults.CLUSTER_HOST)
     var clusterPort by mutableStateOf(prefs.getInt("port", RigWeaveDefaults.CLUSTER_PORT))
@@ -104,6 +206,7 @@ class FeatureController(private val context: Context) {
     var watchlistText by mutableStateOf(prefs.getString("watchlist", "") ?: ""); private set
 
     var clusterStatus by mutableStateOf("DX cluster disconnected"); private set
+    var clusterConnection by mutableStateOf(ClusterConnectionTruth()); private set
     var spots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
     var liveSpots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
     var watchSpots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
@@ -113,6 +216,10 @@ class FeatureController(private val context: Context) {
     var dxWorld by mutableStateOf(emptyList<List<Int>>()); private set
     var dxSummary by mutableStateOf("No live DX data"); private set
     var solar by mutableStateOf(AndroidSolar()); private set
+    var sunspotNumber by mutableStateOf(prefs.getFloat("noaa_sunspot_number", Float.NaN).takeIf(Float::isFinite)); private set
+    var sunspotObservedMonth by mutableStateOf(prefs.getString("noaa_sunspot_month", "").orEmpty()); private set
+    var sunspotError by mutableStateOf(""); private set
+    var solarError by mutableStateOf(""); private set
     var learnedSpots by mutableStateOf(0); private set
     var duplicateSpots by mutableStateOf(0); private set
     var newestSpotEpoch by mutableStateOf(0L); private set
@@ -121,6 +228,11 @@ class FeatureController(private val context: Context) {
     private data class WorkedFingerprint(
         val changeToken: Long, val authority: LogMode, val stationId: String, val ctyRevision: Long,
     )
+    var requestedSpotId by mutableStateOf<String?>(null); private set
+    var requestedSpotRequiresReceiveReview by mutableStateOf(false); private set
+    internal var rbnObservations by mutableStateOf(emptyList<HamClockRbnObservation>()); private set
+    var latestRbnEpoch by mutableStateOf(0L); private set
+    internal var rbnSourceSnapshot by mutableStateOf(HamClockRbnSourceSnapshot()); private set
 
     init {
         val defaults = prefs.edit()
@@ -129,6 +241,7 @@ class FeatureController(private val context: Context) {
         if (!prefs.contains("callsign")) defaults.putString("callsign", clusterCallsign)
         defaults.apply()
         synchronized(nativeLock) { NativeCore.featureWatchlist(handle, watchlistText) }
+        scheduleRbnPublish()
     }
 
     fun setWatchlist(value: String) {
@@ -136,6 +249,29 @@ class FeatureController(private val context: Context) {
             .map(String::trim).filter(String::isNotBlank).map(String::uppercase).distinct().take(32).joinToString("\n")
         prefs.edit().putString("watchlist", watchlistText).apply()
         synchronized(nativeLock) { NativeCore.featureWatchlist(handle, watchlistText) }
+        scheduleRbnPublish(immediate = true)
+    }
+
+    fun requestSpot(id: String, requireReceiveReview: Boolean = false) {
+        requestedSpotId = id
+        requestedSpotRequiresReceiveReview = requireReceiveReview
+    }
+    fun consumeRequestedSpot() { requestedSpotId = null; requestedSpotRequiresReceiveReview = false }
+
+    fun applyRbnPreference(value: HamClockRbnPreference, currentStationCall: String = "") {
+        rbnPreference = value
+        rbnStationCall = currentStationCall.trim().uppercase()
+        if (!value.enabled) {
+            synchronized(rbnBuffer) { rbnBuffer.clear() }
+            rbnObservations = emptyList()
+        }
+        scheduleRbnPublish(immediate = true)
+        updateRbnMaintenance(runImmediate = value.enabled)
+    }
+
+    fun setForeground(value: Boolean) {
+        foreground = value
+        updateRbnMaintenance(runImmediate = value)
     }
 
     fun connectConfiguredCluster() {
@@ -169,7 +305,8 @@ class FeatureController(private val context: Context) {
             var reconnectAttempt = 0
             while (generation == clusterGeneration && endpoints.isNotEmpty()) {
                 val (endpointHost, endpointPort) = endpoints[endpointIndex]
-                publishCluster("Connecting to $endpointHost:$endpointPort…")
+                publishCluster("Connecting to $endpointHost:$endpointPort…", ClusterConnectionState.CONNECTING,
+                    "$endpointHost:$endpointPort")
                 try {
                     val socket = Socket(); socket.connect(InetSocketAddress(endpointHost, endpointPort), 12_000); clusterSocket = socket
                     val output = socket.getOutputStream()
@@ -180,30 +317,51 @@ class FeatureController(private val context: Context) {
                         output.write("sh/dx 50\r\n".toByteArray()); output.flush()
                     }
                     reconnectAttempt = 0
-                    publishCluster("Connected to $endpointHost:$endpointPort")
+                    publishCluster("Connected to $endpointHost:$endpointPort", ClusterConnectionState.CONNECTED,
+                        "$endpointHost:$endpointPort", connectedSince = Instant.now().epochSecond)
                     BufferedReader(InputStreamReader(socket.getInputStream())).useLines { lines ->
                         lines.forEach { line ->
                             if (generation != clusterGeneration) return@useLines
-                            if (synchronized(nativeLock) {
+                            val rbn = parseRbnClusterLine(line)
+                            rbn?.let {
+                                lastRbnObservedEpoch = maxOf(lastRbnObservedEpoch, it.observedEpoch)
+                                synchronized(rbnBuffer) {
+                                    rbnBuffer.addLast(it)
+                                    while (rbnBuffer.size > 1_000) rbnBuffer.removeFirst()
+                                }
+                                scheduleRbnPublish()
+                            }
+                            // An RBN line is already represented by the typed RBN observation path.
+                            // Do not also ingest it as a generic DX-cluster spot.
+                            if (rbn == null && synchronized(nativeLock) {
                                 NativeCore.featureClusterLine(handle, line, Instant.now().epochSecond)
                             }) refreshDX()
                         }
                     }
                 } catch (error: Exception) {
-                    if (generation == clusterGeneration) publishCluster("$endpointHost failed · trying next cluster")
+                    if (generation == clusterGeneration) publishCluster("$endpointHost failed · trying next cluster",
+                        ClusterConnectionState.ERROR, "$endpointHost:$endpointPort", safeFeatureError(error))
                 } finally { clusterSocket?.close(); clusterSocket = null }
                 if (generation != clusterGeneration) return@launch
                 endpointIndex = (endpointIndex + 1) % endpoints.size
                 val next = endpoints[endpointIndex]
                 val waitSeconds = minOf(30, 1 shl minOf(reconnectAttempt, 4))
                 reconnectAttempt++
-                publishCluster("Trying ${next.first}:${next.second} in ${waitSeconds}s…")
+                publishCluster("Trying ${next.first}:${next.second} in ${waitSeconds}s…",
+                    ClusterConnectionState.RETRYING, "${next.first}:${next.second}")
                 delay(waitSeconds * 1_000L)
             }
         }
     }
 
-    fun disconnectCluster() { clusterGeneration++; clusterSocket?.close(); clusterSocket = null; clusterStatus = "DX cluster disconnected" }
+    fun disconnectCluster(disabled: Boolean = false) {
+        clusterGeneration++; clusterSocket?.close(); clusterSocket = null
+        clusterStatus = if (disabled) "DX cluster disabled" else "DX cluster disconnected"
+        clusterConnection = ClusterConnectionTruth(if (disabled) ClusterConnectionState.DISABLED else ClusterConnectionState.DISCONNECTED,
+            stateChangedEpoch = Instant.now().epochSecond, latestSpotEpoch = newestSpotEpoch)
+        scheduleRbnPublish(immediate = true)
+        updateRbnMaintenance()
+    }
 
     fun postSpot(callsign: String, frequencyKHz: Double, comment: String) {
         val call = callsign.trim().uppercase()
@@ -228,16 +386,41 @@ class FeatureController(private val context: Context) {
                 val geomagnetic = summaryText("https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json")
                 val kp = parseNoaaSummaryValue(geomagnetic, listOf("Kp", "kp_index", "KpIndex")) ?: error("Unexpected NOAA Kp response")
                 val a = parseNoaaSummaryValue(geomagnetic, listOf("a_running", "A", "a_index")) ?: error("Unexpected NOAA A response")
-                synchronized(nativeLock) {
-                    NativeCore.featureSolar(handle, flux, a, kp, Instant.now().epochSecond)
-                }
-                refreshDX()
-            } catch (_: Exception) { publishCluster("NOAA solar data unavailable · retained last values") }
+                completeSolarRefresh(
+                    publishCore = {
+                        synchronized(nativeLock) {
+                            NativeCore.featureSolar(handle, flux, a, kp, Instant.now().epochSecond)
+                        }
+                        refreshDX()
+                    },
+                    refreshOptionalSunspot = { refreshSunspotNumber() },
+                    reportSunspotFailure = { sunspotError = it.ifBlank { "NOAA SSN unavailable; retained last monthly value" } },
+                )
+                solarError = ""
+            } catch (error: Exception) {
+                solarError = safeFeatureError(error).ifBlank { "NOAA solar data unavailable · retained last values" }
+            }
         }
     }
 
+    private fun refreshSunspotNumber() {
+        val body = summaryText("https://services.swpc.noaa.gov/json/solar-cycle/observed-solar-cycle-indices.json")
+        val latest = parseLatestNoaaSunspot(body)
+        sunspotNumber = latest.first
+        sunspotObservedMonth = latest.second
+        sunspotError = ""
+        prefs.edit().putFloat("noaa_sunspot_number", sunspotNumber!!)
+            .putString("noaa_sunspot_month", sunspotObservedMonth).apply()
+    }
+
     fun close() {
-        disconnectCluster(); scope.cancel(); synchronized(nativeLock) { NativeCore.featureDestroy(handle) }
+        closed = true
+        rbnMaintenanceGeneration++
+        rbnMaintenanceJob?.cancel()
+        rbnMaintenanceJob = null
+        disconnectCluster()
+        scope.cancel()
+        synchronized(nativeLock) { NativeCore.featureDestroy(handle) }
     }
 
     fun startWorkedLogSync(database: QsoDatabase, wavelog: WavelogController, cty: CtyController) {
@@ -324,6 +507,79 @@ class FeatureController(private val context: Context) {
             learnedSpots = root.optInt("learnedSpots"); duplicateSpots = root.optInt("duplicateSpots")
             newestSpotEpoch = root.optLong("newestSpotEpoch")
             workedLog = decodeWorkedLog(root)
+            clusterConnection = clusterConnection.copy(latestSpotEpoch = newestSpotEpoch)
+        }
+    }
+
+    @Synchronized private fun scheduleRbnPublish(immediate: Boolean = false) {
+        rbnDirty = true
+        if (rbnPublishJob?.isActive == true) return
+        rbnPublishJob = scope.launch {
+            try {
+                var first = true
+                do {
+                    rbnDirty = false
+                    if (!immediate || !first) delay(250)
+                    first = false
+                    publishRbn()
+                } while (rbnDirty)
+            } finally {
+                synchronized(this@FeatureController) {
+                    rbnPublishJob = null
+                    if (rbnDirty) scheduleRbnPublish()
+                }
+            }
+        }
+    }
+
+    @Synchronized private fun updateRbnMaintenance(runImmediate: Boolean = false) {
+        val required = !closed && shouldRunRbnMaintenance(foreground, rbnPreference.enabled, clusterConnection.state)
+        if (!required) {
+            rbnMaintenanceGeneration++
+            rbnMaintenanceJob?.cancel()
+            rbnMaintenanceJob = null
+            return
+        }
+        if (runImmediate) scheduleRbnPublish(immediate = true)
+        if (rbnMaintenanceJob?.isActive == true) return
+        val generation = ++rbnMaintenanceGeneration
+        rbnMaintenanceJob = scope.launch {
+            try {
+                while (true) { delay(2_000); scheduleRbnPublish(immediate = true) }
+            } finally {
+                synchronized(this@FeatureController) {
+                    if (rbnMaintenanceGeneration == generation) rbnMaintenanceJob = null
+                }
+            }
+        }
+    }
+
+    private suspend fun publishRbn() {
+        val now = Instant.now().epochSecond
+        val watchlist = watchlistText.lineSequence().map(String::trim).filter(String::isNotBlank).toSet()
+        val cutoff = now - rbnPreference.windowMinutes * 60L
+        val buffered = synchronized(rbnBuffer) {
+            val retained = rbnBuffer.filter { it.observedEpoch >= cutoff }
+            rbnBuffer.clear(); rbnBuffer.addAll(retained)
+            rbnBuffer.toList()
+        }
+        val bounded = boundedRbnObservations(buffered, rbnPreference, watchlist, rbnStationCall, now)
+        val sourceState = when {
+            !rbnPreference.enabled || clusterConnection.state == ClusterConnectionState.DISABLED -> HamClockRbnSourceState.DISABLED
+            clusterConnection.state == ClusterConnectionState.CONNECTING || clusterConnection.state == ClusterConnectionState.RETRYING -> HamClockRbnSourceState.CONNECTING
+            clusterConnection.state == ClusterConnectionState.ERROR -> HamClockRbnSourceState.ERROR
+            clusterConnection.state != ClusterConnectionState.CONNECTED -> HamClockRbnSourceState.DISCONNECTED
+            lastRbnObservedEpoch > 0 && lastRbnObservedEpoch < cutoff -> HamClockRbnSourceState.STALE
+            lastRbnObservedEpoch == 0L -> HamClockRbnSourceState.EMPTY
+            else -> HamClockRbnSourceState.CURRENT
+        }
+        val sourceSnapshot = HamClockRbnSourceSnapshot(sourceState, lastRbnObservedEpoch, buffered.size,
+            bounded.size, clusterConnection.activeEndpoint, clusterConnection.error
+                .replace(Regex("https?://\\S+|(?i)(token|key|password)=[^\\s]+"), "[redacted]").take(160))
+        withContext(Dispatchers.Main) {
+            rbnObservations = bounded
+            latestRbnEpoch = lastRbnObservedEpoch
+            rbnSourceSnapshot = sourceSnapshot
         }
     }
 
@@ -333,9 +589,22 @@ class FeatureController(private val context: Context) {
     }
 
     private fun summaryText(url: String): String {
-        val connection = URL(url).openConnection(); connection.connectTimeout = 10_000; connection.readTimeout = 10_000
-        return connection.getInputStream().bufferedReader().use { it.readText() }
+        val maximum = if (url.contains("observed-solar-cycle")) 1_500_000 else 256_000
+        return boundedFeatureText(http, url, maximum)
     }
 
-    private suspend fun publishCluster(value: String) = withContext(Dispatchers.Main) { clusterStatus = value }
+    private suspend fun publishCluster(value: String, state: ClusterConnectionState = clusterConnection.state,
+        endpoint: String = clusterConnection.activeEndpoint, error: String = "", connectedSince: Long = clusterConnection.connectedSinceEpoch) {
+        withContext(Dispatchers.Main) {
+            clusterStatus = value
+            clusterConnection = ClusterConnectionTruth(state, endpoint,
+                if (state == ClusterConnectionState.CONNECTED) connectedSince else 0,
+                Instant.now().epochSecond, newestSpotEpoch, error.take(160))
+        }
+        updateRbnMaintenance()
+        scheduleRbnPublish(immediate = true)
+    }
 }
+
+private fun safeFeatureError(error: Throwable): String = error.message.orEmpty()
+    .replace(Regex("https?://\\S+|(?i)(token|key|password)=[^\\s]+"), "[redacted]").take(160)
