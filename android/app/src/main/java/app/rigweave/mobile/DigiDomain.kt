@@ -208,7 +208,8 @@ data class DigiSettingsDocument(
                     else -> if (root.optBoolean("txFirst", true)) 0 else 1
                 },
                 holdTx = root.optBoolean("holdTx"),
-                ftAutoSequence = root.optBoolean("ftAutoSequence", true), ftAutoCq = root.optBoolean("ftAutoCq"),
+                ftAutoSequence = root.optBoolean("ftAutoSequence", true),
+                ftAutoCq = effectiveAutoCq(root.optBoolean("ftAutoSequence", true), root.optBoolean("ftAutoCq")),
                 ftAutoCqLimit = root.optInt("ftAutoCqLimit", 3).coerceIn(1, 20),
                 ftRetryLimit = root.optInt("ftRetryLimit", 3).coerceIn(0, 10), ftAutoLog = root.optBoolean("ftAutoLog"),
                 rttyCarrierHz = root.optDouble("rttyCarrierHz", 1_000.0).toFloat(),
@@ -268,7 +269,10 @@ data class DigiDecodeEvent(
     val sessionId: String,
     val epoch: Long,
     val mode: String,
-    val periodStartEpoch: Long,
+    val slotStartMillis: Long,
+    val decodeSource: DigiDecodeSource,
+    val exactSlotTiming: Boolean,
+    val dialFrequencyHz: Long,
     val snr: Float,
     val dt: Float,
     val audioHz: Float,
@@ -284,6 +288,22 @@ data class DigiDecodeEvent(
     val needs: List<String> = emptyList(),
     val watchlisted: Boolean = false,
 )
+
+enum class DigiDecodeSource { LIVE_CAPTURE, REDECODE_LIVE_SLOT, REFERENCE_RECORDING, COMPANION }
+
+fun DigiDecodeEvent.automaticFtEligible(
+    activeMode: String,
+    activeDialFrequencyHz: Long,
+    activeSessionId: String,
+    activeCapturedSlotMillis: Long,
+): Boolean {
+    if (!exactSlotTiming || mode != activeMode || dialFrequencyHz != activeDialFrequencyHz || callsign.isBlank()) return false
+    return when (decodeSource) {
+        DigiDecodeSource.LIVE_CAPTURE -> sessionId == activeSessionId
+        DigiDecodeSource.REDECODE_LIVE_SLOT -> slotStartMillis == activeCapturedSlotMillis
+        DigiDecodeSource.REFERENCE_RECORDING, DigiDecodeSource.COMPANION -> false
+    }
+}
 
 data class DigiQsoDraft(
     val callsign: String, val grid: String = "", val sentReport: String = "", val receivedReport: String = "",

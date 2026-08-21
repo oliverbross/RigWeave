@@ -42,6 +42,7 @@ data class DigiTxOutcome(
     val failure: DigiTxFailure? = null,
     val detail: String = "",
     val slotStartMillis: Long = 0,
+    val pttAttempted: Boolean = pttConfirmed,
 ) {
     val successful: Boolean
         get() = encoded && pttConfirmed && audioCompleted && rxConfirmed && failure == null
@@ -50,8 +51,8 @@ data class DigiTxOutcome(
         fun success(slotStartMillis: Long = 0) = DigiTxOutcome(true, true, true, true, slotStartMillis = slotStartMillis)
         fun failed(failure: DigiTxFailure, detail: String = "", encoded: Boolean = true,
             pttConfirmed: Boolean = false, audioCompleted: Boolean = false, rxConfirmed: Boolean = false,
-            slotStartMillis: Long = 0) = DigiTxOutcome(
-            encoded, pttConfirmed, audioCompleted, rxConfirmed, failure, detail, slotStartMillis,
+            slotStartMillis: Long = 0, pttAttempted: Boolean = pttConfirmed) = DigiTxOutcome(
+            encoded, pttConfirmed, audioCompleted, rxConfirmed, failure, detail, slotStartMillis, pttAttempted,
         )
     }
 }
@@ -414,6 +415,8 @@ data class FtSlotPlan(
     val lateStart: Boolean,
     val allowedLateStartMillis: Long,
 ) {
+    val targetMonotonicMillis: Long get() = createdMonotonicMillis + monotonicDelayMillis
+
     fun remainsValid(wallMillis: Long, monotonicMillis: Long, clockJumpToleranceMillis: Long = 250): Boolean {
         val expectedWall = createdWallMillis + (monotonicMillis - createdMonotonicMillis)
         val clockStable = abs(wallMillis - expectedWall) <= clockJumpToleranceMillis
@@ -422,6 +425,46 @@ data class FtSlotPlan(
             slotParity(targetWallSlotStartMillis, periodMillis) == desiredParity
     }
 }
+
+object FtRuntimeWait {
+    fun remainingMillis(plan: FtSlotPlan, monotonicMillis: Long): Long =
+        (plan.targetMonotonicMillis - monotonicMillis).coerceAtLeast(0)
+
+    fun wallClockStable(plan: FtSlotPlan, wallMillis: Long, monotonicMillis: Long, toleranceMillis: Long = 250): Boolean {
+        val expectedWall = plan.createdWallMillis + (monotonicMillis - plan.createdMonotonicMillis)
+        return abs(wallMillis - expectedWall) <= toleranceMillis
+    }
+}
+
+data class DigiPostTxDecision(val resumeDecoder: Boolean, val latchRxUnconfirmed: Boolean)
+
+fun decidePostTxRecovery(priorRxActive: Boolean, outcome: DigiTxOutcome, pttMayHaveOccurred: Boolean): DigiPostTxDecision {
+    val uncertainRadioState = !outcome.rxConfirmed && (outcome.pttAttempted || pttMayHaveOccurred)
+    return DigiPostTxDecision(
+        resumeDecoder = priorRxActive && (outcome.rxConfirmed || (!outcome.pttAttempted && !pttMayHaveOccurred)),
+        latchRxUnconfirmed = uncertainRadioState,
+    )
+}
+
+fun flexStateConfirmsReceive(state: FlexTxState): Boolean =
+    state in setOf(FlexTxState.DISABLED, FlexTxState.READY, FlexTxState.ARMED)
+
+fun flexPostStopOutcome(state: FlexTxState, slotStartMillis: Long): DigiTxOutcome =
+    if (flexStateConfirmsReceive(state)) DigiTxOutcome.success(slotStartMillis)
+    else DigiTxOutcome.failed(DigiTxFailure.RX_UNCONFIRMED,
+        "Flex post-stop state is $state", pttConfirmed = true, audioCompleted = true,
+        slotStartMillis = slotStartMillis, pttAttempted = true)
+
+fun phaseAfterRxRecheck(confirmed: Boolean): DigiTxPhase =
+    if (confirmed) DigiTxPhase.SAFE else DigiTxPhase.RX_UNCONFIRMED
+
+fun shouldQueueFtAction(autoSequence: Boolean, txEnabled: Boolean, messageKind: FtTxMessageKind?, message: String): Boolean =
+    autoSequence && txEnabled && messageKind != null && message.isNotBlank()
+
+fun effectiveAutoCq(autoSequence: Boolean, requestedAutoCq: Boolean): Boolean = autoSequence && requestedAutoCq
+
+fun wsjtMillisSinceMidnight(slotStartMillis: Long): Int =
+    Math.floorMod(slotStartMillis, 86_400_000L).toInt()
 
 object FtSlotScheduler {
     fun plan(

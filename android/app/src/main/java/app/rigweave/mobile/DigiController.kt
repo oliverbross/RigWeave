@@ -27,6 +27,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -89,7 +90,7 @@ val DigiModeFamilies = listOf(
     DigiMode.MSK144, DigiMode.JT65, DigiMode.WSPR, DigiMode.CW, DigiMode.RTTY,
     DigiMode.PSK31, DigiMode.SSTV,
 )
-enum class DigiTxPhase { SAFE, SEQUENCING, PTT_CONFIRMED }
+enum class DigiTxPhase { SAFE, SEQUENCING, PTT_CONFIRMED, RX_UNCONFIRMED }
 
 data class DigiDecodeRow(val text: String, val frequencyHz: Float, val dtSeconds: Float, val snrDb: Float)
 
@@ -153,6 +154,8 @@ class DigiController(
     private var lastSpectrumPublishedMs = 0L
     private var lastCompletedSlot = FloatArray(0)
     private var lastCompletedSlotMode: DigiMode? = null
+    private var lastCompletedSlotFrequencyHz = 0L
+    private var lastCompletedSlotSessionId = ""
     private var closed = false
     private var lastRadioIdentity = ""
     private var lastRadioFrequency = 0L
@@ -161,6 +164,7 @@ class DigiController(
     private var lastStableRoute = ""
     private var sequenceTimeoutJob: Job? = null
     private var pendingFtMessageKind: FtTxMessageKind? = null
+    private var preparedFtTxParity = -1
     private var issRxOwned = false
 
     var settings by mutableStateOf(DigiSettingsDocument.parse(prefs.getString("settings_v1", null))); private set
@@ -212,6 +216,7 @@ class DigiController(
     val interopState get() = interop.state
     val rxAudioHz get() = settings.rxOffsets[mode.family] ?: defaultAudioOffset(mode)
     val txAudioHz get() = settings.txOffsets[mode.family] ?: defaultAudioOffset(mode)
+    val effectiveFtTxParity get() = preparedFtTxParity.takeIf { it >= 0 } ?: settings.ftTxParity
     val capability get() = DigiCapabilities.forMode(mode)
     fun isModeVisible(value: DigiMode): Boolean {
         val entry = DigiCapabilities.forMode(value)
@@ -309,6 +314,14 @@ class DigiController(
             status = "Enable TX and live RX in FT8 or FT4 before starting CQ"
             return
         }
+        if (!settings.ftAutoSequence) {
+            cancelFtAutomation("Manual CQ prepared")
+            preparedFtTxParity = settings.ftTxParity
+            applyStandardMessage(0)
+            status = "Manual CQ prepared for ${if (preparedFtTxParity == 0) "FIRST / EVEN" else "SECOND / ODD"} · arm and SEND once"
+            return
+        }
+        preparedFtTxParity = -1
         handleFtAction(sequencer.operatorStartCq(mode.name, dependencies.radioState().frequencyHz, sessionId,
             Instant.now().epochSecond, settings.ftTxParity, settings.ftRetryLimit, settings.ftAutoCq, settings.ftAutoCqLimit))
     }
@@ -320,14 +333,26 @@ class DigiController(
 
     fun callSelected() {
         val event = selectedDecode ?: run { status = "Select a decoded station first"; return }
+        val radioFrequency = dependencies.radioState().frequencyHz
+        val eligible = event.automaticFtEligible(mode.name, radioFrequency, sessionId, lastCompletedSlotStartMillis)
         if (mode !in setOf(DigiMode.FT8, DigiMode.FT4) || !txEnabled || !rxActive || sessionId.isBlank() ||
-            event.mode != mode.name || event.sessionId != sessionId || event.callsign.isBlank()) {
-            status = "Select a station from the current live FT8/FT4 receive session"
+            !eligible) {
+            status = if (!event.exactSlotTiming || event.decodeSource in setOf(DigiDecodeSource.REFERENCE_RECORDING, DigiDecodeSource.COMPANION))
+                "Reference/legacy decode — manual draft only"
+            else "Select a station from the current live FT8/FT4 receive context"
             return
         }
         updateDxCall(event.callsign)
+        if (!settings.ftAutoSequence) {
+            cancelFtAutomation("Manual selected call prepared")
+            preparedFtTxParity = 1 - slotParity(event.slotStartMillis, mode.slotMillis)
+            applyStandardMessage(1)
+            status = "Manual call prepared for ${if (preparedFtTxParity == 0) "FIRST / EVEN" else "SECOND / ODD"} · arm and SEND once"
+            return
+        }
+        preparedFtTxParity = -1
         handleFtAction(sequencer.operatorCallSelected(event.callsign, event.grid, event.snr,
-            event.periodStartEpoch * 1_000L, mode.slotMillis, mode.name, dependencies.radioState().frequencyHz,
+            event.slotStartMillis, mode.slotMillis, mode.name, radioFrequency,
             event.sessionId, Instant.now().epochSecond, settings.ftRetryLimit))
     }
 
@@ -344,14 +369,21 @@ class DigiController(
     }
 
     fun updateFtAutomation(autoCq: Boolean, autoCqLimit: Int, retryLimit: Int) {
-        updateSettings { it.copy(ftAutoCq = autoCq, ftAutoCqLimit = autoCqLimit.coerceIn(1, 20), ftRetryLimit = retryLimit.coerceIn(0, 10)) }
+        updateSettings { it.copy(ftAutoCq = effectiveAutoCq(it.ftAutoSequence, autoCq), ftAutoCqLimit = autoCqLimit.coerceIn(1, 20), ftRetryLimit = retryLimit.coerceIn(0, 10)) }
+    }
+
+    fun updateFtAutoSequence(enabled: Boolean) {
+        if (!enabled) cancelFtAutomation("Automatic FT sequencing disabled")
+        updateSettings { it.copy(ftAutoSequence = enabled, ftAutoCq = it.ftAutoCq && enabled) }
+        status = if (enabled) "Automatic FT sequencing enabled" else "Automatic FT sequencing off · Call actions prepare one manual message"
     }
 
     private fun handleFtAction(action: FtEngineAction) {
         ftSequence = sequencer.snapshot
         when (action.kind) {
             FtEngineActionKind.QUEUE_MESSAGE, FtEngineActionKind.RETRY, FtEngineActionKind.RETURN_TO_CQ -> {
-                if (!settings.ftAutoSequence || !txEnabled || action.messageKind == null || action.message.isBlank()) return
+                if (!settings.ftAutoSequence) { cancelFtAutomation("Automatic FT sequencing disabled"); return }
+                if (!shouldQueueFtAction(settings.ftAutoSequence, txEnabled, action.messageKind, action.message)) return
                 sequenceTimeoutJob?.cancel()
                 pendingFtMessageKind = action.messageKind
                 txText = action.message.take(240)
@@ -661,6 +693,10 @@ class DigiController(
 
     @SuppressLint("MissingPermission")
     fun startRx() {
+        if (txPhase == DigiTxPhase.RX_UNCONFIRMED) {
+            status = "RX UNCONFIRMED · use REQUEST RX & RECHECK before restarting the decoder"
+            return
+        }
         if (rxActive) return
         if (settings.companionMode || !interop.localModemAllowed) {
             status = "Companion mode is active; local decoder and PTT authority are disabled"
@@ -913,11 +949,16 @@ class DigiController(
             slotProgress = slotUsed.toFloat() / slotPcm.size
             if (slotUsed == slotPcm.size) {
                 val decoder = mode.slotDecoder ?: return
+                val capturedMode = mode
                 val captured = slotPcm.copyOf()
                 val capturedStartMillis = slotCaptureStartMillis
+                val capturedFrequencyHz = dependencies.radioState().frequencyHz
+                val capturedSessionId = sessionId
                 lastCompletedSlot = captured
-                lastCompletedSlotMode = mode
+                lastCompletedSlotMode = capturedMode
                 lastCompletedSlotStartMillis = capturedStartMillis
+                lastCompletedSlotFrequencyHz = capturedFrequencyHz
+                lastCompletedSlotSessionId = capturedSessionId
                 slotCaptureStartMillis += mode.slotMillis
                 slotUsed = 0
                 slotProgress = 0f
@@ -928,13 +969,24 @@ class DigiController(
                 status = "${mode.label} slot captured · decoding ${captured.size / 12_000}s"
                 slotDecodeJob = scope.launch(Dispatchers.Default) {
                     val result = NativeCore.digiDecodeSlot(decoder, captured, 12_000)
-                    withContext(Dispatchers.Main.immediate) { applySlotDecode(result, mode, capturedStartMillis) }
+                    withContext(Dispatchers.Main.immediate) {
+                        applySlotDecode(result, capturedMode, capturedStartMillis, DigiDecodeSource.LIVE_CAPTURE,
+                            capturedSessionId, capturedFrequencyHz, exactSlotTiming = true)
+                    }
                 }
             }
         }
     }
 
-    private fun applySlotDecode(value: String, decodedMode: DigiMode, slotStartMillis: Long) {
+    private fun applySlotDecode(
+        value: String,
+        decodedMode: DigiMode,
+        slotStartMillis: Long,
+        decodeSource: DigiDecodeSource,
+        decodeSessionId: String,
+        dialFrequencyHz: Long,
+        exactSlotTiming: Boolean,
+    ) {
         if (mode != decodedMode) return
         val json = runCatching { JSONObject(value) }.getOrNull()
         val error = json?.optString("error").orEmpty()
@@ -953,7 +1005,7 @@ class DigiController(
                 }
             }
         }
-        enrichSlotRows(decodedRows, decodedMode, slotStartMillis)
+        enrichSlotRows(decodedRows, decodedMode, slotStartMillis, decodeSource, decodeSessionId, dialFrequencyHz, exactSlotTiming)
         transcript = decodedRows.joinToString("\n") { row ->
             "%+4.0f dB  %+.2f  %7.1f Hz  %s".format(row.snrDb, row.dtSeconds, row.frequencyHz, row.text)
         }
@@ -961,10 +1013,17 @@ class DigiController(
         else "${decodedMode.label} · ${decodedRows.size} signal${if (decodedRows.size == 1) "" else "s"} decoded"
     }
 
-    private fun enrichSlotRows(rows: List<DigiDecodeRow>, decodedMode: DigiMode, slotStartMillis: Long) {
+    private fun enrichSlotRows(
+        rows: List<DigiDecodeRow>,
+        decodedMode: DigiMode,
+        slotStartMillis: Long,
+        decodeSource: DigiDecodeSource,
+        decodeSessionId: String,
+        dialFrequencyHz: Long,
+        exactSlotTiming: Boolean,
+    ) {
         if (rows.isEmpty()) return
         val now = Instant.now().epochSecond
-        val periodStart = slotStartMillis / 1_000L
         val parsed = rows.map { it to DigiFtParser.parse(it.text) }
         val calls = parsed.map { it.second.from }.filter(String::isNotBlank).distinct()
         scope.launch(Dispatchers.IO) {
@@ -977,10 +1036,11 @@ class DigiController(
                 val cty = dependencies.cty.lookup(call)
                 val remote = maidenheadCenter(message.grid)
                 val summary = summaries[call]
-                val identity = "$sessionId|${decodedMode.name}|$periodStart|${row.frequencyHz}|${row.text}"
+                val identity = "$decodeSessionId|${decodedMode.name}|$slotStartMillis|${decodeSource.name}|${row.frequencyHz}|${row.text}"
                 DigiDecodeEvent(
-                    UUID.nameUUIDFromBytes(identity.toByteArray()).toString(), sessionId.ifBlank { "reference" }, now,
-                    decodedMode.name, periodStart, row.snrDb, row.dtSeconds, row.frequencyHz, row.text,
+                    UUID.nameUUIDFromBytes(identity.toByteArray()).toString(), decodeSessionId.ifBlank { "reference" }, now,
+                    decodedMode.name, slotStartMillis, decodeSource, exactSlotTiming, dialFrequencyHz,
+                    row.snrDb, row.dtSeconds, row.frequencyHz, row.text,
                     call, message.grid, cty?.country.orEmpty(), cty?.continent.orEmpty(),
                     if (stationPoint != null && remote != null) distanceKm(stationPoint, remote) else 0.0,
                     if (stationPoint != null && remote != null) initialBearingDegrees(stationPoint, remote).toDouble() else 0.0,
@@ -992,11 +1052,13 @@ class DigiController(
             withContext(Dispatchers.Main.immediate) {
                 decodeHistory = (decodeHistory + events).distinctBy(DigiDecodeEvent::id).takeLast(3_000)
                 events.forEach { event ->
-                    interop.send(WsjtDatagram.decode("RigWeave", true, ((event.periodStartEpoch % 86_400) * 1_000).toInt(),
+                    interop.send(WsjtDatagram.decode("RigWeave", true, wsjtMillisSinceMidnight(event.slotStartMillis),
                         event.snr.roundToInt(), event.dt.toDouble(), event.audioHz.roundToInt(), decodedMode.label, event.text))
-                    if (decodedMode in setOf(DigiMode.FT8, DigiMode.FT4)) {
+                    val eligible = event.automaticFtEligible(mode.name, dependencies.radioState().frequencyHz, sessionId,
+                        lastCompletedSlotStartMillis)
+                    if (settings.ftAutoSequence && eligible && decodedMode in setOf(DigiMode.FT8, DigiMode.FT4)) {
                         val action = sequencer.decoded(FtDecodeInput(DigiFtParser.parse(event.text), event.snr,
-                            event.periodStartEpoch * 1_000L, event.mode, ftSequence.dialFrequencyHz,
+                            event.slotStartMillis, event.mode, ftSequence.dialFrequencyHz,
                             ftSequence.sessionId), Instant.now().epochSecond)
                         if (action.kind != FtEngineActionKind.NONE) {
                             sequenceTimeoutJob?.cancel()
@@ -1136,7 +1198,8 @@ class DigiController(
                 val result = withContext(Dispatchers.Default) { NativeCore.digiDecodeSlot(decoder, pcm, 12_000) }
                 val period = mode.slotMillis
                 val slotStart = System.currentTimeMillis().let { it - it.mod(period) }
-                applySlotDecode(result, mode, slotStart)
+                applySlotDecode(result, mode, slotStart, DigiDecodeSource.REFERENCE_RECORDING,
+                    "reference", 0L, exactSlotTiming = false)
             } else if (mode == DigiMode.PSK31) {
                 applyDecode(withContext(Dispatchers.Default) { NativeCore.digiDecodePsk31(pcm, pskCarrierHz) })
                 status = "PSK31 reference recording decoded"
@@ -1158,7 +1221,9 @@ class DigiController(
         slotDecodeJob = scope.launch(Dispatchers.Default) {
             val result = NativeCore.digiDecodeSlot(decoder, captured, 12_000)
             withContext(Dispatchers.Main.immediate) {
-                if (mode == capturedMode) applySlotDecode(result, capturedMode, lastCompletedSlotStartMillis)
+                if (mode == capturedMode) applySlotDecode(result, capturedMode, lastCompletedSlotStartMillis,
+                    DigiDecodeSource.REDECODE_LIVE_SLOT, lastCompletedSlotSessionId,
+                    lastCompletedSlotFrequencyHz, exactSlotTiming = true)
             }
         }
     }
@@ -1308,6 +1373,7 @@ class DigiController(
     }
 
     fun haltTx() {
+        val recoveryLatched = txPhase == DigiTxPhase.RX_UNCONFIRMED
         disarm()
         txEnabled = false
         cancelFtAutomation("Stopped by operator")
@@ -1315,14 +1381,47 @@ class DigiController(
         txJob = null
         txSlotCountdownMillis = 0L
         txActive = false
-        txPhase = DigiTxPhase.SAFE
-        status = "Digital transmission stopped by operator · RX requested"
+        if (!recoveryLatched) txPhase = DigiTxPhase.SAFE
+        status = if (recoveryLatched) "RX UNCONFIRMED · use REQUEST RX & RECHECK" else "Digital transmission stopped by operator · RX requested"
         scope.launch {
             flex.stopTransmit("operator stopped digital transmission")
             transport.send("RX;")
             routes.releaseAudio(AudioOwners.DIGI_TX)
         }
         publishInteropStatus()
+    }
+
+    fun requestRxAndRecheck() {
+        if (txPhase != DigiTxPhase.RX_UNCONFIRMED || txActive) return
+        txEnabled = false
+        disarm()
+        scope.launch {
+            status = "Requesting RX and checking radio state"
+            val confirmed = if (radioFamily() == RadioFamily.FLEXRADIO) {
+                runCatching { flex.stopTransmit("Digi RX recovery recheck") }.isSuccess && waitForFlexReceive(2_000L)
+            } else {
+                transport.send("RX;") is UsbResult.Connected &&
+                    runCatching { transport.confirmTq(false).transmitting == false }.getOrDefault(false)
+            }
+            txPhase = phaseAfterRxRecheck(confirmed)
+            if (confirmed) {
+                status = "RX confirmed · decoder remains stopped until explicitly restarted"
+            } else {
+                latchRxUnconfirmed("RX UNCONFIRMED · recheck failed; verify the radio")
+            }
+            publishInteropStatus()
+        }
+    }
+
+    private fun latchRxUnconfirmed(detail: String) {
+        txEnabled = false
+        disarm()
+        sequenceTimeoutJob?.cancel(); sequenceTimeoutJob = null
+        pendingFtMessageKind = null
+        sequencer.stop("RX unconfirmed")
+        ftSequence = sequencer.snapshot
+        txPhase = DigiTxPhase.RX_UNCONFIRMED
+        status = detail
     }
 
     private suspend fun transmit(text: String) {
@@ -1355,21 +1454,30 @@ class DigiController(
         publishInteropStatus()
         var slotStartMillis = 0L
         var externallyCancelled = false
+        var adapterEntered = false
+        var completedOutcome: DigiTxOutcome? = null
         try {
             if (selectedMode.isSlotted) {
-                val desiredParity = if (pendingFtMessageKind != null) ftSequence.operatorTxParity else settings.ftTxParity
+                val desiredParity = if (pendingFtMessageKind != null) ftSequence.operatorTxParity else effectiveFtTxParity
                 val plan = FtSlotScheduler.plan(selectedMode.slotMillis, desiredParity, System.currentTimeMillis(),
                     android.os.SystemClock.elapsedRealtime(), allowedLateStartMillis = 120L)
                 slotStartMillis = plan.targetWallSlotStartMillis
                 while (true) {
-                    val remaining = plan.targetWallSlotStartMillis - System.currentTimeMillis()
-                    txSlotCountdownMillis = remaining.coerceAtLeast(0)
+                    val monotonicNow = android.os.SystemClock.elapsedRealtime()
+                    val remaining = FtRuntimeWait.remainingMillis(plan, monotonicNow)
+                    txSlotCountdownMillis = remaining
                     status = "${selectedMode.label} TX ${if (desiredParity == 0) "FIRST / EVEN" else "SECOND / ODD"} · ${"%.1f".format(txSlotCountdownMillis / 1_000.0)}s"
                     if (remaining <= 0) break
+                    if (!FtRuntimeWait.wallClockStable(plan, System.currentTimeMillis(), monotonicNow)) {
+                        completedOutcome = DigiTxOutcome.failed(DigiTxFailure.CLOCK_JUMP,
+                            "UTC clock changed while waiting; transmission cancelled", slotStartMillis = slotStartMillis)
+                        break
+                    }
                     delay(minOf(remaining, 100L))
                 }
-                if (!plan.remainsValid(System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime())) {
-                    val failed = DigiTxOutcome.failed(DigiTxFailure.CLOCK_JUMP, "UTC clock changed or the slot start window expired", slotStartMillis = slotStartMillis)
+                if (completedOutcome != null || !plan.remainsValid(System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime())) {
+                    val failed = completedOutcome ?: DigiTxOutcome.failed(DigiTxFailure.CLOCK_JUMP, "UTC clock changed or the slot start window expired", slotStartMillis = slotStartMillis)
+                    completedOutcome = failed
                     if (pendingFtMessageKind != null) handleFtAction(sequencer.txOutcome(failed, Instant.now().epochSecond))
                     else status = failed.detail
                     txEnabled = false
@@ -1381,16 +1489,19 @@ class DigiController(
                 currentRadio.identity != selectedIdentity || radioFamily() != selectedFamily) {
                 txEnabled = false
                 val failed = DigiTxOutcome.failed(DigiTxFailure.CONTEXT_CHANGED, "Transmission cancelled because radio, mode, frequency, or TX enable changed", slotStartMillis = slotStartMillis)
+                completedOutcome = failed
                 if (pendingFtMessageKind != null) handleFtAction(sequencer.txOutcome(failed, Instant.now().epochSecond))
                 else status = failed.detail
                 return
             }
             stopRx("RX paused immediately before transmit")
+            adapterEntered = true
             val outcome = withTimeoutOrNull(DigiCapabilities.forMode(selectedMode).maximumTxMillis + 5_000L) {
                 if (selectedFamily == RadioFamily.FLEXRADIO) transmitFlex(samples, slotStartMillis)
                 else transmitElecraft(samples, slotStartMillis)
             } ?: DigiTxOutcome.failed(DigiTxFailure.CANCELLED, "Digital TX exceeded its finite safety timeout",
-                encoded = true, slotStartMillis = slotStartMillis)
+                encoded = true, slotStartMillis = slotStartMillis, pttAttempted = true)
+            completedOutcome = outcome
             if (pendingFtMessageKind != null) {
                 pendingFtMessageKind = null
                 val action = sequencer.txOutcome(outcome, Instant.now().epochSecond)
@@ -1402,14 +1513,21 @@ class DigiController(
             }
         } catch (cancelled: CancellationException) {
             externallyCancelled = true
+            if (adapterEntered) latchRxUnconfirmed("RX UNCONFIRMED · transmission was cancelled after radio handoff")
             throw cancelled
         } finally {
             txActive = false
-            txPhase = DigiTxPhase.SAFE
             txSlotCountdownMillis = 0L
             routes.releaseAudio(AudioOwners.DIGI_TX)
+            val decision = completedOutcome?.let { decidePostTxRecovery(resumeRx, it, pttMayHaveOccurred = false) }
+            if (txPhase != DigiTxPhase.RX_UNCONFIRMED && decision?.latchRxUnconfirmed == true) {
+                latchRxUnconfirmed("RX UNCONFIRMED · verify the radio, then use REQUEST RX & RECHECK")
+            } else if (txPhase != DigiTxPhase.RX_UNCONFIRMED) {
+                txPhase = DigiTxPhase.SAFE
+                if (!externallyCancelled && decision?.resumeDecoder == true && mode == selectedMode && !settings.companionMode && !rxActive) startRx()
+            }
             publishInteropStatus()
-            if (!externallyCancelled && resumeRx && mode == selectedMode && !settings.companionMode && !rxActive) startRx()
+            if (pendingFtMessageKind == null && selectedMode in setOf(DigiMode.FT8, DigiMode.FT4)) preparedFtTxParity = -1
             txJob = null
         }
     }
@@ -1474,19 +1592,51 @@ class DigiController(
             val confirmDeadline = android.os.SystemClock.elapsedRealtime() + 2_000L
             while (flex.tx.state == FlexTxState.KEYING && android.os.SystemClock.elapsedRealtime() < confirmDeadline) delay(50)
             if (flex.tx.state != FlexTxState.TRANSMITTING) {
-                status = "Flex PTT was not confirmed; transmission stopped"
-                return DigiTxOutcome.failed(DigiTxFailure.FLEX_PTT_UNCONFIRMED, status, pttConfirmed = false,
-                    rxConfirmed = true, slotStartMillis = slotStartMillis)
+                flex.stopTransmit("digital PTT confirmation failed")
+                val rxConfirmed = waitForFlexReceive(2_000L)
+                status = if (rxConfirmed) "Flex PTT was not confirmed; RX verified"
+                else "RX UNCONFIRMED · Flex did not reach a safe post-stop state"
+                return if (rxConfirmed) DigiTxOutcome.failed(DigiTxFailure.FLEX_PTT_UNCONFIRMED, status,
+                    rxConfirmed = true, slotStartMillis = slotStartMillis, pttAttempted = true)
+                else DigiTxOutcome.failed(DigiTxFailure.RX_UNCONFIRMED, status,
+                    slotStartMillis = slotStartMillis, pttAttempted = true)
             }
             txPhase = DigiTxPhase.PTT_CONFIRMED
             status = "Flex PTT confirmed · ${mode.label} on air"
             delay(pcm.durationMillis + 600L)
-            status = "Flex digital TX complete · RX"
-            // Flex stopTransmit completion is the strongest RX acknowledgement exposed by the adapter.
-            return DigiTxOutcome.success(slotStartMillis)
-        } finally {
-            flex.stopTransmit("digital transmission cleanup")
+            flex.stopTransmit("digital transmission complete")
+            if (!waitForFlexReceive(2_000L)) {
+                status = "RX UNCONFIRMED · Flex remains in a transmit or unknown state"
+                return flexPostStopOutcome(flex.tx.state, slotStartMillis).copy(detail = status)
+            }
+            status = "Flex digital TX complete · non-transmitting state confirmed"
+            return flexPostStopOutcome(flex.tx.state, slotStartMillis)
+        } catch (cancelled: CancellationException) {
+            withContext(NonCancellable) {
+                runCatching { flex.stopTransmit("cancelled digital transmission cleanup") }
+                waitForFlexReceive(2_000L)
+            }
+            throw cancelled
+        } catch (failure: Throwable) {
+            val rxConfirmed = withContext(NonCancellable) {
+                runCatching { flex.stopTransmit("failed digital transmission cleanup") }.isSuccess && waitForFlexReceive(2_000L)
+            }
+            status = if (rxConfirmed) "Flex digital TX failed safely: ${failure.message}"
+            else "RX UNCONFIRMED · Flex cleanup failed: ${failure.message}"
+            return DigiTxOutcome.failed(if (rxConfirmed) DigiTxFailure.CANCELLED else DigiTxFailure.RX_UNCONFIRMED,
+                status, pttConfirmed = flex.tx.state == FlexTxState.TRANSMITTING, rxConfirmed = rxConfirmed,
+                slotStartMillis = slotStartMillis, pttAttempted = true)
         }
+    }
+
+    private suspend fun waitForFlexReceive(timeoutMillis: Long): Boolean {
+        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMillis
+        while (android.os.SystemClock.elapsedRealtime() <= deadline) {
+            if (flexStateConfirmsReceive(flex.tx.state)) return true
+            if (flex.tx.state == FlexTxState.FAULT) return false
+            delay(50L)
+        }
+        return flexStateConfirmsReceive(flex.tx.state)
     }
 
     private suspend fun transmitElecraft(samples: FloatArray, slotStartMillis: Long): DigiTxOutcome {
@@ -1517,6 +1667,7 @@ class DigiController(
             return DigiTxOutcome.failed(DigiTxFailure.AUDIO_ROUTE_BIND_FAILED, status, slotStartMillis = slotStartMillis)
         }
         var pttConfirmed = false
+        var pttAttempted = false
         var audioCompleted = false
         var failure: DigiTxFailure? = null
         var detail = ""
@@ -1524,7 +1675,7 @@ class DigiController(
             if (transport.send("MD6;") !is UsbResult.Connected) {
                 failure = DigiTxFailure.DATA_MODE_REFUSED
                 detail = "CAT refused DATA mode; transmitter stayed in RX"
-            } else if (transport.send("TX;") !is UsbResult.Connected) {
+            } else if (run { pttAttempted = true; transport.send("TX;") } !is UsbResult.Connected) {
                 failure = DigiTxFailure.PTT_REFUSED
                 detail = "PTT command was refused; transmitter returned to RX"
             } else if (transport.confirmTq(true).transmitting != true) {
@@ -1559,12 +1710,14 @@ class DigiController(
         if (!rxConfirmed) {
             status = "RX UNCONFIRMED · verify the radio before transmitting again"
             return DigiTxOutcome.failed(DigiTxFailure.RX_UNCONFIRMED, status, pttConfirmed = pttConfirmed,
-                audioCompleted = audioCompleted, rxConfirmed = false, slotStartMillis = slotStartMillis)
+                audioCompleted = audioCompleted, rxConfirmed = false, slotStartMillis = slotStartMillis,
+                pttAttempted = pttAttempted)
         }
         if (failure != null) {
             status = detail
             return DigiTxOutcome.failed(requireNotNull(failure), detail, pttConfirmed = pttConfirmed,
-                audioCompleted = audioCompleted, rxConfirmed = true, slotStartMillis = slotStartMillis)
+                audioCompleted = audioCompleted, rxConfirmed = true, slotStartMillis = slotStartMillis,
+                pttAttempted = pttAttempted)
         }
         status = "Elecraft digital TX complete · RX confirmed"
         return DigiTxOutcome.success(slotStartMillis)

@@ -31,7 +31,7 @@ class NexusDigiSessionStoreInstrumentedTest {
     @Test fun decodeHistoryIsSeparateAndHardCapped() {
         val now = System.currentTimeMillis() / 1_000
         val rows = (0 until 1_005).map { index ->
-            DigiDecodeEvent("id-$index", "session", now + index, "FT8", now, -10f, .1f, 1_000f, "CQ K1ABC FN31")
+            event("id-$index", now + index, 15_000L * index)
         }
         store.appendDecodes(rows, hardCap = 1_000)
         assertEquals(1_000, store.recentDecodes(3_000).size)
@@ -40,10 +40,40 @@ class NexusDigiSessionStoreInstrumentedTest {
     @Test fun expiredDecodeRowsAreRemoved() {
         val now = System.currentTimeMillis() / 1_000
         store.appendDecodes(listOf(
-            DigiDecodeEvent("old", "session", now - 3 * 86_400, "FT8", now, -10f, 0f, 1_000f, "old"),
-            DigiDecodeEvent("new", "session", now, "FT8", now, -10f, 0f, 1_000f, "new"),
+            event("old", now - 3 * 86_400, 7_500L),
+            event("new", now, 22_500L),
         ), retentionDays = 1)
         assertEquals(listOf("new"), store.recentDecodes().map { it.id })
+    }
+
+    @Test fun ft4HalfSecondSlotsRoundTripExactly() {
+        val now = System.currentTimeMillis() / 1_000
+        store.appendDecodes(listOf(event("a", now, 7_500L), event("b", now + 1, 22_500L)))
+        val rows = store.recentDecodes()
+        assertEquals(listOf(7_500L, 22_500L), rows.map { it.slotStartMillis })
+        assertEquals(listOf(1, 1), rows.map { slotParity(it.slotStartMillis, 7_500L) })
+        assertTrue(rows.all { it.decodeSource == DigiDecodeSource.LIVE_CAPTURE && it.exactSlotTiming })
+    }
+
+    @Test fun schemaOneMigrationPreservesRowsButMarksTimingIneligible() {
+        store.close()
+        context.deleteDatabase("rigweave-digi.sqlite")
+        val db = context.openOrCreateDatabase("rigweave-digi.sqlite", Context.MODE_PRIVATE, null)
+        db.execSQL("""CREATE TABLE decode_event(
+            id TEXT PRIMARY KEY,session_id TEXT NOT NULL,epoch INTEGER NOT NULL,mode TEXT NOT NULL,
+            period_start_epoch INTEGER NOT NULL,snr REAL NOT NULL,dt REAL NOT NULL,audio_hz REAL NOT NULL,
+            text TEXT NOT NULL,callsign TEXT NOT NULL,grid TEXT NOT NULL,country TEXT NOT NULL,
+            continent TEXT NOT NULL,distance_km REAL NOT NULL,bearing_degrees REAL NOT NULL,
+            worked INTEGER NOT NULL,confirmed INTEGER NOT NULL,needs_json TEXT NOT NULL,watchlisted INTEGER NOT NULL)""")
+        db.execSQL("INSERT INTO decode_event VALUES('legacy','old-session',100,'FT4',7,-10,0.1,1000,'CQ K1ABC FN31','K1ABC','FN31','','',0,0,0,0,'[]',0)")
+        db.version = 1
+        db.close()
+        store = DigiSessionStore(context)
+        val migrated = store.recentDecodes().single()
+        assertEquals(7_000L, migrated.slotStartMillis)
+        assertEquals(DigiDecodeSource.LIVE_CAPTURE, migrated.decodeSource)
+        assertFalse(migrated.exactSlotTiming)
+        assertFalse(migrated.automaticFtEligible("FT4", 14_080_000, "old-session", 7_000L))
     }
 
     @Test fun galleryUsesAtomicPrivatePngAndMetadata() {
@@ -62,4 +92,10 @@ class NexusDigiSessionStoreInstrumentedTest {
         store.enforceGalleryQuota(0)
         assertEquals("keeper", store.gallery().single().caption)
     }
+
+    private fun event(id: String, epoch: Long, slotStartMillis: Long) = DigiDecodeEvent(
+        id = id, sessionId = "session", epoch = epoch, mode = "FT4", slotStartMillis = slotStartMillis,
+        decodeSource = DigiDecodeSource.LIVE_CAPTURE, exactSlotTiming = true, dialFrequencyHz = 14_080_000,
+        snr = -10f, dt = .1f, audioHz = 1_000f, text = "CQ K1ABC FN31", callsign = "K1ABC",
+    )
 }

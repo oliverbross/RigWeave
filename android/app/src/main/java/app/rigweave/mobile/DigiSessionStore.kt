@@ -21,11 +21,12 @@ class DigiSessionStore(
     context: Context,
     databaseName: String = "rigweave-digi.sqlite",
     private val filesRoot: File = context.filesDir,
-) : SQLiteOpenHelper(context, databaseName, null, 1) {
+) : SQLiteOpenHelper(context, databaseName, null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE decode_event(
             id TEXT PRIMARY KEY,session_id TEXT NOT NULL,epoch INTEGER NOT NULL,mode TEXT NOT NULL,
-            period_start_epoch INTEGER NOT NULL,snr REAL NOT NULL,dt REAL NOT NULL,audio_hz REAL NOT NULL,
+            slot_start_millis INTEGER NOT NULL,decode_source TEXT NOT NULL,timing_exact INTEGER NOT NULL,
+            dial_frequency_hz INTEGER NOT NULL,snr REAL NOT NULL,dt REAL NOT NULL,audio_hz REAL NOT NULL,
             text TEXT NOT NULL,callsign TEXT NOT NULL,grid TEXT NOT NULL,country TEXT NOT NULL,
             continent TEXT NOT NULL,distance_km REAL NOT NULL,bearing_degrees REAL NOT NULL,
             worked INTEGER NOT NULL,confirmed INTEGER NOT NULL,needs_json TEXT NOT NULL,watchlisted INTEGER NOT NULL)""")
@@ -44,7 +45,15 @@ class DigiSessionStore(
         db.execSQL("CREATE TABLE digi_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE decode_event ADD COLUMN slot_start_millis INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE decode_event ADD COLUMN decode_source TEXT NOT NULL DEFAULT 'LIVE_CAPTURE'")
+            db.execSQL("ALTER TABLE decode_event ADD COLUMN timing_exact INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE decode_event ADD COLUMN dial_frequency_hz INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("UPDATE decode_event SET slot_start_millis=period_start_epoch*1000")
+        }
+    }
 
     fun beginSession(mode: String, epoch: Long): String = UUID.randomUUID().toString().also { id ->
         writableDatabase.insertOrThrow("digi_session", null, ContentValues().apply {
@@ -64,7 +73,9 @@ class DigiSessionStore(
         try {
             rows.forEach { row -> db.insertWithOnConflict("decode_event", null, ContentValues().apply {
                 put("id", row.id); put("session_id", row.sessionId); put("epoch", row.epoch); put("mode", row.mode)
-                put("period_start_epoch", row.periodStartEpoch); put("snr", row.snr); put("dt", row.dt); put("audio_hz", row.audioHz)
+                put("slot_start_millis", row.slotStartMillis); put("decode_source", row.decodeSource.name)
+                put("timing_exact", if (row.exactSlotTiming) 1 else 0); put("dial_frequency_hz", row.dialFrequencyHz)
+                put("snr", row.snr); put("dt", row.dt); put("audio_hz", row.audioHz)
                 put("text", row.text); put("callsign", row.callsign); put("grid", row.grid); put("country", row.country)
                 put("continent", row.continent); put("distance_km", row.distanceKm); put("bearing_degrees", row.bearingDegrees)
                 put("worked", if (row.worked) 1 else 0); put("confirmed", if (row.confirmed) 1 else 0)
@@ -81,16 +92,22 @@ class DigiSessionStore(
     }
 
     fun recentDecodes(limit: Int = 3_000): List<DigiDecodeEvent> = readableDatabase.rawQuery("""
-        SELECT id,session_id,epoch,mode,period_start_epoch,snr,dt,audio_hz,text,callsign,grid,country,continent,
+        SELECT id,session_id,epoch,mode,slot_start_millis,decode_source,timing_exact,dial_frequency_hz,
+        snr,dt,audio_hz,text,callsign,grid,country,continent,
         distance_km,bearing_degrees,worked,confirmed,needs_json,watchlisted
         FROM decode_event ORDER BY epoch DESC,id DESC LIMIT ?
     """.trimIndent(), arrayOf(limit.coerceIn(1, 3_000).toString())).use { cursor -> buildList {
         while (cursor.moveToNext()) add(DigiDecodeEvent(
-            cursor.getString(0), cursor.getString(1), cursor.getLong(2), cursor.getString(3), cursor.getLong(4),
-            cursor.getFloat(5), cursor.getFloat(6), cursor.getFloat(7), cursor.getString(8), cursor.getString(9),
-            cursor.getString(10), cursor.getString(11), cursor.getString(12), cursor.getDouble(13), cursor.getDouble(14),
-            cursor.getInt(15) != 0, cursor.getInt(16) != 0,
-            runCatching { JSONArray(cursor.getString(17)).stringList() }.getOrDefault(emptyList()), cursor.getInt(18) != 0,
+            id = cursor.getString(0), sessionId = cursor.getString(1), epoch = cursor.getLong(2), mode = cursor.getString(3),
+            slotStartMillis = cursor.getLong(4),
+            decodeSource = runCatching { DigiDecodeSource.valueOf(cursor.getString(5)) }.getOrDefault(DigiDecodeSource.REFERENCE_RECORDING),
+            exactSlotTiming = cursor.getInt(6) != 0, dialFrequencyHz = cursor.getLong(7),
+            snr = cursor.getFloat(8), dt = cursor.getFloat(9), audioHz = cursor.getFloat(10), text = cursor.getString(11),
+            callsign = cursor.getString(12), grid = cursor.getString(13), country = cursor.getString(14), continent = cursor.getString(15),
+            distanceKm = cursor.getDouble(16), bearingDegrees = cursor.getDouble(17), worked = cursor.getInt(18) != 0,
+            confirmed = cursor.getInt(19) != 0,
+            needs = runCatching { JSONArray(cursor.getString(20)).stringList() }.getOrDefault(emptyList()),
+            watchlisted = cursor.getInt(21) != 0,
         ))
     }.asReversed() }
 

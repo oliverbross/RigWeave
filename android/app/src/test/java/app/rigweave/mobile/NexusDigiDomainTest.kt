@@ -183,6 +183,89 @@ class NexusDigiDomainTest {
         assertEquals(0, DigiSettingsDocument.parse("{\"ftRetryLimit\":-2}").ftRetryLimit)
     }
 
+    @Test fun ft4ProductionSlotPrecisionKeepsOddParity() {
+        assertEquals(1, slotParity(7_500L, 7_500L))
+        assertEquals(1, slotParity(22_500L, 7_500L))
+    }
+
+    @Test fun wsjtFt4TimestampPreservesHalfSecond() {
+        assertEquals(7_500, wsjtMillisSinceMidnight(7_500L))
+        assertEquals(22_500, wsjtMillisSinceMidnight(86_422_500L))
+    }
+
+    @Test fun runtimeCountdownUsesOnlyMonotonicTarget() {
+        val plan = FtSlotScheduler.plan(7_500L, 1, 1_000L, 5_000L, 120L)
+        assertEquals(6_500L, FtRuntimeWait.remainingMillis(plan, 5_000L))
+        assertEquals(1_500L, FtRuntimeWait.remainingMillis(plan, 10_000L))
+    }
+
+    @Test fun runtimeClockJumpIsDetectedSeparatelyFromCountdown() {
+        val plan = FtSlotScheduler.plan(15_000L, 1, 1_000L, 2_000L, 120L)
+        assertTrue(FtRuntimeWait.wallClockStable(plan, 2_000L, 3_000L))
+        assertFalse(FtRuntimeWait.wallClockStable(plan, 2_400L, 3_000L))
+        assertEquals(FtRuntimeWait.remainingMillis(plan, 3_000L), FtRuntimeWait.remainingMillis(plan, 3_000L))
+    }
+
+    @Test fun rxUnconfirmedLatchesAndNeverResumesDecoder() {
+        val outcome = DigiTxOutcome.failed(DigiTxFailure.RX_UNCONFIRMED, pttConfirmed = true, pttAttempted = true)
+        val decision = decidePostTxRecovery(true, outcome, false)
+        assertFalse(decision.resumeDecoder)
+        assertTrue(decision.latchRxUnconfirmed)
+    }
+
+    @Test fun failureBeforePttMayResumeExactPriorDecoder() {
+        val outcome = DigiTxOutcome.failed(DigiTxFailure.ROUTE_MISSING, pttAttempted = false)
+        val decision = decidePostTxRecovery(true, outcome, false)
+        assertTrue(decision.resumeDecoder)
+        assertFalse(decision.latchRxUnconfirmed)
+    }
+
+    @Test fun rxRecheckClearsLatchOnlyWhenConfirmed() {
+        assertEquals(DigiTxPhase.SAFE, phaseAfterRxRecheck(true))
+        assertEquals(DigiTxPhase.RX_UNCONFIRMED, phaseAfterRxRecheck(false))
+    }
+
+    @Test fun flexSuccessRequiresConfirmedPostStopReceiveState() {
+        assertTrue(flexPostStopOutcome(FlexTxState.READY, 30_000L).successful)
+        assertFalse(flexPostStopOutcome(FlexTxState.STOPPING, 30_000L).successful)
+        assertFalse(flexPostStopOutcome(FlexTxState.TRANSMITTING, 30_000L).successful)
+        assertEquals(DigiTxFailure.RX_UNCONFIRMED, flexPostStopOutcome(FlexTxState.FAULT, 30_000L).failure)
+    }
+
+    @Test fun referenceAndCompanionDecodesCannotAdvanceAutomation() {
+        assertFalse(decodeEvent(DigiDecodeSource.REFERENCE_RECORDING).automaticFtEligible("FT4", 14_080_000, "session", 7_500L))
+        assertFalse(decodeEvent(DigiDecodeSource.COMPANION).automaticFtEligible("FT4", 14_080_000, "session", 7_500L))
+    }
+
+    @Test fun legacyTimingCannotAdvanceAutomation() {
+        assertFalse(decodeEvent(DigiDecodeSource.LIVE_CAPTURE, exact = false).automaticFtEligible("FT4", 14_080_000, "session", 7_500L))
+    }
+
+    @Test fun exactLiveCaptureRequiresModeFrequencyAndSession() {
+        val event = decodeEvent(DigiDecodeSource.LIVE_CAPTURE)
+        assertTrue(event.automaticFtEligible("FT4", 14_080_000, "session", 7_500L))
+        assertFalse(event.automaticFtEligible("FT8", 14_080_000, "session", 7_500L))
+        assertFalse(event.automaticFtEligible("FT4", 14_074_000, "session", 7_500L))
+        assertFalse(event.automaticFtEligible("FT4", 14_080_000, "other", 7_500L))
+    }
+
+    @Test fun liveRedecodeRequiresExactActiveCapturedSlot() {
+        val event = decodeEvent(DigiDecodeSource.REDECODE_LIVE_SLOT)
+        assertTrue(event.automaticFtEligible("FT4", 14_080_000, "other-session", 7_500L))
+        assertFalse(event.automaticFtEligible("FT4", 14_080_000, "other-session", 22_500L))
+    }
+
+    @Test fun automaticSequenceOffCannotQueueNextMessage() {
+        assertFalse(shouldQueueFtAction(false, true, FtTxMessageKind.REPORT, "OM0RX K1ABC -10"))
+        assertTrue(shouldQueueFtAction(true, true, FtTxMessageKind.REPORT, "OM0RX K1ABC -10"))
+    }
+
+    @Test fun autoCqCannotOperateWithoutAutomaticSequence() {
+        assertFalse(effectiveAutoCq(false, true))
+        assertFalse(DigiSettingsDocument.parse("{\"ftAutoSequence\":false,\"ftAutoCq\":true}").ftAutoCq)
+        assertTrue(effectiveAutoCq(true, true))
+    }
+
     private fun engine() = DigiFtExchangeEngine({ "OM0RX" }, { "JN88TQ" })
 
     private fun startSp(engine: DigiFtExchangeEngine) = engine.operatorCallSelected(
@@ -194,6 +277,12 @@ class NexusDigiDomainTest {
 
     private fun decode(engine: DigiFtExchangeEngine, text: String, snr: Float, slot: Long) =
         engine.decoded(FtDecodeInput(DigiFtParser.parse(text), snr, slot, "FT8", 14_074_000, "s"), slot / 1_000)
+
+    private fun decodeEvent(source: DigiDecodeSource, exact: Boolean = true) = DigiDecodeEvent(
+        id = "decode", sessionId = "session", epoch = 100L, mode = "FT4", slotStartMillis = 7_500L,
+        decodeSource = source, exactSlotTiming = exact, dialFrequencyHz = 14_080_000L,
+        snr = -10f, dt = .1f, audioHz = 1_000f, text = "CQ K1ABC FN31", callsign = "K1ABC",
+    )
 
     @Test fun wsjtPacketsUseCanonicalMagicSchemaAndType() {
         assertEquals(0, WsjtDatagram.headerType(WsjtDatagram.heartbeat("RigWeave", "test")))

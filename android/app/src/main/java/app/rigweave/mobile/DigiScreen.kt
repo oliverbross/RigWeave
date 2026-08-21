@@ -143,9 +143,10 @@ private fun DigiCockpitHeader(controller: DigiController, radio: RadioState, tog
         HeaderTruth("TX", when (controller.txPhase) {
             DigiTxPhase.PTT_CONFIRMED -> "ON AIR"
             DigiTxPhase.SEQUENCING -> "QUEUED"
+            DigiTxPhase.RX_UNCONFIRMED -> "RX UNCONFIRMED"
             DigiTxPhase.SAFE -> if (controller.txArmed) "ARMED" else "SAFE"
         }, when {
-            controller.txPhase == DigiTxPhase.PTT_CONFIRMED -> NexusRed
+            controller.txPhase in setOf(DigiTxPhase.PTT_CONFIRMED, DigiTxPhase.RX_UNCONFIRMED) -> NexusRed
             controller.txActive || controller.txArmed -> NexusAmber
             else -> NexusMuted
         })
@@ -457,10 +458,15 @@ private fun WeakSignalDock(controller: DigiController) {
         if (controller.mode != DigiMode.WSPR) CockpitButton("CALL SELECTED", NexusBlue, filled = false, enabled = controller.mode in setOf(DigiMode.FT8, DigiMode.FT4) && controller.txEnabled) { controller.callSelected() }
         if (controller.mode in setOf(DigiMode.FT8, DigiMode.FT4)) {
             val sequenceActive = controller.ftSequence.state !in setOf(FtExchangeState.IDLE, FtExchangeState.STOPPED, FtExchangeState.COMPLETE, FtExchangeState.FAILED)
-            val parity = if (controller.ftSequence.role == FtExchangeRole.SEARCH_AND_POUNCE && sequenceActive) controller.ftSequence.operatorTxParity else controller.settings.ftTxParity
+            val parity = if (controller.ftSequence.role == FtExchangeRole.SEARCH_AND_POUNCE && sequenceActive) controller.ftSequence.operatorTxParity else controller.effectiveFtTxParity
             CockpitButton("TX FIRST / EVEN", if (parity == 0) NexusCyan else NexusMuted, filled = parity == 0, enabled = !sequenceActive) { controller.updateFtTxParity(0) }
             CockpitButton("TX SECOND / ODD", if (parity == 1) NexusCyan else NexusMuted, filled = parity == 1, enabled = !sequenceActive) { controller.updateFtTxParity(1) }
-            CockpitButton(if (controller.settings.ftAutoCq) "AUTO CQ ON" else "AUTO CQ OFF", if (controller.settings.ftAutoCq) NexusGreen else NexusMuted, filled = false) {
+            CockpitButton(if (controller.settings.ftAutoSequence) "AUTO SEQUENCE ON" else "AUTO SEQUENCE OFF",
+                if (controller.settings.ftAutoSequence) NexusGreen else NexusMuted, filled = false) {
+                controller.updateFtAutoSequence(!controller.settings.ftAutoSequence)
+            }
+            CockpitButton(if (controller.settings.ftAutoCq) "AUTO CQ ON" else "AUTO CQ OFF", if (controller.settings.ftAutoCq) NexusGreen else NexusMuted,
+                filled = false, enabled = controller.settings.ftAutoSequence) {
                 controller.updateFtAutomation(!controller.settings.ftAutoCq, controller.settings.ftAutoCqLimit, controller.settings.ftRetryLimit)
             }
             CockpitButton("CQ LIMIT ${controller.settings.ftAutoCqLimit}", NexusBlue, filled = false) {
@@ -472,14 +478,20 @@ private fun WeakSignalDock(controller: DigiController) {
             if (controller.txSlotCountdownMillis > 0) Text("${"%.1f".format(controller.txSlotCountdownMillis / 1_000.0)}s", color = NexusAmber, fontFamily = FontFamily.Monospace)
         }
         VerticalDivider(Modifier.height(34.dp), color = NexusLine)
-            CockpitButton(if (controller.txEnabled) "TX ENABLED" else "ENABLE TX", if (controller.txEnabled) NexusRed else NexusAmber, enabled = !controller.issSessionEnabled) { controller.updateTxEnabled(!controller.txEnabled) }
-        CockpitButton(if (controller.txArmed) "TX ARMED" else "ARM TX", NexusAmber) { controller.arm() }
-        CockpitButton("SEND ${controller.mode.label}", NexusGreen, enabled = controller.txEnabled && controller.txArmed && !controller.txActive && controller.capability.sendEnabled) { controller.send() }
+            CockpitButton(if (controller.txEnabled) "TX ENABLED" else "ENABLE TX", if (controller.txEnabled) NexusRed else NexusAmber,
+                enabled = !controller.issSessionEnabled && controller.txPhase != DigiTxPhase.RX_UNCONFIRMED) { controller.updateTxEnabled(!controller.txEnabled) }
+        CockpitButton(if (controller.txArmed) "TX ARMED" else "ARM TX", NexusAmber, enabled = controller.txPhase != DigiTxPhase.RX_UNCONFIRMED) { controller.arm() }
+        CockpitButton("SEND ${controller.mode.label}", NexusGreen, enabled = controller.txEnabled && controller.txArmed && !controller.txActive &&
+            controller.capability.sendEnabled && controller.txPhase != DigiTxPhase.RX_UNCONFIRMED) { controller.send() }
         CockpitButton("STOP TX", NexusRed, enabled = controller.txActive || controller.txArmed) { controller.haltTx() }
+        if (controller.txPhase == DigiTxPhase.RX_UNCONFIRMED) {
+            CockpitButton("REQUEST RX & RECHECK", NexusRed, filled = false) { controller.requestRxAndRecheck() }
+        }
         Text(
             when (controller.txPhase) {
                 DigiTxPhase.PTT_CONFIRMED -> "ON AIR"
                 DigiTxPhase.SEQUENCING -> "WAITING FOR UTC SLOT"
+                DigiTxPhase.RX_UNCONFIRMED -> "RX UNCONFIRMED · RECOVERY REQUIRED"
                 DigiTxPhase.SAFE -> if (controller.txArmed) "ONE TRANSMISSION ARMED" else "RECEIVE ONLY"
             },
             color = if (controller.txActive) NexusRed else if (controller.txArmed) NexusAmber else NexusMuted,
