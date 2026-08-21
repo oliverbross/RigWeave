@@ -7,7 +7,7 @@
 - Branch: `feature/neural-hamclock-completion-v1`
 - Isolated worktree: `/Users/oliver/Documents/Projects/RigWeave/rigweave-mobile-neural-hamclock-completion-v1`
 - Wavelog watcher: release `3.1.0`, commit `af3256140bd05403b7c4a421746c2ea653a4f04f`, `NO CHANGE`.
-- OpenHamClock watcher: successful read-only exit with no change report.
+- OpenHamClock watcher at the initial freeze: stable/release pins unchanged. The final rerun returned `REVIEW_REQUIRED` because preview advanced by two satellite-telemetry display/test commits; the exact two paths were reviewed and do not change this pass's stable pin, provider contracts, empirical model or independent-implementation boundary.
 - Frozen universal debug APK reference: 110,139,162 bytes. Frozen debug AAB reference: 51,540,301 bytes.
 
 ## Existing owners preserved
