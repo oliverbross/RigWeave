@@ -107,6 +107,12 @@ Task 2B2B makes the RBN map point the skimmer receiver and the path heard/DX sta
 
 ## Closure rule
 
+## Empirical outlook completion
+
+`NEURAL_OUTLOOK` is now a native Home module and typed map layer driven by the same application-scoped snapshot as Neural DX. The module is visible by default on wide layouts, hidden by default on compact layouts, and operator-configurable. The layer is disabled by default, selects 30/60/120 minutes and one band, renders at most 72 confidence-aware region cells, and performs no request or CAT action. Propagation presentation now explicitly separates the remote propagation estimate, observed empirical outlook and `P.533 local engine unavailable · LICENSE_BLOCKED`. Band Health remains current evidence; Log Intelligence adds the operational forecast/calibration handoff without changing awards.
+
+Production wiring confirms the previous Finish-Line truth: solar imagery, space weather, NOAA aurora, Satellite Operations tracks/footprints, contest QSO mapping, ID reminder and shack display are native Android outcomes. With the added outlook module the effective panel count is `NATIVE 24 / PARTIAL 2 / MISSING 6 / DELEGATED 5 / EXCLUDED 2`; with the outlook layer the effective map count is `NATIVE 11 / PARTIAL 1 / MISSING 11 / EXCLUDED 2`.
+
 Future reviews must compare this inventory to the pinned stable source. A model or provider changes status only after an operator-visible native outcome exists and is validated at the appropriate software/device/service boundary.
 
 ## Finish-line broad Phase 1 update

@@ -23,14 +23,13 @@ by in-process controllers, encrypted preferences, SQLite, and Compose UI.
 - **Map:** individual geolocated spots; time, count, band, and mode filters;
   station detail and tune action; recenter; and Who Hears Me receiver view with
   great-circle reach.
-- **AI Insight:** live tactical DX briefing, solar and activity summary,
+- **Insight & Outlook:** native current evidence plus 30/60/120-minute empirical outlook, top bands/regions,
+  attributed candidates, reasons and calibration truth; the retained optional AI briefing can summarize but cannot score or overwrite the local result. It also retains live tactical DX briefing, solar and activity summary,
   DXCC/continent/band/mode log analysis, missing-entity opportunities,
   watchlist recommendations, generated report status, and explicit on-demand
   refresh. The deterministic local report always works; an optional configured
   Perplexity key adds the upstream AI brief.
-- **World:** band and 15–360 minute window controls; anomaly-only and grey-line
-  overlays; observed region cells, expected baseline, anomaly ratio,
-  confidence/sample count, and an explanation/reality-check view.
+- **World:** `CURRENT`, `OUTLOOK 30`, `OUTLOOK 60`, and `OUTLOOK 120`; current anomalies and future cells share station-scoped five-minute evidence buckets and a 56-day UTC-quarter-hour ±30-minute baseline. The 6 × 12 output is capped at 72 cells and exposes confidence, matched samples and reasons.
 - **Briefing:** independently validated 12-hour last-good caches for DX-World, DXNews, NG3K ADXO, and QO-100 sources;
   per-source live/cached/stale/unavailable state and age; operator reordering; manual refresh; DX mode;
   callsign extraction; and one-tap watchlist addition.
@@ -54,6 +53,7 @@ by in-process controllers, encrypted preferences, SQLite, and Compose UI.
 - Keep bounded live state and a durable indexed spot journal. Android provider caches
   validate before atomic commit, survive restarts, and expose source, age, and uniform
   `LIVE`, `CACHED`, `STALE`, or `UNAVAILABLE` state without fabricating values.
+- Schema 4 keeps the spot journal intact and adds compact empirical evidence, prediction, verification and calibration tables. The independently designed RigWeave model copies no Neural-DX-Watcher predictor source, database, weights or assets; unresolved upstream permission still blocks licensed predictor parity.
 - Use the configured local log or selected Wavelog station for worked status.
   A QSO is confirmed only by paper QSL or LoTW, as explicitly required for
   RigWeave.

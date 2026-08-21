@@ -87,3 +87,6 @@ Every map layer declares a maximum object count. DX points cap at 160, great-cir
 - Satellite map work stays in one existing controller job. Output is at most 40 positions, four 28-sample-or-smaller ground-track segments, and four 49-point footprints.
 - Contest-QSO map/list work uses the indexed projection and a hard 200-row cap. No canonical JSON or full log is loaded.
 - Shack rotation does not refresh a provider, change radio state, or remove the persistent exit control. Lifecycle stop/dispose restores system bars and clears the keep-screen-on flag.
+## Neural empirical outlook bounds
+
+Schema 4 uses five-minute `evidence_bucket` rows keyed by station/band/mode/region/source and targeted UTC-matched indexes. Live snapshots are deduplicated and coalesced at no more than one write per minute; prediction recomputation is no more than once per five minutes outside explicit scope/window/source/manual changes. Backfill is off-main, cancellable, restart-safe and capped at 1,000 journal rows per transaction. Verification is capped at 100 predictions, World at 72 cells, candidates at 12 and live input at 2,000 observations. Evidence/predictions retain 180 days and the database has a 50 MB soft target; startup never vacuums.

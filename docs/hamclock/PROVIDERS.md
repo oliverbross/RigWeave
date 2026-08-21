@@ -9,6 +9,7 @@ Task 2B2 adds no unbounded public-provider poller:
 - regional WSPR.live is `UNAVAILABLE_POLICY`, default disabled, and has no production HTTP path;
 - IBP is a versioned/hash-recorded local NCDXF/IARU schedule manifest, with no network refresh and no claim that a scheduled beacon was heard;
 - Band Health is a local deterministic reducer over bounded live evidence; a compact indexed `qso_projection` aggregate supplies separate station/band/mode/comparable-UTC-window historical context. It is not a propagation forecast.
+- Empirical outlook is a local deterministic reducer owned by `NeuralOutlookController`. It receives immutable snapshots from these existing owners, never fetches a provider, stores only compact aggregates in `neural-dx.sqlite`, and shares one snapshot across Neural DX, Home/map and Log Intelligence.
 
 Task 2B2 scale contracts are RBN buffer 1,000/raw and 120/presentation-map, personal WSPR 100/map, PSK provider response 500/direction, and IBP 18 points plus five current paths. Repeated Band Health contributors are capped at three observations per source/call/receiver key.
 

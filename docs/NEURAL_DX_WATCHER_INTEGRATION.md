@@ -2,6 +2,10 @@
 
 ## Provenance and release status
 
+### Empirical-outlook completion
+
+Android now has an independently designed `RigWeave Empirical Outlook v1` in the existing Neural workspace. It receives immutable snapshots from the established cluster/RBN/PSK/WSPR/weather/solar/calendar/Needs/QSO owners, performs no provider fetch, and publishes the single snapshot used by Neural DX, HamClock Home/map, Band Health handoff and Log Intelligence. Schema 4, UTC-matched baseline, 30/60/120-minute outputs, verification/calibration gates and safety limits are specified in `NEURAL_HAMCLOCK_EMPIRICAL_OUTLOOK.md`. No upstream predictor code, model, database, weights or assets were copied; unresolved upstream permission remains recorded.
+
 - RigWeave repository: https://github.com/oliverbross/RigWeave
 - Reviewed remediation base: `39a2926648bdd98ca3d8e1200eff4892dca5eee9`
 - Current-opportunities Android task base: `73b2f5e997d90a634dfa141fd414131599d2bf56`

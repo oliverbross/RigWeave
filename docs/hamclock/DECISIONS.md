@@ -90,3 +90,6 @@ The audited upstream is `accius/openhamclock` at immutable stable commit `d4a50e
 - Query contest QSOs from the indexed projection and selected contest window. Geometry-free QSOs stay in the list and are never assigned a fabricated point.
 - The ID timer is a local reminder driven by explicit start or a verified CAT TX transition. `ID SENT` is an operator assertion; the app neither decodes an ID nor transmits one.
 - Shack display is a full-window Compose dialog with a persistent exit, lifecycle-restored system bars, optional keep-screen-on, reduced motion, and touch-paused rotation. It reuses Home state and providers.
+## Empirical outlook
+
+The future-window feature is named `RigWeave Empirical Outlook v1`, not AI probability, VOACAP or P.533. One application-scoped controller receives existing owner snapshots; it cannot fetch, tune, transmit, spot or log. Current Band Health and future outlook remain separate scores. QSO history and calendar/watchlist/Needs are context/value ranking only. Percentages remain hidden until the 40-family/15-bin calibration gate passes. Local P.533 remains `LICENSE_BLOCKED`.
