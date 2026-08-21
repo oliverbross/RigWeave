@@ -180,3 +180,36 @@ DESKTOP_NOT_APPLICABLE 1, EXCLUDED_MODE 1, MISSING 0.
 Physical USB/audio/RF/PTT/TUNE, live Flex, SSTV safe-load transmit,
 authenticated Wavelog delivery, real WSJT-X peer interoperability and tablet
 accessibility were not performed. No APK install or deployment occurred.
+
+## FT8/FT4 sequencer hardening
+
+The FT operator workflow now uses `DigiFtExchangeEngine`, a pure deterministic
+CQ-runner and search-and-pounce state machine. Every outgoing message is an
+explicit action, and a state transition occurs only after a typed TX outcome
+confirms encoding, PTT, complete audio delivery and return to RX. Refused PTT,
+audio failure, clock/context change and RX-unconfirmed outcomes stop automation.
+
+The scheduler uses UTC wall time to select FT8/FT4 parity and monotonic time for
+the wait. It permits only a 120 ms late-start window, revalidates clock, radio,
+mode, frequency and TX enable immediately before PTT, and exposes the selected
+FIRST/EVEN or SECOND/ODD slot plus countdown. CQ parity has one persisted
+authority. Search-and-pounce parity is derived as the opposite of the selected
+captured decode slot. Captured slot start is retained through decode, UDP,
+selection, sequencing and re-decode.
+
+Reports are derived from the associated decode SNR and clamped to FT syntax.
+Sent and received reports remain distinct, and automatic draft creation requires
+a completed standard exchange with both reports. Retry limit defaults to 3 and
+is constrained to 0–10. Auto-CQ defaults off, requires explicit operator start,
+and stops at its configured transmission limit. ISS enable stops TX first;
+ISS AOS/LOS owns and stops only the receive session it started, while ordinary
+SSTV auto-arm is suppressed during an ISS session.
+
+Hardening validation: 408 Android host unit tests passed; debug Android-test
+sources compiled; APK and AAB assembled; Rust passed 97 with 1 ignored; shared
+core CTest passed 2/2. Package scans passed. The debug APK is 115,051,218 bytes,
+SHA-256 `c074531cdc0c993c6337a6c0c35cd5ba700c0e1a7d79d8f92b029927a8ff32d6`.
+The debug AAB is 51,817,294 bytes, SHA-256
+`734e30ae166f50287b6b057e9afc7afa438fccdf054e0e487561d25d3cfc1c1d`.
+Physical radio/audio/RF and device UI acceptance remains pending; no install or
+deployment was performed.

@@ -13,6 +13,13 @@ protected backup, and use upgrade install only when separately authorized.
 - [ ] Receive FT8; manually call and complete one station-locked sequence; verify
   bystanders do not redirect it.
 - [ ] Repeat slot/timing/STOP checks on FT4.
+- [ ] For FT8 and FT4, verify FIRST/EVEN and SECOND/ODD CQ selection, derived
+  opposite S&P parity, the visible countdown, bounded late start, retry limit,
+  auto-CQ limit, actual SNR reports and complete sent/received draft reports.
+- [ ] During a queued FT transmission change UTC time, mode, frequency and radio
+  identity in separate safe runs; verify PTT never begins and automation stops.
+- [ ] Simulate/refuse PTT and prevent RX confirmation; verify the exchange state
+  never advances and the UI requires explicit recovery.
 - [ ] Verify RTTY normal/reverse, click-to-net, transcript limit and one-shot TX
   into a safe load/test arrangement.
 - [ ] Verify BPSK31 carrier acquisition/reacquire, transcript limit and one-shot

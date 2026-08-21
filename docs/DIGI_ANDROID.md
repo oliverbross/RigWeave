@@ -68,3 +68,16 @@ explicit receive-only ISS session. Logging uses `QsoMutationCoordinator` and
 the existing Wavelog outbox. WSJT-X UDP is disabled and loopback-only by
 default. See `docs/nexus/NEXUS_DIGI_INTEGRATION_V2.md` and the unperformed
 physical checklist in `docs/nexus/NEXUS_DIGI_LIVE_ACCEPTANCE.md`.
+
+## FT8/FT4 operating sequence
+
+Start live RX and explicitly enable TX. For CQ, choose `TX FIRST / EVEN` or
+`TX SECOND / ODD`, review auto-CQ/retry bounds, then press `CALL CQ`. For
+search-and-pounce, select a decode from the current session and press
+`CALL SELECTED`; the application derives the opposite TX parity from that
+decode's captured slot and locks it for the exchange.
+
+The UI shows the exact parity and countdown. Any mode, radio identity,
+frequency, clock, route, PTT, audio or RX-confirmation failure cancels the
+automatic exchange. A completed draft is offered only when the standard
+exchange completes with both sent and received reports.
