@@ -368,7 +368,7 @@ internal fun extractCallsigns(text: String): List<String> = Regex("(?<![A-Z0-9/]
     .findAll(text.uppercase(Locale.US)).map { it.value }.filterNot { it in setOf("2024", "2025", "2026") }.distinct().take(24).toList()
 
 internal class NeuralDxStore(context: Context, databaseName: String = "neural-dx.sqlite") :
-    SQLiteOpenHelper(context, databaseName, null, 4) {
+    SQLiteOpenHelper(context, databaseName, null, 5) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE spot(id TEXT PRIMARY KEY, ts INTEGER NOT NULL, call TEXT NOT NULL, spotter TEXT NOT NULL,
             frequency_hz INTEGER NOT NULL, band TEXT NOT NULL, mode TEXT NOT NULL, country TEXT NOT NULL,
@@ -394,6 +394,7 @@ internal class NeuralDxStore(context: Context, databaseName: String = "neural-dx
             db.execSQL("DROP TABLE IF EXISTS prediction_result")
         }
         if (oldVersion < 4) createNeuralOutlookSchema(db)
+        if (oldVersion in 4 until 5) upgradeNeuralOutlookSchemaV5(db)
     }
 
     fun ingest(rows: List<AndroidDXSpot>): List<AndroidDXSpot> {
@@ -461,11 +462,11 @@ internal class NeuralDxStore(context: Context, databaseName: String = "neural-dx
         data class Bucket(var current: Int = 0, var sourceCount: Int = 0, val historical: MutableMap<Long, Int> = linkedMapOf())
         val buckets = mutableMapOf<Pair<Int, Int>, Bucket>()
         val bandSql = if (band == "ALL") " AND band<>'*'" else " AND band=?"
-        val args = mutableListOf(stationKey, historySince.toString(), now.toString()).apply {
+        val args = mutableListOf(stationKey, NEURAL_OUTLOOK_SHARED_HISTORY_KEY, historySince.toString(), now.toString()).apply {
             if (band != "ALL") add(band)
         }.toTypedArray()
         readableDatabase.rawQuery("""SELECT bucket_start,region_row,region_col,SUM(observation_count),COUNT(DISTINCT source) FROM evidence_bucket
-            WHERE station_key=? AND bucket_start>=? AND bucket_start<=? AND region_row BETWEEN 0 AND 5
+            WHERE station_key IN (?,?) AND bucket_start>=? AND bucket_start<=? AND region_row BETWEEN 0 AND 5
             AND region_col BETWEEN 0 AND 11$bandSql GROUP BY bucket_start,region_row,region_col""", args).use { c ->
             while (c.moveToNext()) {
                 val epoch = c.getLong(0); val slot = ((epoch / 900L) % 96L).toInt()

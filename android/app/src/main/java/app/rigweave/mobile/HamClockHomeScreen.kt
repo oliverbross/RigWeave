@@ -864,6 +864,7 @@ internal fun HamClockHomeScreen(
             KeyValue(row.band, "${row.label.name.replace('_', ' ')} · ${row.confidence} · ${row.sourceCount} sources", HcInk)
         }
         Text(snapshot.calibration.label, color = HcAmber, fontSize = HcMetaSize)
+        if (snapshot.status.startsWith("Outlook retrying")) Text(snapshot.status, color = HcAmber, fontSize = HcMetaSize)
         val ageMinutes = if (snapshot.generatedEpoch > 0) ((Instant.now().epochSecond - snapshot.generatedEpoch).coerceAtLeast(0) / 60) else null
         Text("Generated ${ageMinutes?.let { "${it}m ago" } ?: "waiting"} · OPEN INSIGHT & OUTLOOK", color = HcCyan, fontSize = HcMetaSize)
     }

@@ -6,13 +6,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneOffset
@@ -22,6 +26,9 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 internal const val NEURAL_OUTLOOK_MODEL_VERSION = "RigWeave Empirical Outlook v1"
+internal const val NEURAL_OUTLOOK_SHARED_HISTORY_KEY = "global|cluster-history|v1"
+internal const val NEURAL_OUTLOOK_KEY_CAP = 24
+internal const val NEURAL_OUTLOOK_PREDICTION_CAP = 100_000
 internal val NEURAL_OUTLOOK_BANDS = listOf(
     "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m",
     "6m", "4m", "2m", "70cm", "23cm", "3cm",
@@ -100,6 +107,8 @@ internal data class OutlookForecast(
     val baselineSamples: Int,
     val reasons: List<String>,
     val generatedEpoch: Long,
+    val currentObservations: Int = 0,
+    val contributingSources: Set<String> = emptySet(),
 )
 
 internal data class OutlookWorldCell(
@@ -193,13 +202,36 @@ internal fun outlookVerification(uniqueCallsInOneSource: Int, sameCallSourceCoun
     else -> OutlookVerification.MISS
 }
 
+internal fun outlookPersistenceSlot(epoch: Long): Long = ((epoch + 899L) / 900L) * 900L
+
+internal fun mergeOutlookKeys(vararg values: String): String = values.asSequence().flatMap { it.split(',').asSequence() }
+    .map(String::trim).filter(String::isNotBlank).distinct().sorted().take(NEURAL_OUTLOOK_KEY_CAP).joinToString(",")
+
+internal fun outlookPersistenceEligible(value: OutlookForecast): Boolean =
+    value.row == -1 && value.column == -1 && value.label != OutlookLabel.INSUFFICIENT_EVIDENCE &&
+        value.contributingSources.isNotEmpty() &&
+        outlookBandSupported(value.band, value.baselineSamples, value.currentObservations, value.contributingSources.size)
+
+internal fun verifyOutlookEvidence(callsBySource: Map<String, Set<String>>, contributingSources: Set<String>,
+    coveredSources: Set<String>): OutlookVerification {
+    val accepted = callsBySource.filterKeys { it in contributingSources }
+    val sourceCountByCall = linkedMapOf<String, Int>()
+    accepted.values.forEach { calls -> calls.forEach { call -> sourceCountByCall[call] = (sourceCountByCall[call] ?: 0) + 1 } }
+    return outlookVerification(accepted.values.maxOfOrNull(Set<String>::size) ?: 0,
+        sourceCountByCall.values.maxOrNull() ?: 0, contributingSources.any { it in coveredSources })
+}
+
+internal fun selectedOutlookForecast(values: List<OutlookForecast>, window: OutlookWindow, band: String): OutlookForecast? =
+    values.firstOrNull { it.window == window && it.band == band }
+
 internal fun createNeuralOutlookSchema(db: SQLiteDatabase) {
     db.execSQL("""CREATE TABLE IF NOT EXISTS evidence_bucket(
         bucket_start INTEGER NOT NULL, station_key TEXT NOT NULL, station_call TEXT NOT NULL, station_grid TEXT NOT NULL,
         band TEXT NOT NULL, mode_family TEXT NOT NULL, region_row INTEGER NOT NULL, region_col INTEGER NOT NULL,
         source TEXT NOT NULL, observation_count INTEGER NOT NULL, unique_call_count INTEGER NOT NULL,
         unique_receiver_count INTEGER NOT NULL, snr_count INTEGER NOT NULL, snr_sum INTEGER NOT NULL,
-        distance_count INTEGER NOT NULL, distance_sum INTEGER NOT NULL, call_keys TEXT NOT NULL, source_state TEXT NOT NULL,
+        distance_count INTEGER NOT NULL, distance_sum INTEGER NOT NULL, call_keys TEXT NOT NULL,
+        receiver_keys TEXT NOT NULL DEFAULT '', source_state TEXT NOT NULL,
         PRIMARY KEY(station_key,bucket_start,band,mode_family,region_row,region_col,source))""")
     db.execSQL("CREATE INDEX IF NOT EXISTS evidence_match_idx ON evidence_bucket(station_key,band,mode_family,region_row,region_col,bucket_start)")
     db.execSQL("CREATE INDEX IF NOT EXISTS evidence_region_match_idx ON evidence_bucket(station_key,band,region_row,region_col,bucket_start)")
@@ -221,17 +253,31 @@ internal fun createNeuralOutlookSchema(db: SQLiteDatabase) {
     val cutoff = Instant.now().epochSecond
     db.execSQL("INSERT OR IGNORE INTO outlook_meta(meta_key,meta_value) VALUES('backfill_rowid','0')")
     db.execSQL("INSERT OR IGNORE INTO outlook_meta(meta_key,meta_value) VALUES('backfill_cutoff','$cutoff')")
+    db.execSQL("INSERT OR IGNORE INTO outlook_meta(meta_key,meta_value) VALUES('last_compaction_epoch','0')")
+}
+
+internal fun upgradeNeuralOutlookSchemaV5(db: SQLiteDatabase) {
+    val columns = db.rawQuery("PRAGMA table_info(evidence_bucket)", null).use { cursor ->
+        buildSet { while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("name"))) }
+    }
+    if ("receiver_keys" !in columns) db.execSQL("ALTER TABLE evidence_bucket ADD COLUMN receiver_keys TEXT NOT NULL DEFAULT ''")
+    db.execSQL("UPDATE OR IGNORE evidence_bucket SET station_key=?,station_call='',station_grid='' WHERE source_state='HISTORICAL'",
+        arrayOf(NEURAL_OUTLOOK_SHARED_HISTORY_KEY))
+    db.delete("evidence_bucket", "source_state='HISTORICAL' AND station_key<>?", arrayOf(NEURAL_OUTLOOK_SHARED_HISTORY_KEY))
+    db.execSQL("UPDATE outlook_prediction SET verification_state='UNVERIFIABLE',verified_epoch=? WHERE verification_state='PENDING'",
+        arrayOf(Instant.now().epochSecond))
+    db.execSQL("INSERT OR IGNORE INTO outlook_meta(meta_key,meta_value) VALUES('last_compaction_epoch','0')")
 }
 
 private data class EvidenceAggregate(
     val bucket: Long, val band: String, val mode: String, val row: Int, val column: Int, val source: String,
     val count: Int, val calls: Int, val receivers: Int, val snrCount: Int, val snrSum: Int,
-    val distanceCount: Int, val distanceSum: Int, val callKeys: String, val state: OutlookSourceState,
+    val distanceCount: Int, val distanceSum: Int, val callKeys: String, val receiverKeys: String, val state: OutlookSourceState,
 )
 
 private data class OutlookMetrics(
     val current: Int, val previous: Int, val sources: Int, val calls: Int, val receivers: Int,
-    val distanceCount: Int, val distanceSum: Int, val staleSources: Int,
+    val distanceCount: Int, val distanceSum: Int, val staleSources: Int, val sourceFamilies: Set<String>,
 )
 
 private data class BaselineMetrics(val expected: Double, val samples: Int, val observed: Int)
@@ -242,14 +288,17 @@ private data class PendingOutlookInput(
     val generation: Long,
 )
 
-internal class NeuralOutlookController(private val store: NeuralDxStore) {
-    private val scope = CoroutineScope(Job() + Dispatchers.IO)
+internal class NeuralOutlookController(private val store: NeuralDxStore, private val clock: () -> Long = { Instant.now().epochSecond }) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val wake = Channel<Unit>(Channel.CONFLATED)
     private var foreground = true
     private var closed = false
     @Volatile private var pending: PendingOutlookInput? = null
     private var worker: Job? = null
     private var lastWriteEpoch = 0L
     private var lastComputeEpoch = 0L
+    private var nextBackfillEpoch = 0L
+    private var backfillPending = true
     private var lastInput: NeuralOutlookInput? = null
     @Volatile private var generation = 0L
     private var environmentXray = ""
@@ -279,12 +328,13 @@ internal class NeuralOutlookController(private val store: NeuralDxStore) {
         pending = PendingOutlookInput(normalized, effectiveImmediate, inputGeneration)
         if (!foreground && !effectiveImmediate) return
         startWorker()
+        wake.trySend(Unit)
     }
 
     fun select(window: OutlookWindow, band: String) {
         selectedWindow = window
         selectedBand = band.takeIf { it in NEURAL_OUTLOOK_BANDS } ?: "20m"
-        lastInput?.let { submit(it.copy(epoch = Instant.now().epochSecond), immediate = true) }
+        lastInput?.let { submit(it.copy(epoch = clock()), immediate = true) }
     }
 
     fun updateEnvironment(xrayClass: String, solarWind: Double?, bz: Double?, auroraActive: Boolean?) {
@@ -292,37 +342,67 @@ internal class NeuralOutlookController(private val store: NeuralDxStore) {
         environmentSolarWind = solarWind
         environmentBz = bz
         environmentAurora = auroraActive
-        lastInput?.let { input -> submit(input.copy(epoch = Instant.now().epochSecond, xrayClass = xrayClass,
+        lastInput?.let { input -> submit(input.copy(epoch = clock(), xrayClass = xrayClass,
             solarWind = solarWind, bz = bz, auroraActive = auroraActive), immediate = true) }
     }
 
     fun setForeground(value: Boolean) {
         if (foreground == value) return
         foreground = value
-        if (!value) lastInput?.let { submit(it.copy(epoch = Instant.now().epochSecond), immediate = true) }
-        else lastInput?.let { submit(it.copy(epoch = Instant.now().epochSecond), immediate = true) }
+        lastInput?.let { submit(it.copy(epoch = clock()), immediate = true) }
+        wake.trySend(Unit)
     }
 
     private fun startWorker() {
         if (worker?.isActive == true) return
         worker = scope.launch {
-            do {
-                val work = pending.also { pending = null } ?: break
-                val input = work.input
-                val now = Instant.now().epochSecond
-                if (!work.immediate && lastWriteEpoch > 0 && now - lastWriteEpoch < 60) delay((60 - (now - lastWriteEpoch)) * 1_000)
-                ingest(input)
-                lastWriteEpoch = Instant.now().epochSecond
-                while (isActive && backfillBatch(input.stationKey())) delay(5)
-                verifyPredictions(100)
-                val shouldCompute = work.immediate || lastComputeEpoch == 0L || now - lastComputeEpoch >= 300
-                if (shouldCompute) {
-                    val calculated = calculate(input)
-                    if (work.generation == generation) withContext(Dispatchers.Main) { snapshot = calculated }
-                    lastComputeEpoch = Instant.now().epochSecond
+            try {
+                while (isActive && !closed) {
+                    val now = clock()
+                    val heartbeatDue = foreground && lastInput != null && (lastComputeEpoch == 0L || now - lastComputeEpoch >= 300L)
+                    val backfillDue = foreground && backfillPending && lastInput != null && now >= nextBackfillEpoch
+                    if (pending == null && !heartbeatDue && !backfillDue) {
+                        val heartbeatWait = if (foreground && lastInput != null) (300L - (now - lastComputeEpoch)).coerceAtLeast(1L) else 3_600L
+                        val backfillWait = if (foreground && backfillPending && lastInput != null)
+                            (nextBackfillEpoch - now).coerceAtLeast(1L) else 3_600L
+                        withTimeoutOrNull(min(heartbeatWait, backfillWait) * 1_000L) { wake.receive() }
+                        continue
+                    }
+                    val work = pending.also { pending = null }
+                    val input = (work?.input ?: lastInput)?.copy(epoch = now) ?: continue
+                    try {
+                        if (work != null || heartbeatDue) {
+                            if (lastWriteEpoch > 0 && now - lastWriteEpoch < 60L) delay((60L - (now - lastWriteEpoch)) * 1_000L)
+                            ingest(input)
+                            lastWriteEpoch = clock()
+                        }
+                        if (foreground && (work != null || backfillDue)) {
+                            backfillPending = backfillBatch()
+                            nextBackfillEpoch = clock() + 5L
+                        }
+                        verifyPredictions(100)
+                        val shouldCompute = work?.immediate == true || heartbeatDue || lastComputeEpoch == 0L || now - lastComputeEpoch >= 300L
+                        if (shouldCompute) {
+                            val calculated = calculate(input)
+                            val publishGeneration = work?.generation ?: generation
+                            if (publishGeneration == generation) withContext(Dispatchers.Main) { snapshot = calculated }
+                            lastComputeEpoch = clock()
+                        }
+                        compactPredictions(clock())
+                    } catch (failure: CancellationException) {
+                        if (work != null) pending = pending ?: work
+                        throw failure
+                    } catch (failure: Throwable) {
+                        if (work != null) pending = pending ?: work
+                        val error = failure.javaClass.simpleName.take(48).ifBlank { "storage error" }
+                        withContext(Dispatchers.Main) { snapshot = snapshot.copy(status = "Outlook retrying · $error") }
+                        nextBackfillEpoch = clock() + 5L
+                        withTimeoutOrNull(5_000L) { wake.receive() }
+                    }
                 }
-                retain()
-            } while (pending != null && foreground)
+            } finally {
+                worker = null
+            }
         }
     }
 
@@ -357,11 +437,12 @@ internal class NeuralOutlookController(private val store: NeuralDxStore) {
             rows.map { it.receiver.uppercase(Locale.US) }.filter(String::isNotBlank).distinct().size,
             rows.count { it.snr != null }, rows.sumOf { it.snr ?: 0 }, rows.count { it.distanceKm != null },
             rows.sumOf { it.distanceKm ?: 0 }, rows.map { callKey(it.callsign) }.filter(String::isNotBlank).distinct().take(24).joinToString(","),
+            rows.map { callKey(it.receiver) }.filter(String::isNotBlank).distinct().take(NEURAL_OUTLOOK_KEY_CAP).joinToString(","),
             input.sourceStates[key[5] as String] ?: OutlookSourceState.CURRENT,
         ) }
         val currentBucket = (input.epoch / 300L) * 300L
         val states = input.sourceStates.map { (source, state) -> EvidenceAggregate(
-            currentBucket, "*", "*", -2, -2, source.uppercase(Locale.US), 0, 0, 0, 0, 0, 0, 0, "", state,
+            currentBucket, "*", "*", -2, -2, source.uppercase(Locale.US), 0, 0, 0, 0, 0, 0, 0, "", "", state,
         ) }
         val db = store.outlookWritableDatabase()
         db.beginTransaction()
@@ -375,6 +456,7 @@ internal class NeuralOutlookController(private val store: NeuralDxStore) {
                     put("snr_count", row.snrCount); put("snr_sum", row.snrSum); put("distance_count", row.distanceCount)
                     put("distance_sum", row.distanceSum); put("source_state", row.state.name)
                     put("call_keys", row.callKeys)
+                    put("receiver_keys", row.receiverKeys)
                 }
                 db.insertWithOnConflict("evidence_bucket", null, values, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -382,7 +464,7 @@ internal class NeuralOutlookController(private val store: NeuralDxStore) {
         } finally { db.endTransaction() }
     }
 
-    private fun backfillBatch(stationKey: String): Boolean {
+    private fun backfillBatch(): Boolean {
         val db = store.outlookWritableDatabase()
         val progressValue = meta(db, "backfill_rowid")
         if (progressValue == "complete") return false
@@ -404,17 +486,25 @@ internal class NeuralOutlookController(private val store: NeuralDxStore) {
         db.beginTransaction()
         try {
             grouped.forEach { (key, values) ->
-                db.execSQL("""INSERT INTO evidence_bucket(bucket_start,station_key,station_call,station_grid,band,mode_family,
-                    region_row,region_col,source,observation_count,unique_call_count,unique_receiver_count,snr_count,snr_sum,
-                    distance_count,distance_sum,call_keys,source_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    ON CONFLICT(station_key,bucket_start,band,mode_family,region_row,region_col,source) DO UPDATE SET
-                    observation_count=observation_count+excluded.observation_count,
-                    unique_call_count=unique_call_count+excluded.unique_call_count,
-                    unique_receiver_count=unique_receiver_count+excluded.unique_receiver_count,
-                    call_keys=CASE WHEN call_keys='' THEN excluded.call_keys ELSE call_keys||','||excluded.call_keys END""",
-                    arrayOf<Any?>(key[0], stationKey, "", "", key[1], key[2], key[3], key[4], "CLUSTER", values.size,
-                        values.map(Row::call).distinct().size, values.map(Row::spotter).distinct().size, 0, 0, 0, 0,
-                        values.map { callKey(it.call) }.distinct().take(24).joinToString(","), "HISTORICAL"))
+                val whereArgs = arrayOf(NEURAL_OUTLOOK_SHARED_HISTORY_KEY, key[0].toString(), key[1].toString(), key[2].toString(),
+                    key[3].toString(), key[4].toString(), "CLUSTER")
+                var priorCount = 0; var priorCalls = ""; var priorReceivers = ""
+                db.rawQuery("""SELECT observation_count,call_keys,receiver_keys FROM evidence_bucket WHERE station_key=?
+                    AND bucket_start=? AND band=? AND mode_family=? AND region_row=? AND region_col=? AND source=?""", whereArgs).use { cursor ->
+                    if (cursor.moveToFirst()) { priorCount = cursor.getInt(0); priorCalls = cursor.getString(1); priorReceivers = cursor.getString(2) }
+                }
+                val callKeys = mergeOutlookKeys(priorCalls, values.joinToString(",") { callKey(it.call) })
+                val receiverKeys = mergeOutlookKeys(priorReceivers, values.joinToString(",") { callKey(it.spotter) })
+                val row = ContentValues().apply {
+                    put("bucket_start", key[0] as Long); put("station_key", NEURAL_OUTLOOK_SHARED_HISTORY_KEY)
+                    put("station_call", ""); put("station_grid", ""); put("band", key[1] as String); put("mode_family", key[2] as String)
+                    put("region_row", key[3] as Int); put("region_col", key[4] as Int); put("source", "CLUSTER")
+                    put("observation_count", priorCount + values.size); put("unique_call_count", callKeys.split(',').count(String::isNotBlank))
+                    put("unique_receiver_count", receiverKeys.split(',').count(String::isNotBlank)); put("snr_count", 0); put("snr_sum", 0)
+                    put("distance_count", 0); put("distance_sum", 0); put("call_keys", callKeys); put("receiver_keys", receiverKeys)
+                    put("source_state", "HISTORICAL")
+                }
+                db.insertWithOnConflict("evidence_bucket", null, row, SQLiteDatabase.CONFLICT_REPLACE)
             }
             setMeta(db, "backfill_rowid", rows.last().rowId.toString())
             db.setTransactionSuccessful()
@@ -426,16 +516,19 @@ internal class NeuralOutlookController(private val store: NeuralDxStore) {
         val stationKey = input.stationKey()
         val now = (input.epoch / 300L) * 300L
         val globalBaselines = globalBaselines(stationKey, now)
-        val topBands = OutlookWindow.entries.flatMap { window -> NEURAL_OUTLOOK_BANDS.map { band ->
+        val allGlobalForecasts = OutlookWindow.entries.flatMap { window -> NEURAL_OUTLOOK_BANDS.map { band ->
             forecast(input, stationKey, now, window, band, -1, -1, globalBaselines[window to band])
-        } }.filterNot { it.label == OutlookLabel.INSUFFICIENT_EVIDENCE }
+        } }
+        val topBands = allGlobalForecasts.filterNot { it.label == OutlookLabel.INSUFFICIENT_EVIDENCE }
         val selectedTop = topBands.filter { it.window == selectedWindow }.sortedByDescending(OutlookForecast::supportScore).take(3)
         val cells = buildList {
             for (row in 0..5) for (column in 0..11) add(OutlookWorldCell(row, column,
                 75.0 - row * 30.0 - 15.0, -180.0 + column * 30.0 + 15.0,
                 forecast(input, stationKey, now, selectedWindow, selectedBand, row, column)))
         }.take(72)
-        val calibration = selectedTop.firstOrNull()?.let { calibration(selectedWindow, selectedBand, it.supportScore) }
+        val selectedForecast = selectedOutlookForecast(allGlobalForecasts, selectedWindow, selectedBand)
+        val calibration = selectedForecast?.takeIf { it.label != OutlookLabel.INSUFFICIENT_EVIDENCE }
+            ?.let { calibration(selectedWindow, selectedBand, it.supportScore) }
             ?: OutlookCalibration()
         val rankedCandidates = (input.candidates + recentPatternCandidates(input.epoch))
             .distinctBy { it.source to it.callsign }.sortedWith(
@@ -444,9 +537,7 @@ internal class NeuralOutlookController(private val store: NeuralDxStore) {
             generatedEpoch = input.epoch, stationKey = stationKey, selectedWindow = selectedWindow, selectedBand = selectedBand,
             forecasts = topBands, topBands = selectedTop, world = cells, candidates = rankedCandidates,
             calibration = calibration, sources = input.sourceStates, partialBaseline = meta(store.outlookReadableDatabase(), "backfill_rowid") != "complete",
-            sourceAgesSeconds = input.evidence.groupBy(OutlookEvidence::source).mapValues { (_, rows) ->
-                (input.epoch - (rows.maxOfOrNull(OutlookEvidence::epoch) ?: input.epoch)).coerceAtLeast(0)
-            },
+            sourceAgesSeconds = sourceAges(input, stationKey),
             status = if (selectedTop.isEmpty()) "Insufficient evidence" else "Empirical outlook · observed support",
         )
     }
@@ -503,8 +594,9 @@ internal class NeuralOutlookController(private val store: NeuralDxStore) {
         val label = RigWeaveEmpiricalOutlookV1.label(score, supportedBand, degraded)
         val id = stableId(NEURAL_OUTLOOK_MODEL_VERSION, stationKey, targetStart.toString(), window.minutes.toString(), band, row.toString(), column.toString())
         val result = OutlookForecast(id, window, targetStart, targetEnd, band, "ALL", row, column, score, label,
-            confidence, calibration.first, calibration.second, metrics.sources, baseline.samples, reasons, input.epoch)
-        savePrediction(result, stationKey, input.sourceStates.filterValues { it !in setOf(OutlookSourceState.DISABLED, OutlookSourceState.UNAVAILABLE) }.keys)
+            confidence, calibration.first, calibration.second, metrics.sources, baseline.samples, reasons, input.epoch,
+            metrics.current, metrics.sourceFamilies)
+        persistEligiblePrediction(result, stationKey)
         return result
     }
 
@@ -515,10 +607,10 @@ internal class NeuralOutlookController(private val store: NeuralDxStore) {
             val targetSlot = (targetEpoch / 900L) % 96L
             val totals = linkedMapOf<String, Pair<Int, Int>>()
             store.outlookReadableDatabase().rawQuery("""SELECT band,bucket_start,SUM(observation_count) FROM evidence_bucket
-                WHERE station_key=? AND bucket_start>=? AND bucket_start<?
+                WHERE station_key IN (?,?) AND bucket_start>=? AND bucket_start<?
                 AND MIN(ABS(((bucket_start / 900) % 96) - $targetSlot),
                     96 - ABS(((bucket_start / 900) % 96) - $targetSlot)) <= 2
-                GROUP BY band,bucket_start""", arrayOf(stationKey, since.toString(), targetEpoch.toString())).use { cursor ->
+                GROUP BY band,bucket_start""", arrayOf(stationKey, NEURAL_OUTLOOK_SHARED_HISTORY_KEY, since.toString(), targetEpoch.toString())).use { cursor ->
                 while (cursor.moveToNext()) {
                     val band = cursor.getString(0)
                     val prior = totals[band] ?: (0 to 0)
@@ -539,11 +631,11 @@ internal class NeuralOutlookController(private val store: NeuralDxStore) {
         var total = 0; val buckets = linkedSetOf<Long>()
         val regionSql = if (row < 0) "" else " AND region_row=? AND region_col=?"
         val targetSlot = (targetEpoch / 900L) % 96L
-        val args = mutableListOf(stationKey, band, since.toString(), targetEpoch.toString()).apply {
+        val args = mutableListOf(stationKey, NEURAL_OUTLOOK_SHARED_HISTORY_KEY, band, since.toString(), targetEpoch.toString()).apply {
             if (row >= 0) { add(row.toString()); add(column.toString()) }
         }.toTypedArray()
         store.outlookReadableDatabase().rawQuery("""SELECT bucket_start,SUM(observation_count) FROM evidence_bucket
-            WHERE station_key=? AND band=? AND bucket_start>=? AND bucket_start<?$regionSql
+            WHERE station_key IN (?,?) AND band=? AND bucket_start>=? AND bucket_start<?$regionSql
             AND MIN(ABS(((bucket_start / 900) % 96) - $targetSlot),
                 96 - ABS(((bucket_start / 900) % 96) - $targetSlot)) <= 2
             GROUP BY bucket_start""", args).use { c ->
@@ -557,63 +649,88 @@ internal class NeuralOutlookController(private val store: NeuralDxStore) {
 
     private fun currentMetrics(stationKey: String, band: String, row: Int, column: Int, now: Long): OutlookMetrics {
         var current = 0; var previous = 0; var distanceCount = 0; var distanceSum = 0
-        val sources = linkedSetOf<String>(); var calls = 0; var receivers = 0; var stale = 0
+        val sources = linkedSetOf<String>(); val calls = linkedSetOf<String>(); val receivers = linkedSetOf<String>()
+        val staleSources = linkedSetOf<String>()
         val regionSql = if (row < 0) "" else " AND region_row=? AND region_col=?"
         val args = mutableListOf(stationKey, band, (now - 1_800L).toString(), now.toString()).apply {
             if (row >= 0) { add(row.toString()); add(column.toString()) }
         }.toTypedArray()
-        store.outlookReadableDatabase().rawQuery("""SELECT bucket_start,source,observation_count,unique_call_count,
-            unique_receiver_count,distance_count,distance_sum,source_state FROM evidence_bucket
+        store.outlookReadableDatabase().rawQuery("""SELECT bucket_start,source,observation_count,call_keys,
+            receiver_keys,distance_count,distance_sum,source_state FROM evidence_bucket
             WHERE station_key=? AND band=? AND bucket_start>=? AND bucket_start<=?$regionSql""", args).use { c ->
             while (c.moveToNext()) {
-                if (c.getLong(0) >= now - 900L) current += c.getInt(2) else previous += c.getInt(2)
-                sources += sourceFamily(c.getString(1)); calls += c.getInt(3); receivers += c.getInt(4)
+                val family = sourceFamily(c.getString(1))
+                if (c.getLong(0) >= now - 900L) {
+                    current += c.getInt(2)
+                    if (c.getInt(2) > 0) sources += family
+                } else previous += c.getInt(2)
+                calls += c.getString(3).orEmpty().split(',').filter(String::isNotBlank)
+                receivers += c.getString(4).orEmpty().split(',').filter(String::isNotBlank)
                 distanceCount += c.getInt(5); distanceSum += c.getInt(6)
-                if (c.getString(7) in setOf("STALE", "DEGRADED")) stale++
+                if (c.getString(7) in setOf("STALE", "DEGRADED")) staleSources += family
             }
         }
-        return OutlookMetrics(current, previous, sources.size, calls, receivers, distanceCount, distanceSum, stale)
+        return OutlookMetrics(current, previous, sources.size, calls.size, receivers.size, distanceCount, distanceSum,
+            staleSources.size, sources)
     }
 
-    private fun savePrediction(value: OutlookForecast, stationKey: String, sourceMask: Set<String>) {
+    private fun sourceAges(input: NeuralOutlookInput, stationKey: String): Map<String, Long> {
+        val latest = linkedMapOf<String, Long>()
+        store.outlookReadableDatabase().rawQuery("""SELECT source,MAX(bucket_start) FROM evidence_bucket
+            WHERE station_key=? AND band='*' GROUP BY source""", arrayOf(stationKey)).use { cursor ->
+            while (cursor.moveToNext()) latest[cursor.getString(0)] = cursor.getLong(1)
+        }
+        return input.sourceStates.keys.associateWith { source -> latest[source.uppercase(Locale.US)]
+            ?.let { (input.epoch - it).coerceAtLeast(0L) } ?: -1L }
+    }
+
+    private fun savePrediction(value: OutlookForecast, stationKey: String) {
         val db = store.outlookWritableDatabase()
+        val persistenceSlot = outlookPersistenceSlot(value.targetStartEpoch)
+        val id = stableId(NEURAL_OUTLOOK_MODEL_VERSION, stationKey, persistenceSlot.toString(),
+            value.window.minutes.toString(), value.band)
         db.execSQL("""INSERT OR IGNORE INTO outlook_prediction(id,model_version,created_epoch,target_start,target_end,window_minutes,
             station_key,band,mode_family,region_row,region_col,raw_score,label,confidence,calibrated_probability,
             calibration_samples,source_mask,reasons,verification_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            arrayOf<Any?>(value.id, NEURAL_OUTLOOK_MODEL_VERSION, value.generatedEpoch, value.targetStartEpoch, value.targetEndEpoch,
+            arrayOf<Any?>(id, NEURAL_OUTLOOK_MODEL_VERSION, value.generatedEpoch, persistenceSlot,
+                persistenceSlot + value.window.minutes * 60L,
                 value.window.minutes, stationKey, value.band, value.modeFamily, value.row, value.column, value.supportScore,
                 value.label.name, value.confidence.name, value.calibratedHitRate, value.calibrationSamples,
-                sourceMask.sorted().joinToString(","), value.reasons.joinToString(" | ").take(480), OutlookVerification.PENDING.name))
+                value.contributingSources.sorted().joinToString(","), value.reasons.joinToString(" | ").take(480), OutlookVerification.PENDING.name))
+    }
+
+    private fun persistEligiblePrediction(value: OutlookForecast, stationKey: String) {
+        if (outlookPersistenceEligible(value)) savePrediction(value, stationKey)
     }
 
     private fun verifyPredictions(limit: Int) {
-        val db = store.outlookWritableDatabase(); val now = Instant.now().epochSecond
+        val db = store.outlookWritableDatabase(); val now = clock()
         data class Pending(val id: String, val station: String, val start: Long, val end: Long, val window: Int,
             val band: String, val family: String, val bin: Int, val row: Int, val column: Int, val mask: String)
         val pending = mutableListOf<Pending>()
         db.rawQuery("""SELECT id,station_key,target_start,target_end,window_minutes,band,mode_family,raw_score/10,
             region_row,region_col,source_mask FROM outlook_prediction WHERE verification_state='PENDING' AND target_end<=?
+            AND label<>'INSUFFICIENT_EVIDENCE' AND region_row=-1 AND region_col=-1
             ORDER BY target_end LIMIT ?""", arrayOf(now.toString(), limit.toString())).use { c -> while (c.moveToNext()) pending += Pending(
             c.getString(0), c.getString(1), c.getLong(2), c.getLong(3), c.getInt(4), c.getString(5), c.getString(6),
             c.getInt(7), c.getInt(8), c.getInt(9), c.getString(10)) }
         pending.forEach { prediction ->
-            val sourcesByCall = linkedMapOf<String, MutableSet<String>>(); var maximumUniqueCalls = 0
-            val regionSql = if (prediction.row < 0) "" else " AND region_row=? AND region_col=?"
-            val args = mutableListOf(prediction.station, prediction.band, prediction.start.toString(), prediction.end.toString()).apply {
-                if (prediction.row >= 0) { add(prediction.row.toString()); add(prediction.column.toString()) }
-            }.toTypedArray()
-            db.rawQuery("""SELECT source,SUM(unique_call_count),GROUP_CONCAT(call_keys) FROM evidence_bucket WHERE station_key=? AND band=?
-                AND bucket_start>=? AND bucket_start<=?$regionSql GROUP BY source""", args).use { c -> while (c.moveToNext()) {
-                val source = sourceFamily(c.getString(0)); maximumUniqueCalls = max(maximumUniqueCalls, c.getInt(1))
-                c.getString(2).orEmpty().split(',').filter(String::isNotBlank).forEach { key ->
-                    sourcesByCall.getOrPut(key) { linkedSetOf() } += source
-                }
+            val contributing = prediction.mask.split(',').filter(String::isNotBlank).map(::sourceFamily).toSet()
+            val callsBySource = linkedMapOf<String, MutableSet<String>>()
+            db.rawQuery("""SELECT source,call_keys FROM evidence_bucket WHERE station_key=? AND band=?
+                AND bucket_start>=? AND bucket_start<=? AND observation_count>0""",
+                arrayOf(prediction.station, prediction.band, prediction.start.toString(), prediction.end.toString())).use { c -> while (c.moveToNext()) {
+                val family = sourceFamily(c.getString(0))
+                if (family in contributing) callsBySource.getOrPut(family) { linkedSetOf() } +=
+                    c.getString(1).orEmpty().split(',').filter(String::isNotBlank)
             } }
-            val coverage = db.rawQuery("""SELECT COUNT(DISTINCT source) FROM evidence_bucket WHERE station_key=? AND band='*'
-                AND bucket_start>=? AND bucket_start<=? AND source_state IN ('CURRENT','CACHED')""",
-                arrayOf(prediction.station, prediction.start.toString(), prediction.end.toString())).use { it.moveToFirst() && it.getInt(0) > 0 }
-            val result = outlookVerification(maximumUniqueCalls, sourcesByCall.values.maxOfOrNull(Set<String>::size) ?: 0,
-                coverage && prediction.mask.isNotBlank())
+            val covered = linkedSetOf<String>()
+            db.rawQuery("""SELECT source,source_state FROM evidence_bucket WHERE station_key=? AND band='*'
+                AND bucket_start>=? AND bucket_start<=?""",
+                arrayOf(prediction.station, prediction.start.toString(), prediction.end.toString())).use { cursor -> while (cursor.moveToNext()) {
+                if (cursor.getString(1) in setOf("CURRENT", "CACHED")) covered += sourceFamily(cursor.getString(0))
+            } }
+            val result = verifyOutlookEvidence(callsBySource, contributing, covered)
             db.beginTransaction()
             try {
                 db.execSQL("UPDATE outlook_prediction SET verification_state=?,verified_epoch=? WHERE id=? AND verification_state='PENDING'",
@@ -630,6 +747,7 @@ internal class NeuralOutlookController(private val store: NeuralDxStore) {
                 db.setTransactionSuccessful()
             } finally { db.endTransaction() }
         }
+        compactPredictions(now)
     }
 
     private fun calibratedRate(window: OutlookWindow, band: String, score: Int): Pair<Int?, Int> {
@@ -666,10 +784,32 @@ internal class NeuralOutlookController(private val store: NeuralDxStore) {
         return OutlookCalibration(state, binVerified, hits, rate)
     }
 
-    private fun retain() {
-        val db = store.outlookWritableDatabase(); val cutoff = Instant.now().epochSecond - 180L * 86_400L
-        db.delete("evidence_bucket", "bucket_start<?", arrayOf(cutoff.toString()))
-        db.delete("outlook_prediction", "created_epoch<?", arrayOf(cutoff.toString()))
+    private fun compactPredictions(now: Long, force: Boolean = false, hardCap: Int = NEURAL_OUTLOOK_PREDICTION_CAP) {
+        val db = store.outlookWritableDatabase()
+        val last = meta(db, "last_compaction_epoch").toLongOrNull() ?: 0L
+        if (!force && now - last < 86_400L) return
+        db.beginTransaction()
+        try {
+            db.delete("evidence_bucket", "bucket_start<?", arrayOf((now - 180L * 86_400L).toString()))
+            db.delete("outlook_prediction", "verification_state='PENDING' AND created_epoch<?",
+                arrayOf((now - 180L * 86_400L).toString()))
+            db.delete("outlook_prediction", "verification_state<>'PENDING' AND verified_epoch<?",
+                arrayOf((now - 14L * 86_400L).toString()))
+            var total = db.rawQuery("SELECT COUNT(*) FROM outlook_prediction", null).use { it.moveToFirst(); it.getInt(0) }
+            if (total > hardCap) {
+                db.execSQL("""DELETE FROM outlook_prediction WHERE id IN (SELECT id FROM outlook_prediction
+                    WHERE verification_state<>'PENDING' ORDER BY verified_epoch,created_epoch LIMIT ?)""",
+                    arrayOf(total - hardCap))
+                total = db.rawQuery("SELECT COUNT(*) FROM outlook_prediction", null).use { it.moveToFirst(); it.getInt(0) }
+            }
+            if (total > hardCap) {
+                db.execSQL("""DELETE FROM outlook_prediction WHERE id IN (SELECT id FROM outlook_prediction
+                    WHERE verification_state='PENDING' AND target_end<=? ORDER BY target_end LIMIT ?)""",
+                    arrayOf<Any?>(now, total - hardCap))
+            }
+            setMeta(db, "last_compaction_epoch", now.toString())
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
     }
 
     fun databaseFacts(): Map<String, Long> {
@@ -679,9 +819,22 @@ internal class NeuralOutlookController(private val store: NeuralDxStore) {
             "outlook_calibration" to count("outlook_calibration"), "backfill_rowid" to (meta(db, "backfill_rowid").toLongOrNull() ?: 0L))
     }
 
-    internal fun runBackfillBatchForTest(stationKey: String): Boolean = backfillBatch(stationKey)
+    internal fun runBackfillBatchForTest(): Boolean = backfillBatch()
 
-    fun close() { closed = true; worker?.cancel(); scope.cancel() }
+    internal fun runCompactionForTest(now: Long, hardCap: Int = NEURAL_OUTLOOK_PREDICTION_CAP) =
+        compactPredictions(now, force = true, hardCap = hardCap)
+
+    internal fun persistForecastForTest(value: OutlookForecast, stationKey: String) = persistEligiblePrediction(value, stationKey)
+
+    internal fun runVerificationForTest(limit: Int = 100) = verifyPredictions(limit)
+
+    fun close() {
+        if (closed) return
+        closed = true
+        wake.close()
+        worker?.cancel()
+        scope.cancel()
+    }
 
     private fun bandFamily(band: String) = when (band) {
         "160m", "80m", "60m", "40m" -> "LOW_HF"

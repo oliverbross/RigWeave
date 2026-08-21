@@ -706,7 +706,7 @@ private fun signalReportSpot(report: SignalReport, cty: CtyController): AndroidD
             DxLine("Observed opportunities", controller.currentOpportunities.size.toString(), DxCyan)
             DxLine("Policy observations", policySpots.size.toString(), DxGreen)
             outlook.sources.forEach { (source, state) ->
-                val age = outlook.sourceAgesSeconds[source]?.let { " · ${it / 60}m old" }.orEmpty()
+                val age = outlook.sourceAgesSeconds[source]?.let { if (it >= 0) " · ${it / 60}m old" else " · age unavailable" }.orEmpty()
                 DxLine(source.replace('_', ' '), state.name + age, if (state == OutlookSourceState.CURRENT) DxGreen else DxYellow)
             }
         } }
