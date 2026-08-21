@@ -2,5 +2,6 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <cache-path name="pota_exports" path="pota-exports/" />
     <files-path name="groupsio_files" path="GroupsIO/" />
+    <files-path name="sstv_gallery" path="digi/sstv/" />
     <cache-path name="operations_exports" path="operations-exports/" />
 </paths>

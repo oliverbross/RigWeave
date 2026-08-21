@@ -138,9 +138,9 @@ Java_app_rigweave_mobile_NativeCore_flexParseDiscovery(JNIEnv *env, jobject, jby
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_app_rigweave_mobile_NativeCore_digiCreate(JNIEnv *, jobject, jint sampleRate, jfloat pitch, jboolean reverse) {
+Java_app_rigweave_mobile_NativeCore_digiCreate(JNIEnv *, jobject, jint sampleRate, jfloat pitch, jboolean reverse, jfloat rttyCentre) {
     return static_cast<jlong>(reinterpret_cast<intptr_t>(
-        rw_digi_context_create(static_cast<uint32_t>(sampleRate), pitch, reverse == JNI_TRUE)));
+        rw_digi_context_create(static_cast<uint32_t>(sampleRate), pitch, reverse == JNI_TRUE, rttyCentre)));
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -186,13 +186,30 @@ Java_app_rigweave_mobile_NativeCore_digiDecodeSlot(JNIEnv *env, jobject, jint mo
     return env->NewStringUTF(size >= 0 ? output.c_str() : "{\"error\":\"Decode failed\",\"decodes\":[]}");
 }
 
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_app_rigweave_mobile_NativeCore_digiSpectrum(JNIEnv *env, jobject, jfloatArray data, jint sampleRate,
+                                                  jfloat lowHz, jfloat highHz, jint bins, jint window) {
+    if (!data || bins <= 0 || bins > 512) return env->NewFloatArray(0);
+    const jsize length = env->GetArrayLength(data);
+    jfloat *samples = env->GetFloatArrayElements(data, nullptr);
+    jfloatArray result = env->NewFloatArray(bins);
+    jfloat *output = env->GetFloatArrayElements(result, nullptr);
+    const int count = rw_digi_spectrum(samples, static_cast<size_t>(length), static_cast<uint32_t>(sampleRate),
+                                       lowHz, highHz, static_cast<size_t>(bins), window,
+                                       output, static_cast<size_t>(bins));
+    env->ReleaseFloatArrayElements(data, samples, JNI_ABORT);
+    env->ReleaseFloatArrayElements(result, output, count == bins ? 0 : JNI_ABORT);
+    if (count != bins) return env->NewFloatArray(0);
+    return result;
+}
+
 extern "C" JNIEXPORT jstring JNICALL
-Java_app_rigweave_mobile_NativeCore_digiDecodePsk31(JNIEnv *env, jobject, jfloatArray data) {
+Java_app_rigweave_mobile_NativeCore_digiDecodePsk31(JNIEnv *env, jobject, jfloatArray data, jfloat carrierHz) {
     if (!data) return env->NewStringUTF("{}");
     const jsize length = env->GetArrayLength(data);
     jfloat *samples = env->GetFloatArrayElements(data, nullptr);
     std::string output(65536, '\0');
-    const int size = rw_digi_decode_psk31(samples, static_cast<size_t>(length), output.data(), output.size());
+    const int size = rw_digi_decode_psk31(samples, static_cast<size_t>(length), carrierHz, output.data(), output.size());
     env->ReleaseFloatArrayElements(data, samples, JNI_ABORT);
     return env->NewStringUTF(size >= 0 ? output.c_str() : "{}");
 }

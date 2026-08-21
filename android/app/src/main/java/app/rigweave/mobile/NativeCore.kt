@@ -85,13 +85,14 @@ object NativeCore {
     external fun flexMode(slice: Int, mode: String): String
     external fun flexFilter(letter: String, lowHz: Int, highHz: Int): String
     external fun flexParseDiscovery(data: ByteArray): String
-    external fun digiCreate(sampleRate: Int, cwPitchHz: Float, rttyReverse: Boolean): Long
+    external fun digiCreate(sampleRate: Int, cwPitchHz: Float, rttyReverse: Boolean, rttyCentreHz: Float): Long
     external fun digiDestroy(handle: Long)
     external fun digiFeedCw(handle: Long, samples: FloatArray): String
     external fun digiFeedRtty(handle: Long, samples: FloatArray): String
     external fun digiFeedSstv(handle: Long, samples: FloatArray): String
     external fun digiDecodeSlot(mode: Int, samples: FloatArray, sampleRate: Int): String
-    external fun digiDecodePsk31(samples: FloatArray): String
+    external fun digiSpectrum(samples: FloatArray, sampleRate: Int, lowHz: Float, highHz: Float, bins: Int, window: Int): FloatArray
+    external fun digiDecodePsk31(samples: FloatArray, carrierHz: Float): String
     external fun digiSstvImage(handle: Long): ByteArray
     external fun digiEncodeCw(text: String, wpm: Int, pitchHz: Float, sampleRate: Int): FloatArray
     external fun digiEncodeRtty(text: String, sampleRate: Int, reverse: Boolean): FloatArray

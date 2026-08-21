@@ -131,7 +131,7 @@ private enum class Destination(val label: String) {
 }
 private enum class SettingsSection(val label: String) {
     RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
-    AUDIO("Audio"), INTEGRATIONS("Integrations"), HEALTH("Health"), DIAG("Diag"), ABOUT("About")
+    AUDIO("Audio"), DIGI("Digi"), INTEGRATIONS("Integrations"), HEALTH("Health"), DIAG("Diag"), ABOUT("About")
 }
 private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Station"), GENERAL("General"), NOTES("Notes"), QSL("QSL") }
 
@@ -199,8 +199,6 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val cty = remember { CtyController(context) }
     val audio = remember { AudioMonitorController(context) }
     flex.attachAudioRoutes(audio)
-    val digi = remember { DigiController(context, audio, transport, flex, { app.radioFamily },
-        { app.stationCallsign }, { app.stationGrid }) }
     val cwDecoder = remember { CwDecodeBuffer() }
     var kxRadio by remember { mutableStateOf(NativeCore.parseState(NativeCore.state(core))) }
     var radio by remember { mutableStateOf(kxRadio) }
@@ -235,6 +233,32 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     var pendingHomeQsoId by remember { mutableStateOf<String?>(null) }
     var pendingVoiceSlot by remember { mutableStateOf<Int?>(null) }
     var voiceArmedMode by remember { mutableStateOf<String?>(null) }
+    val digi = remember { DigiController(context, audio, transport, flex, { app.radioFamily },
+        { app.stationCallsign }, { app.stationGrid }, DigiDependencies(
+            database = database, mutations = mutations, cty = cty, radioState = { radio },
+            stationProfile = { wavelog.stationId },
+            stationLocation = { wavelog.selectedStation?.city.orEmpty() },
+            operatorCallsign = { activation.session?.setup?.operatorCallsign.orEmpty().ifBlank { app.stationCallsign } },
+            activationContext = { activation.session?.takeIf { it.state == PotaActivationState.ACTIVE }?.let { "POTA" to it.id } ?: ("" to "") },
+            needsByCallsign = { progress.snapshot.needs.mapNotNull { need ->
+                (need.dxSpot?.callsign ?: need.portableSpot?.callsign ?: need.title).takeIf(String::isNotBlank)?.uppercase()?.let { it to need.reasons }
+            }.groupBy({ it.first }, { it.second }).mapValues { entry -> entry.value.flatten().distinct() } },
+            liveSpots = { features.liveSpots },
+            onOpenLogbook = { call -> progress.requestLogbook(logbookFilterForDimension("callsign", call)); destination = Destination.LOGBOOK },
+            onOpenDx = { destination = Destination.DX },
+            onOpenCallbook = { call -> callbook.lookup(call) {}; destination = Destination.RADIO },
+            nextIssPass = {
+                operations.satellites.passes.firstOrNull { row -> row.satellite.name.contains("ISS", true) }?.let { row ->
+                    DigiIssPass(row.satellite.name, row.pass.aos, row.pass.los, row.pass.maximumElevationDeg)
+                }
+            },
+            requestIssReceiveReview = {
+                pendingHomeReceiveTune = HomeReceiveTuneReview(145_800_000L, "FM", "ISS SSTV receive-only session",
+                    "Review the 145.800 MHz downlink. This does not transmit or tune without confirmation.")
+            },
+        )) }
+    LaunchedEffect(foreground) { digi.onForegroundChanged(foreground) }
+    LaunchedEffect(radio.identity, radio.frequencyHz, radio.connected) { digi.onRadioStateChanged(radio) }
     val scope = rememberCoroutineScope()
     fun accept(result: UsbResult) {
         when (result) {
@@ -668,7 +692,7 @@ private fun navIcon(item: Destination) = when (item) {
                     "Review receive-only downlink change")
             }, prepareSatelliteLogger)
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
-            transport, flex, voiceStore, voiceAudio, voiceTx, groupsIo, openEq, openSync, openGroupsIo, connect, direct)
+            transport, flex, voiceStore, voiceAudio, voiceTx, groupsIo, openEq, openSync, openDigi, openGroupsIo, connect, direct)
     }
 }
 
@@ -3776,7 +3800,7 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
     audio: AudioMonitorController, panadapter: PanadapterController, app: AppController, transport: UsbRadioTransport,
     flex: FlexRadioController, voiceStore: VoiceMacroStore,
     voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, groupsIo: GroupsIoController,
-    openEq: () -> Unit, openSync: () -> Unit, openGroupsIo: () -> Unit,
+    openEq: () -> Unit, openSync: () -> Unit, openDigi: () -> Unit, openGroupsIo: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
     var section by remember { mutableStateOf(SettingsSection.RADIO) }
     var host by remember { mutableStateOf(features.clusterHost) }; var port by remember { mutableStateOf(features.clusterPort.toString()) }
@@ -3925,6 +3949,11 @@ private fun positiveLogStatus(value: String) = value.trim().uppercase() in setOf
                 Switch(app.panadapterEnabled, app::updatePanadapterEnabled,
                     enabled = app.radioFamily.isElecraft)
             }
+        }
+        if (section == SettingsSection.DIGI) SettingsCard("NEXUS DIGI") {
+            Text("Digital-mode setup is shared with the Digi cockpit so mode capabilities, USB audio health, waterfall calibration, UDP interoperability, and storage diagnostics always describe the active session.", color = Muted)
+            Button(onClick = openDigi) { Text("OPEN DIGI SETUP") }
+            Text("Opening setup never enables or arms transmit. Digi TX remains a separate session switch plus one-shot arm.", color = Muted)
         }
         if (section == SettingsSection.LOG || section == SettingsSection.MACROS) SettingsCard(if (section == SettingsSection.LOG) "LOCAL STATION" else "MACROS") {
             if (section == SettingsSection.LOG) {
