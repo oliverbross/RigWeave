@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/s53zo/n1mm-network-protocol",
+  "commit": "2decc5adbdffedf1138fd4b75c65f811f6a21064",
+  "license": "MIT",
+  "claim": "Protocol coverage against s53zo/n1mm-network-protocol at 2decc5adbdffedf1138fd4b75c65f811f6a21064.",
+  "caveat": "Unofficial reverse-engineered/developer reference; not N1MM+ certification or proven live interoperability.",
+  "reviewed": ["README.md","LICENSE","docs/protocol.md","docs/commands.md","docs/ports.md","docs/payload-examples.md","docs/implementation-notes.md","n1mm_protocol/**","examples/python/**","tests/**"]
+}
