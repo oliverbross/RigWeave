@@ -1,5 +1,7 @@
 # Android SSB voice macros
 
+Keyer v2 adds logical composite plans that reference the same six private slots. Every clip is validated before PTT, plans are capped at 12 references/45 seconds, and playback uses the existing single `VoiceMacroTransmitController` TX/RX lifecycle. The legacy one-slot API is a one-item adapter. Configuration recovery exports slot references, never WAV bytes or paths. See `docs/keyer/KEYER_HOTKEYS_V2.md`.
+
 RigWeave for Android provides six private, tablet-local voice slots for USB and LSB operation on an Elecraft KX3/KX2. A slot can be recorded with the built-in microphone or imported from an uncompressed PCM WAV, previewed only through the built-in speaker, and sent through an explicitly selected DigiRig USB audio output.
 
 ## Signal and control architecture
