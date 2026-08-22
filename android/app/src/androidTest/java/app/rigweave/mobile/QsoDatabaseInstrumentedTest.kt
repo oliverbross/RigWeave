@@ -74,6 +74,27 @@ class QsoDatabaseInstrumentedTest {
         assertTrue(bandForFrequency(100_000_000).isBlank())
     }
 
+    @Test fun repairsMissingProjectionGridFromCanonicalDetailsJson() {
+        val qso = Qso(
+            id = "grid-repair", callsign = "VK0TEST", frequencyHz = 14_074_000, mode = "FT8",
+            rstSent = "-10", rstReceived = "-12", createdAt = 100, grid = "JN88TQ",
+        )
+        assertTrue(database.save(qso))
+        database.writableDatabase.execSQL(
+            "UPDATE qso_projection SET grid_norm='' WHERE qso_id=?",
+            arrayOf(qso.id),
+        )
+
+        assertEquals(1, database.repairProjectionGridBatch())
+        database.readableDatabase.rawQuery(
+            "SELECT grid_norm FROM qso_projection WHERE qso_id=?",
+            arrayOf(qso.id),
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("JN88TQ", cursor.getString(0))
+        }
+    }
+
     @Test fun pagesAndFiltersInsideSqlBeforeReturningRows() {
         val target = Qso(
             id = "target", callsign = "OM0RX", frequencyHz = 14_060_000, mode = "CW", rstSent = "599",

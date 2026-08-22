@@ -99,3 +99,7 @@ Status legend: `FIXED` means the named source correction is implemented. Local, 
 - Protected-tablet backup, replace install, UID/schema/data preservation, 120-second process survival and passive screenshots are pending the final exact-SHA artifacts.
 - Authenticated services, audio, CAT/PTT/TUNE, transmit, on-air and RF behavior are not claimed by these source/build results.
 - Frozen `main` remains `fb04d52df0c9ccc305125449bb188ef8e3f0185e`; this programme does not merge or push it.
+
+## Device-gate correction
+
+The first protected replace candidate at `b50a70fcd5394f2eb66d04db1e5379423d11ea32` installed with UID/data preservation but exited during launch. Sanitized evidence identified a bounded projection-grid repair query referencing nonexistent legacy column `q.grid`; canonical worked grid is stored in `q.details_json`. The query now uses `json_extract(q.details_json,'$.grid')`, and the existing Android migration-matrix test file includes an executable regression case that empties `grid_norm`, repairs from canonical JSON, and verifies the restored locator. No mutation occurred before the failing SELECT. The corrected commit, artifacts, hosted run and device evidence supersede the first candidate.

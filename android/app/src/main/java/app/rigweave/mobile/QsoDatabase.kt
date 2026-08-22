@@ -384,7 +384,8 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         val size = batchSize.coerceIn(50, 500)
         val ids = readableDatabase.rawQuery(
             """SELECT q.id FROM qso q JOIN qso_projection p ON p.qso_id=q.id
-                WHERE p.grid_norm='' AND TRIM(q.grid)<>'' ORDER BY q.created_at,q.id LIMIT $size""".trimIndent(), null,
+                WHERE p.grid_norm='' AND TRIM(COALESCE(json_extract(q.details_json,'$.grid'),''))<>''
+                ORDER BY q.created_at,q.id LIMIT $size""".trimIndent(), null,
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
         if (ids.isEmpty()) return 0
         transaction { qsos(ids).forEach { QsoProjectionStore.write(writableDatabase, it) } }
