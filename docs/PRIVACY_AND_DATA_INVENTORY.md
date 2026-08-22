@@ -1,5 +1,9 @@
 # Privacy and Data Inventory
 
+## Sweep 1 Portable and browser data
+
+Portable SOTA may open a receive-only TCP session to cluster.sota.org.uk:7300 while the Portable workspace is foregrounded. The login value is read from the existing user-configured DX-cluster username; it is not hard-coded, copied into reports, or used to post spots. Parsed rows are bounded, expire after one hour, and are enriched from the existing app-private SOTA catalogue cache for map coordinates. POTA/SOTA in-app pages enable JavaScript and DOM storage only on exact reviewed HTTPS hosts; unreviewed redirects lose that privilege and require external-browser confirmation. Third-party cookies, file/content access, and mixed content remain disabled.
+
 | Data | Storage owner | Export / support-bundle rule |
 |---|---|---|
 | QSO records and projections | SQLite, schema 13/2 | Never in configuration or support ZIP |

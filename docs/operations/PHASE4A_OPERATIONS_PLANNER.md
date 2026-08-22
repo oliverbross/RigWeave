@@ -1,5 +1,9 @@
 # Phase 4A — Operations Planner
 
+## Sweep 1 catalog authority
+
+Activation Planner now queries independent bounded POTA and SOTA catalogue snapshots off-main, deduplicates exact references, applies inclusive great-circle radius without country restriction, and sorts by distance/name/reference. Provider state, catalogue/nearby counts, attribution and invalid-coordinate counts are visible. WWFF is not substituted with live agenda spots: because no stable licensed structured full catalogue contract is available, both Operations and Portable state PROVIDER UNAVAILABLE explicitly.
+
 Verdict: PASS
 
 Source-complete Android features:

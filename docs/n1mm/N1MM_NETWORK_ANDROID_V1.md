@@ -1,5 +1,9 @@
 # N1MM network Android v1
 
+## Sweep 1 presentation
+
+The Contest Network tab now presents enabled/armed state, loopback/LAN policy, bind identity, peers, exact trust, last-seen and bounded diagnostic counters, sanitized errors, and start/stop/arm/disarm controls. It remains off and unarmed by default, never restores armed, and continues to reject incoming radio, keyer, time and file commands. The UI does not expose raw XML or create a second network controller.
+
 Claim: **Protocol coverage against s53zo/n1mm-network-protocol at `2decc5adbdffedf1138fd4b75c65f811f6a21064`.** This is not certified full N1MM+ interoperability.
 
 ## Architecture and lifecycle

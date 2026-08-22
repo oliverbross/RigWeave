@@ -25,7 +25,7 @@ The clients do not have identical surface coverage. Android currently contains t
 - Android EQ Studio reads exact KX3 RX/TX curves, keeps radio/draft/profile state separate, records one finite local audio sample, previews an approximate eight-band response with matched/blind A/B, and applies only through an exclusive CAT transaction with exact readback verification. It never keys the transmitter or claims to reproduce Elecraft's undocumented DSP topology.
 - Panadapter is implemented on Android as an expanded destination and compact Radio subview. CW/RTTY/SSTV Digi is implemented. FT8/FT4/FT2/Q65/FST4/MSK144/JT65/WSPR remain unavailable because the evaluated Nexus modem build still depends on a desktop Fortran/C++/Qt/FFTW toolchain without an Android parity path; the app does not expose placeholder modes.
 - The consolidated DX destination owns live cluster browsing and analyzed DX views.
-- Android Portable → Portable Chase preserves the POTA vertical slice and adds unified programme filtering, WWFF Spotline/agendas, a safely replaceable offline SOTA summit catalogue, conservative grouping, programme-correct worked intelligence, MapLibre selection, receive-only CAT tuning, and an editable multi-reference draft in the existing logger. SOTA live is explicitly unavailable pending the current programme API approval; the app does not use the deprecated endpoint or fabricate fallback activity.
+- Android Portable → Portable Chase preserves the POTA vertical slice and adds unified programme filtering, WWFF Spotline/agendas, a safely replaceable offline SOTA summit catalogue, the authorised receive-only SOTA Cluster feed at cluster.sota.org.uk:7300, conservative grouping, programme-correct worked intelligence, coordinate-anchored MapLibre labels, receive-only CAT tuning, and an editable multi-reference draft in the existing logger. It does not use the deprecated private SOTA API or expose a SOTA posting path.
 - Android Portable → Activate provides one recoverable local POTA session, explicit boundary acknowledgement, CAT-optional fast logging into the existing journal, editable P2P handoff, per-UTC-day progress, multi-own-park/P2P ADIF expansion, file sharing, and official-site browser handoffs. It does not post spots, upload logs, or initiate transmission.
 - Radio state must be observed truth with explicit live, stale, disconnected, pending, and failed states.
 - TX, TUNE, ATU TUNE, and CW macro transmission are disabled by default, explicitly armed, never started automatically, and never blindly retried.
@@ -37,7 +37,7 @@ The clients do not have identical surface coverage. Android currently contains t
 ## Approved direction
 
 1. KX3/KX2 Studio: preserve and harden the implemented Android KX3 EQ Studio, profiles, voice macros, and dedicated KX3 panadapter; extend other clients and KX2 write or wideband-I/Q claims only after their platform and hardware gates.
-2. Preserve the integrated Android Portable Chase extension while SOTA live remains disabled pending documented API approval.
+2. Preserve the integrated Android Portable Chase extension and its authorised receive-only SOTA Cluster source; continue to keep deprecated private SOTA API access disabled.
 3. Preserve the implemented Android POTA Activate workflow; SOTA/WWFF activation remains later work.
 4. Preserve Android Phase 4A local-log delivery; Phase 4B Needs Board and statistics is next.
 5. FlexRadio SmartLink through legitimate official interfaces and authentication.

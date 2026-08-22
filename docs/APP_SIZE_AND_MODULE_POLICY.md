@@ -1,5 +1,9 @@
 # Android app size and module policy
 
+## Sweep 1 package decision
+
+Sweep 1 adds no embedded provider catalogue, model, binary payload, or P.533 material. POTA/SOTA catalogues remain bounded runtime caches in app-private storage and SOTA cluster rows are transient. The pre-final local debug artifacts remain below the 130 MB APK and 60 MB AAB ceilings; final sizes and SHA-256 values are recorded only after the final source commit is built.
+
 RigWeave remains one coherent product. Neural DX, HamClock, Wavelog, and Groups.io are not separate user-facing applications or dynamic feature modules.
 
 Keyer, Contest/N1MM and DX Chaser remain Kotlin/Compose code and small schema-1 private stores in the

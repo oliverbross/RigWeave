@@ -1,5 +1,9 @@
 # Android Portable Chase
 
+## Sweep 1 SOTA cluster and tablet surfaces
+
+The operator-authorized SOTA live source is the GM4LLD SOTA Cluster at cluster.sota.org.uk:7300. Portable uses the username already configured in DX-cluster settings, receives spots only while foregrounded, never posts, reconnects with bounded backoff, expires rows after one hour, and matches valid summit references through the existing SOTA catalogue for names and map coordinates. Mode remains UNKNOWN unless the received comment states one. POTA/SOTA maps now use coordinate-anchored decluttered labels, Places uses an adaptive tablet grid, and only exact reviewed POTA/SOTA HTTPS hosts receive the minimum JavaScript/DOM policy.
+
 ## Purpose
 
 Portable → Portable Chase is the Android hunter cockpit for POTA, SOTA, and WWFF activity. It keeps POTA's proven live/cache/offline and staged park-catalogue path, normalizes provider activity only at the list/ranking/map/logger boundary, and never claims official programme credit.
@@ -35,4 +39,4 @@ RigWeave is independent of POTA, SOTA, and WWFF and uses no programme logos.
 - The official 2026-08-17 SOTA CSV imported 181,658 summits. Searches selected `VK3/VC-001` Mt Matlock and `OM/ZA-001` Bystrá. Nearby from manual grid `JN88TQ` returned `OM/TN-045` Bradlo at 4.2 km / 260° first after correcting pre-limit proximity ordering.
 - Screenshots: `docs/portable/evidence/portable-all-on-air.png`, `docs/portable/evidence/portable-sota-places.png`, and `docs/portable/evidence/portable-wwff-map-detail.png`.
 
-Phase 2B is integrated with the accepted status **PASS WITH EXTERNAL DEPENDENCY**. SOTA live remains unavailable pending written API approval; the disabled provider makes no live SOTA request. The existing offline summit catalogue is independent of that approval. WWFF full offline directory storage remains deferred pending permission. Phase 3A adds POTA Activate beside Chase without changing these provider boundaries; iPadOS parity, awards, panadapter overlays, and Nexus reuse remain outside Phase 2B.
+Phase 2B was integrated with **PASS WITH EXTERNAL DEPENDENCY** under the earlier API boundary. Sweep 1 supersedes only that live-source statement with the operator-authorized receive-only GM4LLD SOTA Cluster contract above; the deprecated SOTAwatch API remains unused. The offline summit catalogue remains an independent enrichment authority. WWFF full offline directory storage remains deferred pending a stable licensed provider contract. Phase 3A adds POTA Activate beside Chase without changing the remaining provider boundaries; iPadOS parity, awards, panadapter overlays, and Nexus reuse remain outside Phase 2B.

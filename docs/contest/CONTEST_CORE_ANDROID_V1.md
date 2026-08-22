@@ -1,5 +1,9 @@
 # Contest Core Android v1
 
+## Sweep 1 operator workspace
+
+Setup, Logging, Review and Network are now full tablet workspaces over the existing Contest authorities. Setup is definition-driven; Logging exposes eight configurable panels, dynamic exchanges, live context and canonical mutation; Review provides bounded canonical rows, filters, local-only deletion and export previews; Network exposes safe N1MM state, trust, counters and controls. Score rebuilds are latest-generation background work. No Contest surface directly owns CAT, PTT, TUNE, Digi, Chaser or remote Wavelog mutation.
+
 ## Ownership and architecture
 
 `rigweave-contest.sqlite` schema 1 owns session lifecycle, operator/radio metadata, serial reservations, QSO ID/revision links, derived score/rate snapshots, rule-pack state, bounded N1MM dedupe/link/claim state and sanitized peer state. It contains no canonical callsign, exchange, comment or QSO body table.

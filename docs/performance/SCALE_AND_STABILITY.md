@@ -1,5 +1,9 @@
 # Scale and stability
 
+## Tablet Acceptance Sweep 1
+
+Log Intelligence work stays on bounded projection queries with latest-generation cancellation and an explicit local/Wavelog authority identity. Contest score rebuilds run off the interface thread and apply only the latest active-session generation. Band Map placement is linear over a bounded input with six lanes and exact chooser membership capped at 20. Activation Planner catalog work runs off-main over at most 5,000 source rows and returns at most 1,000 deduplicated inclusive-radius results. The established disposable 100k-logbook, 180-day Neural, 20k-Digi, 30k-Groups and provider-lifecycle soak passes.
+
 ## Delivered architecture
 
 The old interactive paths repeatedly decoded the canonical `qso.details_json` record, materialised the complete log, sorted it in memory, and recalculated analytics or calendar history for each consumer. That made memory and latency grow with the log and made Android lifecycle churn a plausible crash trigger.

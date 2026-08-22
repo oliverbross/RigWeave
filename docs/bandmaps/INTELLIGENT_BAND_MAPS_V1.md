@@ -1,5 +1,9 @@
 # RigWeave Intelligent Band Maps v1
 
+## Sweep 1 interaction and presentation
+
+The operator-visible selector is restricted to 160m through 23cm. All four layouts show labelled frequency axes and reviewed Region 1/2/3 operating guidance explicitly marked non-regulatory. Per-band viewports support bounded pinch, wheel/trackpad, buttons, double-click/tap, drag and keyboard zoom/pan with safe persistence/reset. Dense labels use six deterministic lanes plus bounded exact-member stacks; Grid and Single layouts preserve selected frequency, while Single adds RX, TX/split and passband markers. Shared CS/DS configured tokens drive status colour and text.
+
 ## Frozen source and platform boundary
 
 Android Band Maps v1 was developed on `feature/intelligent-bandmaps-v1` in the isolated worktree
@@ -144,4 +148,3 @@ included in normal configuration export/transactional restore. Restore code has 
 - Physical touch, keyboard, screen-reader, rotation and colour assessment remain device validation.
 - RX/TX/passband markers render only when authoritative integration fields are wired into the lane scene; no TX marker is fabricated.
 - Authenticated/live provider completeness depends on the existing configured owners and was not exercised by this task.
-

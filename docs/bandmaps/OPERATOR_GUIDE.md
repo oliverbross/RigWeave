@@ -1,5 +1,9 @@
 # Intelligent Band Maps operator guide
 
+## Sweep 1 controls
+
+Use pinch or mouse wheel/trackpad, plus/minus buttons, double-tap/click, drag, or focused keyboard plus/minus to change the visible range; RESET returns to the configured segment. Viewport limits stay inside the band and are restored per band/layout. A stacked label opens a bounded chooser containing the exact represented spots. Grid cards can hand a selected frequency to Single Expanded, which shows receive, transmit/split and passband context without implying radio control.
+
 ## Enable and open
 
 Open **Settings → Band Maps**, enable Intelligent Band Maps, and leave **Show in nav** selected. Open **Band Maps** from
@@ -59,4 +63,3 @@ enable Digi TX, log a QSO, start Assist/Dry Run/Chase or accept a cross-band rec
 Provider rows appear only when the existing configured owner supplies them. Missing CTY, projection, Contest, Chaser,
 Keyer or provider data remains unknown/unavailable. Apple and desktop Band Maps are not included. Physical device,
 screen-reader, live CAT, audio and RF validation were outside Task C.
-

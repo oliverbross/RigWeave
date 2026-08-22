@@ -1,5 +1,9 @@
 # Final whole-application completion matrix
 
+## Tablet Acceptance Sweep 1 delta
+
+The fix/tablet-acceptance-sweep-1 source closes the 41 owner-observed acceptance items recorded in TABLET_ACCEPTANCE_SWEEP_1.md: Home/Settings convergence, complete Contest workspaces, interactive Band Maps, authority-scoped Log Intelligence, tablet layouts, Portable map/browser corrections, catalog-truth Operations, Groups.io server timestamps, and shared CS/DS presentation. This row is source-complete only; exact-SHA hosted, protected-tablet presentation, authenticated-service, audio and RF evidence remain separate gates.
+
 | Area | Classification | Evidence boundary |
 |---|---|---|
 | Android production graph and navigation | SOURCE_COMPLETE | One construction graph; each required top-level destination appears once; DX Chaser remains inside Digi |

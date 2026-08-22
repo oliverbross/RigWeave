@@ -48,8 +48,11 @@ Android Portable Chase consumes the WWFF Spotline public integration spot and
 active-agenda JSON feeds from spots.wwff.co and the official downloadable SOTA
 summit list from sotadata.org.uk. WWFF and SOTA names and data remain
 attributable to their respective programmes. The full WWFF Directory is not
-stored without permission. SOTA live access is disabled pending approval under
-the current private-API terms; no deprecated or unauthorized endpoint is used.
+stored without permission. Authorised receive-only SOTA activity is obtained
+from the GM4LLD SOTA Cluster at cluster.sota.org.uk:7300 using the operator's
+configured DX-cluster login. RigWeave sends only the login and a bounded history
+query, exposes no SOTA posting path, and resolves summit details through the
+separately downloaded official summit catalogue. No deprecated private API is used.
 
 The Android Home operating dashboard is a native RigWeave integration inspired
 by OpenHamClock (https://github.com/accius/openhamclock), inspected at immutable
