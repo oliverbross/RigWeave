@@ -72,7 +72,9 @@ summary and sanitized diagnostics. It contains no direct transmit or tune contro
 
 The completion branch was validated with:
 
-- `:app:testDebugUnitTest`: PASS, 24 focused cases in three JVM files plus one instrumentation-source file.
+- `:app:testDebugUnitTest`: PASS, 23 focused JVM cases in three files.
+- Focused instrumentation structure: one high-value SQLite/retention case; its source compiled successfully but it was not executed on
+  an emulator or physical device. Total focused structure is 24 cases in the authorised three JVM plus one instrumentation files.
 - `:app:assembleDebug`: PASS.
 - `:app:bundleDebug`: PASS.
 - `:app:compileDebugAndroidTestSources`: PASS. No emulator/device test execution was claimed.
