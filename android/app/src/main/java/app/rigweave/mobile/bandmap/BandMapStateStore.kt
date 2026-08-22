@@ -78,10 +78,13 @@ internal object BandMapSettingsCodec {
         .put("id", value.id).put("label", value.label).put("layout", value.layout.name).put("built_in", value.builtIn)
         .put("filter", JSONObject().put("bands", JSONArray(value.filter.bands.toList())).put("modes", JSONArray(value.filter.modes.map(Enum<*>::name)))
             .put("sources", JSONArray(value.filter.sources.map(Enum<*>::name))).put("maximum_age", value.filter.maximumAgeSeconds)
+            .put("segments", JSONArray().apply { value.filter.segments.forEach { put(JSONObject().put("band", it.band).put("label", it.label).put("lower_hz", it.lowerHz).put("upper_hz", it.upperHz)) } })
             .put("minimum_spotters", value.filter.minimumSpotters).put("minimum_diversity", value.filter.minimumSourceDiversity)
+            .put("spotter_continents", JSONArray(value.filter.spotterContinents.toList())).put("target_continents", JSONArray(value.filter.targetContinents.toList()))
             .put("needs", JSONArray(value.filter.requiredNeeds.toList())).put("contest_only", value.filter.contestOnly)
             .put("multipliers_only", value.filter.multipliersOnly).put("hide_duplicates", value.filter.hideDuplicates)
             .put("chaser_eligible", value.filter.chaserEligibleOnly).put("portable", JSONArray(value.filter.portablePrograms.toList()))
+            .put("evidence", JSONArray(value.filter.evidenceStatuses.map(Enum<*>::name))).put("search", value.filter.search)
             .put("show_unknown", value.filter.showUnknown).put("show_stale", value.filter.showStale))
         .put("weights", JSONObject().apply { weights(value.weights).forEach { (key, number) -> put(key, number) } })
 
@@ -90,16 +93,27 @@ internal object BandMapSettingsCodec {
         require(id.matches(Regex("[a-z0-9][a-z0-9_-]{0,63}")) && label.isNotBlank() && label.length <= 80) { "Invalid Band Map preset identity" }
         val f = row.getJSONObject("filter"); val bands = f.optJSONArray("bands")?.strings()?.toSet().orEmpty()
         require(bands.all { name -> bandMapBands.any { it.name == name } }) { "Invalid preset band" }
+        val segments = f.optJSONArray("segments")?.objects()?.map { segment ->
+            val band = segment.getString("band"); require(bandMapBands.any { it.name == band }) { "Invalid segment band" }
+            val lower = segment.getLong("lower_hz"); val upper = segment.getLong("upper_hz")
+            val definition = bandMapBands.first { it.name == band }
+            require(lower >= definition.lowerHz && upper <= definition.upperHz && upper > lower) { "Invalid segment range" }
+            BandMapSegment(band, segment.optString("label", "Custom display range").take(80), lower, upper)
+        }.orEmpty().ifEmpty { bands.map { BandMapSegment(it) } }
         val filter = BandMapFilter(
-            bands = bands, segments = bands.map { BandMapSegment(it) },
+            bands = bands, segments = segments,
             modes = f.optJSONArray("modes")?.strings()?.map { BandMapModeFamily.valueOf(it) }?.toSet().orEmpty(),
             sources = f.optJSONArray("sources")?.strings()?.map { BandMapSource.valueOf(it) }?.toSet().orEmpty(),
             maximumAgeSeconds = f.optLong("maximum_age", 3_600).also { require(it in 60..86_400) },
             minimumSpotters = f.optInt("minimum_spotters").also { require(it in 0..100) },
             minimumSourceDiversity = f.optInt("minimum_diversity").also { require(it in 0..BandMapSource.entries.size) },
+            spotterContinents = f.optJSONArray("spotter_continents")?.strings()?.toSet().orEmpty(),
+            targetContinents = f.optJSONArray("target_continents")?.strings()?.toSet().orEmpty(),
             requiredNeeds = f.optJSONArray("needs")?.strings()?.toSet().orEmpty(), contestOnly = f.optBoolean("contest_only"),
             multipliersOnly = f.optBoolean("multipliers_only"), hideDuplicates = f.optBoolean("hide_duplicates"),
             chaserEligibleOnly = f.optBoolean("chaser_eligible"), portablePrograms = f.optJSONArray("portable")?.strings()?.toSet().orEmpty(),
+            evidenceStatuses = f.optJSONArray("evidence")?.strings()?.map { BandMapEvidenceStatus.valueOf(it) }?.toSet().orEmpty(),
+            search = f.optString("search").take(80),
             showUnknown = f.optBoolean("show_unknown", true), showStale = f.optBoolean("show_stale", true),
         )
         val weights = row.optJSONObject("weights")?.let { w -> BandMapRankingWeights(

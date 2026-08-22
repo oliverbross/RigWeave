@@ -181,13 +181,20 @@ internal fun BandMapScreen(
 
 @Composable private fun BandControls(controller: BandMapController) {
     val selected = controller.settings.selectedBands
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-        bandMapBands.forEach { band -> FilterChip(band.name in selected, {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            selected.forEachIndexed { index, band -> OutlinedButton({ if (index > 0) controller.updateSettings { current ->
+                val reordered = current.selectedBands.toMutableList(); val value = reordered.removeAt(index); reordered.add(index - 1, value); current.copy(selectedBands = reordered)
+            } }, enabled = index > 0) { Text("← $band") } }
+        }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            bandMapBands.forEach { band -> FilterChip(band.name in selected, {
             controller.updateSettings { current ->
                 val next = if (band.name in current.selectedBands) current.selectedBands - band.name else current.selectedBands + band.name
                 current.copy(selectedBands = next.ifEmpty { current.selectedBands })
             }
-        }, { Text(band.name) }) }
+            }, { Text(band.name) }) }
+        }
     }
 }
 
@@ -309,14 +316,55 @@ internal fun BandMapScreen(
 
 @Composable private fun FilterDialog(controller: BandMapController, dismiss: () -> Unit) {
     val preset = controller.settings.presets.firstOrNull { it.id == controller.settings.activePresetId } ?: builtInBandMapPresets.first()
-    var search by remember(preset.id) { mutableStateOf(preset.filter.search) }
-    AlertDialog(onDismissRequest = dismiss, title = { Text("Band Map filters") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(search, { search = it.take(80) }, label = { Text("Callsign, comment or reference") })
-        Text("Filters remain separate from priority ranking. Unknown provider data is not silently classified as needed.", color = MapMuted, fontSize = 11.sp)
-        Text("Active preset: ${preset.label} · sources ${preset.filter.sources.ifEmpty { BandMapSource.entries.toSet() }}")
-    } }, confirmButton = { Button({ controller.updateSettings { current -> current.copy(presets = current.presets.map { if (it.id == preset.id) it.copy(filter = it.filter.copy(search = search)) else it }) }; dismiss() }) { Text("APPLY") } },
+    var draft by remember(preset.id) { mutableStateOf(preset.filter) }
+    var segmentProfile by remember(preset.id) { mutableStateOf(BandMapSegmentProfile.WHOLE) }
+    var customLower by remember(preset.id) { mutableStateOf("") }; var customUpper by remember(preset.id) { mutableStateOf("") }
+    fun <T> toggle(set: Set<T>, value: T) = if (value in set) set - value else set + value
+    AlertDialog(onDismissRequest = dismiss, title = { Text("Band Map filters") }, text = { LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.heightIn(max = 570.dp)) {
+        item { OutlinedTextField(draft.search, { draft = draft.copy(search = it.take(80)) }, label = { Text("Callsign, comment or reference") }) }
+        item { Text("MODE FAMILY", fontWeight = FontWeight.Bold); ChipFlow { BandMapModeFamily.entries.forEach { value -> FilterChip(value in draft.modes, { draft = draft.copy(modes = toggle(draft.modes, value)) }, { Text(value.name) }) } } }
+        item { Text("SOURCE", fontWeight = FontWeight.Bold); ChipFlow { BandMapSource.entries.forEach { value -> FilterChip(value in draft.sources, { draft = draft.copy(sources = toggle(draft.sources, value)) }, { Text(value.name.replace('_', ' ')) }) } } }
+        item { Text("DISPLAY SEGMENT · not a legal band plan", fontWeight = FontWeight.Bold); ChipFlow { BandMapSegmentProfile.entries.forEach { value -> FilterChip(segmentProfile == value, {
+            segmentProfile = value
+            if (value != BandMapSegmentProfile.CUSTOM) draft = draft.copy(segments = controller.settings.selectedBands.map { bandMapDisplaySegment(it, value) })
+        }, { Text(value.name.replace('_', ' ')) }) } } }
+        if (segmentProfile == BandMapSegmentProfile.CUSTOM) item { Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OutlinedTextField(customLower, { customLower = it.filter(Char::isDigit).take(12) }, label = { Text("Start kHz") }, modifier = Modifier.weight(1f))
+            OutlinedTextField(customUpper, { customUpper = it.filter(Char::isDigit).take(12) }, label = { Text("End kHz") }, modifier = Modifier.weight(1f))
+        } }
+        item { Text("AGE / DIVERSITY", fontWeight = FontWeight.Bold); ChipFlow {
+            listOf(300L, 900L, 3_600L, 10_800L).forEach { seconds -> FilterChip(draft.maximumAgeSeconds == seconds, { draft = draft.copy(maximumAgeSeconds = seconds) }, { Text(if (seconds < 3_600) "${seconds / 60}m" else "${seconds / 3_600}h") }) }
+            (0..3).forEach { count -> FilterChip(draft.minimumSpotters == count, { draft = draft.copy(minimumSpotters = count) }, { Text("$count+ spotters") }) }
+            (0..3).forEach { count -> FilterChip(draft.minimumSourceDiversity == count, { draft = draft.copy(minimumSourceDiversity = count) }, { Text("$count+ sources") }) }
+        } }
+        item { Text("SPOTTER CONTINENT", fontWeight = FontWeight.Bold); ChipFlow { listOf("AF", "AS", "EU", "NA", "OC", "SA").forEach { value -> FilterChip(value in draft.spotterContinents, { draft = draft.copy(spotterContinents = toggle(draft.spotterContinents, value)) }, { Text(value) }) } } }
+        item { Text("TARGET CONTINENT", fontWeight = FontWeight.Bold); ChipFlow { listOf("AF", "AS", "EU", "NA", "OC", "SA").forEach { value -> FilterChip(value in draft.targetContinents, { draft = draft.copy(targetContinents = toggle(draft.targetContinents, value)) }, { Text(value) }) } } }
+        item { Text("NEEDS", fontWeight = FontWeight.Bold); ChipFlow { listOf("ENTITY", "BAND", "MODE", "BAND_MODE", "GRID", "CQ", "ITU", "PORTABLE", "UNKNOWN").forEach { value -> FilterChip(value in draft.requiredNeeds, { draft = draft.copy(requiredNeeds = toggle(draft.requiredNeeds, value)) }, { Text(value) }) } } }
+        item { Text("CONTEST / CHASER", fontWeight = FontWeight.Bold); ChipFlow {
+            FilterChip(draft.contestOnly, { draft = draft.copy(contestOnly = !draft.contestOnly) }, { Text("CONTEST ACTIVE") })
+            FilterChip(draft.multipliersOnly, { draft = draft.copy(multipliersOnly = !draft.multipliersOnly) }, { Text("NEW MULT") })
+            FilterChip(draft.hideDuplicates, { draft = draft.copy(hideDuplicates = !draft.hideDuplicates) }, { Text("HIDE DUPES") })
+            FilterChip(draft.chaserEligibleOnly, { draft = draft.copy(chaserEligibleOnly = !draft.chaserEligibleOnly) }, { Text("CHASER ELIGIBLE") })
+        } }
+        item { Text("PORTABLE", fontWeight = FontWeight.Bold); ChipFlow { listOf("POTA", "SOTA", "WWFF").forEach { value -> FilterChip(value in draft.portablePrograms, { draft = draft.copy(portablePrograms = toggle(draft.portablePrograms, value)) }, { Text(value) }) } } }
+        item { Text("CURRENT EVIDENCE STATUS", fontWeight = FontWeight.Bold); ChipFlow { BandMapEvidenceStatus.entries.forEach { value -> FilterChip(value in draft.evidenceStatuses, { draft = draft.copy(evidenceStatuses = toggle(draft.evidenceStatuses, value)) }, { Text(value.name) }) } } }
+        item { ChipFlow {
+            FilterChip(draft.showUnknown, { draft = draft.copy(showUnknown = !draft.showUnknown) }, { Text("SHOW UNKNOWN") })
+            FilterChip(draft.showStale, { draft = draft.copy(showStale = !draft.showStale) }, { Text("SHOW STALE") })
+        }; Text("Filters remain separate from priority ranking. Unknown provider data is not silently classified as needed.", color = MapMuted, fontSize = 11.sp) }
+    } }, confirmButton = { Button({
+        if (segmentProfile == BandMapSegmentProfile.CUSTOM) {
+            val band = controller.settings.selectedBands.first(); val definition = bandMapBands.first { it.name == band }
+            val low = customLower.toLongOrNull()?.times(1_000); val high = customUpper.toLongOrNull()?.times(1_000)
+            if (low != null && high != null && low >= definition.lowerHz && high <= definition.upperHz && high > low) draft = draft.copy(segments = listOf(BandMapSegment(band, "Custom display range", low, high)))
+        }
+        controller.updateSettings { current -> current.copy(presets = current.presets.map { if (it.id == preset.id) it.copy(filter = draft) else it }) }; dismiss()
+    }) { Text("APPLY") } },
         dismissButton = { TextButton(dismiss) { Text("CANCEL") } })
 }
+
+@Composable private fun ChipFlow(content: @Composable RowScope.() -> Unit) = Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+    horizontalArrangement = Arrangement.spacedBy(5.dp), content = content)
 
 @Composable
 internal fun BandMapSettingsPanel(controller: BandMapController) {

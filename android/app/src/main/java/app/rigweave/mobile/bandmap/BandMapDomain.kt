@@ -10,6 +10,7 @@ internal enum class BandMapModeFamily { CW, PHONE, DIGI, FM, AM, UNKNOWN }
 internal enum class BandMapAgeState { CURRENT, AGING, STALE, EXPIRED, PINNED_STALE }
 internal enum class BandMapLayoutMode { MULTI_VERTICAL, MULTI_HORIZONTAL, GRID_OVERVIEW, SINGLE_EXPANDED }
 internal enum class BandMapDirection { LOW_TO_HIGH, HIGH_TO_LOW }
+internal enum class BandMapSegmentProfile { WHOLE, CW_DISPLAY, PHONE_DISPLAY, DIGI_DISPLAY, CUSTOM }
 internal enum class BandMapEvidenceKind { CURRENT_OBSERVED, EMPIRICAL_OUTLOOK, HISTORICAL_PERSONAL }
 internal enum class BandMapEvidenceStatus { POSITIVE, NEUTRAL, NEGATIVE, UNKNOWN, UNAVAILABLE }
 internal enum class BandMapNeedTruth { NEEDED, WORKED, CONFIRMED, UNKNOWN }
@@ -48,6 +49,17 @@ internal data class BandMapSegment(
     val upperHz: Long = bandMapBands.firstOrNull { it.name == band }?.upperHz ?: Long.MAX_VALUE,
 ) {
     init { require(lowerHz >= 0 && upperHz > lowerHz) }
+}
+
+internal fun bandMapDisplaySegment(band: String, profile: BandMapSegmentProfile): BandMapSegment {
+    val definition = bandMapBands.first { it.name == band }
+    val width = definition.upperHz - definition.lowerHz
+    return when (profile) {
+        BandMapSegmentProfile.WHOLE, BandMapSegmentProfile.CUSTOM -> BandMapSegment(band)
+        BandMapSegmentProfile.CW_DISPLAY -> BandMapSegment(band, "CW display slice", definition.lowerHz, definition.lowerHz + width * 20 / 100)
+        BandMapSegmentProfile.DIGI_DISPLAY -> BandMapSegment(band, "Digi display slice", definition.lowerHz + width * 10 / 100, definition.lowerHz + width * 40 / 100)
+        BandMapSegmentProfile.PHONE_DISPLAY -> BandMapSegment(band, "Phone display slice", definition.lowerHz + width * 30 / 100, definition.upperHz)
+    }
 }
 
 internal data class BandMapSourceObservation(
