@@ -98,6 +98,15 @@ data class GroupsIoSearchResult(
 
 data class GroupsIoCacheStats(val topics: Int = 0, val messages: Int = 0, val downloadedAttachments: Int = 0)
 
+data class GroupsIoHomeSummary(
+    val recent: List<GroupsIoSearchResult> = emptyList(),
+    val needsAttention: Int = 0,
+    val archiveState: String = "not_started",
+    val archiveDownloaded: Int = 0,
+    val lastRefreshMillis: Long = 0,
+    val offline: Boolean = true,
+)
+
 internal data class GroupsIoPage<T>(val values: List<T>, val nextPageToken: String?, val hasMore: Boolean)
 internal fun groupsIoDestinationVisible(enabled: Boolean, compact: Boolean): Boolean = enabled && !compact
 internal fun groupsIoPagination(root: JSONObject): Pair<String?, Boolean> {
@@ -289,6 +298,14 @@ internal class GroupsIoDatabase(private val appContext: Context, private val dat
         "SELECT api_message_id,group_id,topic_id,message_number,reply_to_number,subject,author_name,created,body_plain,moderated,deleted,has_attachments FROM messages WHERE topic_id=? ORDER BY message_number LIMIT ? OFFSET ?",
         arrayOf(topicId.toString(), limit.coerceIn(1, 100).toString(), offset.coerceAtLeast(0).toString())
     ).use { cursor -> buildList { while (cursor.moveToNext()) add(GroupsIoMessage(cursor.longOrNull(0), cursor.getLong(1), cursor.getLong(2), cursor.getLong(3), cursor.longOrNull(4), cursor.getString(5), cursor.getString(6), cursor.getLong(7), cursor.getString(8), cursor.getInt(9) != 0, cursor.getInt(10) != 0, cursor.getInt(11) != 0)) } }
+
+    fun recentMessages(limit: Int = 5): List<GroupsIoSearchResult> = readableDatabase.rawQuery(
+        """SELECT m.group_id,m.topic_id,m.message_number,g.title,t.subject,m.author_name,m.created,
+            substr(m.body_plain,1,180) FROM messages m JOIN groups g ON g.group_id=m.group_id
+            JOIN topics t ON t.topic_id=m.topic_id WHERE m.deleted=0 ORDER BY m.created DESC LIMIT ?""",
+        arrayOf(limit.coerceIn(1, 20).toString())
+    ).use { cursor -> buildList { while (cursor.moveToNext()) add(GroupsIoSearchResult(cursor.getLong(0), cursor.getLong(1),
+        cursor.getLong(2), cursor.getString(3), cursor.getString(4), cursor.getString(5), cursor.getLong(6), cursor.getString(7))) } }
 
     fun search(query: String, groupId: Long? = null, topicId: Long? = null, limit: Int = 40): List<GroupsIoSearchResult> {
         val match = query.trim().split(Regex("\\s+")).filter(String::isNotBlank).joinToString(" AND ") { "\"${it.replace("\"", "\"\"")}\"*" }
@@ -634,6 +651,15 @@ class GroupsIoController(context: Context) {
     var selectedMessage by mutableStateOf<GroupsIoMessage?>(null); private set
     var incomingAttachments by mutableStateOf<List<GroupsIoIncomingAttachment>>(emptyList()); private set
     var showAttachments by mutableStateOf(false); private set
+    private var homeRecent by mutableStateOf<List<GroupsIoSearchResult>>(emptyList())
+    val homeSummary: GroupsIoHomeSummary get() = GroupsIoHomeSummary(
+        recent = homeRecent,
+        needsAttention = localDrafts.count { it.state !in setOf(GroupsIoOutboxState.POSTED, GroupsIoOutboxState.PENDING_MODERATION) },
+        archiveState = archiveProgress.state,
+        archiveDownloaded = archiveProgress.downloaded,
+        lastRefreshMillis = lastSyncMillis,
+        offline = !connected,
+    )
     private var topicNextToken: String? = null
     private var messageNextToken: String? = null
     private var onlineSearchNextToken: String? = null
@@ -648,7 +674,8 @@ class GroupsIoController(context: Context) {
     fun loadCachedGroups() {
         if (!enabled) return
         scope.launch { val db = db(); val loaded = db.groups(); val savedDrafts = db.drafts(); val stats = db.cacheStats(); val size = db.sizeBytes()
-            withContext(Dispatchers.Main) { groups = loaded; localDrafts = savedDrafts; cacheStats = stats; storageBytes = size } }
+            val summary = buildHomeSummary(db, savedDrafts)
+            withContext(Dispatchers.Main) { groups = loaded; localDrafts = savedDrafts; cacheStats = stats; storageBytes = size; homeRecent = summary.recent } }
     }
 
     fun connectAndVerify(candidate: String) = replaceOperation {
@@ -699,7 +726,8 @@ class GroupsIoController(context: Context) {
             runCatching { api.messages(credentials.load(), groupId, topicId) }.onSuccess { page ->
                 val now = System.currentTimeMillis(); db().applyMessages(groupId, topicId, page.values, page.nextPageToken, page.hasMore, now)
                 val savedMessages = db().messages(topicId); val stats = db().cacheStats(); val size = db().sizeBytes()
-                withContext(Dispatchers.Main) { messages = savedMessages; messageNextToken = page.nextPageToken; messagesHaveMore = page.hasMore; status = "Thread synced"; cacheStats = stats; storageBytes = size }
+                val recent = db().recentMessages()
+                withContext(Dispatchers.Main) { messages = savedMessages; messageNextToken = page.nextPageToken; messagesHaveMore = page.hasMore; status = "Thread synced"; cacheStats = stats; storageBytes = size; homeRecent = recent }
             }.onFailure { publishFailure("messages", topicId.toString(), it) }
         }
     }
@@ -960,6 +988,14 @@ class GroupsIoController(context: Context) {
     @Deprecated("Use clearDownloadedCache") fun deleteDownloadedData() = clearDownloadedCache()
 
     fun close() { operation?.cancel(); scope.cancel(); database?.close() }
+    private fun buildHomeSummary(database: GroupsIoDatabase, drafts: List<GroupsIoLocalDraft> = database.drafts()) = GroupsIoHomeSummary(
+        recent = database.recentMessages(),
+        needsAttention = drafts.count { it.state !in setOf(GroupsIoOutboxState.POSTED, GroupsIoOutboxState.PENDING_MODERATION) },
+        archiveState = archiveProgress.state,
+        archiveDownloaded = archiveProgress.downloaded,
+        lastRefreshMillis = lastSyncMillis,
+        offline = !connected,
+    )
     private fun db(): GroupsIoDatabase = database ?: GroupsIoDatabase(appContext).also { database = it }
 
     private fun replaceOperation(block: suspend CoroutineScope.() -> Unit) {

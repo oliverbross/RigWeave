@@ -1,5 +1,7 @@
 package app.rigweave.mobile
 
+import app.rigweave.mobile.groupsio.GroupsIoController
+
 /*
 THESIS: A native ham-radio operations clock: one glance from station state to workable RF activity.
 OWN-WORLD: RigWeave Flightline instrumentation, with OpenHamClock's pinned dashboard density and map-first hierarchy.
@@ -46,6 +48,8 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -153,15 +157,17 @@ internal fun HamClockHomeScreen(
     openLogbook: () -> Unit,
     openRadio: () -> Unit,
     openDigi: () -> Unit,
+    groupsIo: GroupsIoController,
+    openGroupsIo: () -> Unit,
     homeForeground: Boolean,
+    operatingContext: OperatingContextSnapshot,
     requestReceiveTune: (Long, String?, String, String) -> Unit,
     openExactQso: (String) -> Unit,
 ) {
     val context = LocalContext.current
-    val stationId = wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }
-    val stationGrid = wavelog.selectedStation?.grid?.ifBlank { null } ?: app.stationGrid
-    val stationCall = wavelog.selectedStation?.callsign?.ifBlank { null }
-        ?: app.stationCallsign.ifBlank { features.clusterCallsign }
+    val stationId = operatingContext.stationProfileId.value.takeIf { wavelog.logMode == LogMode.WAVELOG }
+    val stationGrid = operatingContext.stationGrid.value
+    val stationCall = operatingContext.stationCallsign.value
     val hamClockPrefs = remember(context) { context.getSharedPreferences("rigweave-hamclock-layout", Context.MODE_PRIVATE) }
     val settingsDocument = settingsCoordinator.document
     val finishLineCache = remember(context) { File(context.cacheDir, "hamclock-finishline").apply(File::mkdirs) }
@@ -738,6 +744,7 @@ internal fun HamClockHomeScreen(
                     features.refreshSolar(); portable.refreshAll()
                 }, { showShackDisplay = true }) { configureDashboard = true }
                 if (!settingsDocument.settings.display.immersive) OperationsHomeSummary(operations, openOperations)
+                if (groupsIo.enabled) GroupsIoHomeCard(groupsIo, openGroupsIo)
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(panelGap)) {
                     if (leftPanels.isNotEmpty()) LazyColumn(Modifier.widthIn(min = 300.dp, max = 350.dp).weight(.26f), verticalArrangement = Arrangement.spacedBy(panelGap)) {
                         items(leftPanels, key = HamClockPanelPreference::id) { panel ->
@@ -770,6 +777,7 @@ internal fun HamClockHomeScreen(
                     features.refreshSolar(); portable.refreshAll()
                 }, { showShackDisplay = true }) { configureDashboard = true } }
                 if (!settingsDocument.settings.display.immersive) item { OperationsHomeSummary(operations, openOperations) }
+                if (groupsIo.enabled) item { GroupsIoHomeCard(groupsIo, openGroupsIo) }
                 items(compactPanels, key = HamClockPanelPreference::id) { panel ->
                     val height = if (panel.id == HamClockPanelId.MAP) {
                         if (maxWidth < 500.dp) (290 * panel.rowSpan).dp else (390 * panel.rowSpan).dp
@@ -811,6 +819,21 @@ internal fun HamClockHomeScreen(
             { channel, force -> solarImageRequest = channel to force }, openExactQso,
             { showShackDisplay = false },
         )
+    }
+}
+
+@Composable private fun GroupsIoHomeCard(controller: GroupsIoController, open: () -> Unit) {
+    val summary = controller.homeSummary
+    Card(Modifier.fillMaxWidth().clickable(onClick = open), colors = CardDefaults.cardColors(containerColor = HcPanel)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("GROUPS.IO · ${if (summary.offline) "OFFLINE CACHE" else "CONNECTED"}", color = HcAmber, fontWeight = FontWeight.Bold)
+                Text("${summary.recent.size} recent cached · ${summary.needsAttention} need attention · archive ${summary.archiveState} ${summary.archiveDownloaded}",
+                    color = HcMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Text("OPEN", color = HcGreen, fontWeight = FontWeight.Bold)
+        }
     }
 }
 

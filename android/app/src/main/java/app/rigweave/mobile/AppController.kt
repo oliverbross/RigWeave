@@ -53,6 +53,7 @@ internal fun defaultSpotStatusColour(dimension: String, status: String): Int =
 
 class AppController(private val context: Context) {
     private val prefs = context.getSharedPreferences("rigweave-app", Context.MODE_PRIVATE)
+    private val configurationRecovery = ConfigurationRecovery(context.applicationContext)
     private val needsDxccCountryColumnMigration = !prefs.getBoolean("logbook_dxcc_country_v1", false)
     var fieldProfile by mutableStateOf(runCatching { FieldProfile.valueOf(prefs.getString("profile", "DAY")!!) }.getOrDefault(FieldProfile.DAY)); private set
     var radioFamily by mutableStateOf(decodeRadioFamily(prefs.getString("radio_family", null))); private set
@@ -247,17 +248,16 @@ class AppController(private val context: Context) {
     }
 
     fun backupNow(): String = runCatching {
-        val hamClock = context.getSharedPreferences("rigweave-hamclock-layout", Context.MODE_PRIVATE)
-        val payload = JSONObject().put("version", 2).put("created_at", System.currentTimeMillis())
-            .put("preferences", JSONObject(prefs.all)).put("hamclock_layout", JSONObject(hamClock.all))
-        context.openFileOutput("rigweave-recovery.json", Context.MODE_PRIVATE).bufferedWriter().use { it.write(payload.toString(2)) }
+        disarmAll()
+        context.openFileOutput("rigweave-recovery.json", Context.MODE_PRIVATE).bufferedWriter().use {
+            it.write(configurationRecovery.export())
+        }
         "Backup captured locally"
     }.getOrElse { "Backup failed: ${it.message}" }
 
     fun verifyBackup(): String = runCatching {
-        val row = JSONObject(recoveryText())
-        require(row.getInt("version") in 1..2 && row.has("preferences"))
-        "Recovery data verified"
+        val preview = configurationRecovery.preview(recoveryText())
+        "Recovery data verified · ${preview.sections.size} sections · ${preview.changeCount} changes"
     }.getOrElse { "Backup verification failed: ${it.message}" }
 
     fun recoveryPath(): String = context.filesDir.resolve("rigweave-recovery.json").absolutePath
@@ -265,30 +265,19 @@ class AppController(private val context: Context) {
     fun recoveryText(): String = context.openFileInput("rigweave-recovery.json").bufferedReader().use { it.readText() }
 
     fun reviewRecovery(text: String): String = runCatching {
-        val row = JSONObject(text); require(row.getInt("version") in 1..2)
-        val count = row.getJSONObject("preferences").length() + row.optJSONObject("hamclock_layout")?.length().orZero()
-        "Valid recovery · $count settings"
+        val preview = configurationRecovery.preview(text)
+        "Valid recovery · ${preview.sections.size} sections · ${preview.changeCount} changes" +
+            preview.sections.flatMap { it.mappingTasks }.takeIf(List<String>::isNotEmpty)?.joinToString("\n", prefix = "\nMapping tasks · ").orEmpty()
     }.getOrElse { "Invalid recovery: ${it.message}" }
 
-    fun restoreRecovery(text: String): String = runCatching {
-        val row = JSONObject(text); require(row.getInt("version") in 1..2)
-        restorePreferences(prefs, row.getJSONObject("preferences"))
-        row.optJSONObject("hamclock_layout")?.let { values ->
-            restorePreferences(context.getSharedPreferences("rigweave-hamclock-layout", Context.MODE_PRIVATE), values)
-        }
-        "Recovery restored · restart app to load all settings"
+    fun previewRecovery(text: String): ConfigurationPreview = configurationRecovery.preview(text)
+
+    fun restoreRecovery(text: String, sections: Set<String> = previewRecovery(text).selectedByDefault): String = runCatching {
+        disarmAll()
+        val preview = configurationRecovery.restore(text, sections)
+        disarmAll()
+        "Recovery restored · ${sections.size}/${preview.sections.size} sections · restart required"
     }.getOrElse { "Restore failed: ${it.message}" }
-
-    private fun restorePreferences(store: android.content.SharedPreferences, values: JSONObject) {
-        val editor = store.edit().clear()
-        values.keys().forEach { key -> when (val value = values.get(key)) {
-            is Boolean -> editor.putBoolean(key, value); is Int -> editor.putInt(key, value); is Long -> editor.putLong(key, value)
-            is Double -> editor.putFloat(key, value.toFloat()); is String -> editor.putString(key, value)
-        } }
-        editor.commit()
-    }
-
-    private fun Int?.orZero() = this ?: 0
 
     private fun loadPresets(): List<RadioPreset> = runCatching {
         val rows = JSONArray(prefs.getString("presets", "[]"))

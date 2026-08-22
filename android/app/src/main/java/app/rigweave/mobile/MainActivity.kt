@@ -189,13 +189,15 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val features = remember { FeatureController(context) }
     val app = remember { AppController(context) }
     val wavelog = remember { WavelogController(context, database) }
+    val operatingContext = remember { OperatingContextAuthority() }
     val neuralDx = remember {
         NeuralDxController(context, database, publicProviders, operations.satellites,
             wavelog.selectedStation?.grid?.ifBlank { null } ?: app.stationGrid)
     }
     val wavelogNative = remember { WavelogNativeController(database, wavelog, mutations) }
     val flex = remember { FlexRadioController(context, { app.preferredFlexStation }, app::savePreferredFlexStation) { app.manualFlexIp } }
-    val syncHub = remember { SyncHubController(context, database, { wavelog.logMode }, { app.stationGrid }) }
+    val syncHub = remember { SyncHubController(context, database, { wavelog.logMode },
+        { operatingContext.snapshot.stationGrid.value.ifBlank { app.stationGrid } }) }
     val callbook = remember { CallbookController(context) { app.stationCallsign } }
     val cty = remember { CtyController(context) }
     val audio = remember { AudioMonitorController(context) }
@@ -210,6 +212,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val eqProfiles = remember { EqProfileStore(context) }
     val eqStudio = remember { EqStudioController(transport, { radio }, eqAudio, eqProfiles) }
     val groupsIo = remember { GroupsIoController(context) }
+    val connectivity = remember { context.getSystemService(ConnectivityManager::class.java) }
+    var networkAvailable by remember { mutableStateOf(connectivity.activeNetwork != null) }
     var foreground by remember { mutableStateOf(true) }
     val voiceTx = remember { VoiceMacroTransmitController(context, transport, audio, voiceStore, app,
         radioState = { radio }, foreground = { foreground }, audioOperationIdle = { voiceAudio.state is VoiceAudioState.Idle }, onFrames = { frames ->
@@ -234,20 +238,46 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     var pendingHomeQsoId by remember { mutableStateOf<String?>(null) }
     var pendingVoiceSlot by remember { mutableStateOf<Int?>(null) }
     var voiceArmedMode by remember { mutableStateOf<String?>(null) }
+    fun dispatchWorkspaceAction(action: WorkspaceAction) {
+        val route = WorkspaceActionRouter.resolve(action)
+        destination = when (action.destination) {
+            WorkspaceDestination.HOME -> Destination.HOME
+            WorkspaceDestination.RADIO -> Destination.RADIO
+            WorkspaceDestination.DIGI -> Destination.DIGI
+            WorkspaceDestination.LOGBOOK -> Destination.LOGBOOK
+            WorkspaceDestination.PROGRESS -> Destination.PROGRESS
+            WorkspaceDestination.SYNC -> Destination.SYNC
+            WorkspaceDestination.DX -> Destination.DX
+            WorkspaceDestination.PORTABLE -> Destination.PORTABLE
+            WorkspaceDestination.OPERATIONS -> Destination.OPERATIONS
+            WorkspaceDestination.GROUPS_IO -> Destination.GROUPS_IO
+            WorkspaceDestination.SETTINGS -> Destination.SETTINGS
+        }
+        action.qsoId.takeIf(String::isNotBlank)?.let { pendingHomeQsoId = it }
+        action.groupsIoGroupId?.let(groupsIo::selectGroup)
+        action.groupsIoTopicId?.let(groupsIo::selectTopic)
+        route.receiveReview?.let { pendingHomeReceiveTune = it }
+    }
     val digi = remember { DigiController(context, audio, transport, flex, { app.radioFamily },
-        { app.stationCallsign }, { app.stationGrid }, DigiDependencies(
+        { operatingContext.snapshot.stationCallsign.value.ifBlank { app.stationCallsign } },
+        { operatingContext.snapshot.stationGrid.value.ifBlank { app.stationGrid } }, DigiDependencies(
             database = database, mutations = mutations, cty = cty, radioState = { radio },
-            stationProfile = { wavelog.stationId },
-            stationLocation = { wavelog.selectedStation?.city.orEmpty() },
-            operatorCallsign = { activation.session?.setup?.operatorCallsign.orEmpty().ifBlank { app.stationCallsign } },
-            activationContext = { activation.session?.takeIf { it.state == PotaActivationState.ACTIVE }?.let { "POTA" to it.id } ?: ("" to "") },
+            stationProfile = { operatingContext.snapshot.stationProfileId.value },
+            stationLocation = { operatingContext.snapshot.stationLocation.value },
+            operatorCallsign = { operatingContext.snapshot.operatorCallsign.value.ifBlank { app.stationCallsign } },
+            activationContext = { operatingContext.snapshot.activationProgram.value to operatingContext.snapshot.activationSession.value },
             needsByCallsign = { progress.snapshot.needs.mapNotNull { need ->
                 (need.dxSpot?.callsign ?: need.portableSpot?.callsign ?: need.title).takeIf(String::isNotBlank)?.uppercase()?.let { it to need.reasons }
             }.groupBy({ it.first }, { it.second }).mapValues { entry -> entry.value.flatten().distinct() } },
             liveSpots = { features.liveSpots },
-            onOpenLogbook = { call -> progress.requestLogbook(logbookFilterForDimension("callsign", call)); destination = Destination.LOGBOOK },
-            onOpenDx = { destination = Destination.DX },
-            onOpenCallbook = { call -> callbook.lookup(call) {}; destination = Destination.RADIO },
+            onOpenLogbook = { call -> progress.requestLogbook(logbookFilterForDimension("callsign", call));
+                dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.LOGBOOK, callsign = call,
+                    source = "Digi decode", reason = "Open exact callsign history")) },
+            onOpenDx = { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.DX,
+                source = "Digi decode", reason = "Open DX details")) },
+            onOpenCallbook = { call -> callbook.lookup(call) {};
+                dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.RADIO, callsign = call,
+                    source = "Digi decode", reason = "Open exact callbook identity")) },
             nextIssPass = {
                 operations.satellites.passes.firstOrNull { row -> row.satellite.name.contains("ISS", true) }?.let { row ->
                     DigiIssPass(row.satellite.name, row.pass.aos, row.pass.los, row.pass.maximumElevationDeg)
@@ -260,6 +290,46 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         )) }
     LaunchedEffect(foreground) { digi.onForegroundChanged(foreground) }
     LaunchedEffect(radio.identity, radio.frequencyHz, radio.connected) { digi.onRadioStateChanged(radio) }
+    val contextGeneration = remember(app.stationCallsign, app.stationGrid, app.activationProgram, app.activationReference,
+        wavelog.stationId, wavelog.selectedStation, activation.session, radio, foreground, networkAvailable,
+        database.changeToken(), cty.dataRevision, neuralDx.lastRefreshEpoch, features.liveSpots.size) {
+        operatingContext.beginUpdate()
+    }
+    val contextSnapshot = remember(contextGeneration) {
+        val selectedStation = wavelog.selectedStation
+        val session = activation.session
+        val stationCall = selectedStation?.callsign?.ifBlank { null } ?: app.stationCallsign.ifBlank { features.clusterCallsign }
+        val stationGrid = selectedStation?.grid?.ifBlank { null } ?: app.stationGrid
+        OperatingContextSnapshot(
+            generation = contextGeneration,
+            stationProfileId = ContextValue(wavelog.stationId, "WavelogController.stationId"),
+            stationCallsign = ContextValue(stationCall, "Wavelog selected station -> AppController fallback"),
+            operatorCallsign = ContextValue(session?.setup?.operatorCallsign.orEmpty().ifBlank { app.stationCallsign }, "PotaActivationController -> AppController fallback"),
+            stationGrid = ContextValue(stationGrid, "Wavelog selected station -> AppController fallback"),
+            stationLocation = ContextValue(selectedStation?.city.orEmpty(), "WavelogController.selectedStation"),
+            wavelogBindingId = ContextValue(wavelog.stationId, "WavelogController"),
+            wavelogRemoteStationId = ContextValue(wavelog.stationId, "WavelogController"),
+            activationProgram = ContextValue(if (session != null) "POTA" else app.activationProgram, "PotaActivationController -> AppController fallback"),
+            activationReference = ContextValue(session?.setup?.primaryReference ?: app.activationReference, "PotaActivationController -> AppController fallback"),
+            activationSession = ContextValue(session?.id.orEmpty(), "PotaActivationController"),
+            radioFamily = ContextValue(app.radioFamily.name, "AppController"),
+            radioModel = ContextValue(radio.model, "radio backend"),
+            radioIdentity = ContextValue(radio.identity, "radio backend"),
+            connected = ContextValue(radio.connected, "radio backend"),
+            receiveFrequencyHz = ContextValue(radio.effectiveRxHz.takeIf { it > 0 } ?: radio.frequencyHz, "radio backend"),
+            transmitFrequencyHz = ContextValue((radio.effectiveTxHz.takeIf { it > 0 } ?: radio.frequencyBHz.takeIf { it > 0 }), "radio backend"),
+            band = ContextValue(bandForFrequency(radio.frequencyHz), "QsoDatabase.bandForFrequency"),
+            mode = ContextValue(radio.mode, "radio backend"),
+            submode = ContextValue(radio.dataSubmode.takeIf { it >= 0 }?.toString().orEmpty(), "radio backend"),
+            split = ContextValue(radio.split, "radio backend"),
+            radioState = ContextValue(if (radio.transmitting) "TX" else "RX", "radio backend"),
+            networkAvailable = ContextValue(networkAvailable, "ConnectivityManager"),
+            foreground = ContextValue(foreground, "Android lifecycle"),
+            qsoDatabaseRevision = ContextValue(database.changeToken(), "QsoDatabase"),
+            providerGeneration = ContextValue(cty.dataRevision + neuralDx.lastRefreshEpoch + features.liveSpots.size, "CTY + Neural + FeatureController"),
+        )
+    }
+    SideEffect { operatingContext.publish(contextGeneration, contextSnapshot) }
     val scope = rememberCoroutineScope()
     fun accept(result: UsbResult) {
         when (result) {
@@ -315,9 +385,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     LaunchedEffect(features, database, wavelog, cty) {
         features.startWorkedLogSync(database, wavelog, cty)
     }
-    val hamClockStationCall = wavelog.selectedStation?.callsign?.ifBlank { null }
-        ?: app.stationCallsign.ifBlank { features.clusterCallsign }
-    val hamClockStationGrid = wavelog.selectedStation?.grid?.ifBlank { null } ?: app.stationGrid
+    val hamClockStationCall = contextSnapshot.stationCallsign.value
+    val hamClockStationGrid = contextSnapshot.stationGrid.value
     LaunchedEffect(hamClockSettings.document.settings.cluster.enabled, hamClockSettings.document.settings.rbn, foreground, hamClockStationCall) {
         features.setForeground(foreground)
         features.applyRbnPreference(hamClockSettings.document.settings.rbn, hamClockStationCall)
@@ -388,10 +457,10 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    val connectivity = remember { context.getSystemService(ConnectivityManager::class.java) }
     DisposableEffect(connectivity) {
         val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) { wavelogNative.onConnectivityAvailable() }
+            override fun onAvailable(network: Network) { networkAvailable = true; wavelogNative.onConnectivityAvailable() }
+            override fun onLost(network: Network) { networkAvailable = connectivity.activeNetwork != null }
         }
         connectivity.registerDefaultNetworkCallback(callback)
         onDispose { runCatching { connectivity.unregisterNetworkCallback(callback) } }
@@ -478,28 +547,52 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             }
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
-                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
+                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.GROUPS_IO }, { destination = Destination.OPERATIONS },
-                { row -> pendingPortableDraft = operations.satellites.normalLoggerDraft(row); destination = Destination.RADIO },
-                { frequency, mode, source, reason -> pendingHomeReceiveTune = HomeReceiveTuneReview(frequency, mode, source, reason) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.DX, source = "Navigation", reason = "Open DX workspace")) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.PORTABLE, source = "Navigation", reason = "Open Portable workspace")) },
+                { activation.requestOpen(); dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.PORTABLE, source = "Home", reason = "Open activation setup")) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.LOGBOOK, source = "Navigation", reason = "Open Logbook")) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.SYNC, source = "Navigation", reason = "Open reconciliation")) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.PROGRESS, source = "Navigation", reason = "Open Log Intelligence")) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.DIGI, source = "Navigation", reason = "Open Digi")) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.GROUPS_IO, source = "Home", reason = "Open Groups.io exact destination")) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.OPERATIONS, source = "Navigation", reason = "Open Operations")) },
+                { row -> pendingPortableDraft = operations.satellites.normalLoggerDraft(row);
+                    dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.RADIO, noradId = row.satellite.noradId,
+                        source = "Satellite Operations", reason = "Prepare exact logger context")) },
+                { frequency, mode, source, reason -> dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.RADIO,
+                    frequencyHz = frequency, mode = mode.orEmpty(), source = source, reason = reason)) },
                 pendingHomeQsoId, { pendingHomeQsoId = null },
-                { id -> pendingHomeQsoId = id; destination = Destination.LOGBOOK })
+                { id -> dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.LOGBOOK, qsoId = id,
+                    source = "Home QSO marker", reason = "Open exact QSO")) })
         } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
             Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.OPERATIONS || it == Destination.GROUPS_IO }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
-                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
+                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
-                { destination = Destination.DX }, { destination = Destination.PORTABLE }, { activation.requestOpen(); destination = Destination.PORTABLE }, { destination = Destination.LOGBOOK }, { destination = Destination.SYNC }, { destination = Destination.PROGRESS }, { destination = Destination.DIGI }, { destination = Destination.GROUPS_IO }, { destination = Destination.OPERATIONS },
-                { row -> pendingPortableDraft = operations.satellites.normalLoggerDraft(row); destination = Destination.RADIO },
-                { frequency, mode, source, reason -> pendingHomeReceiveTune = HomeReceiveTuneReview(frequency, mode, source, reason) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.DX, source = "Navigation", reason = "Open DX workspace")) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.PORTABLE, source = "Navigation", reason = "Open Portable workspace")) },
+                { activation.requestOpen(); dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.PORTABLE, source = "Home", reason = "Open activation setup")) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.LOGBOOK, source = "Navigation", reason = "Open Logbook")) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.SYNC, source = "Navigation", reason = "Open reconciliation")) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.PROGRESS, source = "Navigation", reason = "Open Log Intelligence")) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.DIGI, source = "Navigation", reason = "Open Digi")) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.GROUPS_IO, source = "Home", reason = "Open Groups.io exact destination")) },
+                { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.OPERATIONS, source = "Navigation", reason = "Open Operations")) },
+                { row -> pendingPortableDraft = operations.satellites.normalLoggerDraft(row);
+                    dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.RADIO, noradId = row.satellite.noradId,
+                        source = "Satellite Operations", reason = "Prepare exact logger context")) },
+                { frequency, mode, source, reason -> dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.RADIO,
+                    frequencyHz = frequency, mode = mode.orEmpty(), source = source, reason = reason)) },
                 pendingHomeQsoId, { pendingHomeQsoId = null },
-                { id -> pendingHomeQsoId = id; destination = Destination.LOGBOOK })
+                { id -> dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.LOGBOOK, qsoId = id,
+                    source = "Home QSO marker", reason = "Open exact QSO")) })
         } }
     }
     InAppBrowserDialog(inAppBrowser)
@@ -531,7 +624,8 @@ private fun navIcon(item: Destination) = when (item) {
     syncHub: SyncHubController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
     portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
     transport: UsbRadioTransport, flex: FlexRadioController, digi: DigiController, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
-    eqStudio: EqStudioController, groupsIo: GroupsIoController, compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
+    eqStudio: EqStudioController, groupsIo: GroupsIoController, operatingContext: OperatingContextSnapshot,
+    compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
     tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openDx: () -> Unit, openPortable: () -> Unit,
     openActivation: () -> Unit, openLogbook: () -> Unit, openSync: () -> Unit, openProgress: () -> Unit, openDigi: () -> Unit,
@@ -581,9 +675,9 @@ private fun navIcon(item: Destination) = when (item) {
         "WSPR" to if (!hamClockSettings.document.settings.wspr.personalEnabled) HamClockEvidenceAvailability.DISABLED
             else signalAvailability(neuralDx.wsprPersonal.sourceState),
     ) }
-    val bandStationId = wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }
-    val bandStationCall = wavelog.selectedStation?.callsign?.ifBlank { null } ?: app.stationCallsign
-    val bandStationGrid = wavelog.selectedStation?.grid?.ifBlank { null } ?: app.stationGrid
+    val bandStationId = operatingContext.stationProfileId.value.takeIf { wavelog.logMode == LogMode.WAVELOG }
+    val bandStationCall = operatingContext.stationCallsign.value
+    val bandStationGrid = operatingContext.stationGrid.value
     LaunchedEffect(bandEvidence, bandAvailability, hamClockSettings.document.settings.bandHealth,
         database.changeToken(), bandStationId, bandStationCall) {
         progress.refreshBandHealth(bandEvidence, bandAvailability, hamClockSettings.document.settings.bandHealth,
@@ -642,7 +736,7 @@ private fun navIcon(item: Destination) = when (item) {
     when (destination) {
         Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, callbook,
             publicProviders, hamClockSettings, operations, progress.bandHealthSnapshot, send, openDx, openPortable, openProgress, openOperations,
-            openLogbook, closeEq, openDigi, foreground, requestHomeReceiveTune,
+            openLogbook, closeEq, openDigi, groupsIo, openGroupsIo, foreground, operatingContext, requestHomeReceiveTune,
             openHomeQso)
         Destination.RADIO -> Column(Modifier.fillMaxSize()) {
             if (compact) SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
@@ -703,8 +797,8 @@ private fun navIcon(item: Destination) = when (item) {
                 requestHomeReceiveTune(frequency, mode, "Operations satellite receive preview",
                     "Review receive-only downlink change")
             }, prepareSatelliteLogger)
-        Destination.SETTINGS -> SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, callbook, cty, audio, panadapter, app,
-            transport, flex, voiceStore, voiceAudio, voiceTx, groupsIo, openEq, openSync, openDigi, openGroupsIo, connect, direct)
+        Destination.SETTINGS -> SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, syncHub, callbook, cty, audio, panadapter, app,
+            transport, flex, digi, voiceStore, voiceAudio, voiceTx, groupsIo, operatingContext, openEq, openSync, openDigi, openGroupsIo, connect, direct)
     }
 }
 
@@ -3924,10 +4018,11 @@ private fun statusColourForeground(argb: Int): Color {
 
 @Composable private fun SettingsScreen(state: RadioState, detail: String, database: QsoDatabase,
     mutations: QsoMutationCoordinator, features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController,
-    callbook: CallbookController, cty: CtyController,
+    syncHub: SyncHubController, callbook: CallbookController, cty: CtyController,
     audio: AudioMonitorController, panadapter: PanadapterController, app: AppController, transport: UsbRadioTransport,
-    flex: FlexRadioController, voiceStore: VoiceMacroStore,
+    flex: FlexRadioController, digi: DigiController, voiceStore: VoiceMacroStore,
     voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, groupsIo: GroupsIoController,
+    operatingContext: OperatingContextSnapshot,
     openEq: () -> Unit, openSync: () -> Unit, openDigi: () -> Unit, openGroupsIo: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
     var section by remember { mutableStateOf(SettingsSection.RADIO) }
@@ -3980,18 +4075,36 @@ private fun statusColourForeground(argb: Int): Color {
     LaunchedEffect(transport.selected?.sessionKey, transport.candidates) {
         if (!catSelectionDirty) pendingCatKey = transport.selected?.sessionKey
     }
-    var restorePayload by remember { mutableStateOf<String?>(null) }; val context = LocalContext.current
+    var restorePayload by remember { mutableStateOf<String?>(null) }
+    var recoveryPreview by remember { mutableStateOf<ConfigurationPreview?>(null) }
+    val selectedRecoverySections = remember { mutableStateListOf<String>() }
+    var supportBundleBytes by remember { mutableStateOf<ByteArray?>(null) }
+    val context = LocalContext.current
     var stability by remember { mutableStateOf<StabilitySnapshot?>(null) }
     var confirmProjectionRebuild by remember { mutableStateOf(false) }
     fun refreshStability() { settingsScope.launch { stability = withContext(Dispatchers.IO) { StabilityDiagnostics.snapshot(context, database) } } }
-    LaunchedEffect(section) { if (section == SettingsSection.DIAG) refreshStability() }
+    LaunchedEffect(section) { if (section in setOf(SettingsSection.HEALTH, SettingsSection.DIAG)) refreshStability() }
     val exportRecovery = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         uri?.let { runCatching { context.contentResolver.openOutputStream(it)?.bufferedWriter()?.use { writer -> writer.write(app.recoveryText()) } }
             .onSuccess { systemMessage = "Recovery file exported" }.onFailure { error -> systemMessage = "Export failed: ${error.message}" } }
     }
+    val exportSupport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        val bytes = supportBundleBytes
+        supportBundleBytes = null
+        if (uri != null && bytes != null) runCatching { context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: error("Support destination unavailable") }
+            .onSuccess { systemMessage = "Sanitized support bundle exported" }
+            .onFailure { systemMessage = "Support export failed: ${it.message}" }
+    }
     val openRecovery = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { runCatching { context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader -> reader.readText() }.orEmpty() }
-            .onSuccess { payload -> systemMessage = app.reviewRecovery(payload); if (systemMessage.startsWith("Valid")) restorePayload = payload }
+            .onSuccess { payload ->
+                runCatching { app.previewRecovery(payload) }.onSuccess { preview ->
+                    recoveryPreview = preview
+                    selectedRecoverySections.clear(); selectedRecoverySections.addAll(preview.selectedByDefault)
+                    restorePayload = payload
+                    systemMessage = app.reviewRecovery(payload)
+                }.onFailure { error -> systemMessage = "Restore review failed: ${error.message}" }
+            }
             .onFailure { error -> systemMessage = "Restore review failed: ${error.message}" } }
     }
     val exportAdif = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-adif")) { uri ->
@@ -4501,9 +4614,23 @@ private fun statusColourForeground(argb: Int): Color {
             }
         }
         if (section == SettingsSection.HEALTH) SettingsCard("SYSTEM HEALTH") {
+            val health = buildSystemHealthSnapshot(context, operatingContext, stability, wavelog.status, wavelog.pendingCount,
+                syncHub.records.count { it.state !in setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED) },
+                features.clusterStatus, neuralDx.status, groupsIo.status, groupsIo.cacheStats.messages, groupsIo.homeSummary.needsAttention,
+                digi.mode.name, digi.rxActive, digi.status)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 HealthTile("UI", "RUNNING", true, Modifier.weight(1f)); HealthTile("CAT / USB", if (state.connected) "LIVE" else "OFFLINE", state.connected, Modifier.weight(1f))
                 HealthTile("NETWORK / DX", features.clusterStatus, features.liveSpots.isNotEmpty(), Modifier.weight(1f)); HealthTile("WAVELOG", wavelog.status, wavelog.pendingCount == 0, Modifier.weight(1f))
+            }
+            health.cards.forEach { card ->
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Raised)) {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("${card.title.uppercase()} · ${card.state}", color = if (card.state == HealthState.HEALTHY) Healthy else Hold, fontWeight = FontWeight.Bold)
+                        Text(card.summary, color = Muted)
+                        if (card.counts.isNotEmpty()) Text(card.counts.entries.joinToString(" · ") { "${it.key} ${it.value}" }, color = Muted)
+                        Text(card.safeActions.joinToString(" · "), color = Amber)
+                    }
+                }
             }
             Text("CAT · $detail", color = Muted); Text("AUDIO IN · ${audio.inputName}", color = Muted); Text("AUDIO OUT · ${audio.outputName}", color = Muted)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -4511,6 +4638,11 @@ private fun statusColourForeground(argb: Int): Color {
                 OutlinedButton({ systemMessage = app.verifyBackup() }) { Text("VERIFY BACKUP") }
                 OutlinedButton({ systemMessage = app.backupNow(); if (systemMessage.startsWith("Backup")) exportRecovery.launch("rigweave-recovery.json") }) { Text("EXPORT RECOVERY") }
                 OutlinedButton({ openRecovery.launch(arrayOf("application/json", "text/plain")) }) { Text("RESTORE REVIEW") }
+                OutlinedButton({
+                    supportBundleBytes = SanitizedSupportBundle.build(health,
+                        mapOf("Wavelog" to "3.1.0@af325614", "OpenHamClock" to "v26.5.0@cc2415e7", "Nexus reviewed" to "1.7.5@57d11fd"), emptyMap())
+                    exportSupport.launch("rigweave-sanitized-support.zip")
+                }) { Text("EXPORT SUPPORT") }
                 OutlinedButton(audio::refreshDevices) { Text("RESCAN AUDIO") }
             }
             Text(systemMessage, color = Muted)
@@ -4622,10 +4754,31 @@ private fun statusColourForeground(argb: Int): Color {
             }
         }
     }
-    restorePayload?.let { payload -> AlertDialog(onDismissRequest = { restorePayload = null }, title = { Text("RESTORE REVIEW") },
-        text = { Text("${app.reviewRecovery(payload)}\n\nRestoring replaces saved station, preset, control-order, field, and connection preferences. Live radio state and QSOs are not changed.") },
-        confirmButton = { Button({ systemMessage = app.restoreRecovery(payload); restorePayload = null }, colors = ButtonDefaults.buttonColors(containerColor = Danger)) { Text("RESTORE SETTINGS") } },
-        dismissButton = { TextButton({ restorePayload = null }) { Text("CANCEL") } }) }
+    restorePayload?.let { payload -> AlertDialog(onDismissRequest = { restorePayload = null; recoveryPreview = null }, title = { Text("RESTORE REVIEW") },
+        text = { Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(app.reviewRecovery(payload))
+            recoveryPreview?.sections?.forEach { row ->
+                Row(Modifier.fillMaxWidth().clickable {
+                    if (row.name in selectedRecoverySections) selectedRecoverySections.remove(row.name) else selectedRecoverySections.add(row.name)
+                }, verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(row.name in selectedRecoverySections, { checked ->
+                        if (checked) { if (row.name !in selectedRecoverySections) selectedRecoverySections.add(row.name) }
+                        else selectedRecoverySections.remove(row.name)
+                    })
+                    Column(Modifier.weight(1f)) {
+                        Text(row.name.replace('_', ' ').uppercase(), fontWeight = FontWeight.Bold)
+                        Text("${row.changedKeys.size} changed · ${row.changedKeys.take(6).joinToString().ifBlank { "no changes" }}", color = Muted)
+                        row.mappingTasks.forEach { Text(it, color = Hold) }
+                    }
+                }
+            }
+            Text("Credentials, QSO data, private messages/drafts, provider bodies, and TX/PTT/arming state are excluded. Restore is transactional and always clears transmit authority.", color = Muted)
+        } },
+        confirmButton = { Button({
+            systemMessage = app.restoreRecovery(payload, selectedRecoverySections.toSet())
+            restorePayload = null; recoveryPreview = null
+        }, enabled = selectedRecoverySections.isNotEmpty(), colors = ButtonDefaults.buttonColors(containerColor = Danger)) { Text("RESTORE SELECTED") } },
+        dismissButton = { TextButton({ restorePayload = null; recoveryPreview = null }) { Text("CANCEL") } }) }
     pendingDeleteSlot?.let { slot -> AlertDialog(onDismissRequest = { pendingDeleteSlot = null }, title = { Text("Delete voice macro?") },
         text = { Text("Delete ${voiceStore.slots.getOrNull(slot)?.label ?: "M${slot + 1}"} from private tablet storage? This cannot be undone.") },
         confirmButton = { Button({ voiceAudio.delete(slot); pendingDeleteSlot = null }, colors = ButtonDefaults.buttonColors(containerColor = Danger)) { Text("DELETE") } },
