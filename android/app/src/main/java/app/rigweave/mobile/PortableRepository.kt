@@ -16,6 +16,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -236,11 +237,10 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
     private suspend fun refreshWwffNow(now: Long = Instant.now().epochSecond) = wwffMutex.withLock {
         if (wwffSpots.isEmpty()) wwffStatus = ProviderStatus(PortableFeedKind.LOADING)
         val result = withContext(Dispatchers.IO) {
-            runCatching {
-                val spots = async { fetch(WWFF_SPOTS_URL, "wwff_spots") }
-                val agendas = async { fetch(WWFF_AGENDAS_URL, "wwff_agendas") }
-                spots.await() to agendas.await()
-            }
+            capturePortableProviderPair(
+                first = { fetch(WWFF_SPOTS_URL, "wwff_spots") },
+                second = { fetch(WWFF_AGENDAS_URL, "wwff_agendas") },
+            )
         }
         result.fold(onSuccess = { (spots, agendas) ->
             runCatching { parseWwffSpots(spots.body, agendas.body, now) }.fold(onSuccess = { normalized ->
@@ -298,6 +298,15 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
     private fun cacheAtomically(file: File, body: String) {
         runCatching { val part = File(file.path + ".part"); part.writeText(body); if (!part.renameTo(file)) { file.writeText(body); part.delete() } }
     }
+}
+
+internal suspend fun <A, B> capturePortableProviderPair(
+    first: suspend () -> A,
+    second: suspend () -> B,
+): Result<Pair<A, B>> = supervisorScope {
+    val firstResult = async { first() }
+    val secondResult = async { second() }
+    runCatching { firstResult.await() to secondResult.await() }
 }
 
 internal class SotaCatalogue(context: Context) {

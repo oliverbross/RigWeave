@@ -1,6 +1,7 @@
 package app.rigweave.mobile
 
 import app.rigweave.mobile.groupsio.groupsIoTimestampText
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -10,6 +11,18 @@ import java.time.Instant
 import java.time.ZoneOffset
 
 class TabletAcceptanceSweep1CoreTest {
+    @Test fun parallelPortableProviderFailureIsCapturedWithoutCancellingTheCaller() = runBlocking {
+        var siblingCompleted = false
+        val result = capturePortableProviderPair(
+            first = { throw java.net.UnknownHostException("offline fixture") },
+            second = { siblingCompleted = true; "agenda" },
+        )
+
+        assertTrue(result.isFailure)
+        assertTrue(siblingCompleted)
+        assertTrue(result.exceptionOrNull() is java.net.UnknownHostException)
+    }
+
     @Test fun sotaClusterLineParsesFrequencyReferenceUtcAndUnknownModeTruthfully() {
         val now = Instant.parse("2026-08-23T15:10:00Z").epochSecond
         val spot = requireNotNull(parseSotaClusterLine(
