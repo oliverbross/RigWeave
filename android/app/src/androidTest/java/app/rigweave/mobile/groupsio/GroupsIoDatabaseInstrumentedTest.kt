@@ -41,11 +41,11 @@ class GroupsIoDatabaseInstrumentedTest {
         assertEquals(41, database.search("linked dipole").single().messageNumber)
     }
 
-    @Test fun deleteDownloadedDataCannotTouchSuppliedMainDatabasePath() {
+    @Test fun deprecatedCacheClearCannotTouchSuppliedMainDatabasePathOrDeleteFeatureDatabase() {
         SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath(mainName), null).use { it.execSQL("CREATE TABLE sentinel(value TEXT NOT NULL)"); it.execSQL("INSERT INTO sentinel VALUES('preserve')") }
         database.writableDatabase
         database.deleteDownloadedData()
-        assertFalse(context.getDatabasePath(featureName).exists())
+        assertTrue(context.getDatabasePath(featureName).exists())
         assertTrue(context.getDatabasePath(mainName).exists())
         SQLiteDatabase.openDatabase(context.getDatabasePath(mainName).path, null, SQLiteDatabase.OPEN_READONLY).use { main ->
             assertEquals("preserve", main.rawQuery("SELECT value FROM sentinel", null).use { it.moveToFirst(); it.getString(0) })

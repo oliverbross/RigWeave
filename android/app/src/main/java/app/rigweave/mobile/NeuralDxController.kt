@@ -404,7 +404,10 @@ internal class NeuralDxStore(context: Context, databaseName: String = "neural-dx
             db.execSQL("CREATE INDEX IF NOT EXISTS spot_dxcc_band_ts_idx ON spot(dxcc,band,ts DESC)")
             db.execSQL("DROP TABLE IF EXISTS prediction_result")
         }
-        if (oldVersion < 4) createNeuralOutlookSchema(db)
+        if (oldVersion < 4) {
+            db.execSQL("DROP TABLE IF EXISTS prediction_result")
+            createNeuralOutlookSchema(db)
+        }
         if (oldVersion in 4 until 5) upgradeNeuralOutlookSchemaV5(db)
     }
 

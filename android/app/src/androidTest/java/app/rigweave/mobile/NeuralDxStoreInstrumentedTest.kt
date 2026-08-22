@@ -174,7 +174,7 @@ class NeuralDxStoreInstrumentedTest {
         val outlook = NeuralOutlookController(store) { now }
         val base = forecast(now, OutlookWindow.MINUTES_60, "20m")
         outlook.persistForecastForTest(base, "profile|OM0RX|JN88TQ")
-        outlook.persistForecastForTest(base.copy(targetStartEpoch = base.targetStartEpoch + 300L), "profile|OM0RX|JN88TQ")
+        outlook.persistForecastForTest(base.copy(targetStartEpoch = base.targetStartEpoch - 300L), "profile|OM0RX|JN88TQ")
         outlook.persistForecastForTest(base.copy(label = OutlookLabel.INSUFFICIENT_EVIDENCE), "profile|OM0RX|JN88TQ")
         outlook.persistForecastForTest(base.copy(row = 1, column = 1), "profile|OM0RX|JN88TQ")
         assertEquals(1, tableCount("outlook_prediction"))

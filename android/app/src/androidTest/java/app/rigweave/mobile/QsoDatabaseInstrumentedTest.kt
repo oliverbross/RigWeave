@@ -105,7 +105,7 @@ class QsoDatabaseInstrumentedTest {
             LogbookFilter(propagation = "F2"), LogbookFilter(county = "zil"), LogbookFilter(dok = "A01"),
             LogbookFilter(sota = "ZA-001"), LogbookFilter(pota = "OM-0001"), LogbookFilter(iota = "EU-001"),
             LogbookFilter(wwff = "OMFF"), LogbookFilter(operator = "OM0RX"), LogbookFilter(contest = "CQ-WW"),
-            LogbookFilter(continent = "EU"), LogbookFilter(comment = "strong signal"),
+            LogbookFilter(continent = "EU"), LogbookFilter(notes = "strong signal"),
             LogbookFilter(distance = ">1000"), LogbookFilter(duration = ">=60"), LogbookFilter(qslSent = "Y"),
             LogbookFilter(qslReceived = "Y"), LogbookFilter(qslSentMethod = "D"),
             LogbookFilter(qslReceivedMethod = "B"), LogbookFilter(lotwSent = "Y"),
@@ -316,6 +316,7 @@ class QsoDatabaseInstrumentedTest {
             apiGeneration = WavelogApiGeneration.V2,
             capabilities = WavelogCapabilities(setOf("qso:read", "qso:write"), true, true),
             remoteStationId = "11",
+            localStationProfileId = DEFAULT_LOCAL_STATION,
         )
         val store = WavelogSyncStore(database)
         store.saveBinding(binding)

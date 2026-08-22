@@ -28,8 +28,8 @@ The deterministic host profile passed and deleted its temporary databases. Obser
 
 ## Final host artifacts
 
-- Universal debug APK: 124,629,714 bytes; SHA-256 `6b5b37e9dd84f221176a29b895b0ce3a68d505a85bfe9001257ac76b3fdb37f3`.
-- Debug AAB: 52,425,209 bytes; SHA-256 `0ba6f69ef05b2b000c5acecb9e6fe49f6433df8b12e5ba94d20d41aaeed64b74`.
+- Universal debug APK: 124,629,714 bytes; SHA-256 `8c99b803efd4669e8611b5e86ac002b870f6d9906cd3ad1ed1207a1e23b86e58`.
+- Debug AAB: 52,425,227 bytes; SHA-256 `7e1ad57078f5d0031d99a2d2cabbc05d9ba72e66504f43b25136b1538f7b9404`.
 - Package audit: P.533 payload scan PASS for both archives.
 
 These are unsigned/debug host outputs and were not installed or distributed.
