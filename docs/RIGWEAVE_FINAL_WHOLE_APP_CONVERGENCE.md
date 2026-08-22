@@ -33,6 +33,12 @@ This ledger must be updated from actual command results before main is eligible.
 - Apple unsigned generic iOS Simulator build: `BUILD SUCCEEDED`.
 - Wavelog: NO CHANGE. MSHV Auto DX Chaser: NO_REVIEW. OpenHamClock stable/release/licence unchanged; preview-only satellite-layer/test movement is documented and not absorbed. Nexus moved from reviewed `57d11fd`/1.7.5 to `f0869a1`/1.7.6 in documentation, Digi workflow, waterfall/audio and UI paths; no source was absorbed and review remains pending.
 - Deterministic release soak: PASS for 100k logbook, 180-day Neural, 20k Digi, 30k Groups.io and provider lifecycle profiles; generated data was disposable.
-- Hosted exact-SHA workflow: pending until the branch is pushed.
+- Hosted workflow run `32570096778` passed all seven jobs on source/documentation SHA `180b911db78e4a9782b005b92382a7c35fb802f8`: contract audit, Rust/native core, Android/package, Apple, migration/emulator matrix, scale soak and upstream watchers. A final documentation-only evidence commit requires one last exact-tip rerun.
 - Protected tablet in-place deployment: explicitly authorised, but ADB reported no attached device. The required `pm path`/backup gate could not run, so no install was attempted.
 - Physical radio/audio, authenticated Wavelog/Groups.io, live N1MM peer and RF: pending; not claimed by this programme.
+
+## Gate verdict
+
+`PARTIAL — FINAL WHOLE-APP BRANCH BUILT; MAIN NOT UPDATED`
+
+The integration branch is source/build complete and hosted validation passed for the implementation SHA. `main` remains frozen because the local shared-core command could not run without `cmake`, and the explicitly requested protected-tablet deployment could not pass its preflight while no ADB device was attached. Neither missing evidence layer is inferred from hosted or artifact results.
