@@ -6,6 +6,7 @@ import app.rigweave.mobile.groupsio.GroupsIoSettingsPanel
 import app.rigweave.mobile.groupsio.groupsIoDestinationVisible
 import app.rigweave.mobile.keyer.*
 import app.rigweave.mobile.dxchaser.DxChaserActionType
+import app.rigweave.mobile.bandmap.*
 
 import android.Manifest
 import android.content.Intent
@@ -134,11 +135,11 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), DIGI("Digi"), CONTEST("Contest"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Progress"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), OPERATIONS("Operations"), GROUPS_IO("Groups.io"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Progress"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), OPERATIONS("Operations"), GROUPS_IO("Groups.io"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
-    AUDIO("Audio"), DIGI("Digi"), INTEGRATIONS("Integrations"), COLOURS("Colours"),
+    AUDIO("Audio"), DIGI("Digi"), BAND_MAPS("Band Maps"), INTEGRATIONS("Integrations"), COLOURS("Colours"),
     HEALTH("Health"), DIAG("Diag"), ABOUT("About")
 }
 private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Station"), GENERAL("General"), NOTES("Notes"), QSL("QSL") }
@@ -195,6 +196,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val activation = remember { PotaActivationController(context, database) }
     val features = remember { FeatureController(context) }
     val app = remember { AppController(context) }
+    val bandMapStore = remember { BandMapStateStore(context) }
+    val bandMaps = remember { BandMapController(bandMapStore.load(), bandMapStore::save) }
     val keyerProfiles = remember { KeyerProfileStore(context, app.macroLabels.toList(), app.macroTexts.toList(), app.voiceMacroLabels.toList(), app.cqRepeatSeconds) }
     val wavelog = remember { WavelogController(context, database) }
     val operatingContext = remember { OperatingContextAuthority() }
@@ -244,6 +247,9 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     LaunchedEffect(destination) { navigationPrefs.edit().putString("destination", destination.name).apply() }
     LaunchedEffect(groupsIo.enabled, destination) {
         if (!groupsIo.enabled && destination == Destination.GROUPS_IO) destination = Destination.SETTINGS
+    }
+    LaunchedEffect(bandMaps.settings.enabled, bandMaps.settings.navigationVisible, destination) {
+        if ((!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible) && destination == Destination.BAND_MAPS) destination = Destination.SETTINGS
     }
     var pendingPortableDraft by remember { mutableStateOf<PortableLogDraft?>(null) }
     var pendingRisk by remember { mutableStateOf<String?>(null) }
@@ -520,7 +526,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         while (foreground) { chaser.poll(); delay(1_000) }
     }
     DisposableEffect(Unit) { onDispose {
-        app.disarmAll(); chaser.close(); contest.close(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close(); groupsIo.close()
+        app.disarmAll(); bandMaps.close(); chaser.close(); contest.close(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close(); groupsIo.close()
         scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelogNative.close(); wavelog.close(); callbook.close(); cty.close()
         portable.close(); progress.close(); operations.close(); syncHub.close(); NativeCore.destroy(core)
     } }
@@ -621,6 +627,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 Destination.entries.filterNot { item ->
                     item == Destination.SYNC ||
                     (item == Destination.GROUPS_IO && !groupsIoDestinationVisible(groupsIo.enabled, compact = false)) ||
+                    (item == Destination.BAND_MAPS && (!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible)) ||
                     (item == Destination.PANADAPTER && (!app.panadapterEnabled || app.radioFamily == RadioFamily.FLEXRADIO)) ||
                         (item == Destination.EQ && app.radioFamily == RadioFamily.FLEXRADIO)
                 }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
@@ -628,7 +635,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             }
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
-                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, keyerProfiles, keyer, repeatCq,
+                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, keyerProfiles, keyer, repeatCq, bandMaps,
+                BandMapKeyerContext(keyer.snapshot(), keyer.availability(keyerRuntime.context()), contest.activeSession.role.name),
                 contest, chaser, integratedDigiPage, { integratedDigiPage = it }, { destination = Destination.CONTEST },
                 { destination = Destination.DIGI; integratedDigiPage = IntegratedDigiPage.DX_CHASER }, { destination = Destination.SETTINGS },
                 false, { destination = Destination.EQ }, { destination = Destination.RADIO },
@@ -652,12 +660,13 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 { id -> dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.LOGBOOK, qsoId = id,
                     source = "Home QSO marker", reason = "Open exact QSO")) })
         } else Scaffold(modifier = Modifier.padding(top = keyerStripInset), bottomBar = { NavigationBar(containerColor = Panel) {
-            Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.OPERATIONS || it == Destination.GROUPS_IO }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
+            Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.OPERATIONS || it == Destination.GROUPS_IO || (it == Destination.BAND_MAPS && (!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible)) }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
-                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, keyerProfiles, keyer, repeatCq,
+                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, keyerProfiles, keyer, repeatCq, bandMaps,
+                BandMapKeyerContext(keyer.snapshot(), keyer.availability(keyerRuntime.context()), contest.activeSession.role.name),
                 contest, chaser, integratedDigiPage, { integratedDigiPage = it }, { destination = Destination.CONTEST },
                 { destination = Destination.DIGI; integratedDigiPage = IntegratedDigiPage.DX_CHASER }, { destination = Destination.SETTINGS },
                 true, { destination = Destination.EQ }, { destination = Destination.RADIO },
@@ -691,6 +700,7 @@ private fun navIcon(item: Destination) = when (item) {
     Destination.RADIO -> Icons.Outlined.SettingsInputAntenna
     Destination.DIGI -> Icons.Outlined.GraphicEq
     Destination.CONTEST -> Icons.Outlined.EmojiEvents
+    Destination.BAND_MAPS -> Icons.Outlined.StackedLineChart
     Destination.PANADAPTER -> Icons.Outlined.WaterfallChart
     Destination.EQ -> Icons.Outlined.Equalizer
     Destination.LOGBOOK -> Icons.AutoMirrored.Outlined.List
@@ -714,6 +724,7 @@ private fun navIcon(item: Destination) = when (item) {
     transport: UsbRadioTransport, flex: FlexRadioController, digi: DigiController, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
     eqStudio: EqStudioController, groupsIo: GroupsIoController, operatingContext: OperatingContextSnapshot,
     keyerProfiles: KeyerProfileStore, keyer: KeyerController, repeatCq: RepeatCqController,
+    bandMaps: BandMapController, bandMapKeyer: BandMapKeyerContext,
     contest: ContestRuntime, chaser: DxChaserRuntime, integratedDigiPage: IntegratedDigiPage,
     setIntegratedDigiPage: (IntegratedDigiPage) -> Unit, openContest: () -> Unit, openChaser: () -> Unit,
     openSettings: () -> Unit,
@@ -856,6 +867,18 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.CONTEST -> IntegratedContestWorkspace(contest, keyer.snapshot(), onOpenRadio = closeEq,
             onOpenLogbook = openLogbook, onOpenProgress = openProgress,
             onOpenSettings = openSettings)
+        Destination.BAND_MAPS -> BandMapScreen(bandMaps, database, features, neuralDx, portable, cty, contest, chaser,
+            operatingContext, bandMapKeyer) { action ->
+            val route = WorkspaceActionRouter.resolve(action)
+            route.receiveReview?.let { requestHomeReceiveTune(it.frequencyHz, it.mode, it.source, it.reason) }
+            when (action.destination) {
+                WorkspaceDestination.DX -> openDx()
+                WorkspaceDestination.LOGBOOK -> openLogbook()
+                WorkspaceDestination.DX_CHASER -> openChaser()
+                WorkspaceDestination.RADIO -> closeEq()
+                else -> Unit
+            }
+        }
         Destination.PANADAPTER -> if (app.panadapterEnabled && app.radioFamily.isElecraft)
             PanadapterScreen(panadapter, radio, features.liveSpots, compact)
         else RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty, features, voiceStore, voiceTx,
@@ -896,7 +919,7 @@ private fun navIcon(item: Destination) = when (item) {
             IntegratedOperationsSettings(contest, chaser, openContest, openChaser)
             Box(Modifier.weight(1f)) { SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, syncHub, callbook, cty, audio, panadapter, app,
                 transport, flex, digi, voiceStore, voiceAudio, voiceTx, groupsIo, operatingContext, keyerProfiles, keyer, repeatCq,
-                contest, chaser, openEq, openSync, openDigi, openGroupsIo, connect, direct) }
+                bandMaps, contest, chaser, openEq, openSync, openDigi, openGroupsIo, connect, direct) }
         }
     }
 }
@@ -4122,7 +4145,7 @@ private fun statusColourForeground(argb: Int): Color {
     flex: FlexRadioController, digi: DigiController, voiceStore: VoiceMacroStore,
     voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, groupsIo: GroupsIoController,
     operatingContext: OperatingContextSnapshot, keyerProfiles: KeyerProfileStore, keyer: KeyerController, repeatCq: RepeatCqController,
-    contestRuntime: ContestRuntime, chaserRuntime: DxChaserRuntime,
+    bandMaps: BandMapController, contestRuntime: ContestRuntime, chaserRuntime: DxChaserRuntime,
     openEq: () -> Unit, openSync: () -> Unit, openDigi: () -> Unit, openGroupsIo: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
     var section by remember { mutableStateOf(SettingsSection.RADIO) }
@@ -4291,6 +4314,7 @@ private fun statusColourForeground(argb: Int): Color {
                     enabled = app.radioFamily.isElecraft)
             }
         }
+        if (section == SettingsSection.BAND_MAPS) SettingsCard("INTELLIGENT BAND MAPS") { BandMapSettingsPanel(bandMaps) }
         if (section == SettingsSection.DIGI) SettingsCard("NEXUS DIGI") {
             Text("Digital-mode setup is shared with the Digi cockpit so mode capabilities, USB audio health, waterfall calibration, UDP interoperability, and storage diagnostics always describe the active session.", color = Muted)
             Button(onClick = openDigi) { Text("OPEN DIGI SETUP") }

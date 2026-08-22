@@ -41,6 +41,7 @@ class ConfigurationRecovery(private val context: Context) {
             "esm_enabled", "n1mm_enabled", "n1mm_mode", "n1mm_lan_opt_in", "n1mm_bind_address"
         ) },
         PreferenceSection("dx_chaser", "dxchaser-settings") { key -> key == "document_v1" },
+        PreferenceSection("band_maps", "rigweave-bandmaps-v1") { key -> key in setOf("document_v1", "document_last_good") },
         PreferenceSection("navigation", "navigation") { true },
         PreferenceSection("home_hamclock", "rigweave-hamclock-layout") { key -> !unsafeKey(key) },
         PreferenceSection("digi", "rigweave-digi") { key -> !unsafeKey(key) },
