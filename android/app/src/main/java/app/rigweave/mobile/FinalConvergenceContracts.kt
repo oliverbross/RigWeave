@@ -22,6 +22,7 @@ data class OperatingContextSnapshot(
     val connected: ContextValue<Boolean> = ContextValue(false, "none"),
     val receiveFrequencyHz: ContextValue<Long> = ContextValue(0, "none"),
     val transmitFrequencyHz: ContextValue<Long?> = ContextValue(null, "none"),
+    val receiveBandwidthHz: ContextValue<Int> = ContextValue(0, "none"),
     val band: ContextValue<String> = ContextValue("", "none"),
     val mode: ContextValue<String> = ContextValue("", "none"),
     val submode: ContextValue<String> = ContextValue("", "none"),

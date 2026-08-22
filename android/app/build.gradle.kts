@@ -34,8 +34,17 @@ rootProject.file("../flex-developer.properties").takeIf { it.isFile }?.inputStre
 fun flexValue(name: String): String = providers.environmentVariable(name).orNull
     ?: flexProperties.getProperty(name).orEmpty()
 fun quoted(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+val buildSha = providers.environmentVariable("GITHUB_SHA").orNull?.take(12) ?: runCatching {
+    providers.exec {
+        workingDir(rootProject.projectDir.parentFile)
+        commandLine("git", "rev-parse", "--short=12", "HEAD")
+    }.standardOutput.asText.get().trim()
+}.getOrDefault("UNKNOWN")
+val buildChannel = providers.environmentVariable("RIGWEAVE_BUILD_CHANNEL").orNull?.trim().orEmpty().ifBlank { "development" }
 
 android.defaultConfig {
+    buildConfigField("String", "BUILD_SHA", quoted(buildSha))
+    buildConfigField("String", "BUILD_CHANNEL", quoted(buildChannel))
     buildConfigField("String", "FLEX_SMARTLINK_CLIENT_ID", quoted(flexValue("FLEX_SMARTLINK_CLIENT_ID")))
     buildConfigField("String", "FLEX_SMARTLINK_AUTH_DOMAIN", quoted(flexValue("FLEX_SMARTLINK_AUTH_DOMAIN")))
     buildConfigField("String", "FLEX_SMARTLINK_REDIRECT_URI", quoted(flexValue("FLEX_SMARTLINK_REDIRECT_URI")))

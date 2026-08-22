@@ -167,13 +167,13 @@ fun NeuralDxScreen(
         when (page) {
             NeuralDxPage.COCKPIT -> DxCockpit(controller, features, policySpots, database, wavelog, callbook, cty, app, stationGrid, tune,
                 requestReceiveTune, intelligenceNeeds, previousQsos, { page = NeuralDxPage.INSIGHT }, pageModifier)
-            NeuralDxPage.MAP -> DxMap(controller, enrichedPolicySpots, features, cty, stationGrid,
+            NeuralDxPage.MAP -> DxMap(controller, enrichedPolicySpots, features, cty, app, stationGrid,
                 database, wavelog, requestReceiveTune, previousQsos, pageModifier)
             NeuralDxPage.INSIGHT -> DxInsightPage(controller, policySpots, pageModifier)
             NeuralDxPage.WORLD -> DxWorldPage(controller, features, pageModifier)
             NeuralDxPage.BRIEFING -> DxBriefingPage(controller, features, policySpots, database, wavelog, cty,
                 requestReceiveTune, intelligenceNeeds, previousQsos, dxNewsPreference, updateDxNewsPreference, pageModifier)
-            NeuralDxPage.OBSERVATIONS -> DxRfEvidencePage(controller, features, policySpots, database, cty,
+            NeuralDxPage.OBSERVATIONS -> DxRfEvidencePage(controller, features, policySpots, database, cty, app,
                 callbook, stationId, stationCall, stationGrid, bandHealthPreference, bandHealthSnapshot, updateBandHealthPreference,
                 openCallHistory, requestReceiveTune, pageModifier)
             NeuralDxPage.SATELLITES -> DxSatellitesPage(controller, stationGrid, pageModifier)
@@ -231,6 +231,7 @@ private fun spotHistoryDate(epoch: Long): String = DateTimeFormatter.ofPattern("
     cluster: List<AndroidDXSpot>,
     database: QsoDatabase,
     cty: CtyController,
+    app: AppController,
     callbook: CallbookController,
     stationId: String?,
     stationCall: String,
@@ -336,7 +337,8 @@ private fun spotHistoryDate(epoch: Long): String = DateTimeFormatter.ofPattern("
                     Text(row.dxCall, color = DxInk, fontWeight = FontWeight.Bold)
                     Text("${row.band} ${row.mode} · ${row.skimmerCall} · ${row.snr?.let { "$it dB" } ?: "SNR —"}",
                         color = DxMuted, modifier = Modifier.weight(1f))
-                    Text(status?.callStatus ?: if (row.dxCall in watchlist) "WATCH" else "—", color = DxYellow)
+                    Text("CS ${status?.callStatus ?: "—"}", color = Color(app.spotStatusColour(SPOT_STATUS_CS, status?.callStatus)), fontWeight = FontWeight.Bold)
+                    Text("DS ${status?.dxccStatus ?: "—"}", color = Color(app.spotStatusColour(SPOT_STATUS_DS, status?.dxccStatus)), fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -348,7 +350,9 @@ private fun spotHistoryDate(epoch: Long): String = DateTimeFormatter.ofPattern("
                     Text(row.callsign, color = DxInk, fontWeight = FontWeight.Bold)
                     Text("${row.direction.name.replace('_', ' ')} · ${row.band} · ${row.snr?.let { "$it dB" } ?: "SNR —"}",
                         color = DxMuted, modifier = Modifier.weight(1f))
-                    Text(statuses[id]?.callStatus ?: if (row.callsign in watchlist) "WATCH" else "—", color = DxYellow)
+                    val status = statuses[id]
+                    Text("CS ${status?.callStatus ?: "—"}", color = Color(app.spotStatusColour(SPOT_STATUS_CS, status?.callStatus)), fontWeight = FontWeight.Bold)
+                    Text("DS ${status?.dxccStatus ?: "—"}", color = Color(app.spotStatusColour(SPOT_STATUS_DS, status?.dxccStatus)), fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -397,10 +401,12 @@ private fun spotHistoryDate(epoch: Long): String = DateTimeFormatter.ofPattern("
                 }
             }) {
                 Row(Modifier.padding(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val status = statuses[contributor.sourceReferenceId]
                     Text(contributor.source, color = DxCyan, fontWeight = FontWeight.Bold)
                     Text(contributor.callsign, color = DxInk, fontWeight = FontWeight.Bold)
                     Text("${contributor.band} ${contributor.mode} · ${contributor.receiver.ifBlank { "receiver —" }} · ${contributor.snr?.let { "$it dB" } ?: "SNR —"}",
                         color = DxMuted, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (status != null) Text("CS ${status.callStatus} · DS ${status.dxccStatus}", color = Color(app.spotStatusColour(SPOT_STATUS_CS, status.callStatus)), fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -539,8 +545,8 @@ private fun spotHistoryDate(epoch: Long): String = DateTimeFormatter.ofPattern("
             Text("${rows.size} LIVE", color = DxCyan, fontWeight = FontWeight.Black)
         }
         if (mode == "COCKPIT") Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            DxSpotFeed(rows, statuses, distances, cty, app, intelligenceNeeds, { selected = it; selectedRequiresReview = false }, previousQsos, Modifier.weight(1.55f).fillMaxHeight())
-            LazyColumn(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            DxSpotFeed(rows, statuses, distances, cty, app, intelligenceNeeds, { selected = it; selectedRequiresReview = false }, previousQsos, Modifier.weight(1.9f).fillMaxHeight())
+            LazyColumn(Modifier.weight(.8f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 item { DxSection("ACTIVE BANDS · 24H") { controller.bandActivity.entries.take(12).forEach { DxBar(it.key, it.value, controller.bandActivity.values.maxOrNull() ?: 1) } } }
                 item { DxSection("NEXT 60 MIN", Modifier.clickable(onClick = openOutlook)) {
                     val outlook = controller.outlook.snapshot
@@ -626,10 +632,10 @@ private fun spotHistoryDate(epoch: Long): String = DateTimeFormatter.ofPattern("
 }
 
 @Composable private fun DxSpotHeader() = Row(Modifier.fillMaxWidth().height(52.dp).background(DxRaised).padding(horizontal=6.dp),verticalAlignment=Alignment.CenterVertically) {
-    DxFlexCell("UTC",.62f,DxInk,true);DxFlexCell("CALL",.86f,DxInk,true);DxFlexCell("BAND",.5f,DxInk,true);DxFlexCell("MODE",.55f,DxInk,true)
+    DxFlexCell("UTC",.72f,DxInk,true);DxFlexCell("CALL",.88f,DxInk,true);DxFlexCell("BAND",.5f,DxInk,true);DxFlexCell("MODE",.55f,DxInk,true)
     DxFlexCell("FREQ MHz",.76f,DxInk,true);DxFlexCell("COUNTRY / DXCC",1.42f,DxInk,true);DxFlexCell("CQ",.36f,DxInk,true)
-    DxFlexCell("DX DE",.82f,DxInk,true);DxFlexCell("CS",.34f,DxInk,true);DxFlexCell("DS",.46f,DxInk,true);DxFlexCell("KM",.52f,DxInk,true)
-    DxFlexCell("SCORE",.48f,DxInk,true);DxFlexCell("COMMENT / REASON",1.72f,DxInk,true)
+    DxFlexCell("DX DE",.82f,DxInk,true);DxFlexCell("CS",.34f,DxInk,true);DxFlexCell("DS",.46f,DxInk,true);DxFlexCell("DIST",.66f,DxInk,true)
+    DxFlexCell("SCORE",.48f,DxInk,true);DxFlexCell("COMMENT / REASON",1.55f,DxInk,true)
 }
 
 @Composable private fun DxSpotRow(spot:AndroidDXSpot,status:SpotLogStatus?,calculatedDistanceKm:Int?,cty:CtyController,app:AppController,selected:(AndroidDXSpot)->Unit,
@@ -637,18 +643,18 @@ private fun spotHistoryDate(epoch: Long): String = DateTimeFormatter.ofPattern("
     val entity=cty.lookup(spot.callsign);val country=entity?.country.orEmpty().ifBlank{spot.country}.ifBlank{"Unknown"}
     Row(Modifier.fillMaxWidth().height(64.dp).clickable(role=Role.Button){selected(spot)}
         .background(if(smart&&spot.score>=75)DxGreen.copy(alpha=.08f) else if(spot.receivedEpoch%2L==0L)DxPanel else DxBg).padding(horizontal=6.dp),verticalAlignment=Alignment.CenterVertically){
-        DxFlexCell(utcSeconds(spot.receivedEpoch),.62f,DxInk);Box(Modifier.weight(.86f).fillMaxHeight().clickable{previous(spot)},contentAlignment=Alignment.CenterStart){Text(spot.callsign,color=if(spot.watchlisted)DxYellow else OperationalCallsign,fontWeight=FontWeight.Black,fontSize=19.sp,maxLines=1,overflow=TextOverflow.Ellipsis)}
+        DxFlexCell(utcSeconds(spot.receivedEpoch),.72f,DxInk);Box(Modifier.weight(.88f).fillMaxHeight().clickable{previous(spot)},contentAlignment=Alignment.CenterStart){Text(spot.callsign,color=if(spot.watchlisted)DxYellow else OperationalCallsign,fontWeight=FontWeight.Black,fontSize=19.sp,maxLines=1,overflow=TextOverflow.Ellipsis)}
         DxFlexCell(spot.band,.5f,DxInk);DxFlexCell(spot.mode,.55f,DxInk);DxFlexCell(formatMHz(spot.frequencyHz),.76f,OperationalFrequency)
         DxFlexCell(country,1.42f,OperationalCountry);DxFlexCell(entity?.cqZone.orEmpty().ifBlank{spot.cqZone.takeIf{it>0}?.toString().orEmpty()},.36f,DxInk)
         DxFlexCell(spot.spotter,.82f,DxMuted);DxFlexCell(status?.callStatus.orEmpty(),.34f,Color(app.spotStatusColour(SPOT_STATUS_CS,status?.callStatus)),true);DxFlexCell(status?.dxccStatus.orEmpty(),.46f,Color(app.spotStatusColour(SPOT_STATUS_DS,status?.dxccStatus)),true)
-        DxFlexCell(spot.distanceKm.takeIf{it>0}?.toString() ?: calculatedDistanceKm?.toString().orEmpty(),.52f,DxMuted);DxFlexCell(spot.score.toString(),.48f,scoreColor(spot.score),true)
-        DxFlexCell(intelligenceNeeds.joinToString(" · ").ifBlank { spot.reason.ifBlank{spot.comment} },1.72f,if(intelligenceNeeds.isEmpty())DxMuted else DxYellow,true)
+        DxFlexCell((spot.distanceKm.takeIf{it>0} ?: calculatedDistanceKm)?.let{"$it km"}.orEmpty(),.66f,DxMuted);DxFlexCell(spot.score.toString(),.48f,scoreColor(spot.score),true)
+        DxFlexCell(intelligenceNeeds.joinToString(" · ").ifBlank { spot.reason.ifBlank{spot.comment} },1.55f,if(intelligenceNeeds.isEmpty())DxMuted else DxYellow,true)
     };HorizontalDivider(color=Color(0xFF303940))
 }
 
-@Composable private fun RowScope.DxFlexCell(text:String,weight:Float,color:Color,bold:Boolean=false){Text(text,color=color,fontWeight=if(bold)FontWeight.Black else FontWeight.Medium,fontFamily=FontFamily.Monospace,fontSize=18.sp,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(weight).padding(horizontal=3.dp))}
+@Composable private fun RowScope.DxFlexCell(text:String,weight:Float,color:Color,bold:Boolean=false){Text(text,color=color,fontWeight=if(bold)FontWeight.Black else FontWeight.Medium,fontFamily=FontFamily.Monospace,fontSize=15.sp,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.weight(weight).padding(horizontal=3.dp))}
 
-@Composable private fun DxMap(controller:NeuralDxController,rows: List<AndroidDXSpot>, features: FeatureController, cty: CtyController, stationGrid: String,
+@Composable private fun DxMap(controller:NeuralDxController,rows: List<AndroidDXSpot>, features: FeatureController, cty: CtyController, app: AppController, stationGrid: String,
     database: QsoDatabase, wavelog: WavelogController, requestReceiveTune: (Long, String?, String, String) -> Unit,
     previous: (AndroidDXSpot) -> Unit, modifier: Modifier) {
     var minutes by remember { mutableIntStateOf(60) }; var limit by remember { mutableIntStateOf(250) }
@@ -666,12 +672,12 @@ private fun spotHistoryDate(epoch: Long): String = DateTimeFormatter.ofPattern("
         "MUTUAL" -> report.mutual
         else -> true
     } }
-    LaunchedEffect(controller.mySignal.reports, stationId, cty.dataRevision) {
+    LaunchedEffect(controller.mySignal.reports, rows, stationId, cty.dataRevision) {
         val identities = controller.mySignal.reports.map { report ->
             val entity = cty.lookup(report.callsign)
             SpotLogIdentity(signalReportReference(report), report.callsign, entity?.dxcc.orEmpty(),
                 entity?.country.orEmpty(), report.band, report.mode)
-        }
+        } + rows.map { spot -> spot.toSpotLogIdentity(cty.lookup(spot.callsign)) }
         reportStatuses = withContext(Dispatchers.IO) { database.spotStatuses(identities, stationId) }
     }
     LaunchedEffect(controller.requestedSignalReportId, controller.mySignal.reports) {
@@ -701,11 +707,11 @@ private fun spotHistoryDate(epoch: Long): String = DateTimeFormatter.ofPattern("
             DxSection(if(hearsMe)"RECEIVERS / SPOTTERS" else "MAP OBSERVATIONS",Modifier.weight(1f).fillMaxHeight()){
                 Row(Modifier.fillMaxWidth().height(34.dp).background(DxRaised).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){DxFlexCell(if(hearsMe)"RX CALL" else "DX",.8f,DxInk,true);DxFlexCell("BAND / MODE",.9f,DxInk,true);DxFlexCell(if(hearsMe)"SNR / KM" else "MHz / COUNTRY",1.2f,DxInk,true)}
                 if(hearsMe)LazyColumn(Modifier.fillMaxSize()){items(pskRows,key={signalReportReference(it)}){r->val exact=selectedReport?.let(::signalReportReference)==signalReportReference(r);Row(Modifier.fillMaxWidth().height(44.dp).clickable{selectedReport=r}.background(if(exact)DxGreen.copy(alpha=.16f) else Color.Transparent).padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){DxFlexCell("${if(exact)"SELECTED · " else ""}${r.callsign} ${r.locator}",.8f,DxGreen,true);DxFlexCell("${r.band} ${r.mode}${if(r.mutual)" · MUTUAL" else ""}",.9f,DxInk);DxFlexCell("${r.snr?.let{"$it dB"}?:"—"} · ${r.distanceKm?.let{"$it km"}?:"—"}",1.2f,DxAmber)};HorizontalDivider(color=Color(0xFF303940))}}
-                else LazyColumn(Modifier.fillMaxSize()){items(filtered,key={it.id}){spot->Row(Modifier.fillMaxWidth().height(44.dp).clickable{selected=spot}.padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){Box(Modifier.weight(.8f).fillMaxHeight().clickable{previous(spot)},contentAlignment=Alignment.CenterStart){Text(spot.callsign,color=DxCyan,fontWeight=FontWeight.Black,maxLines=1)};DxFlexCell("${spot.band} ${spot.mode}",.9f,DxInk);DxFlexCell("${formatMHz(spot.frequencyHz)} · ${cty.lookup(spot.callsign)?.country.orEmpty().ifBlank{spot.country}}",1.2f,DxAmber)};HorizontalDivider(color=Color(0xFF303940))}}
+                else LazyColumn(Modifier.fillMaxSize()){items(filtered,key={it.id}){spot->val status=reportStatuses[spot.id];Row(Modifier.fillMaxWidth().height(44.dp).clickable{selected=spot}.padding(horizontal=5.dp),verticalAlignment=Alignment.CenterVertically){Box(Modifier.weight(.8f).fillMaxHeight().clickable{previous(spot)},contentAlignment=Alignment.CenterStart){Text(spot.callsign,color=DxCyan,fontWeight=FontWeight.Black,maxLines=1)};DxFlexCell("${spot.band} ${spot.mode}",.9f,DxInk);DxFlexCell("${formatMHz(spot.frequencyHz)} · ${cty.lookup(spot.callsign)?.country.orEmpty().ifBlank{spot.country}}",1.2f,DxAmber);DxFlexCell("CS ${status?.callStatus?:"—"}",.48f,Color(app.spotStatusColour(SPOT_STATUS_CS,status?.callStatus)),true);DxFlexCell("DS ${status?.dxccStatus?:"—"}",.52f,Color(app.spotStatusColour(SPOT_STATUS_DS,status?.dxccStatus)),true)};HorizontalDivider(color=Color(0xFF303940))}}
             }
         }
     }
-    selected?.let{spot->DxSpotDialog(spot,cty,null,{selected=null},{requestReceiveTune(spot.frequencyHz, spot.mode,
+    selected?.let{spot->DxSpotDialog(spot,cty,reportStatuses[spot.id],{selected=null},{requestReceiveTune(spot.frequencyHz, spot.mode,
         "DX map · ${spot.callsign}", "Review receive-only frequency change");selected=null},
         {previous(spot);selected=null},{val calls=features.watchlistText.lineSequence().map(String::trim).filter(String::isNotBlank).toMutableSet();if(spot.watchlisted)calls.remove(spot.callsign.uppercase(Locale.US))else calls.add(spot.callsign.uppercase(Locale.US));features.setWatchlist(calls.joinToString("\n"));selected=null})}
     selectedReport?.let { report ->
@@ -716,7 +722,11 @@ private fun spotHistoryDate(epoch: Long): String = DateTimeFormatter.ofPattern("
             text = { Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("${report.senderCallsign} ${report.senderLocator} → ${report.receiverCallsign} ${report.receiverLocator}")
                 Text("${formatMHz(report.frequencyHz)} MHz · ${report.band} ${report.mode} · ${report.snr?.let { "$it dB" } ?: "SNR unavailable"}")
-                Text("Worked ${status?.callStatus ?: "—"} · DXCC ${status?.dxccStatus ?: "—"}${if(report.mutual)" · MUTUAL" else ""}", color = DxMuted)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("CS ${status?.callStatus ?: "—"}", color = Color(app.spotStatusColour(SPOT_STATUS_CS, status?.callStatus)), fontWeight = FontWeight.Bold)
+                    Text("DS ${status?.dxccStatus ?: "—"}", color = Color(app.spotStatusColour(SPOT_STATUS_DS, status?.dxccStatus)), fontWeight = FontWeight.Bold)
+                    if (report.mutual) Text("MUTUAL", color = DxMuted)
+                }
                 if (controller.signalSelectionMessage.isNotBlank()) Text(controller.signalSelectionMessage, color = DxYellow)
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                     TextButton({ previous(signalReportSpot(report, cty)); selectedReport = null }) { Text("LOG HISTORY") }

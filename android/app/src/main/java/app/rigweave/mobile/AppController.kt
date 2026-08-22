@@ -10,6 +10,7 @@ import org.json.JSONObject
 
 enum class FieldProfile { DAY, NIGHT, FIELD }
 enum class RadioFamily { ELECRAFT_KX3, ELECRAFT_KX2, FLEXRADIO }
+enum class EqVisibilityPolicy { AUTO, SHOW, HIDE }
 
 internal val RadioFamily.isElecraft: Boolean get() = this != RadioFamily.FLEXRADIO
 internal val RadioFamily.displayName: String get() = when (this) {
@@ -23,6 +24,14 @@ internal fun decodeRadioFamily(stored: String?): RadioFamily = when (stored) {
     else -> runCatching { RadioFamily.valueOf(stored) }.getOrDefault(RadioFamily.ELECRAFT_KX3)
 }
 
+internal fun eqDestinationVisible(policy: EqVisibilityPolicy, selectedRadio: RadioFamily): Boolean = when (policy) {
+    EqVisibilityPolicy.AUTO -> selectedRadio.isElecraft
+    EqVisibilityPolicy.SHOW -> true
+    EqVisibilityPolicy.HIDE -> false
+}
+
+internal fun contestDestinationVisible(enabled: Boolean): Boolean = enabled
+
 data class RadioPreset(
     val slot: Int,
     val name: String,
@@ -35,7 +44,7 @@ data class RadioPreset(
 internal const val SPOT_STATUS_CS = "CS"
 internal const val SPOT_STATUS_DS = "DS"
 
-private val defaultSpotStatusColours = mapOf(
+internal val defaultSpotStatusColours = mapOf(
     "$SPOT_STATUS_CS:NC" to 0xFF43C7D9.toInt(),
     "$SPOT_STATUS_CS:NB" to 0xFFE9A72B.toInt(),
     "$SPOT_STATUS_CS:NM" to 0xFFC481D8.toInt(),
@@ -51,6 +60,10 @@ private val defaultSpotStatusColours = mapOf(
 internal fun defaultSpotStatusColour(dimension: String, status: String): Int =
     defaultSpotStatusColours["$dimension:$status"] ?: 0xFFF4F0E7.toInt()
 
+internal fun resolveSpotStatusColour(configured: Map<String, Int>, dimension: String, status: String?): Int =
+    status?.takeIf(String::isNotBlank)?.let { configured["$dimension:$it"] ?: defaultSpotStatusColour(dimension, it) }
+        ?: 0xFFF4F0E7.toInt()
+
 class AppController(private val context: Context) {
     private val prefs = context.getSharedPreferences("rigweave-app", Context.MODE_PRIVATE)
     private val configurationRecovery = ConfigurationRecovery(context.applicationContext)
@@ -60,6 +73,10 @@ class AppController(private val context: Context) {
     var preferredFlexStation by mutableStateOf(prefs.getString("flex_station", "").orEmpty()); private set
     var manualFlexIp by mutableStateOf(prefs.getString("flex_manual_ip", "").orEmpty().takeIf { it.isBlank() || manualFlexDiscovery(it) != null }.orEmpty()); private set
     var panadapterEnabled by mutableStateOf(prefs.getBoolean("panadapter_enabled", false)); private set
+    var eqVisibilityPolicy by mutableStateOf(runCatching {
+        EqVisibilityPolicy.valueOf(prefs.getString("eq_visibility_policy", EqVisibilityPolicy.AUTO.name).orEmpty())
+    }.getOrDefault(EqVisibilityPolicy.AUTO)); private set
+    var contestEnabled by mutableStateOf(prefs.getBoolean("contest_destination_enabled", true)); private set
     var transmitArmed by mutableStateOf(false); private set
     var cwMacrosArmed by mutableStateOf(false); private set
     var voiceMacrosArmed by mutableStateOf(false); private set
@@ -132,6 +149,16 @@ class AppController(private val context: Context) {
         prefs.edit().putBoolean("panadapter_enabled", value).apply()
     }
 
+    fun updateEqVisibilityPolicy(value: EqVisibilityPolicy) {
+        eqVisibilityPolicy = value
+        prefs.edit().putString("eq_visibility_policy", value.name).apply()
+    }
+
+    fun updateContestEnabled(value: Boolean) {
+        contestEnabled = value
+        prefs.edit().putBoolean("contest_destination_enabled", value).apply()
+    }
+
     fun updateTransmitArmed(value: Boolean) { transmitArmed = value }
     fun updateCwMacrosArmed(value: Boolean) { cwMacrosArmed = value }
     fun updateVoiceMacrosArmed(value: Boolean) { voiceMacrosArmed = value }
@@ -140,9 +167,7 @@ class AppController(private val context: Context) {
         prefs.edit().putFloat("voice_tx_level", voiceTxLevel).apply()
     }
 
-    fun spotStatusColour(dimension: String, status: String?): Int = status?.takeIf(String::isNotBlank)?.let {
-        spotStatusColours["$dimension:$it"] ?: defaultSpotStatusColour(dimension, it)
-    } ?: 0xFFF4F0E7.toInt()
+    fun spotStatusColour(dimension: String, status: String?): Int = resolveSpotStatusColour(spotStatusColours, dimension, status)
 
     fun setSpotStatusColour(dimension: String, status: String, colour: Int) {
         val key = "$dimension:$status"

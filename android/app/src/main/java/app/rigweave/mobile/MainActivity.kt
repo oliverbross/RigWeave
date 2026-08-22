@@ -9,6 +9,8 @@ import app.rigweave.mobile.dxchaser.DxChaserActionType
 import app.rigweave.mobile.bandmap.*
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
@@ -139,7 +141,7 @@ private enum class Destination(val label: String) {
 }
 private enum class SettingsSection(val label: String) {
     RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
-    AUDIO("Audio"), DIGI("Digi"), BAND_MAPS("Band Maps"), INTEGRATIONS("Integrations"), COLOURS("Colours"),
+    AUDIO("Audio"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), INTEGRATIONS("Integrations"), COLOURS("Colours"),
     HEALTH("Health"), DIAG("Diag"), ABOUT("About")
 }
 private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Station"), GENERAL("General"), NOTES("Notes"), QSL("QSL") }
@@ -185,6 +187,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             StabilityDiagnostics.refreshDatabaseFacts(database)
             delay(25)
         }
+        while (withContext(Dispatchers.IO) { database.repairProjectionGridBatch() } > 0) delay(25)
         StabilityDiagnostics.refreshDatabaseFacts(database)
     }
     val mutations = remember { QsoMutationCoordinator(database) }
@@ -243,6 +246,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             Destination.valueOf(navigationPrefs.getString("destination", Destination.HOME.name).orEmpty())
         }.getOrDefault(Destination.HOME))
     }
+    val eqVisible = eqDestinationVisible(app.eqVisibilityPolicy, app.radioFamily)
     var integratedDigiPage by rememberSaveable { mutableStateOf(IntegratedDigiPage.DIGI) }
     LaunchedEffect(destination) { navigationPrefs.edit().putString("destination", destination.name).apply() }
     LaunchedEffect(groupsIo.enabled, destination) {
@@ -250,6 +254,13 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     }
     LaunchedEffect(bandMaps.settings.enabled, bandMaps.settings.navigationVisible, destination) {
         if ((!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible) && destination == Destination.BAND_MAPS) destination = Destination.SETTINGS
+    }
+    LaunchedEffect(eqVisible, app.contestEnabled, destination) {
+        if (!eqVisible && destination == Destination.EQ) destination = Destination.RADIO
+        if (!app.contestEnabled) {
+            contest.pause("DESTINATION DISABLED")
+            if (destination == Destination.CONTEST) destination = Destination.SETTINGS
+        }
     }
     var pendingPortableDraft by remember { mutableStateOf<PortableLogDraft?>(null) }
     var pendingRisk by remember { mutableStateOf<String?>(null) }
@@ -264,10 +275,10 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             WorkspaceDestination.RADIO -> Destination.RADIO
             WorkspaceDestination.DIGI -> Destination.DIGI
             WorkspaceDestination.DX_CHASER -> Destination.DIGI
-            WorkspaceDestination.CONTEST -> Destination.CONTEST
+            WorkspaceDestination.CONTEST -> if (app.contestEnabled) Destination.CONTEST else Destination.SETTINGS
             WorkspaceDestination.BAND_MAPS -> Destination.BAND_MAPS
             WorkspaceDestination.PANADAPTER -> Destination.PANADAPTER
-            WorkspaceDestination.EQ -> Destination.EQ
+            WorkspaceDestination.EQ -> if (eqVisible) Destination.EQ else Destination.RADIO
             WorkspaceDestination.LOGBOOK -> Destination.LOGBOOK
             WorkspaceDestination.PROGRESS -> Destination.PROGRESS
             WorkspaceDestination.SYNC -> Destination.SYNC
@@ -350,6 +361,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             connected = ContextValue(radio.connected, "radio backend"),
             receiveFrequencyHz = ContextValue(radio.effectiveRxHz.takeIf { it > 0 } ?: radio.frequencyHz, "radio backend"),
             transmitFrequencyHz = ContextValue((radio.effectiveTxHz.takeIf { it > 0 } ?: radio.frequencyBHz.takeIf { it > 0 }), "radio backend"),
+            receiveBandwidthHz = ContextValue(radio.bandwidthHz, "radio backend"),
             band = ContextValue(bandForFrequency(radio.frequencyHz), "QsoDatabase.bandForFrequency"),
             mode = ContextValue(radio.mode, "radio backend"),
             submode = ContextValue(radio.dataSubmode.takeIf { it >= 0 }?.toString().orEmpty(), "radio backend"),
@@ -637,7 +649,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                     (item == Destination.GROUPS_IO && !groupsIoDestinationVisible(groupsIo.enabled, compact = false)) ||
                     (item == Destination.BAND_MAPS && (!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible)) ||
                     (item == Destination.PANADAPTER && (!app.panadapterEnabled || app.radioFamily == RadioFamily.FLEXRADIO)) ||
-                        (item == Destination.EQ && app.radioFamily == RadioFamily.FLEXRADIO)
+                    (item == Destination.EQ && !eqVisible) ||
+                    (item == Destination.CONTEST && !contestDestinationVisible(app.contestEnabled))
                 }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
@@ -669,7 +682,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 { id -> dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.LOGBOOK, qsoId = id,
                     source = "Home QSO marker", reason = "Open exact QSO")) })
         } else Scaffold(modifier = Modifier.padding(top = keyerStripInset), bottomBar = { NavigationBar(containerColor = Panel) {
-            Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.OPERATIONS || it == Destination.GROUPS_IO || (it == Destination.BAND_MAPS && (!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible)) }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
+            Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.OPERATIONS || it == Destination.GROUPS_IO || (it == Destination.CONTEST && !contestDestinationVisible(app.contestEnabled)) || (it == Destination.BAND_MAPS && (!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible)) }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
@@ -749,9 +762,11 @@ private fun navIcon(item: Destination) = when (item) {
     val intelligencePortableSpots = portable.pota.spots.map(PotaSpot::toPortable) + portable.sotaSpots + portable.wwffSpots
     val deliveredStates = setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED)
     val intelligenceAttention = syncHub.records.count { it.state !in deliveredStates }
+    val intelligenceLogAuthority = "${wavelog.logMode.name}|${wavelog.stationId}|${wavelog.selectedStation?.callsign.orEmpty()}"
     LaunchedEffect(destination, progress.filters, database.changeToken(), features.liveSpots, intelligencePortableSpots,
-        intelligenceAttention, cty.dataRevision, progress.goalStore.goals) {
-        progress.refresh(progress.filters, features.liveSpots, intelligencePortableSpots, intelligenceAttention, cty, portable.sotaCatalogue)
+        intelligenceAttention, cty.dataRevision, progress.goalStore.goals, intelligenceLogAuthority) {
+        progress.refresh(progress.filters, features.liveSpots, intelligencePortableSpots, intelligenceAttention, cty,
+            portable.sotaCatalogue, intelligenceLogAuthority)
     }
     val clusterBandEvidenceSpots = remember(features.liveSpots, hamClockSettings.document.settings.cluster,
         Instant.now().epochSecond / 60) {
@@ -849,7 +864,7 @@ private fun navIcon(item: Destination) = when (item) {
     when (destination) {
         Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, callbook,
             publicProviders, hamClockSettings, operations, progress.bandHealthSnapshot, send, openDx, openPortable, openProgress, openOperations,
-            openLogbook, closeEq, openDigi, groupsIo, openGroupsIo, foreground, operatingContext, requestHomeReceiveTune,
+            openLogbook, closeEq, openDigi, openGroupsIo, foreground, operatingContext, requestHomeReceiveTune,
             openHomeQso)
         Destination.RADIO -> Column(Modifier.fillMaxSize()) {
             if (compact) SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
@@ -874,23 +889,25 @@ private fun navIcon(item: Destination) = when (item) {
             }
         }
         Destination.DIGI -> IntegratedDigiWorkspace(integratedDigiPage, setIntegratedDigiPage, digi, radio, compact, chaser)
-        Destination.CONTEST -> IntegratedContestWorkspace(contest, keyer.snapshot(), onOpenRadio = closeEq,
-            onOpenLogbook = openLogbook, onOpenProgress = openProgress,
-            onOpenSettings = openSettings)
+        Destination.CONTEST -> if (app.contestEnabled) IntegratedContestWorkspace(contest, keyer.snapshot(), bandMaps, features,
+            onOpenLogbook = openLogbook,
+            onOpenSettings = openSettings) else EqUnavailableScreen("Contest is hidden in Settings", openSettings)
         Destination.BAND_MAPS -> BandMapScreen(bandMaps, database, features, neuralDx, portable, cty, contest, chaser,
-            operatingContext, bandMapKeyer, workspaceAction)
+            operatingContext, bandMapKeyer, app, workspaceAction)
         Destination.PANADAPTER -> if (app.panadapterEnabled && app.radioFamily.isElecraft)
             PanadapterScreen(panadapter, radio, features.liveSpots, compact)
         else RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty, features, voiceStore, voiceTx,
             connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
-        Destination.EQ -> EqStudioScreen(eqStudio, radio, compact, closeEq)
+        Destination.EQ -> if (app.radioFamily.isElecraft) EqStudioScreen(eqStudio, radio, compact, closeEq)
+            else EqUnavailableScreen("EQ is unavailable for ${app.radioFamily.displayName}; SHOW only exposes this setup state and sends no CAT command.", openSettings)
         Destination.LOGBOOK -> Column(Modifier.fillMaxSize()) {
             PotaActivationStrip(activation, radio, openActivation)
             Box(Modifier.weight(1f)) { LogbookScreen(radio, database, mutations, wavelog, wavelogNative, syncHub, callbook, app,
                 openSync, openProgress, progress.logbookRequest, progress::consumeLogbookRequest, homeQsoId, consumeHomeQso) }
         }
-        Destination.PROGRESS -> ProgressScreen(progress, features, portable, syncHub, cty,
-            wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }.orEmpty(), app.stationCallsign, compact,
+        Destination.PROGRESS -> ProgressScreen(progress, features, portable, syncHub, cty, wavelog.logMode,
+            wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }.orEmpty(),
+            if (wavelog.logMode == LogMode.WAVELOG) wavelog.selectedStation?.callsign.orEmpty() else app.stationCallsign, compact,
             outlook = neuralDx.outlook.snapshot, openDx = openDx,
             openOutlook = { neuralDx.requestPage(NeuralDxPage.INSIGHT); openDx() },
             openDxEvidence = { band -> neuralDx.requestBandEvidence(band); openDx() }, openPortable = openPortable,
@@ -916,10 +933,24 @@ private fun navIcon(item: Destination) = when (item) {
                     "Review receive-only downlink change")
             }, prepareSatelliteLogger)
         Destination.SETTINGS -> Column(Modifier.fillMaxSize()) {
-            IntegratedOperationsSettings(contest, chaser, openContest, openChaser)
             Box(Modifier.weight(1f)) { SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, syncHub, callbook, cty, audio, panadapter, app,
                 transport, flex, digi, voiceStore, voiceAudio, voiceTx, groupsIo, operatingContext, keyerProfiles, keyer, repeatCq,
-                bandMaps, contest, chaser, openEq, openSync, openDigi, openGroupsIo, connect, direct) }
+                bandMaps, contest, chaser, openEq, openContest, openSync, openDigi, openGroupsIo, connect, direct) }
+        }
+    }
+}
+
+@Composable private fun EqUnavailableScreen(message: String, openSettings: () -> Unit) {
+    Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Header("EQ")
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Icon(Icons.Outlined.Equalizer, contentDescription = null, tint = Hold, modifier = Modifier.size(32.dp))
+                Text("EQ UNAVAILABLE", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                Text(message, color = Muted)
+                Text("No EQ CAT command is available from this state.", color = Hold, fontWeight = FontWeight.Bold)
+                Button(openSettings, modifier = Modifier.heightIn(min = 48.dp)) { Text("OPEN SETTINGS") }
+            }
         }
     }
 }
@@ -3280,10 +3311,9 @@ private fun qslMethodLabel(code: String) = qslMethodChoices.firstOrNull { it.fir
     var reordering by remember { mutableStateOf(false) }
     val ordered = app.presets.sortedBy { it.slot }
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) { Header("Radio presets", state)
-                Text("${ordered.size} / 12 memories · tap a preset to recall frequency, mode and filter", color = Muted) }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val actions: @Composable RowScope.() -> Unit = {
+                StatusChip(if (state.connected) "RADIO LIVE" else "RADIO OFFLINE", state.connected)
                 if (ordered.size > 1) OutlinedButton({ reordering = !reordering }, modifier = Modifier.heightIn(min = 48.dp)) {
                     Icon(if (reordering) Icons.Outlined.Check else Icons.Outlined.SwapHoriz, null)
                     Spacer(Modifier.width(7.dp)); Text(if (reordering) "DONE" else "REORDER")
@@ -3291,6 +3321,17 @@ private fun qslMethodLabel(code: String) = qslMethodChoices.firstOrNull { it.fir
                 Button({ adding = true }, enabled = app.nextPresetSlot() != null, modifier = Modifier.heightIn(min = 48.dp)) {
                     Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(7.dp)); Text("ADD PRESET")
                 }
+            }
+            if (maxWidth >= 820.dp) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) { Header("Radio presets")
+                    Text("${ordered.size} / 12 memories · tap a preset to recall frequency, mode and filter", color = Muted) }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically, content = actions)
+            } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Header("Radio presets")
+                Text("${ordered.size} / 12 memories · tap a preset to recall frequency, mode and filter", color = Muted)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically, content = actions)
             }
         }
         if (app.presets.isEmpty()) Card(colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
@@ -4146,7 +4187,7 @@ private fun statusColourForeground(argb: Int): Color {
     voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, groupsIo: GroupsIoController,
     operatingContext: OperatingContextSnapshot, keyerProfiles: KeyerProfileStore, keyer: KeyerController, repeatCq: RepeatCqController,
     bandMaps: BandMapController, contestRuntime: ContestRuntime, chaserRuntime: DxChaserRuntime,
-    openEq: () -> Unit, openSync: () -> Unit, openDigi: () -> Unit, openGroupsIo: () -> Unit,
+    openEq: () -> Unit, openContest: () -> Unit, openSync: () -> Unit, openDigi: () -> Unit, openGroupsIo: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
     var section by remember { mutableStateOf(SettingsSection.RADIO) }
     var host by remember { mutableStateOf(features.clusterHost) }; var port by remember { mutableStateOf(features.clusterPort.toString()) }
@@ -4284,6 +4325,19 @@ private fun statusColourForeground(argb: Int): Color {
                 FilterChip(app.radioFamily == RadioFamily.ELECRAFT_KX2, { app.selectRadioFamily(RadioFamily.ELECRAFT_KX2) }, { Text("Elecraft KX2") })
                 FilterChip(app.radioFamily == RadioFamily.FLEXRADIO, { app.selectRadioFamily(RadioFamily.FLEXRADIO) }, { Text("FlexRadio") })
             }
+            Text("EQ DESTINATION", color = Amber, fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                EqVisibilityPolicy.entries.forEach { policy ->
+                    FilterChip(app.eqVisibilityPolicy == policy, { app.updateEqVisibilityPolicy(policy) }, { Text(policy.name) })
+                }
+            }
+            val eqShown = eqDestinationVisible(app.eqVisibilityPolicy, app.radioFamily)
+            Text(when (app.eqVisibilityPolicy) {
+                EqVisibilityPolicy.AUTO -> if (eqShown) "AUTO · supported ${app.radioFamily.displayName} selected" else "AUTO · hidden for ${app.radioFamily.displayName}"
+                EqVisibilityPolicy.SHOW -> if (app.radioFamily.isElecraft) "SHOW · supported ${app.radioFamily.displayName}" else "SHOW · setup/demo only; CAT commands blocked"
+                EqVisibilityPolicy.HIDE -> "HIDE · active EQ route redirects to Radio"
+            }, color = if (eqShown) Healthy else Muted)
+            OutlinedButton(openEq, enabled = eqShown, modifier = Modifier.heightIn(min = 48.dp)) { Text("OPEN EQ") }
             if (app.radioFamily == RadioFamily.FLEXRADIO) {
                 Text(flex.connectionState.label, color = Hold, fontWeight = FontWeight.Bold)
                 Text("KX USB polling, KX EQ and the physical-I/Q panadapter are disabled while FlexRadio is selected. Flex uses its own SmartLink/LAN, VITA panafall, PC audio and session-gated transmit cockpit.", color = Muted)
@@ -4315,7 +4369,29 @@ private fun statusColourForeground(argb: Int): Color {
             }
         }
         if (section == SettingsSection.BAND_MAPS) SettingsCard("INTELLIGENT BAND MAPS") { BandMapSettingsPanel(bandMaps) }
+        if (section == SettingsSection.CONTEST) SettingsCard("CONTEST VISIBILITY & N1MM") {
+            Text("Contest history, sessions and QSOs are preserved when the destination is hidden.", color = Muted)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Switch(app.contestEnabled, { enabled ->
+                    if (!enabled) contestRuntime.pause("DESTINATION DISABLED")
+                    app.updateContestEnabled(enabled)
+                })
+                Column(Modifier.weight(1f)) {
+                    Text(if (app.contestEnabled) "CONTEST DESTINATION ENABLED" else "CONTEST DESTINATION HIDDEN",
+                        fontWeight = FontWeight.Bold)
+                    Text("N1MM remains default-off and unarmed; hiding Contest stops the active runtime without deleting data.", color = Muted)
+                }
+            }
+            Text("Session ${contestRuntime.activeSession.state} · N1MM ${if (contestRuntime.snapshot().n1mmEnabled) "configured" else "disabled"} · " +
+                if (contestRuntime.snapshot().n1mmArmed) "ARMED" else "SAFE", color = Hold)
+            Button(openContest, enabled = app.contestEnabled, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Text("OPEN CONTEST SETUP / NETWORK")
+            }
+        }
         if (section == SettingsSection.DIGI) SettingsCard("NEXUS DIGI") {
+            Button(openDigi, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("OPEN DIGI / DX CHASER") }
+            Text("DX Chaser ${chaserRuntime.snapshot.session.state} · detailed controls live in the DX Chaser tab.", color = Muted)
             Text("Digital-mode setup is shared with the Digi cockpit so mode capabilities, USB audio health, waterfall calibration, UDP interoperability, and storage diagnostics always describe the active session.", color = Muted)
             Button(onClick = openDigi) { Text("OPEN DIGI SETUP") }
             Text("Opening setup never enables or arms transmit. Digi TX remains a separate session switch plus one-shot arm.", color = Muted)
@@ -4854,6 +4930,24 @@ private fun statusColourForeground(argb: Int): Color {
             Text("Local-first tablet control and logging. Wavelog, callbook, CTY.DAT and DX-cluster integrations are optional.", color = Muted)
             Text("WSJT-X is intentionally not exposed in Settings yet.", color = Muted)
             Text("Home is inspired by the MIT-licensed OpenHamClock; the native RigWeave implementation remains GPL-3.0-only and shares RigWeave station and provider settings.", color = Muted)
+            val buildSummary = "Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\n" +
+                "Build SHA ${BuildConfig.BUILD_SHA}\nBuild channel ${BuildConfig.BUILD_CHANNEL}\n" +
+                "QSO schema 16 · projection contract 5\n" +
+                "OpenHamClock stable 26.5.0 · d4a50eaaa61d · checked 2026-08-22"
+            Surface(color = Raised, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("BUILD & DATA CONTRACT", color = Amber, fontWeight = FontWeight.Bold)
+                    Text(buildSummary, fontFamily = FontFamily.Monospace, color = Ink)
+                    OutlinedButton({
+                        context.getSystemService(ClipboardManager::class.java).setPrimaryClip(
+                            ClipData.newPlainText("RigWeave build information", buildSummary)
+                        )
+                        systemMessage = "Build information copied"
+                    }, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Icon(Icons.Outlined.ContentCopy, contentDescription = null); Spacer(Modifier.width(7.dp)); Text("COPY BUILD INFORMATION")
+                    }
+                }
+            }
             HorizontalDivider()
             BoxWithConstraints(Modifier.fillMaxWidth().testTag("settings-developer-information")) {
                 @Composable fun DeveloperCopy(modifier: Modifier) {

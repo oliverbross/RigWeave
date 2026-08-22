@@ -1,7 +1,5 @@
 package app.rigweave.mobile
 
-import app.rigweave.mobile.groupsio.GroupsIoController
-
 /*
 THESIS: A native ham-radio operations clock: one glance from station state to workable RF activity.
 OWN-WORLD: RigWeave Flightline instrumentation, with OpenHamClock's pinned dashboard density and map-first hierarchy.
@@ -22,6 +20,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -42,6 +41,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Hiking
 import androidx.compose.material.icons.outlined.EventNote
+import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Refresh
@@ -157,7 +157,6 @@ internal fun HamClockHomeScreen(
     openLogbook: () -> Unit,
     openRadio: () -> Unit,
     openDigi: () -> Unit,
-    groupsIo: GroupsIoController,
     openGroupsIo: () -> Unit,
     homeForeground: Boolean,
     operatingContext: OperatingContextSnapshot,
@@ -730,6 +729,10 @@ internal fun HamClockHomeScreen(
     fun mutateOutlook(value: HamClockOutlookPreference) {
         settingsCoordinator.updateSettings { it.copy(outlook = value) }
     }
+    val shackDisplayPreference = settingsDocument.settings.shackDisplay
+    val shackProfileName = shackDisplayPreference.selectedProfileId?.let { selected ->
+        settingsDocument.profiles.firstOrNull { it.id == selected }?.name
+    } ?: "Current layout"
 
     BoxWithConstraints(Modifier.fillMaxSize().background(HcBg).testTag("openhamclock-home")) {
         val wideThreshold = when (settingsDocument.settings.display.density) {
@@ -739,12 +742,10 @@ internal fun HamClockHomeScreen(
         if (wide) {
             Column(Modifier.fillMaxSize().padding(outerPadding).testTag("openhamclock-safe-content"), verticalArrangement = Arrangement.spacedBy(panelGap)) {
                 HamClockHeader(stationCall, stationGrid, radio, app, features, neuralDx,
-                    settingsDocument.settings.display, neuralDx.weather, {
+                    settingsDocument.settings.display, shackDisplayPreference, shackProfileName, neuralDx.weather, {
                     neuralDx.refresh(stationCall, stationGrid, stationId, visibleMapSpots, true, NeuralDxRefreshScope.HOME)
                     features.refreshSolar(); portable.refreshAll()
                 }, { showShackDisplay = true }) { configureDashboard = true }
-                if (!settingsDocument.settings.display.immersive) OperationsHomeSummary(operations, openOperations)
-                if (groupsIo.enabled) GroupsIoHomeCard(groupsIo, openGroupsIo)
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(panelGap)) {
                     if (leftPanels.isNotEmpty()) LazyColumn(Modifier.widthIn(min = 300.dp, max = 350.dp).weight(.26f), verticalArrangement = Arrangement.spacedBy(panelGap)) {
                         items(leftPanels, key = HamClockPanelPreference::id) { panel ->
@@ -772,12 +773,10 @@ internal fun HamClockHomeScreen(
         } else {
             LazyColumn(Modifier.fillMaxSize().padding(outerPadding).testTag("openhamclock-safe-content"), verticalArrangement = Arrangement.spacedBy(panelGap)) {
                 item { HamClockHeader(stationCall, stationGrid, radio, app, features, neuralDx,
-                    settingsDocument.settings.display, neuralDx.weather, {
+                    settingsDocument.settings.display, shackDisplayPreference, shackProfileName, neuralDx.weather, {
                     neuralDx.refresh(stationCall, stationGrid, stationId, features.liveSpots, true, NeuralDxRefreshScope.HOME)
                     features.refreshSolar(); portable.refreshAll()
                 }, { showShackDisplay = true }) { configureDashboard = true } }
-                if (!settingsDocument.settings.display.immersive) item { OperationsHomeSummary(operations, openOperations) }
-                if (groupsIo.enabled) item { GroupsIoHomeCard(groupsIo, openGroupsIo) }
                 items(compactPanels, key = HamClockPanelPreference::id) { panel ->
                     val height = if (panel.id == HamClockPanelId.MAP) {
                         if (maxWidth < 500.dp) (290 * panel.rowSpan).dp else (390 * panel.rowSpan).dp
@@ -819,21 +818,6 @@ internal fun HamClockHomeScreen(
             { channel, force -> solarImageRequest = channel to force }, openExactQso,
             { showShackDisplay = false },
         )
-    }
-}
-
-@Composable private fun GroupsIoHomeCard(controller: GroupsIoController, open: () -> Unit) {
-    val summary = controller.homeSummary
-    Card(Modifier.fillMaxWidth().clickable(onClick = open), colors = CardDefaults.cardColors(containerColor = HcPanel)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("GROUPS.IO · ${if (summary.offline) "OFFLINE CACHE" else "CONNECTED"}", color = HcAmber, fontWeight = FontWeight.Bold)
-                Text("${summary.recent.size} recent cached · ${summary.needsAttention} need attention · archive ${summary.archiveState} ${summary.archiveDownloaded}",
-                    color = HcMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Text("OPEN", color = HcGreen, fontWeight = FontWeight.Bold)
-        }
     }
 }
 
@@ -895,27 +879,10 @@ internal fun HamClockHomeScreen(
 }
 
 @Composable
-private fun OperationsHomeSummary(operations: OperationsController, open: () -> Unit) {
-    val now = Instant.now().epochSecond
-    val activeDx = operations.dxItems.count { it.startEpoch != null && it.endEpoch != null && now in it.startEpoch..it.endEpoch }
-    val activeContests = operations.contestItems.count { now in it.startEpoch..it.endEpoch }
-    Surface(color = HcPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth().clickable(onClick = open)) {
-        Row(Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Icon(Icons.Outlined.EventNote, null, tint = HcAmber)
-            Column(Modifier.weight(1f)) {
-                Text("OPERATIONS", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 16.sp)
-                Text("$activeDx active DX · $activeContests active contests · ${operations.nextPlan?.title ?: "no upcoming plan"}", color = HcInk)
-            }
-            Text("OPEN", color = HcAmber, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
 private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: AppController,
     features: FeatureController, neuralDx: NeuralDxController, display: HamClockDisplayPreference,
-    weather: NeuralWeather, refresh: () -> Unit, shack: () -> Unit, configure: () -> Unit) {
+    shackDisplay: HamClockShackDisplayPreference, shackProfileName: String,
+    weather: NeuralWeather, refresh: () -> Unit, enterShack: () -> Unit, configure: () -> Unit) {
     var now by remember { mutableStateOf(Instant.now()) }
     LaunchedEffect(Unit) { while (true) { now = Instant.now(); delay(1_000) } }
     val utc = now.atZone(ZoneOffset.UTC)
@@ -934,7 +901,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                     HeaderIdentity(call, grid, Modifier.weight(1f))
                     StatusPill(if (radio.connected) "CAT LIVE" else "CAT OFFLINE", radio.connected)
                     StatusPill(if (app.transmitArmed) "TX ARMED" else "SAFE / RX", !app.transmitArmed)
-                    ShackButton(shack); ConfigButton(configure); SyncButton(neuralDx.refreshing, refresh)
+                    ShackEntry(enterShack, shackDisplay, shackProfileName, compact = true); ConfigButton(configure); SyncButton(neuralDx.refreshing, refresh)
                 }
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -952,16 +919,38 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 Text(weatherText, color = HcCyan, fontFamily = FontFamily.Monospace, fontSize = 16.sp)
                 StatusPill(if (radio.connected) "CAT LIVE" else "CAT OFFLINE", radio.connected)
                 StatusPill(if (app.transmitArmed) "TX ARMED" else "SAFE / RX", !app.transmitArmed)
-                ShackButton(shack); ConfigButton(configure); SyncButton(neuralDx.refreshing, refresh)
+                ShackEntry(enterShack, shackDisplay, shackProfileName, compact = false); ConfigButton(configure); SyncButton(neuralDx.refreshing, refresh)
             }
-            Text("RigWeave ${BuildConfig.VERSION_NAME} · OHC reviewed v26.5.0 · d4a50ea · checked 2026-08-20",
-                color = HcMuted, fontSize = 12.sp, modifier = Modifier.align(Alignment.BottomStart))
         }
     }
 }
 
-@Composable private fun ShackButton(open: () -> Unit) {
-    Button(open, modifier = Modifier.heightIn(min = 48.dp)) { Text("SHACK") }
+@Composable private fun ShackEntry(
+    open: () -> Unit,
+    preference: HamClockShackDisplayPreference,
+    profileName: String,
+    compact: Boolean,
+) {
+    if (compact) {
+        Button(open, modifier = Modifier.heightIn(min = 48.dp)) {
+            Icon(Icons.Outlined.DesktopWindows, contentDescription = "Enter Shack Display", Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp)); Text("SHACK")
+        }
+        return
+    }
+    Button(open, modifier = Modifier.widthIn(min = 230.dp).heightIn(min = 64.dp),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
+        Icon(Icons.Outlined.DesktopWindows, contentDescription = "Enter Shack Display", Modifier.size(26.dp))
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text("SHACK DISPLAY", fontWeight = FontWeight.Black)
+            Text("Full-screen station dashboard", fontSize = 11.sp, maxLines = 1)
+            Text("$profileName · ${preference.theme.name.replace('_', ' ')}" +
+                if (preference.keepScreenOn) " · SCREEN ON" else "", fontSize = 10.sp, maxLines = 1,
+                overflow = TextOverflow.Ellipsis)
+        }
+        Text("ENTER", fontWeight = FontWeight.Black, fontSize = 11.sp)
+    }
 }
 
 @Composable private fun ConfigButton(configure: () -> Unit) {
@@ -1021,9 +1010,6 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 }
                 ToggleRow("Low-data Map Data view", settings.display.lowDataMode) {
                     updateDisplay(settings.display.copy(lowDataMode = it))
-                }
-                ToggleRow("Minimal Home (hides Operations summary)", settings.display.immersive) {
-                    updateDisplay(settings.display.copy(immersive = it))
                 }
                 OutlinedButton(editTarget, modifier = Modifier.heightIn(min = 48.dp)) { Text("MANUAL DX TARGET") }
                 HorizontalDivider(color = HcLine)
