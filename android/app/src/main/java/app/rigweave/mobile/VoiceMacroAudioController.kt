@@ -15,6 +15,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import app.rigweave.mobile.keyer.VoiceMacroPlan
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -64,6 +65,12 @@ class VoiceMacroAudioController(
     }
 
     fun preview(slot: Int) = scope.launch { mutex.withLock { previewLocked(slot) } }
+
+    fun previewPlan(plan: VoiceMacroPlan) = scope.launch { mutex.withLock {
+        previewPcmLocked(-1, "composite voice plan") {
+            composeVoicePlan(plan.slotIds.map(store::read), plan.interClipSilenceMillis)
+        }
+    } }
 
     fun importWave(slot: Int, bytes: ByteArray) = scope.launch { mutex.withLock {
         if (!routes.acquireAudio("VOICE", true)) { fail("Another audio operation is active"); return@withLock }
@@ -130,11 +137,13 @@ class VoiceMacroAudioController(
         finally { record.release(); recorder = null; level = 0f; state = VoiceAudioState.Idle; routes.releaseAudio("VOICE") }
     }
 
-    private suspend fun previewLocked(slot: Int) {
+    private suspend fun previewLocked(slot: Int) = previewPcmLocked(slot, "voice macro ${slot + 1}") { store.read(slot) }
+
+    private suspend fun previewPcmLocked(slot: Int, description: String, load: () -> CanonicalVoicePcm) {
         if (!routes.acquireAudio("VOICE", true)) return failAndIdle("Another audio operation is active")
         stopCurrent(); active.set(true); state = VoiceAudioState.Previewing(slot); status = "Verifying tablet speaker preview route"
         val speaker = routes.speakerDevice() ?: return failAndIdle("No unique built-in tablet speaker is available")
-        val pcm = runCatching { store.read(slot) }.getOrElse { return failAndIdle("Preview failed: ${it.message}") }
+        val pcm = runCatching(load).getOrElse { return failAndIdle("Preview failed: ${it.message}") }
         val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
         val minimum = AudioTrack.getMinBufferSize(VOICE_SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val player = runCatching {
@@ -151,7 +160,7 @@ class VoiceMacroAudioController(
             player.play()
             writeAll(player, ShortArray(VOICE_SAMPLE_RATE / 10))
             if (player.routedDevice?.id != speaker.id) error("Preview route could not be verified as the tablet speaker")
-            status = "Previewing through the built-in tablet speaker"
+            status = "Previewing $description through the built-in tablet speaker"
             var offset = 0
             while (active.get() && offset < pcm.samples.size) {
                 val amount = minOf(2_400, pcm.samples.size - offset)

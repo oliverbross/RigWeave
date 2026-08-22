@@ -35,6 +35,22 @@ data class CanonicalVoicePcm(val samples: ShortArray, val sampleRate: Int = VOIC
     val durationMillis: Long get() = samples.size * 1_000L / sampleRate
 }
 
+fun composeVoicePlan(clips: List<CanonicalVoicePcm>, interClipSilenceMillis: Int, maximumSeconds: Int = 45): CanonicalVoicePcm {
+    require(clips.isNotEmpty() && clips.size <= 12) { "A voice plan requires 1 through 12 validated clips" }
+    require(interClipSilenceMillis in 0..500) { "Inter-clip silence is out of range" }
+    require(clips.all { it.sampleRate == VOICE_SAMPLE_RATE && it.samples.isNotEmpty() }) { "Voice plan clip is invalid" }
+    val silenceSamples = VOICE_SAMPLE_RATE * interClipSilenceMillis / 1_000
+    val totalSamples = clips.sumOf { it.samples.size.toLong() } + silenceSamples.toLong() * (clips.size - 1)
+    require(totalSamples <= VOICE_SAMPLE_RATE * maximumSeconds.toLong()) { "Voice plan exceeds the $maximumSeconds second limit" }
+    val combined = ShortArray(totalSamples.toInt())
+    var destination = 0
+    clips.forEachIndexed { index, clip ->
+        clip.samples.copyInto(combined, destination); destination += clip.samples.size
+        if (index != clips.lastIndex) destination += silenceSamples
+    }
+    return CanonicalVoicePcm(combined)
+}
+
 data class VoiceMacroSlot(
     val index: Int,
     val label: String,
