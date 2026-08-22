@@ -11,6 +11,8 @@ internal enum class BandMapAgeState { CURRENT, AGING, STALE, EXPIRED, PINNED_STA
 internal enum class BandMapLayoutMode { MULTI_VERTICAL, MULTI_HORIZONTAL, GRID_OVERVIEW, SINGLE_EXPANDED }
 internal enum class BandMapDirection { LOW_TO_HIGH, HIGH_TO_LOW }
 internal enum class BandMapSegmentProfile { WHOLE, CW_DISPLAY, PHONE_DISPLAY, DIGI_DISPLAY, CUSTOM }
+internal enum class BandMapIaruRegion { REGION_1, REGION_2, REGION_3, UNKNOWN }
+internal enum class BandMapOperatingSegmentKind { CW, DATA, PHONE, FM_REPEATER, BEACON_SATELLITE, CUSTOM }
 internal enum class BandMapEvidenceKind { CURRENT_OBSERVED, EMPIRICAL_OUTLOOK, HISTORICAL_PERSONAL }
 internal enum class BandMapEvidenceStatus { POSITIVE, NEUTRAL, NEGATIVE, UNKNOWN, UNAVAILABLE }
 internal enum class BandMapNeedTruth { NEEDED, WORKED, CONFIRMED, UNKNOWN }
@@ -42,6 +44,45 @@ internal val bandMapBands = listOf(
     BandMapBand("2mm", 134_000_000_000, 149_000_000_000), BandMapBand("1mm", 241_000_000_000, 250_000_000_000),
 )
 
+internal val bandMapVisibleBands = listOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m", "70cm", "23cm")
+
+internal data class BandMapOperatingSegment(
+    val band: String,
+    val kind: BandMapOperatingSegmentKind,
+    val lowerHz: Long,
+    val upperHz: Long,
+    val label: String,
+    val pattern: String,
+)
+
+internal data class BandMapDisplayPlan(
+    val region: BandMapIaruRegion,
+    val source: String = "RigWeave reviewed IARU display guidance 2026-08",
+    val regulatoryAuthority: Boolean = false,
+    val segments: List<BandMapOperatingSegment>,
+    val uncertainty: String = "Operating guidance only; 60m allocations are channelised and country-specific in many administrations.",
+)
+
+internal object BandMapDisplayPlans {
+    fun forBand(band: String, region: BandMapIaruRegion): BandMapDisplayPlan {
+        val definition = bandMapBands.first { it.name == band }
+        val width = definition.upperHz - definition.lowerHz
+        val split = when (region) {
+            BandMapIaruRegion.REGION_1 -> listOf(0L, 18L, 38L, 100L)
+            BandMapIaruRegion.REGION_2 -> listOf(0L, 25L, 45L, 100L)
+            BandMapIaruRegion.REGION_3 -> listOf(0L, 20L, 40L, 100L)
+            BandMapIaruRegion.UNKNOWN -> listOf(0L, 20L, 40L, 100L)
+        }
+        fun at(percent: Long) = definition.lowerHz + width * percent / 100L
+        val rows = listOf(
+            BandMapOperatingSegment(band, BandMapOperatingSegmentKind.CW, at(split[0]), at(split[1]), "CW", "solid"),
+            BandMapOperatingSegment(band, BandMapOperatingSegmentKind.DATA, at(split[1]), at(split[2]), "DATA", "diagonal"),
+            BandMapOperatingSegment(band, BandMapOperatingSegmentKind.PHONE, at(split[2]), at(split[3]), "PHONE", "dots"),
+        )
+        return BandMapDisplayPlan(region, segments = rows)
+    }
+}
+
 internal data class BandMapSegment(
     val band: String,
     val label: String = "Whole band",
@@ -49,6 +90,13 @@ internal data class BandMapSegment(
     val upperHz: Long = bandMapBands.firstOrNull { it.name == band }?.upperHz ?: Long.MAX_VALUE,
 ) {
     init { require(lowerHz >= 0 && upperHz > lowerHz) }
+    val spanHz: Long get() = upperHz - lowerHz
+}
+
+internal data class BandMapViewport(val lowerHz: Long, val upperHz: Long) {
+    init { require(lowerHz >= 0 && upperHz > lowerHz) }
+    val spanHz: Long get() = upperHz - lowerHz
+    fun asSegment(band: String) = BandMapSegment(band, "Visible viewport", lowerHz, upperHz)
 }
 
 internal fun bandMapDisplaySegment(band: String, profile: BandMapSegmentProfile): BandMapSegment {
@@ -388,7 +436,9 @@ internal object BandMapPriorityEngine {
 }
 
 internal data class BandMapTick(val frequencyHz: Long, val position: Float, val major: Boolean)
-internal data class BandMapPlacedSpot(val id: String, val primary: Float, val lane: Int, val stackCount: Int)
+internal data class BandMapPlacedSpot(val id: String, val primary: Float, val lane: Int, val memberIds: List<String> = listOf(id)) {
+    val stackCount: Int get() = memberIds.size
+}
 
 internal object BandMapLayoutEngine {
     fun coordinate(frequencyHz: Long, segment: BandMapSegment, direction: BandMapDirection = BandMapDirection.LOW_TO_HIGH): Float {
@@ -410,14 +460,21 @@ internal object BandMapLayoutEngine {
     fun place(spots: List<BandMapSpot>, segment: BandMapSegment, pixels: Int, minimumSpacing: Int = 22): List<BandMapPlacedSpot> {
         val ordered = spots.filter { it.frequencyHz in segment.lowerHz..segment.upperHz }
             .sortedWith(compareBy<BandMapSpot>(BandMapSpot::frequencyHz).thenBy(BandMapSpot::callsign))
-        val laneLast = mutableListOf<Int>()
-        return ordered.map { spot ->
+        val laneLast = IntArray(6) { Int.MIN_VALUE / 2 }
+        val laneOutput = IntArray(6) { -1 }
+        val result = mutableListOf<BandMapPlacedSpot>()
+        ordered.forEach { spot ->
             val primary = (coordinate(spot.frequencyHz, segment) * pixels).roundToInt()
-            var lane = laneLast.indexOfFirst { primary - it >= minimumSpacing }
-            if (lane < 0) { lane = laneLast.size.coerceAtMost(5); if (lane == laneLast.size) laneLast += primary else laneLast[lane] = primary }
-            else laneLast[lane] = primary
-            val stack = ordered.count { abs((coordinate(it.frequencyHz, segment) - coordinate(spot.frequencyHz, segment)) * pixels) < minimumSpacing }
-            BandMapPlacedSpot(spot.id, primary.toFloat() / pixels.coerceAtLeast(1), lane, stack)
+            val lane = laneLast.indexOfFirst { primary - it >= minimumSpacing }
+            if (lane >= 0) {
+                laneLast[lane] = primary
+                laneOutput[lane] = result.size
+                result += BandMapPlacedSpot(spot.id, primary.toFloat() / pixels.coerceAtLeast(1), lane)
+            } else {
+                val index = laneOutput[5]
+                if (index >= 0) result[index] = result[index].copy(memberIds = (result[index].memberIds + spot.id).take(20))
+            }
         }
+        return result
     }
 }

@@ -56,6 +56,7 @@ class N1mmNetworkController(
     fun onNetworkChanged(){ close() }
     fun peerSnapshots()=peers.snapshots()
     fun diagnosticEvents()=diagnostics.snapshot()
+    fun diagnosticCounters()=diagnostics.counterSnapshot()
 
     private fun addLink(socket:Socket){
         lateinit var link:N1mmTcpLink

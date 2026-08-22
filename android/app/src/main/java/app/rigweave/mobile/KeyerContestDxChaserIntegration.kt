@@ -9,6 +9,12 @@ import app.rigweave.mobile.contest.*
 import app.rigweave.mobile.dxchaser.*
 import app.rigweave.mobile.keyer.*
 import app.rigweave.mobile.n1mm.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.util.Locale
 import java.util.UUID
@@ -155,65 +161,177 @@ class ContestQsoMutationAdapter(
 
 class ContestRuntime(
     context: Context,
-    database: QsoDatabase,
-    mutations: QsoMutationCoordinator,
+    private val database: QsoDatabase,
+    private val mutations: QsoMutationCoordinator,
     private val profiles: KeyerProfileStore,
     private val keyer: () -> KeyerDispatchPort?,
     private val operatingContext: () -> OperatingContextSnapshot,
+    private val wavelogBinding: () -> String = { "LOCAL LOG · canonical mutation adapter" },
 ) : ContestReadOnlyPort, AutoCloseable {
     private val prefs = context.getSharedPreferences("rigweave-contest-settings", Context.MODE_PRIVATE)
     val store = ContestSessionStore(context)
     val sessionController = ContestSessionController(store)
     private val serials = ContestSerialAuthority(store)
     private val registry = ContestRuleRegistry()
-    val definition: ContestDefinition = registry.all().first().definition
+    private val initialDefinition = registry.all().first().definition
     private val opportunityEvaluator = DefaultContestOpportunityEvaluator(registry)
     private val canonicalReader = ContestCanonicalQsoReader(store, database)
     private val keyerAdapter = ContestKeyerAdapter(keyer, profiles, operatingContext)
     private val mutationAdapter = ContestQsoMutationAdapter(mutations, store, serials)
+    private val scoreScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var scoreGeneration = 0L
     private var closed = false
     private var foreground = true
     private var networkArmed = false
-    private val n1mmConfig = N1mmNetworkConfig(
-        enabled = prefs.getBoolean("n1mm_enabled", false),
-        mode = runCatching { N1mmMode.valueOf(prefs.getString("n1mm_mode", N1mmMode.OFF.name).orEmpty()) }.getOrDefault(N1mmMode.OFF),
-        stationName = "RigWeave",
-        operatorCall = operatingContext().operatorCallsign.value,
-        contestName = definition.cabrilloContestName,
-        ruleVersion = definition.version.value,
-        bindAddress = if (prefs.getBoolean("n1mm_lan_opt_in", false)) prefs.getString("n1mm_bind_address", "127.0.0.1").orEmpty() else "127.0.0.1",
-        interfaceName = if (prefs.getBoolean("n1mm_lan_opt_in", false)) "operator-selected" else "loopback",
-        lanBroadcastOptIn = prefs.getBoolean("n1mm_lan_opt_in", false),
-    )
-    val n1mm = N1mmNetworkController(n1mmConfig, onCommand = { _, decision ->
-        lastMessage = "N1MM ${decision.name}; no radio, keyer, Digi, or silent logging authority"
-    })
+    private val trustedPeers = linkedMapOf<String, N1mmPeerTrust>()
+    private var peerCache = emptyList<N1mmPeerSnapshot>()
 
-    var activeSession by mutableStateOf(loadOrCreateSession()); private set
+    var activeSession by mutableStateOf(loadOrCreateSession(initialDefinition)); private set
+    var definition by mutableStateOf(runCatching { registry.require(activeSession.definitionId).definition }.getOrDefault(initialDefinition)); private set
     var workspacePage by mutableStateOf(ContestWorkspacePage.SETUP); private set
     var callsign by mutableStateOf(""); private set
+    var rstSent by mutableStateOf(if (definition.mode == ContestMode.CW) "599" else "59"); private set
+    var rstReceived by mutableStateOf(if (definition.mode == ContestMode.CW) "599" else "59"); private set
+    var receivedExchange by mutableStateOf<Map<ContestExchangeField, String>>(emptyMap()); private set
     var exchangeText by mutableStateOf(""); private set
+    var panelLayout by mutableStateOf(loadPanelLayout()); private set
+    var exportPreview by mutableStateOf(""); private set
     var lastMessage by mutableStateOf("Contest setup ready; nothing is armed"); private set
 
-    private fun loadOrCreateSession(): ContestSession {
+    private var n1mmConfig = loadN1mmConfig()
+    var n1mm = newN1mmController(); private set
+
+    val definitions: List<ContestDefinition> get() = registry.all().map(ContestRulePack::definition)
+
+    private fun loadOrCreateSession(fallback: ContestDefinition): ContestSession {
         val stored = prefs.getString("last_session_id", null)?.let { store.loadSession(ContestSessionId(it)) }
         if (stored != null) return sessionController.restored(stored).also(store::saveSession)
         val now = Instant.now().epochSecond
         return ContestSession(
-            id = ContestSessionId(UUID.randomUUID().toString()), definitionId = definition.id,
-            ruleVersion = definition.version, name = definition.humanName, utcStart = now, utcEnd = now + 86_400,
+            id = ContestSessionId(UUID.randomUUID().toString()), definitionId = fallback.id,
+            ruleVersion = fallback.version, name = fallback.humanName, utcStart = now, utcEnd = now + 86_400,
             stationCallsign = operatingContext().stationCallsign.value,
             stationGrid = operatingContext().stationGrid.value, station = ContestEntityInfo(),
-            category = ContestCategory(mode = definition.mode), operators = listOf(operatingContext().operatorCallsign.value),
+            category = ContestCategory(mode = fallback.mode), operators = listOf(operatingContext().operatorCallsign.value),
         ).also { session -> store.saveSession(session); prefs.edit().putString("last_session_id", session.id.value).apply() }
+    }
+
+    private fun loadN1mmConfig() = N1mmNetworkConfig(
+        enabled = prefs.getBoolean("n1mm_enabled", false),
+        mode = runCatching { N1mmMode.valueOf(prefs.getString("n1mm_mode", N1mmMode.OFF.name).orEmpty()) }.getOrDefault(N1mmMode.OFF),
+        stationName = "RigWeave", operatorCall = operatingContext().operatorCallsign.value,
+        contestName = definition.cabrilloContestName, ruleVersion = definition.version.value,
+        bindAddress = if (prefs.getBoolean("n1mm_lan_opt_in", false)) prefs.getString("n1mm_bind_address", "127.0.0.1").orEmpty() else "127.0.0.1",
+        interfaceName = if (prefs.getBoolean("n1mm_lan_opt_in", false)) "operator-selected" else "loopback",
+        lanBroadcastOptIn = prefs.getBoolean("n1mm_lan_opt_in", false),
+    )
+
+    private fun newN1mmController() = N1mmNetworkController(n1mmConfig, trusts = trustedPeers.values.toList(), onCommand = { _, decision ->
+        lastMessage = "N1MM ${decision.name}; no radio, keyer, Digi, or silent logging authority"
+    })
+
+    private fun rebuildN1mmController() {
+        peerCache = (n1mm.peerSnapshots() + peerCache).distinctBy(N1mmPeerSnapshot::station)
+        n1mm.close()
+        networkArmed = false
+        n1mm = newN1mmController()
+    }
+
+    private fun loadPanelLayout(): ContestPanelLayout {
+        val panels = prefs.getString("panel_order", null)?.split(',')?.mapNotNull { value ->
+            runCatching { ContestPanel.valueOf(value) }.getOrNull()
+        }.orEmpty().let { saved -> (saved + ContestPanel.entries).distinct() }
+        val density = runCatching { ContestPanelDensity.valueOf(prefs.getString("panel_density", ContestPanelDensity.NORMAL.name).orEmpty()) }
+            .getOrDefault(ContestPanelDensity.NORMAL)
+        return ContestPanelLayout(panels, density)
+    }
+
+    private fun validation(): List<ContestValidationIssue> = buildList {
+        if (activeSession.name.isBlank()) add(ContestValidationIssue(ContestTruth.INVALID, null, "Session name is required"))
+        if (activeSession.stationCallsign.isBlank()) add(ContestValidationIssue(ContestTruth.INVALID, null, "Station callsign is required"))
+        if (activeSession.operators.isEmpty()) add(ContestValidationIssue(ContestTruth.INVALID, null, "At least one operator callsign is required"))
+        if (activeSession.utcEnd <= activeSession.utcStart) add(ContestValidationIssue(ContestTruth.INVALID, null, "UTC end must be after UTC start"))
+        if (activeSession.stationGrid.isNotBlank() && !Regex("^[A-Ra-r]{2}[0-9]{2}([A-Xa-x]{2})?$", RegexOption.IGNORE_CASE).matches(activeSession.stationGrid))
+            add(ContestValidationIssue(ContestTruth.INVALID, ContestExchangeField.GRID, "Station grid must be a valid 4- or 6-character Maidenhead locator"))
+        registry.require(definition.id).let { pack -> addAll(ContestRuleValidator.validate(pack)) }
     }
 
     fun setPage(value: ContestWorkspacePage) { workspacePage = value }
     fun updateCallsign(value: String) { callsign = value.uppercase(Locale.US).filter { it.isLetterOrDigit() || it == '/' }.take(16) }
-    fun setExchange(value: String) { exchangeText = value.take(80) }
+    fun updateRstSent(value: String) { rstSent = value.filter(Char::isDigit).take(3) }
+    fun updateRstReceived(value: String) { rstReceived = value.filter(Char::isDigit).take(3) }
+    fun setExchange(value: String) {
+        exchangeText = value.take(80)
+        receivedExchange = ContestExchangeEngine().parse(definition, exchangeText)
+    }
+    fun setExchangeField(field: ContestExchangeField, value: String) {
+        receivedExchange = receivedExchange.toMutableMap().apply { put(field, value.take(24)) }
+        exchangeText = definition.receivedExchange.mapNotNull(receivedExchange::get).joinToString(" ")
+    }
+
+    fun selectDefinition(id: ContestDefinitionId) {
+        if (activeSession.state !in setOf(ContestSessionState.DRAFT, ContestSessionState.READY, ContestSessionState.STOPPED)) return
+        definition = registry.require(id).definition
+        activeSession = activeSession.copy(definitionId = definition.id, ruleVersion = definition.version,
+            name = definition.humanName, category = activeSession.category.copy(mode = definition.mode))
+        rstSent = if (definition.mode == ContestMode.CW) "599" else "59"
+        rstReceived = rstSent
+        saveSession()
+        n1mmConfig = loadN1mmConfig()
+        rebuildN1mmController()
+    }
+
+    fun newSession() {
+        pause("NEW SESSION")
+        val now = Instant.now().epochSecond
+        activeSession = ContestSession(ContestSessionId(UUID.randomUUID().toString()), definition.id, definition.version,
+            definition.humanName, now, now + 86_400, operatingContext().stationCallsign.value,
+            operatingContext().stationGrid.value, ContestEntityInfo(), ContestCategory(mode = definition.mode),
+            listOf(operatingContext().operatorCallsign.value).filter(String::isNotBlank))
+        saveSession()
+        clearEntry()
+    }
+
+    fun cloneSession() {
+        pause("CLONE SESSION")
+        activeSession = activeSession.copy(id = ContestSessionId(UUID.randomUUID().toString()),
+            name = "${activeSession.name} copy", state = ContestSessionState.DRAFT, networkArmed = false,
+            keyerArmed = false, score = ContestScoreSnapshot())
+        saveSession()
+        clearEntry()
+    }
+
+    fun updateSession(value: ContestSession) {
+        if (activeSession.state in setOf(ContestSessionState.DRAFT, ContestSessionState.READY, ContestSessionState.STOPPED)) {
+            activeSession = value.copy(id = activeSession.id, definitionId = definition.id, ruleVersion = definition.version,
+                networkArmed = false, keyerArmed = false)
+        }
+    }
+
+    fun saveSession() {
+        store.saveSession(activeSession.copy(networkArmed = false, keyerArmed = false))
+        prefs.edit().putString("last_session_id", activeSession.id.value).apply()
+        lastMessage = if (validation().any { it.truth in setOf(ContestTruth.INVALID, ContestTruth.INCOMPLETE) })
+            "Session saved with validation items; START remains blocked" else "Contest session saved; nothing was armed"
+    }
+
+    fun closeSession() {
+        if (activeSession.state == ContestSessionState.RUNNING) return
+        activeSession = when (activeSession.state) {
+            ContestSessionState.PAUSED -> sessionController.transition(sessionController.transition(activeSession, ContestSessionState.STOPPED), ContestSessionState.CLOSED)
+            ContestSessionState.DRAFT, ContestSessionState.READY, ContestSessionState.STOPPED -> sessionController.transition(activeSession, ContestSessionState.CLOSED)
+            ContestSessionState.CLOSED -> activeSession
+            ContestSessionState.RUNNING -> activeSession
+        }
+        networkArmed = false
+        n1mm.close()
+        lastMessage = "Contest session closed"
+    }
 
     fun startSession() {
         if (!foreground) { lastMessage = "Return to foreground before starting Contest"; return }
+        val invalid = validation().filter { it.truth in setOf(ContestTruth.INVALID, ContestTruth.INCOMPLETE) }
+        if (invalid.isNotEmpty()) { lastMessage = "Start blocked: ${invalid.first().reason}"; return }
         activeSession = when (activeSession.state) {
             ContestSessionState.DRAFT -> sessionController.transition(
                 sessionController.transition(activeSession, ContestSessionState.READY), ContestSessionState.RUNNING)
@@ -248,6 +366,28 @@ class ContestRuntime(
         if (!networkArmed) n1mm.close() else reconcileNetwork()
         lastMessage = if (networkArmed) "N1MM explicitly armed under ${n1mmConfig.mode}" else "N1MM stopped"
     }
+
+    fun configureNetwork(enabled: Boolean, mode: String, lan: Boolean, bindAddress: String) {
+        val selectedMode = runCatching { N1mmMode.valueOf(mode) }.getOrDefault(N1mmMode.OFF)
+        val effectiveEnabled = enabled && selectedMode != N1mmMode.OFF
+        val effectiveBind = if (lan) bindAddress.trim().take(64).ifBlank { "127.0.0.1" } else "127.0.0.1"
+        prefs.edit().putBoolean("n1mm_enabled", effectiveEnabled).putString("n1mm_mode", selectedMode.name)
+            .putBoolean("n1mm_lan_opt_in", lan).putString("n1mm_bind_address", effectiveBind).apply()
+        n1mmConfig = loadN1mmConfig()
+        rebuildN1mmController()
+        lastMessage = "N1MM configuration saved unarmed · ${n1mmConfig.mode} · ${n1mmConfig.bindAddress}"
+    }
+
+    fun setPeerTrust(station: String, trusted: Boolean) {
+        val peer = (n1mm.peerSnapshots() + peerCache).firstOrNull { it.station == station } ?: return
+        if (trusted) trustedPeers[station] = N1mmPeerTrust(peer.station, peer.operatorCall, n1mmConfig.interfaceName,
+            peer.address, peer.address, definition.cabrilloContestName, definition.version.value)
+        else trustedPeers.remove(station)
+        rebuildN1mmController()
+        lastMessage = "Peer $station ${if (trusted) "trusted for this exact contest/address contract" else "trust removed"}; network remains unarmed"
+    }
+
+    fun reviewTrustedMode() { lastMessage = "Trusted LAN requires exact peer, operator, interface, contest, rule and address match" }
 
     private fun reconcileNetwork() {
         if (networkArmed && foreground && activeSession.state == ContestSessionState.RUNNING && !n1mm.active)
@@ -286,9 +426,7 @@ class ContestRuntime(
             sent = sent, received = received)
         val receipt = mutationAdapter.save(activeSession, definition, draft, reservation)
         if (receipt.saved) {
-            val rows = priorDrafts()
-            activeSession = activeSession.copy(score = ContestScoreEngine().rebuild(definition, rows, Instant.now().epochSecond))
-            store.saveSession(activeSession)
+            rebuildScore()
             callsign = ""; exchangeText = ""
         }
         lastMessage = receipt.detail
@@ -312,8 +450,8 @@ class ContestRuntime(
             ContestEntityInfo(), priorDrafts(), snapshot().claims, Instant.now().epochSecond))
     }
 
-    private fun priorDrafts(): List<ContestQsoDraft> {
-        val page = canonicalReader.page(activeSession.id, limit = 500)
+    private fun priorDrafts(sessionId: ContestSessionId = activeSession.id): List<ContestQsoDraft> {
+        val page = canonicalReader.page(sessionId, limit = 101)
         return page.rows.mapNotNull { qso ->
             val band = ContestBand.entries.firstOrNull { it.label.equals(qso.band, true) } ?: return@mapNotNull null
             val mode = when (qso.mode.uppercase(Locale.US)) { "CW" -> ContestMode.CW; "SSB", "USB", "LSB" -> ContestMode.SSB; else -> ContestMode.DIGITAL }
@@ -324,9 +462,94 @@ class ContestRuntime(
     fun digitalCompatible(): Boolean = activeSession.state != ContestSessionState.RUNNING ||
         definition.allowedModes.any { it in setOf(ContestMode.DIGITAL, ContestMode.MIXED) }
 
-    fun workspaceState() = ContestWorkspaceState(activeSession, definition, workspacePage, callsign, exchangeText,
-        score = activeSession.score, networkMode = if (n1mm.active) n1mmConfig.mode.name else "OFF",
-        peers = n1mm.peerSnapshots().map { it.station })
+    fun sendCurrentMessage() {
+        val type = when { callsign.isBlank() -> if (activeSession.role == ContestOperatingRole.RUN) ContestKeyerIntentType.CQ else ContestKeyerIntentType.MY_CALL
+            exchangeText.isBlank() -> ContestKeyerIntentType.SEND_EXCHANGE
+            else -> { logCurrent(); return }
+        }
+        dispatchKeyer(ContestKeyerIntent(type, activeSession.id, definition.id, activeSession.role,
+            activeSession.category.mode, operatingContext().generation,
+            mapOf("CALL" to callsign, "EXCHANGE" to exchangeText), false))
+    }
+
+    fun clearEntry() { callsign = ""; exchangeText = ""; receivedExchange = emptyMap() }
+
+    fun updateLayout(value: ContestPanelLayout) {
+        panelLayout = value.copy(panels = value.panels.distinct())
+        prefs.edit().putString("panel_order", panelLayout.panels.joinToString(",", transform = ContestPanel::name))
+            .putString("panel_density", panelLayout.density.name).apply()
+    }
+
+    fun updateQso(id: String, call: String, sent: String, received: String) {
+        val row = database.qso(id) ?: run { lastMessage = "Canonical QSO was not found"; return }
+        mutations.update(row.copy(callsign = call.uppercase(Locale.US).take(24), rstSent = sent.take(4), rstReceived = received.take(4)), QsoOrigin.OPERATOR)
+        rebuildScore()
+        lastMessage = "Canonical QSO updated; Wavelog outbox ownership preserved"
+    }
+
+    fun deleteQso(id: String) {
+        mutations.delete(id, QsoDeleteIntent.LOCAL_ONLY, QsoOrigin.OPERATOR)
+        rebuildScore()
+        lastMessage = "Canonical local QSO deleted; no remote delete was requested"
+    }
+
+    private fun rebuildScore() {
+        val generation = ++scoreGeneration
+        val requestedSession = activeSession
+        val requestedDefinition = definition
+        scoreScope.launch {
+            val score = ContestScoreEngine().rebuild(
+                requestedDefinition,
+                priorDrafts(requestedSession.id),
+                Instant.now().epochSecond,
+            )
+            val updated = withContext(Dispatchers.Main.immediate) {
+                if (closed || generation != scoreGeneration || activeSession.id != requestedSession.id) null
+                else activeSession.copy(score = score).also { activeSession = it }
+            }
+            if (updated != null) withContext(Dispatchers.IO) { store.saveSession(updated) }
+        }
+    }
+
+    fun previewExport(kind: String) {
+        val rows = priorDrafts().asSequence()
+        exportPreview = if (kind.equals("ADIF", true)) ContestExport.adif(activeSession, definition, rows).take(30).joinToString("\n")
+        else ContestExport.cabrillo(activeSession, definition, activeSession.score, rows).let { result ->
+            "${result.state}\n" + result.issues.joinToString("\n") { "${it.truth}: ${it.field} · ${it.reason}" } +
+                result.lines.take(30).joinToString("\n", prefix = if (result.issues.isEmpty()) "" else "\n")
+        }
+        lastMessage = "$kind preview generated locally; no file or upload was created"
+    }
+
+    fun workspaceState(bandMapRows: List<ContestBandMapRow> = emptyList(), clusterRows: List<ContestBandMapRow> = emptyList()): ContestWorkspaceState {
+        val context = operatingContext()
+        val linked = canonicalReader.page(activeSession.id, limit = 101)
+        val calls = linked.rows.groupingBy { it.callsign.uppercase(Locale.US) }.eachCount()
+        val reviewRows = linked.rows.take(100).map { qso ->
+            val invalid = qso.callsign.isBlank() || qso.frequencyHz <= 0 || qso.mode.isBlank()
+            ContestReviewRow(qso.id, qso.callsign, qso.createdAt, qso.frequencyHz, qso.band, qso.mode,
+                qso.rstSent, qso.rstReceived, networkOrigin = qso.remoteId.isNotBlank(),
+                duplicate = (calls[qso.callsign.uppercase(Locale.US)] ?: 0) > 1, invalid = invalid,
+                reviewRequired = invalid, zeroPoint = false)
+        }
+        val livePeers = n1mm.peerSnapshots()
+        if (livePeers.isNotEmpty()) peerCache = livePeers
+        val peers = (livePeers + peerCache).distinctBy(N1mmPeerSnapshot::station).map { peer ->
+            ContestNetworkPeer(peer.station, peer.address, peer.operatorCall, peer.version, peer.contestName,
+                peer.lastSeen, peer.station in trustedPeers)
+        }
+        val opportunity = callsign.takeIf(String::isNotBlank)?.let { opportunity(it, context.band.value, context.mode.value) }
+        return ContestWorkspaceState(activeSession, definition, definitions, workspacePage, callsign, rstSent, rstReceived,
+            receivedExchange, exchangeText, opportunity?.dupe ?: ContestDupeState.UNKNOWN,
+            opportunity?.newMultipliers.orEmpty(), activeSession.score, validation(), wavelogBinding(),
+            context.band.value.ifBlank { "UNAVAILABLE" }, context.mode.value.ifBlank { "UNAVAILABLE" }, context.receiveFrequencyHz.value,
+            profiles.activeProfile().let { "${it.name} · ${keyer()?.snapshot()?.state ?: "UNAVAILABLE"}" },
+            panelLayout, bandMapRows.take(40), clusterRows.take(40), reviewRows, linked.rows.size > 100,
+            ContestNetworkState(n1mmConfig.enabled, networkArmed, n1mm.active, n1mmConfig.mode.name,
+                n1mmConfig.bindAddress, n1mmConfig.tcpPort, n1mmConfig.stationName, n1mmConfig.lanBroadcastOptIn,
+                peers, n1mm.diagnosticCounters(), n1mm.diagnosticEvents().lastOrNull()?.safeReason.orEmpty()),
+            exportPreview, lastMessage)
+    }
 
     override fun snapshot() = ContestReadOnlySnapshot(activeSession, claims = emptyList(),
         n1mmEnabled = n1mmConfig.enabled, n1mmArmed = networkArmed, n1mmPeers = n1mm.peerSnapshots().size,
@@ -335,6 +558,7 @@ class ContestRuntime(
     override fun close() {
         if (closed) return
         closed = true
+        scoreScope.cancel()
         networkArmed = false
         n1mm.close()
         keyer()?.stop(KeyerStopReason.ContextChanged)

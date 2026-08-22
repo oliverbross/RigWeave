@@ -18,6 +18,8 @@ internal data class BandMapSettings(
     val activePresetId: String = "all-current",
     val labelDensity: Int = 2,
     val linkedZoom: Boolean = false,
+    val iaruRegion: BandMapIaruRegion = BandMapIaruRegion.UNKNOWN,
+    val viewports: Map<String, BandMapViewport> = emptyMap(),
     val palette: String = "COLOUR_VISION_FRIENDLY",
     val presets: List<BandMapPreset> = builtInBandMapPresets,
     val marks: List<BandMapMark> = emptyList(),
@@ -36,6 +38,10 @@ internal object BandMapSettingsCodec {
         .put("active_preset", value.activePresetId)
         .put("label_density", value.labelDensity)
         .put("linked_zoom", value.linkedZoom)
+        .put("iaru_region", value.iaruRegion.name)
+        .put("viewports", JSONObject().apply { value.viewports.filterKeys { it in bandMapVisibleBands }.forEach { (band, viewport) ->
+            put(band, JSONObject().put("lower_hz", viewport.lowerHz).put("upper_hz", viewport.upperHz))
+        } })
         .put("palette", value.palette)
         .put("traversal", value.traversal.name)
         .put("keyer_context", value.keyerContextVisible)
@@ -51,8 +57,9 @@ internal object BandMapSettingsCodec {
         require(text.toByteArray().size <= 512_000) { "Band Map settings are too large" }
         val root = JSONObject(text)
         require(root.getInt("schema") == BAND_MAP_SETTINGS_SCHEMA) { "Unsupported Band Map settings schema" }
-        val bands = root.getJSONArray("bands").strings().map { it.lowercase() }.distinct()
-        require(bands.isNotEmpty() && bands.size <= bandMapBands.size && bands.all { name -> bandMapBands.any { it.name == name } }) { "Invalid selected bands" }
+        val decodedBands = root.getJSONArray("bands").strings().map { it.lowercase() }.distinct()
+        require(decodedBands.size <= bandMapBands.size && decodedBands.all { name -> bandMapBands.any { it.name == name } }) { "Invalid selected bands" }
+        val bands = decodedBands.filter { it in bandMapVisibleBands }.ifEmpty { listOf("40m", "20m", "15m", "10m") }
         val presets = root.optJSONArray("presets")?.objects()?.map(::decodePreset).orEmpty().ifEmpty { builtInBandMapPresets }
         require(presets.size <= 40 && presets.map(BandMapPreset::id).distinct().size == presets.size) { "Invalid Band Map preset collection" }
         val marks = root.optJSONArray("marks")?.objects()?.take(1_000)?.map { row ->
@@ -63,11 +70,22 @@ internal object BandMapSettingsCodec {
                 row.optLong("created", Instant.now().epochSecond), row.optString("note").take(80))
         }.orEmpty()
         val density = root.optInt("label_density", 2); require(density in 1..3) { "Invalid label density" }
+        val viewports = buildMap {
+            root.optJSONObject("viewports")?.let { values -> values.keys().asSequence().take(bandMapVisibleBands.size).forEach { band ->
+                if (band in bandMapVisibleBands) values.optJSONObject(band)?.let { row ->
+                    val definition = bandMapBands.first { it.name == band }
+                    val lower = row.optLong("lower_hz", definition.lowerHz); val upper = row.optLong("upper_hz", definition.upperHz)
+                    if (lower >= definition.lowerHz && upper <= definition.upperHz && upper > lower) put(band, BandMapViewport(lower, upper))
+                }
+            } }
+        }
         return BandMapSettings(
             enabled = root.optBoolean("enabled", true), navigationVisible = root.optBoolean("navigation_visible", true),
             selectedLayout = BandMapLayoutMode.valueOf(root.optString("layout", BandMapLayoutMode.MULTI_VERTICAL.name)),
             selectedBands = bands, activePresetId = root.optString("active_preset", "all-current").take(64),
             labelDensity = density, linkedZoom = root.optBoolean("linked_zoom"),
+            iaruRegion = runCatching { BandMapIaruRegion.valueOf(root.optString("iaru_region", BandMapIaruRegion.UNKNOWN.name)) }.getOrDefault(BandMapIaruRegion.UNKNOWN),
+            viewports = viewports,
             palette = root.optString("palette", "COLOUR_VISION_FRIENDLY").take(40), presets = presets, marks = marks,
             traversal = BandMapTraversal.valueOf(root.optString("traversal", BandMapTraversal.PRIORITY.name)),
             keyerContextVisible = root.optBoolean("keyer_context", true), chaserContextVisible = root.optBoolean("chaser_context", true),

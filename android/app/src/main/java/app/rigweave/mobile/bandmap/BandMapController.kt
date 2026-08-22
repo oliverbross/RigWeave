@@ -225,13 +225,56 @@ internal class BandMapController(
     fun select(id: String?) { snapshot = snapshot.copy(selectedSpotId = id) }
 
     fun updateSettings(transform: (BandMapSettings) -> BandMapSettings) {
-        val candidate = transform(settings)
+        val candidate = transform(settings).let { value ->
+            value.copy(selectedBands = value.selectedBands.filter { it in bandMapVisibleBands }.distinct()
+                .ifEmpty { listOf("40m", "20m", "15m", "10m") })
+        }
         BandMapSettingsCodec.decode(BandMapSettingsCodec.encode(candidate))
         settings = candidate; saveSettings(candidate); latestInputs?.let(::submit)
     }
 
+    fun visibleSegment(band: String): BandMapSegment {
+        settings.viewports[band]?.let { return it.asSegment(band) }
+        val preset = settings.presets.firstOrNull { it.id == settings.activePresetId }
+        return preset?.filter?.segments?.firstOrNull { it.band == band } ?: BandMapSegment(band)
+    }
+
+    fun zoom(band: String, factor: Double, anchorHz: Long? = null) {
+        val targets = if (settings.linkedZoom) settings.selectedBands else listOf(band)
+        updateSettings { current ->
+            val next = current.viewports.toMutableMap()
+            targets.forEach { target ->
+                val definition = bandMapBands.firstOrNull { it.name == target } ?: return@forEach
+                val old = next[target] ?: BandMapViewport(definition.lowerHz, definition.upperHz)
+                val minimum = ((definition.upperHz - definition.lowerHz) / 200L).coerceAtLeast(1_000L)
+                val span = (old.spanHz * factor).toLong().coerceIn(minimum, definition.upperHz - definition.lowerHz)
+                val anchor = (anchorHz ?: ((old.lowerHz + old.upperHz) / 2L)).coerceIn(old.lowerHz, old.upperHz)
+                val ratio = (anchor - old.lowerHz).toDouble() / old.spanHz.toDouble()
+                var lower = anchor - (span * ratio).toLong(); var upper = lower + span
+                if (lower < definition.lowerHz) { lower = definition.lowerHz; upper = lower + span }
+                if (upper > definition.upperHz) { upper = definition.upperHz; lower = upper - span }
+                next[target] = BandMapViewport(lower, upper)
+            }
+            current.copy(viewports = next)
+        }
+    }
+
+    fun pan(band: String, fraction: Double) {
+        updateSettings { current ->
+            val definition = bandMapBands.first { it.name == band }
+            val old = current.viewports[band] ?: BandMapViewport(definition.lowerHz, definition.upperHz)
+            val shift = (old.spanHz * fraction).toLong()
+            var lower = old.lowerHz + shift; var upper = old.upperHz + shift
+            if (lower < definition.lowerHz) { lower = definition.lowerHz; upper = lower + old.spanHz }
+            if (upper > definition.upperHz) { upper = definition.upperHz; lower = upper - old.spanHz }
+            current.copy(viewports = current.viewports + (band to BandMapViewport(lower, upper)))
+        }
+    }
+
+    fun resetViewport(band: String) = updateSettings { current -> current.copy(viewports = current.viewports - band) }
+
     fun prepare(action: WorkspaceAction) {
-        val selectedBand = action.band.takeIf { band -> bandMapBands.any { it.name.equals(band, true) } }
+        val selectedBand = action.band.takeIf { band -> bandMapVisibleBands.any { it.equals(band, true) } }
         val requestedPreset = action.presetId.takeIf { id -> settings.presets.any { it.id == id } }
         updateSettings { current ->
             val activeId = requestedPreset ?: current.activePresetId
