@@ -11,6 +11,10 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_DOCS = [
+    "RIGWEAVE_FINAL_WHOLE_APP_CONVERGENCE.md",
+    "FINAL_WHOLE_APP_COMPLETION_MATRIX.md",
+    "FINAL_WHOLE_APP_OWNERSHIP.md",
+    "FINAL_INTEGRATED_LIVE_ACCEPTANCE.md",
     "RIGWEAVE_FINAL_CONVERGENCE.md",
     "FINAL_CORE_COMPLETION_MATRIX.md",
     "FINAL_CORE_OWNERSHIP.md",
@@ -25,6 +29,9 @@ SCHEMA_PATTERNS = {
     "Digi schema 2": r"SQLiteOpenHelper\(context, databaseName, null, 2\)",
     "Groups.io schema 2": r"SQLiteOpenHelper\(appContext, databaseName, null, 2\)",
     "projection contract 2": r"QSO schema 13 · projection contract 2 · Neural 5 · Digi 2 · Groups\.io 2",
+    "Contest schema 1": r"class ContestSessionStore[^\n]+SQLiteOpenHelper\(context, name, null, 1\)",
+    "DX Chaser schema 1": r"class DxChaserStore[^\n]+SQLiteOpenHelper\(context, DATABASE_NAME, null, 1\)",
+    "Band Maps preferences only": r"BAND_MAP_PREFERENCES\s*=\s*\"rigweave-bandmaps-v1\"",
 }
 
 
