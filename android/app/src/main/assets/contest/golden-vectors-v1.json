@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "vectors": [
+    {"id":"cq-ww-score","family":"CQ_WW","sameCountry":0,"sameContinent":1,"northAmericaDifferentCountry":2,"differentContinent":3},
+    {"id":"cq-wpx-score","family":"CQ_WPX","differentContinentHigh":3,"differentContinentLow":6,"sameContinentDifferentCountryHigh":1,"sameContinentDifferentCountryLow":2},
+    {"id":"arrl-dx-score","family":"ARRL_DX","oppositeEntrantSides":3,"sameEntrantSide":"INVALID"},
+    {"id":"iaru-score","family":"IARU_HF","sameZone":1,"sameContinentDifferentZone":3,"differentContinent":5},
+    {"id":"field-day-score","family":"ARRL_FIELD_DAY","phone":1,"cw":2,"digital":2},
+    {"id":"cq-160-score","family":"CQ_160","sameCountry":2,"sameContinent":5,"differentContinent":10},
+    {"id":"oceania-score","family":"OCEANIA_DX","160M":20,"80M":10,"40M":5,"20M":1,"15M":2,"10M":3},
+    {"id":"general-score","family":"GENERAL_SERIAL","points":1}
+  ]
+}
