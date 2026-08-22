@@ -3,11 +3,12 @@ import UIKit
 import UniformTypeIdentifiers
 
 enum Destination: String, CaseIterable, Identifiable {
-    case home = "Home", radio = "Radio", spots = "Spots", dx = "DX", log = "Log"
+    case home = "Home", radio = "Radio", spots = "Spots", dx = "Neural DX", log = "Log"
+    case intelligence = "Log Intelligence", sync = "Sync", operations = "Operations"
     case panadapter = "Panadapter", lookup = "Lookup", groupsIo = "Groups.io", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
-        switch self { case .home: "house"; case .radio: "antenna.radiowaves.left.and.right"; case .spots: "dot.radiowaves.up.forward"; case .dx: "globe.americas"; case .log: "list.clipboard"; case .panadapter: "waveform.path.ecg.rectangle"; case .lookup: "person.text.rectangle"; case .groupsIo: "person.3.sequence"; case .settings: "gearshape" }
+        switch self { case .home: "house"; case .radio: "antenna.radiowaves.left.and.right"; case .spots: "dot.radiowaves.up.forward"; case .dx: "globe.americas"; case .log: "list.clipboard"; case .intelligence: "chart.bar.xaxis"; case .sync: "arrow.triangle.2.circlepath"; case .operations: "location.north.circle"; case .panadapter: "waveform.path.ecg.rectangle"; case .lookup: "person.text.rectangle"; case .groupsIo: "person.3.sequence"; case .settings: "gearshape" }
     }
 }
 
@@ -55,17 +56,37 @@ struct ContentView: View {
 
     @ViewBuilder private func destinationView(_ destination: Destination) -> some View {
         switch destination {
-        case .home: HomeView()
+        case .home: HomeView(route: route)
         case .radio: RadioView()
         case .spots: SpotsView()
         case .dx: DXView()
         case .log: LogView()
+        case .intelligence: LogIntelligenceView(route: route)
+        case .sync: SyncCentreView(route: route)
+        case .operations: OperationsView(route: route)
         case .panadapter: PanadapterView()
         case .lookup: LookupView()
         case .groupsIo: GroupsIoView()
         case .settings: SettingsView()
         }
     }
+
+    private func route(_ action: WorkspaceAction) {
+        selection = switch action {
+        case .openRadio: .radio
+        case .openNeuralDX: .dx
+        case .openLog: .log
+        case .openLogIntelligence: .intelligence
+        case .openSync: .sync
+        case .openOperations: .operations
+        case .openGroups: groupsIo.enabled ? .groupsIo : .settings
+        case .openSettings: .settings
+        }
+    }
+}
+
+enum WorkspaceAction {
+    case openRadio, openNeuralDX, openLog, openLogIntelligence, openSync, openOperations, openGroups, openSettings
 }
 
 enum RigTheme {
@@ -119,12 +140,114 @@ struct RadioSummary: View {
 }
 
 struct HomeView: View {
+    @EnvironmentObject private var radio: RadioModel
+    @EnvironmentObject private var logbook: QSOStore
+    @EnvironmentObject private var features: FeatureModel
+    @EnvironmentObject private var groupsIo: GroupsIoController
+    let route: (WorkspaceAction) -> Void
+
     var body: some View {
         ScrollView { VStack(alignment: .leading, spacing: 22) {
             BrandHeader(); RadioSummary()
-            Text("Waiting for a real KX3 connection. This build contains no demo or simulated radio state.")
-                .foregroundStyle(.secondary)
+            let state = radio.snapshot
+            GroupBox("Operating context · source truth") {
+                VStack(alignment: .leading, spacing: 8) {
+                    LabeledContent("Radio", value: state.connected ? "\(state.frequencyText) · \(state.mode)" : "Disconnected")
+                    LabeledContent("Log", value: "\(logbook.records.count) local · \(features.wavelog.contacts.count) Wavelog cached")
+                    LabeledContent("DX", value: "\(features.dx.opportunities.count) current opportunities · \(features.clusterStatus)")
+                    LabeledContent("Groups.io", value: groupsIo.enabled ? "\(groupsIo.messages.count) cached · \(groupsIo.status)" : "Disabled")
+                    Text("Every value above is read from the owning model. Missing state remains unavailable; no demo or simulated radio state is substituted.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 210))], spacing: 12) {
+                HomeActionCard(title: "Neural DX", detail: "\(features.dx.opportunities.count) ranked observations", icon: "globe.americas") { route(.openNeuralDX) }
+                HomeActionCard(title: "Log intelligence", detail: "\(logbook.records.count) local contacts", icon: "chart.bar.xaxis") { route(.openLogIntelligence) }
+                HomeActionCard(title: "Sync", detail: "\(features.wavelog.pendingCount) Wavelog queued", icon: "arrow.triangle.2.circlepath") { route(.openSync) }
+                HomeActionCard(title: "Operations", detail: "Portable, satellite and QO-100 truth", icon: "location.north.circle") { route(.openOperations) }
+                HomeActionCard(title: "Groups.io", detail: groupsIo.enabled ? "\(groupsIo.messages.count) cached messages" : "Enable in Settings", icon: "person.3.sequence") { route(.openGroups) }
+            }
         }.padding() }.navigationTitle("Home")
+    }
+}
+
+private struct HomeActionCard: View {
+    let title: String
+    let detail: String
+    let icon: String
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: icon).font(.title2).foregroundStyle(RigTheme.amber)
+                VStack(alignment: .leading) { Text(title).font(.headline); Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                Spacer(); Image(systemName: "chevron.right").foregroundStyle(.secondary)
+            }.padding().frame(maxWidth: .infinity, alignment: .leading)
+        }.buttonStyle(.plain).background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+struct LogIntelligenceView: View {
+    @EnvironmentObject private var logbook: QSOStore
+    @EnvironmentObject private var features: FeatureModel
+    let route: (WorkspaceAction) -> Void
+    var body: some View {
+        List {
+            Section("Owned evidence") {
+                LabeledContent("Local QSO records", value: "\(logbook.records.count)")
+                LabeledContent("Wavelog cached contacts", value: "\(features.wavelog.contacts.count)")
+                LabeledContent("Worked index", value: features.dx.safeWorkedLog.complete ? "Complete" : "Partial")
+                Text("Counts are descriptive evidence, not propagation probability or a promise of a future contact.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Handoffs") {
+                Button("Open log") { route(.openLog) }
+                Button("Review Neural DX observations") { route(.openNeuralDX) }
+            }
+        }.navigationTitle("Log Intelligence")
+    }
+}
+
+struct SyncCentreView: View {
+    @EnvironmentObject private var features: FeatureModel
+    @EnvironmentObject private var groupsIo: GroupsIoController
+    let route: (WorkspaceAction) -> Void
+    var body: some View {
+        List {
+            Section("Wavelog") {
+                Text(features.wavelog.status)
+                LabeledContent("Pending", value: "\(features.wavelog.pendingCount)")
+                LabeledContent("Cached contacts", value: "\(features.wavelog.contacts.count)")
+                Button("Refresh Wavelog log") { Task { await features.wavelog.fullSync() } }.disabled(features.wavelog.apiKey.isEmpty)
+            }
+            Section("Groups.io") {
+                Text(groupsIo.enabled ? groupsIo.status : "Disabled")
+                LabeledContent("Cached messages", value: "\(groupsIo.messages.count)")
+                Button("Open Groups.io") { route(.openGroups) }
+            }
+        }.navigationTitle("Sync")
+    }
+}
+
+struct OperationsView: View {
+    @EnvironmentObject private var features: FeatureModel
+    let route: (WorkspaceAction) -> Void
+    private var qo100: [DXOpportunity] { features.dx.opportunities.filter { $0.displayBand.contains("QO-100") } }
+    var body: some View {
+        List {
+            Section("Portable") {
+                Text("Portable references and activation fields are retained through the log workspace.")
+                Button("Open portable-aware log") { route(.openLog) }
+            }
+            Section("Satellite and QO-100") {
+                LabeledContent("QO-100 observations", value: "\(qo100.count)")
+                Text("Apple currently has no verified orbital pass engine. Next passes, Doppler and rotator control are therefore unavailable on this platform; no synthetic pass is shown.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Review QO-100 observations") { route(.openNeuralDX) }
+            }
+            Section("Transmit boundary") {
+                Text("This workspace prepares review only. It does not key PTT, tune, transmit, post, or log.")
+            }
+        }.navigationTitle("Operations")
     }
 }
 

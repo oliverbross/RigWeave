@@ -457,6 +457,7 @@
 		A90000000000000000000002 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			name = CP210xDriver;
+			platformFilter = driverkit;
 			target = A50000000000000000000002 /* CP210xDriver */;
 			targetProxy = A90000000000000000000001 /* PBXContainerItemProxy */;
 		};
