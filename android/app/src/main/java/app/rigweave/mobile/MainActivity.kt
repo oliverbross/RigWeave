@@ -135,7 +135,7 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Progress"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), OPERATIONS("Operations"), GROUPS_IO("Groups.io"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Log Intelligence"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), OPERATIONS("Operations"), GROUPS_IO("Groups.io"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
@@ -258,23 +258,31 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     var pendingVoiceSlot by remember { mutableStateOf<Int?>(null) }
     var voiceArmedMode by remember { mutableStateOf<String?>(null) }
     fun dispatchWorkspaceAction(action: WorkspaceAction) {
-        val route = WorkspaceActionRouter.resolve(action)
+        val route = WorkspaceActionRouter.resolve(action, operatingContext.snapshot.generation) ?: return
         destination = when (action.destination) {
             WorkspaceDestination.HOME -> Destination.HOME
             WorkspaceDestination.RADIO -> Destination.RADIO
             WorkspaceDestination.DIGI -> Destination.DIGI
             WorkspaceDestination.DX_CHASER -> Destination.DIGI
             WorkspaceDestination.CONTEST -> Destination.CONTEST
+            WorkspaceDestination.BAND_MAPS -> Destination.BAND_MAPS
+            WorkspaceDestination.PANADAPTER -> Destination.PANADAPTER
+            WorkspaceDestination.EQ -> Destination.EQ
             WorkspaceDestination.LOGBOOK -> Destination.LOGBOOK
             WorkspaceDestination.PROGRESS -> Destination.PROGRESS
             WorkspaceDestination.SYNC -> Destination.SYNC
+            WorkspaceDestination.PRESETS -> Destination.PRESETS
             WorkspaceDestination.DX -> Destination.DX
+            WorkspaceDestination.CALLBOOK -> Destination.RADIO
             WorkspaceDestination.PORTABLE -> Destination.PORTABLE
             WorkspaceDestination.OPERATIONS -> Destination.OPERATIONS
+            WorkspaceDestination.SATELLITE -> Destination.OPERATIONS
             WorkspaceDestination.GROUPS_IO -> Destination.GROUPS_IO
             WorkspaceDestination.SETTINGS -> Destination.SETTINGS
         }
         if (action.destination == WorkspaceDestination.DX_CHASER) integratedDigiPage = IntegratedDigiPage.DX_CHASER
+        if (action.destination == WorkspaceDestination.BAND_MAPS) bandMaps.prepare(action)
+        if (action.destination == WorkspaceDestination.CALLBOOK && action.callsign.isNotBlank()) callbook.lookup(action.callsign) {}
         action.qsoId.takeIf(String::isNotBlank)?.let { pendingHomeQsoId = it }
         action.groupsIoGroupId?.let(groupsIo::selectGroup)
         action.groupsIoTopicId?.let(groupsIo::selectTopic)
@@ -639,6 +647,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 BandMapKeyerContext(keyer.snapshot(), keyer.availability(keyerRuntime.context()), contest.activeSession.role.name),
                 contest, chaser, integratedDigiPage, { integratedDigiPage = it }, { destination = Destination.CONTEST },
                 { destination = Destination.DIGI; integratedDigiPage = IntegratedDigiPage.DX_CHASER }, { destination = Destination.SETTINGS },
+                ::dispatchWorkspaceAction,
                 false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
@@ -669,6 +678,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 BandMapKeyerContext(keyer.snapshot(), keyer.availability(keyerRuntime.context()), contest.activeSession.role.name),
                 contest, chaser, integratedDigiPage, { integratedDigiPage = it }, { destination = Destination.CONTEST },
                 { destination = Destination.DIGI; integratedDigiPage = IntegratedDigiPage.DX_CHASER }, { destination = Destination.SETTINGS },
+                ::dispatchWorkspaceAction,
                 true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
@@ -727,7 +737,7 @@ private fun navIcon(item: Destination) = when (item) {
     bandMaps: BandMapController, bandMapKeyer: BandMapKeyerContext,
     contest: ContestRuntime, chaser: DxChaserRuntime, integratedDigiPage: IntegratedDigiPage,
     setIntegratedDigiPage: (IntegratedDigiPage) -> Unit, openContest: () -> Unit, openChaser: () -> Unit,
-    openSettings: () -> Unit,
+    openSettings: () -> Unit, workspaceAction: (WorkspaceAction) -> Unit,
     compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
     tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openDx: () -> Unit, openPortable: () -> Unit,
@@ -868,17 +878,7 @@ private fun navIcon(item: Destination) = when (item) {
             onOpenLogbook = openLogbook, onOpenProgress = openProgress,
             onOpenSettings = openSettings)
         Destination.BAND_MAPS -> BandMapScreen(bandMaps, database, features, neuralDx, portable, cty, contest, chaser,
-            operatingContext, bandMapKeyer) { action ->
-            val route = WorkspaceActionRouter.resolve(action)
-            route.receiveReview?.let { requestHomeReceiveTune(it.frequencyHz, it.mode, it.source, it.reason) }
-            when (action.destination) {
-                WorkspaceDestination.DX -> openDx()
-                WorkspaceDestination.LOGBOOK -> openLogbook()
-                WorkspaceDestination.DX_CHASER -> openChaser()
-                WorkspaceDestination.RADIO -> closeEq()
-                else -> Unit
-            }
-        }
+            operatingContext, bandMapKeyer, workspaceAction)
         Destination.PANADAPTER -> if (app.panadapterEnabled && app.radioFamily.isElecraft)
             PanadapterScreen(panadapter, radio, features.liveSpots, compact)
         else RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty, features, voiceStore, voiceTx,

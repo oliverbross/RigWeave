@@ -311,6 +311,12 @@ internal fun BandMapScreen(
                 OutlinedButton({ controller.workspaceAction(spot, WorkspaceDestination.LOGBOOK, contextGeneration)?.let(onAction) }) { Text("HISTORY") }
                 OutlinedButton({ controller.workspaceAction(spot, WorkspaceDestination.DX_CHASER, contextGeneration)?.let(onAction) }) { Text("OPEN CHASER") }
             } }
+            item { Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton({ controller.workspaceAction(spot, WorkspaceDestination.CALLBOOK, contextGeneration)?.let(onAction) }) { Text("CALLBOOK") }
+                OutlinedButton({ controller.workspaceAction(spot, WorkspaceDestination.CONTEST, contextGeneration)?.let(onAction) }) { Text("CONTEST") }
+                OutlinedButton({ controller.workspaceAction(spot, WorkspaceDestination.DIGI, contextGeneration)?.let(onAction) }) { Text("PREPARE DIGI") }
+                if (spot.portablePrograms.isNotEmpty()) OutlinedButton({ controller.workspaceAction(spot, WorkspaceDestination.PORTABLE, contextGeneration)?.let(onAction) }) { Text("ACTIVATION") }
+            } }
         } }, confirmButton = { TextButton(dismiss) { Text("CLOSE") } })
 }
 

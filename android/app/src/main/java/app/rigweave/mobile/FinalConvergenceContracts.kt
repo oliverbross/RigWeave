@@ -52,7 +52,8 @@ class OperatingContextAuthority {
 }
 
 enum class WorkspaceDestination {
-    HOME, RADIO, DIGI, DX_CHASER, CONTEST, LOGBOOK, PROGRESS, SYNC, DX, PORTABLE, OPERATIONS, GROUPS_IO, SETTINGS
+    HOME, RADIO, DIGI, DX_CHASER, CONTEST, BAND_MAPS, PANADAPTER, EQ, LOGBOOK, PROGRESS, SYNC, PRESETS,
+    DX, CALLBOOK, PORTABLE, OPERATIONS, SATELLITE, GROUPS_IO, SETTINGS
 }
 
 data class WorkspaceAction(
@@ -78,6 +79,8 @@ data class WorkspaceAction(
     val rfEvidenceId: String = "",
     val outlookWindowMinutes: Int? = null,
     val outlookRegion: String = "",
+    val presetId: String = "",
+    val expectedContextGeneration: Long? = null,
     val source: String,
     val reason: String,
 )
@@ -94,10 +97,12 @@ internal data class WorkspaceRoute(
 )
 
 internal object WorkspaceActionRouter {
-    fun resolve(action: WorkspaceAction): WorkspaceRoute {
+    fun resolve(action: WorkspaceAction, currentContextGeneration: Long): WorkspaceRoute? {
         require(action.source.isNotBlank() && action.reason.isNotBlank())
         require(action.frequencyHz == null || action.frequencyHz in 100_000L..77_000_000_000L)
-        val exact = action.qsoId.isNotBlank() || action.noradId != null || action.contestId.isNotBlank() ||
+        if (action.expectedContextGeneration?.let { it != currentContextGeneration } == true) return null
+        val exact = action.callsign.isNotBlank() || action.band.isNotBlank() || action.qsoId.isNotBlank() ||
+            action.noradId != null || action.contestId.isNotBlank() ||
             action.groupsIoMessageNumber != null || action.wavelogOutboxId.isNotBlank() ||
             action.wavelogConflictId.isNotBlank() || action.rfEvidenceId.isNotBlank()
         val review = action.frequencyHz?.let {

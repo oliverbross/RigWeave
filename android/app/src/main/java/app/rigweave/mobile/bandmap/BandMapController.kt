@@ -229,6 +229,23 @@ internal class BandMapController(
         settings = candidate; saveSettings(candidate); latestInputs?.let(::submit)
     }
 
+    fun prepare(action: WorkspaceAction) {
+        val selectedBand = action.band.takeIf { band -> bandMapBands.any { it.name.equals(band, true) } }
+        val requestedPreset = action.presetId.takeIf { id -> settings.presets.any { it.id == id } }
+        updateSettings { current ->
+            val activeId = requestedPreset ?: current.activePresetId
+            current.copy(
+                selectedBands = selectedBand?.let(::listOf) ?: current.selectedBands,
+                activePresetId = activeId,
+                presets = current.presets.map { preset ->
+                    if (preset.id == activeId && action.callsign.isNotBlank())
+                        preset.copy(filter = preset.filter.copy(search = action.callsign.uppercase()))
+                    else preset
+                },
+            )
+        }
+    }
+
     fun toggleMark(spot: BandMapSpot, kind: BandMapMarkKind) = updateSettings { current ->
         val existing = current.marks.firstOrNull { it.callsign == spot.callsign && it.band == spot.band }
         val nextKinds = (existing?.kinds.orEmpty()).let { if (kind in it) it - kind else it + kind }
@@ -242,6 +259,7 @@ internal class BandMapController(
             frequencyHz = spot.frequencyHz.takeIf { destination == WorkspaceDestination.RADIO }, band = spot.band,
             mode = spot.submode.ifBlank { spot.modeFamily.name }, portableProgram = spot.portablePrograms.firstOrNull().orEmpty(),
             portableReference = spot.observations.firstNotNullOfOrNull { it.portableReference.takeIf(String::isNotBlank) }.orEmpty(),
+            expectedContextGeneration = currentContextGeneration,
             source = "Intelligent Band Maps", reason = "Operator selected ${spot.callsign}; prepare reviewed receive action")
     }
 
