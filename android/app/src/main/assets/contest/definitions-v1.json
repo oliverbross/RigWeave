@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "authority": "Official sponsor rules; Kotlin evaluators are authoritative",
+  "definitions": [
+    {"id":"cq-ww-cw","adif":"CQ-WW-CW","mode":"CW","family":"CQ_WW"},
+    {"id":"cq-ww-ssb","adif":"CQ-WW-SSB","mode":"SSB","family":"CQ_WW"},
+    {"id":"cq-wpx-cw","adif":"CQ-WPX-CW","mode":"CW","family":"CQ_WPX"},
+    {"id":"cq-wpx-ssb","adif":"CQ-WPX-SSB","mode":"SSB","family":"CQ_WPX"},
+    {"id":"arrl-dx-cw","adif":"ARRL-DX-CW","mode":"CW","family":"ARRL_DX"},
+    {"id":"arrl-dx-ssb","adif":"ARRL-DX-SSB","mode":"SSB","family":"ARRL_DX"},
+    {"id":"iaru-hf","adif":"IARU-HF","mode":"MIXED","family":"IARU_HF"},
+    {"id":"arrl-field-day","adif":"ARRL-FIELD-DAY","mode":"MIXED","family":"ARRL_FIELD_DAY"},
+    {"id":"cq-160-cw","adif":"CQ-160-CW","mode":"CW","family":"CQ_160"},
+    {"id":"cq-160-ssb","adif":"CQ-160-SSB","mode":"SSB","family":"CQ_160"},
+    {"id":"oceania-dx-cw","adif":"OCEANIA-DX-CW","mode":"CW","family":"OCEANIA_DX"},
+    {"id":"oceania-dx-ssb","adif":"OCEANIA-DX-SSB","mode":"SSB","family":"OCEANIA_DX"},
+    {"id":"general-dx-serial","adif":"RIGWEAVE-GENERAL","mode":"MIXED","family":"GENERAL_SERIAL","nonAward":true}
+  ]
+}
