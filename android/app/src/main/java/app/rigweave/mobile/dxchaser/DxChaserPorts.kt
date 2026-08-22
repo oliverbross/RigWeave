@@ -20,11 +20,11 @@ interface DxChaserJournalPort {
     fun compact(nowEpochSeconds: Long, settings: DxChaserSettingsDocument)
 }
 
-/** Future semantic adapter: prepares an existing exact live FT decode through Digi safety. */
+/** Integrated semantic adapter: prepares an existing exact live FT decode through Digi safety. */
 fun interface DxChaserDigiPort { fun prepare(intent: DxChaserActionIntent) }
-/** Future semantic adapter: routes receive-review only; it must not issue CAT directly. */
+/** Integrated semantic adapter: routes receive-review only; it must not issue CAT directly. */
 fun interface DxChaserReviewPort { fun requestReceiveReview(intent: DxChaserActionIntent) }
-/** Future semantic adapter: reports canonical QSO mutation outcomes without logging here. */
+/** Integrated semantic adapter: reports canonical QSO mutation outcomes without logging here. */
 fun interface DxChaserQsoOutcomePort { fun report(event: DxChaserIntegrationEvent) }
 
 data class DxChaserDependencies(
@@ -114,7 +114,8 @@ class DxChaserController(private val dependencies: DxChaserDependencies) : DxCha
             session = state.session, rankedCandidates = state.ranked.take(50), currentTarget = state.session.target,
             engagedCall = state.session.target?.takeIf(DxChaserTargetSnapshot::engaged)?.candidate?.baseCallsign.orEmpty(),
             cooldowns = state.cooldowns.take(100), crossBandOpportunities = state.crossBand.take(20),
-            providerFreshness = state.providerFreshness, settingsDigest = MessageDigest.getInstance("SHA-256")
+            providerFreshness = state.providerFreshness, safety = dependencies.input.snapshot().safety,
+            contest = dependencies.input.snapshot().contest, settingsDigest = MessageDigest.getInstance("SHA-256")
                 .digest(state.settings.toJson().toByteArray()).take(8).joinToString("") { "%02x".format(it) },
             lastAction = transition.actions.lastOrNull() ?: state.lastAction)
         dependencies.sessionEvents.emit(DxChaserIntegrationEvent(state.session.id, state.generation,

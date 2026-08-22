@@ -23,6 +23,7 @@ object DxChaserScorer {
         val age = (snapshot.nowEpochSeconds - decode.epochSeconds).coerceAtLeast(0)
         val cooldownActive = snapshot.cooldowns.any { it.baseCallsign == call && it.expiresEpochSeconds > snapshot.nowEpochSeconds &&
             (it.band.isBlank() || it.band == decode.band) && (it.mode.isBlank() || it.mode == decode.mode) }
+        val contest = snapshot.contest.opportunities[call]
         val blockers = buildList {
             if (decode.mode !in setOf("FT8", "FT4")) add("MODE_NOT_FT8_FT4")
             if (decode.mode !in settings.selectedModes) add("MODE_DISABLED")
@@ -42,6 +43,10 @@ object DxChaserScorer {
             if (decode.snr < settings.minimumSnr) add("BELOW_MINIMUM_SNR")
             if (!snapshot.safety.preparationPermitted) add("DIGI_RADIO_AUDIO_NOT_READY")
             if (!snapshot.foreground) add("APP_NOT_FOREGROUND")
+            if (snapshot.contest.running && !snapshot.contest.digitalCompatible) add("CONTEST_MODE_INCOMPATIBLE")
+            if (snapshot.contest.running && contest?.validBandMode == false) add("CONTEST_BAND_MODE_INVALID")
+            if (snapshot.contest.running && contest?.duplicate == true) add("CONTEST_DUPLICATE")
+            if (snapshot.contest.running && !contest?.claimedBy.isNullOrBlank()) add("CLAIMED_BY_TRUSTED_PEER")
             if (cooldownActive) add("COOLDOWN_ACTIVE")
         }
 
@@ -64,6 +69,11 @@ object DxChaserScorer {
         if (decode.messageType == DxChaserMessageType.ADDRESSED_TO_OPERATOR) { value += 38; reasons += "DIRECTED_TO_OPERATOR" }
         else if (decode.messageType == DxChaserMessageType.DIRECTED_CQ) { value += 26; reasons += "DIRECTED_CQ" }
         else if (decode.messageType == DxChaserMessageType.CQ) { value += 20; reasons += "CALLING_CQ" }
+        if (snapshot.contest.running && contest != null) {
+            val multiplierPoints = (contest.newMultipliers.size * 12).coerceAtMost(36)
+            if (multiplierPoints > 0) { value += multiplierPoints; reasons += "CONTEST_NEW_MULTIPLIER" }
+            if (contest.validBandMode == null) reasons += "CONTEST_BAND_MODE_UNKNOWN"
+        }
 
         val snrPoints = ((decode.snr.coerceIn(-24, 5) + 24) * (if (settings.profile == DxChaserProfile.LOCAL_SIGNAL) 2 else 1)).coerceAtMost(38)
         val recencyPoints = (20 - age.toInt() / 6).coerceIn(0, 20)

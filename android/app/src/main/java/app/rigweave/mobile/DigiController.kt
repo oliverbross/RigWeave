@@ -93,6 +93,33 @@ val DigiModeFamilies = listOf(
 enum class DigiTxPhase { SAFE, SEQUENCING, PTT_CONFIRMED, RX_UNCONFIRMED }
 
 data class DigiDecodeRow(val text: String, val frequencyHz: Float, val dtSeconds: Float, val snrDb: Float)
+data class DigiIntegrationSnapshot(
+    val mode: DigiMode,
+    val sessionId: String,
+    val capturedSlotStartMillis: Long,
+    val dialFrequencyHz: Long,
+    val rxActive: Boolean,
+    val txEnabled: Boolean,
+    val txActive: Boolean,
+    val txPhase: DigiTxPhase,
+    val localModemAuthority: Boolean,
+    val audioHealthy: Boolean,
+    val decodes: List<DigiDecodeEvent>,
+    val exchange: FtExchangeSnapshot,
+    val lastLoggedQsoId: String,
+)
+data class DigiExactCallRequest(
+    val decodeId: String,
+    val sessionId: String,
+    val slotStartMillis: Long,
+    val mode: String,
+    val dialFrequencyHz: Long,
+    val callsign: String,
+)
+sealed interface DigiPrepareResult {
+    data class Accepted(val sequenceState: FtExchangeState) : DigiPrepareResult
+    data class Rejected(val reason: String) : DigiPrepareResult
+}
 
 data class SstvChoice(val index: Int, val label: String, val width: Int, val height: Int)
 
@@ -329,6 +356,33 @@ class DigiController(
     fun selectDecode(event: DigiDecodeEvent) {
         selectedDecode = event
         if (event.callsign.isNotBlank()) updateDxCall(event.callsign)
+    }
+
+    fun integrationSnapshot(): DigiIntegrationSnapshot = DigiIntegrationSnapshot(
+        mode = mode, sessionId = sessionId, capturedSlotStartMillis = lastCompletedSlotStartMillis,
+        dialFrequencyHz = dependencies.radioState().frequencyHz, rxActive = rxActive, txEnabled = txEnabled,
+        txActive = txActive, txPhase = txPhase, localModemAuthority = !settings.companionMode,
+        audioHealthy = audioHealth.state == DigiAudioHealthState.LIVE,
+        decodes = decodeHistory.takeLast(500).toList(), exchange = ftSequence, lastLoggedQsoId = lastLoggedQsoId,
+    )
+
+    fun prepareExactLiveCall(request: DigiExactCallRequest): DigiPrepareResult {
+        if (mode !in setOf(DigiMode.FT8, DigiMode.FT4)) return DigiPrepareResult.Rejected("Digi mode is not FT8/FT4")
+        if (!rxActive || !txEnabled || txActive || txPhase == DigiTxPhase.RX_UNCONFIRMED)
+            return DigiPrepareResult.Rejected("Digi RX/TX safety interlock is not ready")
+        if (settings.companionMode) return DigiPrepareResult.Rejected("Local modem authority is unavailable")
+        if (sessionId != request.sessionId || mode.name != request.mode || dependencies.radioState().frequencyHz != request.dialFrequencyHz)
+            return DigiPrepareResult.Rejected("Digi context generation changed")
+        val event = decodeHistory.firstOrNull { it.id == request.decodeId }
+            ?: return DigiPrepareResult.Rejected("Exact local decode no longer exists")
+        if (event.slotStartMillis != request.slotStartMillis || !event.callsign.equals(request.callsign, true) ||
+            !event.automaticFtEligible(mode.name, dependencies.radioState().frequencyHz, sessionId, lastCompletedSlotStartMillis))
+            return DigiPrepareResult.Rejected("Exact decode identity, slot, or eligibility changed")
+        selectDecode(event)
+        callSelected()
+        return if (selectedDecode?.id == event.id && dxCall.equals(event.callsign, true))
+            DigiPrepareResult.Accepted(ftSequence.state)
+        else DigiPrepareResult.Rejected("Digi selected-call preparation was rejected")
     }
 
     fun callSelected() {

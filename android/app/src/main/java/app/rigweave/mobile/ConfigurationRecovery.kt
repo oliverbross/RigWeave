@@ -36,6 +36,11 @@ class ConfigurationRecovery(private val context: Context) {
             "keyer_document", "keyer_document_last_good", "hotkeys_enabled", "show_strip", "fallback_general", "active_profile",
             "repeat_interval_seconds", "repeat_maximum_cycles", "repeat_maximum_minutes", "repeat_stops_on_input"
         ) },
+        PreferenceSection("contest_n1mm", "rigweave-contest-settings") { key -> key in setOf(
+            "last_session_id", "preferred_definition", "category_defaults", "operator_defaults", "role_preference",
+            "esm_enabled", "n1mm_enabled", "n1mm_mode", "n1mm_lan_opt_in", "n1mm_bind_address"
+        ) },
+        PreferenceSection("dx_chaser", "dxchaser-settings") { key -> key == "document_v1" },
         PreferenceSection("navigation", "navigation") { true },
         PreferenceSection("home_hamclock", "rigweave-hamclock-layout") { key -> !unsafeKey(key) },
         PreferenceSection("digi", "rigweave-digi") { key -> !unsafeKey(key) },
@@ -154,7 +159,7 @@ class ConfigurationRecovery(private val context: Context) {
     private fun preferences(section: PreferenceSection) = context.getSharedPreferences(section.store, Context.MODE_PRIVATE)
 
     private fun clearUnsafeRuntimePreferences() {
-        listOf("rigweave-app", "rigweave-digi").forEach { name ->
+        listOf("rigweave-app", "rigweave-digi", "rigweave-contest-settings", "dxchaser-settings").forEach { name ->
             val prefs = context.getSharedPreferences(name, Context.MODE_PRIVATE)
             val editor = prefs.edit()
             prefs.all.keys.filter(::unsafeKey).forEach(editor::remove)

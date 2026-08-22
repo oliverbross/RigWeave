@@ -65,7 +65,7 @@ fun DxChaserScreen(
                     item { PolicyCard(settings, onSettingsChanged, onImportRarity, onClearRarity) }
                     item { HistoryCard(snapshot) }
                     item { DiagnosticsCard(snapshot) }
-                    item { SafetyTruthCard() }
+                    item { SafetyTruthCard(snapshot) }
                 }
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     CandidateList(snapshot, onCandidate, Modifier.weight(1f))
@@ -79,7 +79,7 @@ fun DxChaserScreen(
                 item { PolicyCard(settings, onSettingsChanged, onImportRarity, onClearRarity) }
                 item { HistoryCard(snapshot) }
                 item { DiagnosticsCard(snapshot) }
-                item { SafetyTruthCard() }
+                item { SafetyTruthCard(snapshot) }
             }
         }
     }
@@ -174,9 +174,23 @@ private fun CrossBandList(rows: List<DxChaserCrossBandOpportunity>, onReview: (D
 }
 
 @Composable
-private fun SafetyTruthCard() = ChaserCard {
+private fun SafetyTruthCard(snapshot: DxChaserReadOnlySnapshot) = ChaserCard {
+    val safety = snapshot.safety
     Text("SAFETY BOUNDARY", color = ChaserMuted, fontWeight = FontWeight.Bold)
-    Text("Typed intents only", color = ChaserCyan, fontWeight = FontWeight.Bold)
+    Text(if (safety.preparationPermitted) "PREPARE PATH AVAILABLE" else "INTERLOCKED",
+        color = if (safety.preparationPermitted) ChaserCyan else ChaserAmber, fontWeight = FontWeight.Bold)
+    listOf(
+        "Foreground" to safety.foreground,
+        "Radio connected" to safety.radioConnected,
+        "Digi FT8/FT4" to safety.digiModeEligible,
+        "Local modem authority" to safety.localModemAuthority,
+        "Audio route" to (safety.routeHealthy && safety.digiAudioHealthy),
+        "TX enabled by operator" to safety.txEnabledByOperator,
+        "Contest compatible" to safety.contestCompatible,
+        "Keyer idle" to safety.keyerIdle,
+        "RX confirmed" to safety.rxConfirmed,
+    ).forEach { (label, ready) -> Text("$label · ${if (ready) "READY" else "BLOCKED"}", color = ChaserMuted,
+        style = MaterialTheme.typography.labelSmall) }
     Text("No CAT · no PTT · no TUNE · no TX enable · no QSO mutation · no provider connection", color = ChaserMuted,
         style = MaterialTheme.typography.bodySmall)
 }

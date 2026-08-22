@@ -6,6 +6,9 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import app.rigweave.mobile.dxchaser.DxChaserReadOnlySnapshot
+import app.rigweave.mobile.keyer.KeyerQueueSnapshot
+import app.rigweave.mobile.keyer.KeyerQueueState
 
 enum class HealthState { HEALTHY, ATTENTION, DEGRADED, PAUSED, UNAVAILABLE }
 
@@ -42,6 +45,9 @@ internal fun buildSystemHealthSnapshot(
     digiMode: String,
     digiRxActive: Boolean,
     digiStatus: String,
+    keyer: KeyerQueueSnapshot = KeyerQueueSnapshot(),
+    contest: ContestReadOnlySnapshot = ContestReadOnlySnapshot(),
+    chaser: DxChaserReadOnlySnapshot = DxChaserReadOnlySnapshot(),
 ): SystemHealthSnapshot {
     fun databaseBytes(name: String) = listOf("", "-wal", "-shm").sumOf { suffix ->
         context.getDatabasePath(name + suffix).takeIf { it.isFile }?.length() ?: 0L
@@ -51,6 +57,8 @@ internal fun buildSystemHealthSnapshot(
         "neural-dx.sqlite" to databaseBytes("neural-dx.sqlite"),
         "rigweave-digi.sqlite" to databaseBytes("rigweave-digi.sqlite"),
         "rigweave-groupsio.sqlite" to databaseBytes("rigweave-groupsio.sqlite"),
+        "rigweave-contest.sqlite" to databaseBytes("rigweave-contest.sqlite"),
+        "rigweave-dxchaser.sqlite" to databaseBytes("rigweave-dxchaser.sqlite"),
     )
     val projection = qso?.projection
     val cards = listOf(
@@ -70,8 +78,23 @@ internal fun buildSystemHealthSnapshot(
         SystemHealthCard("radio_digi", "Radio / Digi", if (operatingContext.connected.value) HealthState.HEALTHY else HealthState.UNAVAILABLE,
             "${operatingContext.radioModel.value} · $digiMode · ${if (digiRxActive) "RX active" else "RX stopped"} · ${digiStatus.take(120)}",
             safeActions = listOf("open Digi diagnostics")),
+        SystemHealthCard("keyer", "Keyer", if (keyer.state == KeyerQueueState.FAILED) HealthState.ATTENTION else HealthState.HEALTHY,
+            "Queue ${keyer.state} · pending ${keyer.pendingCount}", mapOf("pending" to keyer.pendingCount.toLong()),
+            safeActions = listOf("open Keyer settings", "stop Keyer")),
+        SystemHealthCard("contest", "Contest", contest.activeSession?.let { if (it.state.name == "RUNNING") HealthState.HEALTHY else HealthState.PAUSED } ?: HealthState.UNAVAILABLE,
+            "Schema 1 · session ${contest.activeSession?.state ?: "NONE"} · score ${contest.activeSession?.score?.status ?: "NONE"}",
+            mapOf("claims" to contest.claims.size.toLong()), safeActions = listOf("open Contest", "verify/rebuild derived score", "stop Contest")),
+        SystemHealthCard("n1mm", "N1MM", if (contest.n1mmArmed) HealthState.HEALTHY else HealthState.PAUSED,
+            "${if (contest.n1mmEnabled) "enabled" else "disabled"} · ${if (contest.n1mmArmed) "armed" else "not armed"} · sanitized status only",
+            mapOf("peers" to contest.n1mmPeers.toLong(), "claims" to contest.claims.size.toLong()),
+            safeActions = listOf("open Contest network", "stop N1MM", "retry reviewed item")),
+        SystemHealthCard("dx_chaser", "DX Chaser", if (chaser.session.state.name in setOf("FAILED")) HealthState.ATTENTION else HealthState.PAUSED,
+            "Schema 1 · ${chaser.session.mode} · ${chaser.session.state} · target ${if (chaser.currentTarget == null) "none" else "selected"}",
+            mapOf("candidates" to chaser.rankedCandidates.size.toLong(), "cooldowns" to chaser.cooldowns.size.toLong()),
+            safeActions = listOf("open DX Chaser", "compact Chaser history", "stop Chaser")),
     )
-    return SystemHealthSnapshot(System.currentTimeMillis(), mapOf("qso" to 13, "projection" to 2, "neural" to 5, "digi" to 2, "groupsio" to 2),
+    return SystemHealthSnapshot(System.currentTimeMillis(), mapOf("qso" to 13, "projection" to 2, "neural" to 5, "digi" to 2, "groupsio" to 2,
+        "contest" to 1, "dx_chaser" to 1),
         bytes, cards, operatingContext.generation)
 }
 

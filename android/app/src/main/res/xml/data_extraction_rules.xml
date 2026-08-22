@@ -2,11 +2,15 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="database" path="rigweave-groupsio.sqlite" />
+        <exclude domain="database" path="rigweave-contest.sqlite" />
+        <exclude domain="database" path="rigweave-dxchaser.sqlite" />
         <exclude domain="sharedpref" path="rigweave-groupsio-credentials.xml" />
         <exclude domain="file" path="GroupsIO/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="database" path="rigweave-groupsio.sqlite" />
+        <exclude domain="database" path="rigweave-contest.sqlite" />
+        <exclude domain="database" path="rigweave-dxchaser.sqlite" />
         <exclude domain="sharedpref" path="rigweave-groupsio-credentials.xml" />
         <exclude domain="file" path="GroupsIO/" />
     </device-transfer>

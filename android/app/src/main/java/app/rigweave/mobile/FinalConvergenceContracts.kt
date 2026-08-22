@@ -52,7 +52,7 @@ class OperatingContextAuthority {
 }
 
 enum class WorkspaceDestination {
-    HOME, RADIO, DIGI, LOGBOOK, PROGRESS, SYNC, DX, PORTABLE, OPERATIONS, GROUPS_IO, SETTINGS
+    HOME, RADIO, DIGI, DX_CHASER, CONTEST, LOGBOOK, PROGRESS, SYNC, DX, PORTABLE, OPERATIONS, GROUPS_IO, SETTINGS
 }
 
 data class WorkspaceAction(

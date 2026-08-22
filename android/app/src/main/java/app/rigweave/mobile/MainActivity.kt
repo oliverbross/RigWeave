@@ -5,6 +5,7 @@ import app.rigweave.mobile.groupsio.GroupsIoScreen
 import app.rigweave.mobile.groupsio.GroupsIoSettingsPanel
 import app.rigweave.mobile.groupsio.groupsIoDestinationVisible
 import app.rigweave.mobile.keyer.*
+import app.rigweave.mobile.dxchaser.DxChaserActionType
 
 import android.Manifest
 import android.content.Intent
@@ -133,7 +134,7 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), DIGI("Digi"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Progress"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), OPERATIONS("Operations"), GROUPS_IO("Groups.io"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), DIGI("Digi"), CONTEST("Contest"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Progress"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), OPERATIONS("Operations"), GROUPS_IO("Groups.io"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
@@ -197,6 +198,9 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val keyerProfiles = remember { KeyerProfileStore(context, app.macroLabels.toList(), app.macroTexts.toList(), app.voiceMacroLabels.toList(), app.cqRepeatSeconds) }
     val wavelog = remember { WavelogController(context, database) }
     val operatingContext = remember { OperatingContextAuthority() }
+    val keyerPort = remember { arrayOfNulls<KeyerDispatchPort>(1) }
+    val contest = remember { ContestRuntime(context, database, mutations, keyerProfiles,
+        { keyerPort[0] }, { operatingContext.snapshot }) }
     val neuralDx = remember {
         NeuralDxController(context, database, publicProviders, operations.satellites,
             wavelog.selectedStation?.grid?.ifBlank { null } ?: app.stationGrid)
@@ -236,6 +240,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             Destination.valueOf(navigationPrefs.getString("destination", Destination.HOME.name).orEmpty())
         }.getOrDefault(Destination.HOME))
     }
+    var integratedDigiPage by rememberSaveable { mutableStateOf(IntegratedDigiPage.DIGI) }
     LaunchedEffect(destination) { navigationPrefs.edit().putString("destination", destination.name).apply() }
     LaunchedEffect(groupsIo.enabled, destination) {
         if (!groupsIo.enabled && destination == Destination.GROUPS_IO) destination = Destination.SETTINGS
@@ -252,6 +257,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             WorkspaceDestination.HOME -> Destination.HOME
             WorkspaceDestination.RADIO -> Destination.RADIO
             WorkspaceDestination.DIGI -> Destination.DIGI
+            WorkspaceDestination.DX_CHASER -> Destination.DIGI
+            WorkspaceDestination.CONTEST -> Destination.CONTEST
             WorkspaceDestination.LOGBOOK -> Destination.LOGBOOK
             WorkspaceDestination.PROGRESS -> Destination.PROGRESS
             WorkspaceDestination.SYNC -> Destination.SYNC
@@ -261,6 +268,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             WorkspaceDestination.GROUPS_IO -> Destination.GROUPS_IO
             WorkspaceDestination.SETTINGS -> Destination.SETTINGS
         }
+        if (action.destination == WorkspaceDestination.DX_CHASER) integratedDigiPage = IntegratedDigiPage.DX_CHASER
         action.qsoId.takeIf(String::isNotBlank)?.let { pendingHomeQsoId = it }
         action.groupsIoGroupId?.let(groupsIo::selectGroup)
         action.groupsIoTopicId?.let(groupsIo::selectTopic)
@@ -300,7 +308,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     LaunchedEffect(radio.identity, radio.frequencyHz, radio.connected) { digi.onRadioStateChanged(radio) }
     val contextGeneration = remember(app.stationCallsign, app.stationGrid, app.activationProgram, app.activationReference,
         wavelog.stationId, wavelog.selectedStation, activation.session, radio, foreground, networkAvailable,
-        database.changeToken(), cty.dataRevision, neuralDx.lastRefreshEpoch, features.liveSpots.size) {
+        database.changeToken(), cty.dataRevision, neuralDx.lastRefreshEpoch, features.liveSpots.size,
+        contest.activeSession.id, contest.activeSession.state, contest.activeSession.role) {
         operatingContext.beginUpdate()
     }
     val contextSnapshot = remember(contextGeneration) {
@@ -320,6 +329,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             activationProgram = ContextValue(if (session != null) "POTA" else app.activationProgram, "PotaActivationController -> AppController fallback"),
             activationReference = ContextValue(session?.setup?.primaryReference ?: app.activationReference, "PotaActivationController -> AppController fallback"),
             activationSession = ContextValue(session?.id.orEmpty(), "PotaActivationController"),
+            selectedContestId = ContextValue(contest.activeSession.id.value, "ContestRuntime"),
             radioFamily = ContextValue(app.radioFamily.name, "AppController"),
             radioModel = ContextValue(radio.model, "radio backend"),
             radioIdentity = ContextValue(radio.identity, "radio backend"),
@@ -362,7 +372,19 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val keyerRuntime = remember(keyerProfiles) { AndroidKeyerRuntime(keyerProfiles, app, voiceTx,
         { radio }, { operatingContext.snapshot }, { foreground }, { foregroundGeneration }, direct, scope) }
     val keyer = keyerRuntime.controller
+    SideEffect { keyerPort[0] = keyer }
     val repeatCq = remember { RepeatCqController() }
+    val chaser = remember { DxChaserRuntime(context, database, digi, { operatingContext.snapshot }, { foreground },
+        { keyer.snapshot() }, contest, { intent -> intent.dialFrequencyHz?.let { frequency ->
+            pendingHomeReceiveTune = HomeReceiveTuneReview(frequency, intent.mode.ifBlank { null }, "DX Chaser receive review",
+                "${intent.reason}. Review receive frequency only; a fresh qualifying local decode remains required.")
+        } }, { intent -> when (intent.type) {
+            DxChaserActionType.OPEN_LOGBOOK_HISTORY -> dispatchWorkspaceAction(
+                WorkspaceAction(WorkspaceDestination.LOGBOOK, callsign = intent.callsign, source = "DX Chaser", reason = intent.reason))
+            else -> dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.DX, callsign = intent.callsign,
+                source = "DX Chaser", reason = intent.reason.ifBlank { "Open exact DX details" }))
+        } }) }
+    val operatorStop = remember { OperatorStopRouter(digi, keyer, repeatCq, contest, chaser) }
     val panadapter = remember { PanadapterController(context, audio, { radio }, direct) }
     val sendKx: (String) -> Unit = { raw ->
         val command = raw.uppercase()
@@ -455,10 +477,10 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event -> when (event) {
             Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> {
-                foreground = true; foregroundGeneration++; features.setForeground(true); syncHub.setForeground(true); neuralDx.setForeground(true); wavelogNative.onForeground()
+                foreground = true; foregroundGeneration++; contest.setForeground(true); features.setForeground(true); syncHub.setForeground(true); neuralDx.setForeground(true); wavelogNative.onForeground()
             }
             Lifecycle.Event.ON_STOP, Lifecycle.Event.ON_DESTROY -> {
-                foreground = false; foregroundGeneration++; repeatCq.stop(); keyer.stop(KeyerStopReason.Background); features.setForeground(false); syncHub.setForeground(false); neuralDx.setForeground(false); app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
+                foreground = false; foregroundGeneration++; contest.setForeground(false); chaser.contextLost("BACKGROUND"); repeatCq.stop(); keyer.stop(KeyerStopReason.Background); features.setForeground(false); syncHub.setForeground(false); neuralDx.setForeground(false); app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
                 digi.stopRx("App left foreground · RX stopped")
                 digi.disarm()
                 voiceTx.stop("App left foreground; defensive RX cleanup requested")
@@ -494,8 +516,11 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     LaunchedEffect(voiceTx.state) {
         keyerRuntime.onVoiceStateChanged(voiceTx.state)
     }
+    LaunchedEffect(foreground, contextSnapshot.generation) {
+        while (foreground) { chaser.poll(); delay(1_000) }
+    }
     DisposableEffect(Unit) { onDispose {
-        app.disarmAll(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close(); groupsIo.close()
+        app.disarmAll(); chaser.close(); contest.close(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close(); groupsIo.close()
         scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelogNative.close(); wavelog.close(); callbook.close(); cty.close()
         portable.close(); progress.close(); operations.close(); syncHub.close(); NativeCore.destroy(core)
     } }
@@ -560,21 +585,26 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             val initialDown = event.type == KeyEventType.KeyDown && native.repeatCount == 0
             val inputMethod = context.getSystemService(InputMethodManager::class.java)
             if (initialDown && inputMethod.isAcceptingText && keyerProfiles.repeatStopsOnInput) repeatCq.stop()
-            val decision = KeyerHotkeyDispatcher.dispatch(
-                KeyerKeyEvent(
-                    chord = androidFunctionChord(native),
-                    escape = native.keyCode == AndroidKeyEvent.KEYCODE_ESCAPE,
-                    initialDown = initialDown,
-                    textInputFocused = inputMethod.isAcceptingText,
-                    foreground = foreground,
-                    modalOpen = pendingRisk != null || pendingVoiceSlot != null || pendingHomeReceiveTune != null,
-                ),
-                enabled = keyerProfiles.hotkeysEnabled,
-            bindings = keyerProfiles.bindingsForActive(),
-                keyerActive = keyer.snapshot().active != null || voiceTx.isBusy,
-            )
-            decision.action?.let { keyer.submit(it, keyerRuntime.context()) }
-            decision.consumed
+            if (initialDown && native.keyCode == AndroidKeyEvent.KEYCODE_ESCAPE) {
+                operatorStop.stopAll("ESCAPE")
+                true
+            } else {
+                val decision = KeyerHotkeyDispatcher.dispatch(
+                    KeyerKeyEvent(
+                        chord = androidFunctionChord(native),
+                        escape = false,
+                        initialDown = initialDown,
+                        textInputFocused = inputMethod.isAcceptingText,
+                        foreground = foreground,
+                        modalOpen = pendingRisk != null || pendingVoiceSlot != null || pendingHomeReceiveTune != null,
+                    ),
+                    enabled = keyerProfiles.hotkeysEnabled,
+                    bindings = keyerProfiles.bindingsForActive(),
+                    keyerActive = keyer.snapshot().active != null || voiceTx.isBusy,
+                )
+                decision.action?.let { keyer.submit(it, keyerRuntime.context()) }
+                decision.consumed
+            }
         },
     ) {
         if (keyerProfiles.showStrip) KeyerHotkeyStrip(keyerProfiles.activeStripProfile(), keyer.snapshot(),
@@ -598,7 +628,10 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             }
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
-                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, keyerProfiles, keyer, repeatCq, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
+                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, keyerProfiles, keyer, repeatCq,
+                contest, chaser, integratedDigiPage, { integratedDigiPage = it }, { destination = Destination.CONTEST },
+                { destination = Destination.DIGI; integratedDigiPage = IntegratedDigiPage.DX_CHASER }, { destination = Destination.SETTINGS },
+                false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
                 { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.DX, source = "Navigation", reason = "Open DX workspace")) },
@@ -624,7 +657,10 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         } }) { padding -> Box(Modifier.padding(padding)) {
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
-                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, keyerProfiles, keyer, repeatCq, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
+                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, keyerProfiles, keyer, repeatCq,
+                contest, chaser, integratedDigiPage, { integratedDigiPage = it }, { destination = Destination.CONTEST },
+                { destination = Destination.DIGI; integratedDigiPage = IntegratedDigiPage.DX_CHASER }, { destination = Destination.SETTINGS },
+                true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
                 { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.DX, source = "Navigation", reason = "Open DX workspace")) },
@@ -654,6 +690,7 @@ private fun navIcon(item: Destination) = when (item) {
     Destination.HOME -> Icons.Outlined.Home
     Destination.RADIO -> Icons.Outlined.SettingsInputAntenna
     Destination.DIGI -> Icons.Outlined.GraphicEq
+    Destination.CONTEST -> Icons.Outlined.EmojiEvents
     Destination.PANADAPTER -> Icons.Outlined.WaterfallChart
     Destination.EQ -> Icons.Outlined.Equalizer
     Destination.LOGBOOK -> Icons.AutoMirrored.Outlined.List
@@ -677,6 +714,9 @@ private fun navIcon(item: Destination) = when (item) {
     transport: UsbRadioTransport, flex: FlexRadioController, digi: DigiController, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
     eqStudio: EqStudioController, groupsIo: GroupsIoController, operatingContext: OperatingContextSnapshot,
     keyerProfiles: KeyerProfileStore, keyer: KeyerController, repeatCq: RepeatCqController,
+    contest: ContestRuntime, chaser: DxChaserRuntime, integratedDigiPage: IntegratedDigiPage,
+    setIntegratedDigiPage: (IntegratedDigiPage) -> Unit, openContest: () -> Unit, openChaser: () -> Unit,
+    openSettings: () -> Unit,
     compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
     tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openDx: () -> Unit, openPortable: () -> Unit,
@@ -812,7 +852,10 @@ private fun navIcon(item: Destination) = when (item) {
                 }
             }
         }
-        Destination.DIGI -> DigiScreen(digi, radio, compact)
+        Destination.DIGI -> IntegratedDigiWorkspace(integratedDigiPage, setIntegratedDigiPage, digi, radio, compact, chaser)
+        Destination.CONTEST -> IntegratedContestWorkspace(contest, keyer.snapshot(), onOpenRadio = closeEq,
+            onOpenLogbook = openLogbook, onOpenProgress = openProgress,
+            onOpenSettings = openSettings)
         Destination.PANADAPTER -> if (app.panadapterEnabled && app.radioFamily.isElecraft)
             PanadapterScreen(panadapter, radio, features.liveSpots, compact)
         else RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty, features, voiceStore, voiceTx,
@@ -849,8 +892,12 @@ private fun navIcon(item: Destination) = when (item) {
                 requestHomeReceiveTune(frequency, mode, "Operations satellite receive preview",
                     "Review receive-only downlink change")
             }, prepareSatelliteLogger)
-        Destination.SETTINGS -> SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, syncHub, callbook, cty, audio, panadapter, app,
-            transport, flex, digi, voiceStore, voiceAudio, voiceTx, groupsIo, operatingContext, keyerProfiles, keyer, repeatCq, openEq, openSync, openDigi, openGroupsIo, connect, direct)
+        Destination.SETTINGS -> Column(Modifier.fillMaxSize()) {
+            IntegratedOperationsSettings(contest, chaser, openContest, openChaser)
+            Box(Modifier.weight(1f)) { SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, syncHub, callbook, cty, audio, panadapter, app,
+                transport, flex, digi, voiceStore, voiceAudio, voiceTx, groupsIo, operatingContext, keyerProfiles, keyer, repeatCq,
+                contest, chaser, openEq, openSync, openDigi, openGroupsIo, connect, direct) }
+        }
     }
 }
 
@@ -4075,6 +4122,7 @@ private fun statusColourForeground(argb: Int): Color {
     flex: FlexRadioController, digi: DigiController, voiceStore: VoiceMacroStore,
     voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, groupsIo: GroupsIoController,
     operatingContext: OperatingContextSnapshot, keyerProfiles: KeyerProfileStore, keyer: KeyerController, repeatCq: RepeatCqController,
+    contestRuntime: ContestRuntime, chaserRuntime: DxChaserRuntime,
     openEq: () -> Unit, openSync: () -> Unit, openDigi: () -> Unit, openGroupsIo: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
     var section by remember { mutableStateOf(SettingsSection.RADIO) }
@@ -4670,7 +4718,7 @@ private fun statusColourForeground(argb: Int): Color {
             val health = buildSystemHealthSnapshot(context, operatingContext, stability, wavelog.status, wavelog.pendingCount,
                 syncHub.records.count { it.state !in setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED) },
                 features.clusterStatus, neuralDx.status, groupsIo.status, groupsIo.cacheStats.messages, groupsIo.homeSummary.needsAttention,
-                digi.mode.name, digi.rxActive, digi.status)
+                digi.mode.name, digi.rxActive, digi.status, keyer.snapshot(), contestRuntime.snapshot(), chaserRuntime.snapshot)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 HealthTile("UI", "RUNNING", true, Modifier.weight(1f)); HealthTile("CAT / USB", if (state.connected) "LIVE" else "OFFLINE", state.connected, Modifier.weight(1f))
                 HealthTile("NETWORK / DX", features.clusterStatus, features.liveSpots.isNotEmpty(), Modifier.weight(1f)); HealthTile("WAVELOG", wavelog.status, wavelog.pendingCount == 0, Modifier.weight(1f))

@@ -35,10 +35,35 @@ data class DxChaserSafetySnapshot(
     val digiAudioHealthy: Boolean = false,
     val txActive: Boolean = false,
     val sequenceActive: Boolean = false,
+    val foreground: Boolean = true,
+    val digiModeEligible: Boolean = true,
+    val localModemAuthority: Boolean = true,
+    val txEnabledByOperator: Boolean = true,
+    val contestCompatible: Boolean = true,
+    val keyerIdle: Boolean = true,
+    val rxConfirmed: Boolean = true,
 ) {
     val preparationPermitted: Boolean get() = radioConnected && receiveActive && routeHealthy &&
-        digiAudioHealthy && !txActive && !sequenceActive
+        digiAudioHealthy && !txActive && !sequenceActive && foreground && digiModeEligible &&
+        localModemAuthority && txEnabledByOperator && contestCompatible && keyerIdle && rxConfirmed
 }
+
+data class DxChaserContestOpportunity(
+    val validBandMode: Boolean? = null,
+    val duplicate: Boolean? = null,
+    val newMultipliers: Set<String> = emptySet(),
+    val workedMultipliers: Set<String> = emptySet(),
+    val unknownMultipliers: Set<String> = emptySet(),
+    val expectedExchangeHint: String = "",
+    val claimedBy: String? = null,
+)
+
+data class DxChaserContestSnapshot(
+    val activeSessionId: String = "",
+    val running: Boolean = false,
+    val digitalCompatible: Boolean = true,
+    val opportunities: Map<String, DxChaserContestOpportunity> = emptyMap(),
+)
 
 data class DxChaserNeedFacts(
     val states: Map<DxChaserNeedDimension, DxChaserNeedState> = emptyMap(),
@@ -119,6 +144,7 @@ data class DxChaserInputSnapshot(
     val rarity: Map<String, DxChaserRarity> = emptyMap(),
     val cooldowns: List<DxChaserCooldownSnapshot> = emptyList(),
     val receivableBands: Set<String> = emptySet(),
+    val contest: DxChaserContestSnapshot = DxChaserContestSnapshot(),
 )
 
 data class DxChaserPriorityBreakdown(
@@ -244,6 +270,8 @@ data class DxChaserReadOnlySnapshot(
     val cooldowns: List<DxChaserCooldownSnapshot> = emptyList(),
     val crossBandOpportunities: List<DxChaserCrossBandOpportunity> = emptyList(),
     val providerFreshness: Map<String, DxChaserEvidenceState> = emptyMap(),
+    val safety: DxChaserSafetySnapshot = DxChaserSafetySnapshot(),
+    val contest: DxChaserContestSnapshot = DxChaserContestSnapshot(),
     val databaseCounts: Map<String, Long> = emptyMap(),
     val settingsDigest: String = "",
     val lastAction: DxChaserActionIntent? = null,
