@@ -308,7 +308,7 @@ internal class GroupsIoDatabase(private val appContext: Context, private val dat
         cursor.getLong(2), cursor.getString(3), cursor.getString(4), cursor.getString(5), cursor.getLong(6), cursor.getString(7))) } }
 
     fun search(query: String, groupId: Long? = null, topicId: Long? = null, limit: Int = 40): List<GroupsIoSearchResult> {
-        val match = query.trim().split(Regex("\\s+")).filter(String::isNotBlank).joinToString(" AND ") { "\"${it.replace("\"", "\"\"")}*\"" }
+        val match = Regex("[\\p{L}\\p{N}_]+").findAll(query).map { "${it.value}*" }.joinToString(" AND ")
         if (match.isBlank()) return emptyList()
         val where = buildString { append("message_search MATCH ?"); if (groupId != null) append(" AND m.group_id=?"); if (topicId != null) append(" AND m.topic_id=?") }
         val args = mutableListOf(match); groupId?.let { args += it.toString() }; topicId?.let { args += it.toString() }; args += limit.coerceIn(1, 100).toString()
