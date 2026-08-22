@@ -18,27 +18,27 @@ Navigation is Home, Radio, Digi, Panadapter, EQ, Logbook, Log Intelligence, Sync
 
 Contest local mutation remains `QsoMutationCoordinator` → canonical local success → Contest link/revision → serial commit → derived state/N1MM receipt. Wavelog delivery remains the single canonical outbox. DX Chaser cannot enable Digi TX and completes only from canonical QSO success. Global Stop remains the sole idempotent stop/RX-request path.
 
-Configuration includes Keyer, Contest/N1MM safe preferences, DX Chaser, Band Maps and destination visibility; unsafe arms, queues, sessions, peers, claims, live observations and radio commands are excluded/reset. Health/support output is bounded metadata only. Database schemas remain QSO 13, projection 2, Neural 5, Digi 2, Groups.io 2, Contest 1 and DX Chaser 1; Band Maps adds no database.
+Configuration includes Keyer, Contest/N1MM safe preferences, DX Chaser, Band Maps and destination visibility; unsafe arms, queues, sessions, peers, claims, live observations and radio commands are excluded/reset. Health/support output is bounded metadata only. The protected-tablet acceptance exposed an installed QSO schema 16 database; the final branch therefore preserves the already-reviewed monotonic schema 14–16 / projection 3–5 migrations instead of attempting a destructive downgrade. Current schemas are QSO 16, projection 5, Neural 5, Digi 2, Groups.io 2, Contest 1 and DX Chaser 1; Band Maps adds no database.
 
 ## Evidence ledger
 
 This ledger must be updated from actual command results before main is eligible. Source review is not build, device, service, audio or RF evidence.
 
 - Release contract and repository scans: PASS after convergence edits; `git diff --check` clean and prohibited full-log/WSPR.live/P.533/conflict-marker scans empty.
-- Android unit tests: PASS after convergence edits (`BUILD SUCCESSFUL`, 45s incremental).
-- Android assemble, bundle, Android-test compile/assemble and lint: PASS; lint recorded 0 errors and 171 warnings.
-- APK: 111,832,640 bytes; SHA-256 `f84fd0c7706012fb8c90d9ff1036d91aad9603691dd5cc07625d4b3425f6b41e`.
-- AAB: 53,102,106 bytes; SHA-256 `896058fa90d5b9ad4d0a1d99ed6ca79a4f9ef57c9aef68e2c3c20e2b8c7ddb23`.
-- Rust: PASS, 97 passed / 0 failed / 1 ignored. Shared core: BLOCKED locally because `cmake` is unavailable; no result is inferred.
-- Apple unsigned generic iOS Simulator build: `BUILD SUCCEEDED`.
+- Android unit tests, APK, AAB, Android-test compile/assemble and lint: PASS (`BUILD SUCCESSFUL`); lint recorded 0 errors and 171 warnings.
+- APK: 116,824,560 bytes; SHA-256 `f30a10b88d1dacd9b55840db75b5bb5f4cbdb4d18b5acec92b8d506df5fc363b`.
+- AAB: 53,103,038 bytes; SHA-256 `24ed998da0f5085f7715255b45feae968dfd7f28e9a44c6b3025fd4cc736d8d5`.
+- Package size and ITU/P.533 payload audit: PASS.
+- Rust: PASS, 97 passed / 0 failed / 1 ignored. Shared core CMake/CTest: PASS, 2/2 tests.
+- Apple unsigned generic iOS Simulator and generic iOS builds: `BUILD SUCCEEDED`.
 - Wavelog: NO CHANGE. MSHV Auto DX Chaser: NO_REVIEW. OpenHamClock stable/release/licence unchanged; preview-only satellite-layer/test movement is documented and not absorbed. Nexus moved from reviewed `57d11fd`/1.7.5 to `f0869a1`/1.7.6 in documentation, Digi workflow, waterfall/audio and UI paths; no source was absorbed and review remains pending.
 - Deterministic release soak: PASS for 100k logbook, 180-day Neural, 20k Digi, 30k Groups.io and provider lifecycle profiles; generated data was disposable.
-- Hosted workflow run `32570096778` passed all seven jobs on source/documentation SHA `180b911db78e4a9782b005b92382a7c35fb802f8`: contract audit, Rust/native core, Android/package, Apple, migration/emulator matrix, scale soak and upstream watchers. A final documentation-only evidence commit requires one last exact-tip rerun.
-- Protected tablet in-place deployment: explicitly authorised, but ADB reported no attached device. The required `pm path`/backup gate could not run, so no install was attempted.
+- Hosted workflow runs `32570096778` and `32570818598` passed all seven jobs on their exact pushed tips. The final schema-compatibility tip still requires the same exact-tip workflow before main may move.
+- Protected Lenovo TB373FU tablet: PASS at the process/window layer. The existing package was confirmed before mutation, private app data was backed up with SHA-256 manifests, and only `adb install -r` was used. The first installed candidate exposed an immediate `SQLiteException` because it attempted to open the tablet's schema-16 QSO database with schema 13. The monotonic schema 14–16 and projection 3–5 migrations were restored, the fixed APK was installed in place, and a controlled cold launch completed in 2.133 seconds. After 12 seconds the process remained alive and focused with no Android fatal exception. No app data was cleared or uninstalled.
 - Physical radio/audio, authenticated Wavelog/Groups.io, live N1MM peer and RF: pending; not claimed by this programme.
 
 ## Gate verdict
 
-`PARTIAL — FINAL WHOLE-APP BRANCH BUILT; MAIN NOT UPDATED`
+`CONDITIONALLY PASSING — FINAL WHOLE-APP TIP REQUIRES EXACT-TIP HOSTED GATE BEFORE MAIN`
 
-The integration branch is source/build complete and hosted validation passed for the implementation SHA. `main` remains frozen because the local shared-core command could not run without `cmake`, and the explicitly requested protected-tablet deployment could not pass its preflight while no ADB device was attached. Neither missing evidence layer is inferred from hosted or artifact results.
+The integration branch is source/build/device-process complete. Local Android, Rust, shared-core, Apple, contract, soak and package gates pass, and the protected-tablet crash is repaired without destructive state changes. `main` remains frozen until the exact final tip passes the hosted seven-job workflow; that result is not inferred from earlier tips. Physical UI correctness beyond process/window focus, authenticated services, audio and RF remain separate pending evidence layers.

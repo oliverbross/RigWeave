@@ -117,7 +117,7 @@ fun bandForFrequency(frequencyHz: Long): String = when (frequencyHz) {
     in 10_000_000_000L..10_499_999_999L -> "3cm"; else -> ""
 }
 
-class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 13) {
+class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : SQLiteOpenHelper(context, databaseName, null, 16) {
     companion object {
         @Volatile private var sharedInstance: QsoDatabase? = null
 
@@ -160,6 +160,9 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         if (oldVersion < 11) createAdvancedLogbookIndexes(db)
         if (oldVersion < 12) QsoProjectionStore.createSchema(db, ProjectionState.OPTIMISING)
         if (oldVersion < 13) QsoProjectionStore.migrateV2(db)
+        if (oldVersion < 14) QsoProjectionStore.migrateV3(db)
+        if (oldVersion < 15) QsoProjectionStore.migrateV4(db)
+        if (oldVersion < 16) QsoProjectionStore.migrateV5(db)
     }
 
     private fun createPagingIndexes(db: SQLiteDatabase) {

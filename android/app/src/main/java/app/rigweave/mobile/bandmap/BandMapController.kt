@@ -10,6 +10,7 @@ import app.rigweave.mobile.ContestReadOnlySnapshot
 import app.rigweave.mobile.OperatingContextSnapshot
 import app.rigweave.mobile.PortableProgram
 import app.rigweave.mobile.PortableSpot
+import app.rigweave.mobile.QsoProjectionStore
 import app.rigweave.mobile.SignalReport
 import app.rigweave.mobile.WorkspaceAction
 import app.rigweave.mobile.WorkspaceDestination
@@ -33,7 +34,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 internal data class BandMapNeedsSnapshot(
     val stationKey: String = "",
-    val projectionVersion: Int = 2,
+    val projectionVersion: Int = QsoProjectionStore.VERSION,
     val generation: Long = 0,
     val complete: Boolean = false,
     val workedEntities: Set<String> = emptySet(), val confirmedEntities: Set<String> = emptySet(),
