@@ -194,7 +194,10 @@ extern "C" int rw_satellite_passes_json(char *output, size_t output_size,
                 if (maximum.elevation >= minimum_peak_deg) {
                     const Look aos_look = look_at(sgp4, observer, aos);
                     const Look los_look = look_at(sgp4, observer, los);
-                    if (!first) rows << ','; first = false;
+                    if (!first) {
+                        rows << ',';
+                    }
+                    first = false;
                     rows << "{\"aos\":" << aos << ",\"tca\":" << maximum.epoch << ",\"los\":" << los
                          << ",\"maximum_elevation_deg\":" << maximum.elevation
                          << ",\"aos_azimuth_deg\":" << aos_look.azimuth << ",\"los_azimuth_deg\":" << los_look.azimuth

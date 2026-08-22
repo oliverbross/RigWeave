@@ -324,53 +324,85 @@ private struct KX3ControlDeck: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            VStack(spacing: 10) {
-                HStack(alignment: .top, spacing: 16) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("VFO A").font(.caption.weight(.bold)).foregroundStyle(RigTheme.amber)
-                        Text(state.connected ? state.frequencyText : "—.——— MHz")
-                            .font(.system(.largeTitle, design: .monospaced).weight(.semibold)).minimumScaleFactor(0.55)
-                            .accessibilityIdentifier("frequencyDisplay")
-                        Text(state.frequencyBHz > 0 ? String(format: "VFO B  %.3f MHz", Double(state.frequencyBHz) / 1_000_000) : "VFO B  —.——— MHz")
-                            .font(.system(.subheadline, design: .monospaced)).foregroundStyle(state.split ? Color.red : .secondary)
-                    }
-                    Spacer(minLength: 4)
-                    VStack(spacing: 5) {
-                        Text("CWT").font(.caption.bold())
-                        HStack(alignment: .bottom, spacing: 3) {
-                            ForEach(0..<7, id: \.self) { index in
-                                Capsule().fill(index == 3 ? RigTheme.amber : Color.secondary.opacity(0.45))
-                                    .frame(width: 5, height: CGFloat(8 + (3 - abs(3 - index)) * 4))
-                            }
-                        }.accessibilityHidden(true)
-                    }.frame(minWidth: 88).padding(10).background(Color.black.opacity(0.28)).clipShape(RoundedRectangle(cornerRadius: 8))
-                    StatusBadge(status: state.status)
-                }
-                HStack(spacing: 12) {
-                    Text(state.transmitting ? "TX" : "RX").foregroundStyle(state.transmitting ? .red : RigTheme.green).fontWeight(.bold)
-                    Text(state.mode).font(.system(.body, design: .monospaced).bold())
-                    if state.split { flag("SPLIT", active: true) }
-                    flag("RIT", active: state.rit); flag("XIT", active: state.xit)
-                    flag("PRE", active: state.preamp); flag("ATT", active: state.attenuator)
-                    Spacer(); Text("BW \(state.bandwidthHz) Hz · PWR \(state.powerW) W").font(.caption).foregroundStyle(.secondary)
-                }
-                KX3Meter(label: state.transmitting ? "RF OUTPUT" : "S-METER", value: state.transmitting ? Double(max(0, state.rfOutputTenths)) : Double(state.meter),
-                    maximum: state.transmitting ? 120 : 30, annotation: state.transmitting && state.swrTenths >= 0 ? String(format: "SWR %.1f:1", Double(state.swrTenths) / 10) : "S 1  3  5  7  9  +10  +20  +30")
-                HStack { Text("AF \(state.afGain)"); Spacer(); Text("RF \(state.rfGain)") }.font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            }
-            .padding(18).background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 14))
-
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 86), spacing: 8)], spacing: 8) {
-                ForEach(controls, id: \.0) { control in
-                    Button(control.0) { send(control.1) }
-                        .buttonStyle(.bordered).frame(minHeight: 44)
-                }
-                Button(state.preamp ? "PRE OFF" : "PRE ON") { send(state.preamp ? "PA0;" : "PA1;") }.buttonStyle(.bordered).frame(minHeight: 44)
-                Button(state.attenuator ? "ATT OFF" : "ATT ON") { send(state.attenuator ? "RA00;" : "RA01;") }.buttonStyle(.bordered).frame(minHeight: 44)
-            }
+            displayPanel
+            controlsGrid
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Elecraft KX3 radio control deck")
+    }
+
+    private var displayPanel: some View {
+        VStack(spacing: 10) {
+            HStack(alignment: .top, spacing: 16) {
+                frequencyPanel
+                Spacer(minLength: 4)
+                tuningIndicator
+                StatusBadge(status: state.status)
+            }
+            statusLine
+            meter
+            HStack { Text("AF \(state.afGain)"); Spacer(); Text("RF \(state.rfGain)") }
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+        }
+        .padding(18).background(RigTheme.panel).clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var frequencyPanel: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("VFO A").font(.caption.weight(.bold)).foregroundStyle(RigTheme.amber)
+            Text(state.connected ? state.frequencyText : "—.——— MHz")
+                .font(.system(.largeTitle, design: .monospaced).weight(.semibold)).minimumScaleFactor(0.55)
+                .accessibilityIdentifier("frequencyDisplay")
+            Text(state.frequencyBHz > 0 ? String(format: "VFO B  %.3f MHz", Double(state.frequencyBHz) / 1_000_000) : "VFO B  —.——— MHz")
+                .font(.system(.subheadline, design: .monospaced)).foregroundStyle(state.split ? Color.red : .secondary)
+        }
+    }
+
+    private var tuningIndicator: some View {
+        VStack(spacing: 5) {
+            Text("CWT").font(.caption.bold())
+            HStack(alignment: .bottom, spacing: 3) {
+                ForEach(0..<7, id: \.self) { index in
+                    Capsule().fill(index == 3 ? RigTheme.amber : Color.secondary.opacity(0.45))
+                        .frame(width: 5, height: CGFloat(8 + (3 - abs(3 - index)) * 4))
+                }
+            }.accessibilityHidden(true)
+        }
+        .frame(minWidth: 88).padding(10).background(Color.black.opacity(0.28)).clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var statusLine: some View {
+        HStack(spacing: 12) {
+            Text(state.transmitting ? "TX" : "RX").foregroundStyle(state.transmitting ? .red : RigTheme.green).fontWeight(.bold)
+            Text(state.mode).font(.system(.body, design: .monospaced).bold())
+            if state.split { flag("SPLIT", active: true) }
+            flag("RIT", active: state.rit); flag("XIT", active: state.xit)
+            flag("PRE", active: state.preamp); flag("ATT", active: state.attenuator)
+            Spacer()
+            Text("BW \(state.bandwidthHz) Hz · PWR \(state.powerW) W").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var meter: some View {
+        KX3Meter(
+            label: state.transmitting ? "RF OUTPUT" : "S-METER",
+            value: state.transmitting ? Double(max(0, state.rfOutputTenths)) : Double(state.meter),
+            maximum: state.transmitting ? 120 : 30,
+            annotation: state.transmitting && state.swrTenths >= 0
+                ? String(format: "SWR %.1f:1", Double(state.swrTenths) / 10)
+                : "S 1  3  5  7  9  +10  +20  +30"
+        )
+    }
+
+    private var controlsGrid: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 86), spacing: 8)], spacing: 8) {
+            ForEach(controls, id: \.0) { control in
+                Button(control.0) { send(control.1) }
+                    .buttonStyle(.bordered).frame(minHeight: 44)
+            }
+            Button(state.preamp ? "PRE OFF" : "PRE ON") { send(state.preamp ? "PA0;" : "PA1;") }.buttonStyle(.bordered).frame(minHeight: 44)
+            Button(state.attenuator ? "ATT OFF" : "ATT ON") { send(state.attenuator ? "RA00;" : "RA01;") }.buttonStyle(.bordered).frame(minHeight: 44)
+        }
     }
 
     private func flag(_ text: String, active: Bool) -> some View {

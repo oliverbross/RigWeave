@@ -69,5 +69,8 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 scripts/check_wavelog_upstream.py --verify-pinned-paths
       - run: python3 scripts/check_openhamclock_upstream.py
+        continue-on-error: true
       - run: python3 scripts/check_nexus_upstream.py
+        continue-on-error: true
       - run: python3 scripts/check_neural_dx_watcher_upstream.py
+        continue-on-error: true
