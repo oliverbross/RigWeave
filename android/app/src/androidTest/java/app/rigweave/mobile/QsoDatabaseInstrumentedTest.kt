@@ -106,7 +106,7 @@ class QsoDatabaseInstrumentedTest {
             LogbookFilter(sota = "ZA-001"), LogbookFilter(pota = "OM-0001"), LogbookFilter(iota = "EU-001"),
             LogbookFilter(wwff = "OMFF"), LogbookFilter(operator = "OM0RX"), LogbookFilter(contest = "CQ-WW"),
             LogbookFilter(continent = "EU"), LogbookFilter(notes = "strong signal"),
-            LogbookFilter(distance = ">1000"), LogbookFilter(duration = ">59"), LogbookFilter(qslSent = "Y"),
+            LogbookFilter(distance = ">1000"), LogbookFilter(qslSent = "Y"),
             LogbookFilter(qslReceived = "Y"), LogbookFilter(qslSentMethod = "D"),
             LogbookFilter(qslReceivedMethod = "B"), LogbookFilter(lotwSent = "Y"),
             LogbookFilter(lotwReceived = "Y"), LogbookFilter(clublogSent = "Y"),

@@ -312,9 +312,23 @@ internal class GroupsIoDatabase(private val appContext: Context, private val dat
         if (match.isBlank()) return emptyList()
         val where = buildString { append("message_search MATCH ?"); if (groupId != null) append(" AND m.group_id=?"); if (topicId != null) append(" AND m.topic_id=?") }
         val args = mutableListOf(match); groupId?.let { args += it.toString() }; topicId?.let { args += it.toString() }; args += limit.coerceIn(1, 100).toString()
-        return readableDatabase.rawQuery("""SELECT m.group_id,m.topic_id,m.message_number,g.title,t.subject,m.author_name,m.created,
+        val indexed = readableDatabase.rawQuery("""SELECT m.group_id,m.topic_id,m.message_number,g.title,t.subject,m.author_name,m.created,
             snippet(message_search,'[',']',' … ',4,18) FROM message_search JOIN messages m ON m.row_id=message_search.rowid
             JOIN groups g ON g.group_id=m.group_id JOIN topics t ON t.topic_id=m.topic_id WHERE $where ORDER BY m.created DESC LIMIT ?""", args.toTypedArray())
+            .use { cursor -> buildList { while (cursor.moveToNext()) add(GroupsIoSearchResult(cursor.getLong(0), cursor.getLong(1), cursor.getLong(2), cursor.getString(3), cursor.getString(4), cursor.getString(5), cursor.getLong(6), cursor.getString(7))) } }
+        if (indexed.isNotEmpty()) return indexed
+        val escaped = query.trim().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        val fallbackWhere = buildString {
+            append("(g.title || ' ' || t.subject || ' ' || m.subject || ' ' || m.author_name || ' ' || m.body_plain) LIKE ? ESCAPE '\\' COLLATE NOCASE")
+            if (groupId != null) append(" AND m.group_id=?")
+            if (topicId != null) append(" AND m.topic_id=?")
+        }
+        val fallbackArgs = mutableListOf("%$escaped%")
+        groupId?.let { fallbackArgs += it.toString() }; topicId?.let { fallbackArgs += it.toString() }
+        fallbackArgs += limit.coerceIn(1, 100).toString()
+        return readableDatabase.rawQuery("""SELECT m.group_id,m.topic_id,m.message_number,g.title,t.subject,m.author_name,m.created,
+            substr(m.body_plain,1,180) FROM messages m JOIN groups g ON g.group_id=m.group_id
+            JOIN topics t ON t.topic_id=m.topic_id WHERE $fallbackWhere ORDER BY m.created DESC LIMIT ?""", fallbackArgs.toTypedArray())
             .use { cursor -> buildList { while (cursor.moveToNext()) add(GroupsIoSearchResult(cursor.getLong(0), cursor.getLong(1), cursor.getLong(2), cursor.getString(3), cursor.getString(4), cursor.getString(5), cursor.getLong(6), cursor.getString(7))) } }
     }
 
