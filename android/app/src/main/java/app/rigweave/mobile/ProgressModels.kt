@@ -7,7 +7,23 @@ import java.time.ZoneOffset
 import java.util.Locale
 
 internal enum class ProgressPeriod(val label: String) {
-    DAYS_30("30 days"), DAYS_90("90 days"), MONTHS_12("12 months"), YEAR("This year"), ALL("All time")
+    DAYS_30("30 days"), DAYS_90("90 days"), MONTHS_12("12 months"), YEAR("This year"), LAST_YEAR("Last year"), ALL("All time")
+}
+internal data class ProgressPeriodBounds(val fromEpoch: Long?, val toEpochExclusive: Long?, val label: String)
+internal fun progressPeriodBounds(period: ProgressPeriod, now: Long = Instant.now().epochSecond): ProgressPeriodBounds {
+    val today = Instant.ofEpochSecond(now).atZone(ZoneOffset.UTC).toLocalDate()
+    val thisYear = today.withDayOfYear(1).atStartOfDay().toEpochSecond(ZoneOffset.UTC)
+    return when (period) {
+        ProgressPeriod.DAYS_30 -> ProgressPeriodBounds(now - 30 * 86_400L, null, "Last 30 days")
+        ProgressPeriod.DAYS_90 -> ProgressPeriodBounds(now - 90 * 86_400L, null, "Last 90 days")
+        ProgressPeriod.MONTHS_12 -> ProgressPeriodBounds(Instant.ofEpochSecond(now).atZone(ZoneOffset.UTC).minusMonths(12).toEpochSecond(), null, "Last 12 months")
+        ProgressPeriod.YEAR -> ProgressPeriodBounds(thisYear, null, "${today.year}-01-01 UTC – now")
+        ProgressPeriod.LAST_YEAR -> {
+            val start = today.minusYears(1).withDayOfYear(1).atStartOfDay().toEpochSecond(ZoneOffset.UTC)
+            ProgressPeriodBounds(start, thisYear, "${today.year - 1}-01-01 – ${today.year}-01-01 UTC")
+        }
+        ProgressPeriod.ALL -> ProgressPeriodBounds(null, null, "All time")
+    }
 }
 internal enum class ProgressMode(val label: String) { ALL("All"), CW("CW"), PHONE("Phone"), DIGITAL("Digital") }
 internal data class ProgressFilters(
@@ -127,6 +143,7 @@ internal data class ProgressSnapshot(
     val confirmationDetails: Map<String, ConfirmationProgress> = emptyMap(),
     val stationProfiles: Map<String, Int> = emptyMap(), val stationCallsigns: Map<String, Int> = emptyMap(),
     val radios: Map<String, Int> = emptyMap(), val awards: Map<AwardKind, AwardEstimate> = emptyMap(),
+    val invalidContactGrids: Int = 0,
     val detailed: Boolean = false,
 )
 
@@ -151,21 +168,15 @@ internal fun filterProgressQsos(qsos: List<Qso>, filters: ProgressFilters, now: 
     val operators = filters.selectedOperators().map { it.uppercase(Locale.US) }.toSet()
     val confirmations = filters.selectedConfirmationSources()
     val programmes = filters.selectedPortablePrograms()
-    val start = when (filters.period) {
-        ProgressPeriod.DAYS_30 -> now - 30 * 86_400L
-        ProgressPeriod.DAYS_90 -> now - 90 * 86_400L
-        ProgressPeriod.MONTHS_12 -> Instant.ofEpochSecond(now).atZone(ZoneOffset.UTC).minusMonths(12).toEpochSecond()
-        ProgressPeriod.YEAR -> Instant.ofEpochSecond(now).atZone(ZoneOffset.UTC).toLocalDate().withDayOfYear(1)
-            .atStartOfDay().toEpochSecond(ZoneOffset.UTC)
-        ProgressPeriod.ALL -> Long.MIN_VALUE
-    }
+    val bounds = progressPeriodBounds(filters.period, now)
+    val start = bounds.fromEpoch ?: Long.MIN_VALUE
     return qsos.filter { qso ->
         val stationMatches = filters.allStations ||
             filters.stationProfileId.isNotBlank() && qso.stationProfileId == filters.stationProfileId ||
             filters.stationProfileId.isBlank() && filters.stationCallsign.isNotBlank() &&
                 qso.stationCallsign.equals(filters.stationCallsign, true) ||
             filters.stationProfileId.isBlank() && filters.stationCallsign.isBlank()
-        stationMatches && qso.createdAt >= start &&
+        stationMatches && qso.createdAt >= start && (bounds.toEpochExclusive == null || qso.createdAt < bounds.toEpochExclusive) &&
             (bands.isEmpty() || qsoBand(qso) in bands) &&
             (modes.isEmpty() || qsoMode(qso) in modes) &&
             (submodes.isEmpty() || qso.submode.ifBlank { qso.mode }.uppercase(Locale.US) in submodes) &&
@@ -198,15 +209,10 @@ private fun progressPortableMatches(qso: Qso, program: String): Boolean = when (
 }
 
 internal fun progressLogbookFilter(filters: ProgressFilters, now: Long = Instant.now().epochSecond): LogbookFilter {
-    val start = when (filters.period) {
-        ProgressPeriod.DAYS_30 -> now - 30 * 86_400L
-        ProgressPeriod.DAYS_90 -> now - 90 * 86_400L
-        ProgressPeriod.MONTHS_12 -> Instant.ofEpochSecond(now).atZone(ZoneOffset.UTC).minusMonths(12).toEpochSecond()
-        ProgressPeriod.YEAR -> Instant.ofEpochSecond(now).atZone(ZoneOffset.UTC).toLocalDate().withDayOfYear(1).atStartOfDay().toEpochSecond(ZoneOffset.UTC)
-        ProgressPeriod.ALL -> null
-    }
+    val bounds = progressPeriodBounds(filters.period, now)
     return LogbookFilter(
-        fromEpochSeconds = start,
+        fromEpochSeconds = bounds.fromEpoch,
+        toEpochSecondsExclusive = bounds.toEpochExclusive,
         stationProfile = filters.stationProfileId.takeUnless { filters.allStations }.orEmpty(),
         stationCallsign = filters.stationCallsign.takeIf { !filters.allStations && filters.stationProfileId.isBlank() }.orEmpty(),
         band = filters.selectedBands().singleOrNull().orEmpty(),
@@ -231,7 +237,7 @@ private fun activityBuckets(rows: List<Qso>, period: ProgressPeriod): List<Progr
         val date = Instant.ofEpochSecond(qso.createdAt).atZone(ZoneOffset.UTC).toLocalDate()
         when (period) {
             ProgressPeriod.DAYS_30, ProgressPeriod.DAYS_90 -> date.toString()
-            ProgressPeriod.MONTHS_12, ProgressPeriod.YEAR -> "%04d-%02d".format(date.year, date.monthValue)
+            ProgressPeriod.MONTHS_12, ProgressPeriod.YEAR, ProgressPeriod.LAST_YEAR -> "%04d-%02d".format(date.year, date.monthValue)
             ProgressPeriod.ALL -> date.withDayOfMonth(1).toString().take(7)
         }
     }.eachCount().toSortedMap().map { ProgressBucket(it.key, it.value) }

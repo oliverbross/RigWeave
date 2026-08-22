@@ -67,6 +67,42 @@ internal data class ActivationPlan(
     val updatedAt: Long = Instant.now().epochSecond,
 )
 
+internal enum class ActivationCatalogSort(val label: String) { DISTANCE("DISTANCE"), NAME("NAME"), REFERENCE("REFERENCE") }
+
+internal data class ActivationCatalogReference(
+    val program: String,
+    val reference: String,
+    val name: String,
+    val grid: String,
+    val point: GeoPoint,
+    val active: Boolean,
+    val source: String,
+    val distanceKm: Double = 0.0,
+    val bearingDegrees: Int = 0,
+)
+
+internal fun nearbyActivationReferences(
+    origin: GeoPoint,
+    radiusKm: Double,
+    rows: List<ActivationCatalogReference>,
+    enabledPrograms: Set<String>,
+    sort: ActivationCatalogSort,
+    limit: Int = 500,
+): List<ActivationCatalogReference> {
+    val normalizedPrograms = enabledPrograms.map { it.uppercase(Locale.US) }.toSet()
+    val prepared = rows.asSequence()
+        .filter { it.program.uppercase(Locale.US) in normalizedPrograms }
+        .distinctBy { "${it.program.uppercase(Locale.US)}:${it.reference.uppercase(Locale.US)}" }
+        .map { it.copy(distanceKm = distanceKm(origin, it.point), bearingDegrees = initialBearingDegrees(origin, it.point)) }
+        .filter { it.distanceKm <= radiusKm }
+    val comparator = when (sort) {
+        ActivationCatalogSort.DISTANCE -> compareBy<ActivationCatalogReference> { it.distanceKm }.thenBy { it.reference }
+        ActivationCatalogSort.NAME -> compareBy<ActivationCatalogReference> { it.name.uppercase(Locale.US) }.thenBy { it.reference }
+        ActivationCatalogSort.REFERENCE -> compareBy<ActivationCatalogReference> { it.reference.uppercase(Locale.US) }
+    }
+    return prepared.sortedWith(comparator).take(limit.coerceIn(1, 1_000)).toList()
+}
+
 internal data class GridCell(val south: Double, val west: Double, val north: Double, val east: Double)
 
 internal fun <T> operationsMetadata(feed: HamClockFeed<List<T>>): OperationsCacheMetadata {

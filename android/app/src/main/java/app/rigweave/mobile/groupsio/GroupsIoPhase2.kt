@@ -258,7 +258,7 @@ internal class GroupsIoHttpTransport : GroupsIoTransport {
 
 internal class GroupsIoDeliveryUnknownException : IOException("Delivery could not be confirmed")
 
-data class GroupsIoRemoteDraft(val id: Long, val groupId: Long, val type: String, val messageId: Long?, val subject: String, val body: String, val attachmentCount: Int)
+data class GroupsIoRemoteDraft(val id: Long, val groupId: Long, val type: String, val messageId: Long?, val subject: String, val body: String, val attachmentCount: Int, val updatedAtMillis: Long = 0)
 internal data class GroupsIoPostResult(val pendingModeration: Boolean)
 data class GroupsIoIncomingAttachment(
     val id: Long,
@@ -322,7 +322,8 @@ internal class GroupsIoPhase2Api(private val transport: GroupsIoTransport = Grou
         val data = root.optJSONArray("data") ?: JSONArray()
         val values = (0 until data.length()).map { data.getJSONObject(it) }.map { value -> GroupsIoRemoteDraft(
             value.requiredLong("id", "draft_id"), value.requiredLong("group_id"), value.optString("draft_type"),
-            value.optLong("message_id").takeIf { it > 0 }, value.optString("subject"), normaliseBody(value.optString("body")), value.optInt("num_attachments")
+            value.optLong("message_id").takeIf { it > 0 }, value.optString("subject"), normaliseBody(value.optString("body")), value.optInt("num_attachments"),
+            value.instantMillis("updated", "created", "date")
         ) }
         return values to groupsIoPagination(root)
     }

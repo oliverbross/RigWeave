@@ -42,6 +42,10 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import org.maplibre.android.MapLibre
 import org.maplibre.android.annotations.IconFactory
 import org.maplibre.android.annotations.MarkerOptions
@@ -278,29 +282,47 @@ private fun operationStatusColor(status: String): Color = when (status) {
     var program by rememberSaveable { mutableStateOf("ALL") }
     var editing by remember { mutableStateOf<ActivationPlan?>(null) }
     var delete by remember { mutableStateOf<ActivationPlan?>(null) }
+    var catalogueRows by remember { mutableStateOf<List<ActivationCatalogReference>>(emptyList()) }
+    var nearbyRows by remember { mutableStateOf<List<ActivationCatalogReference>>(emptyList()) }
+    var invalidPotaCoordinates by remember { mutableIntStateOf(0) }
+    var invalidSotaCoordinates by remember { mutableIntStateOf(0) }
+    var catalogueBusy by remember { mutableStateOf(false) }
+    var catalogueSort by rememberSaveable { mutableStateOf(ActivationCatalogSort.DISTANCE) }
     var cq by rememberSaveable { mutableStateOf(false) }; var itu by rememberSaveable { mutableStateOf(false) }; var states by rememberSaveable { mutableStateOf(false) }
     var pota by rememberSaveable { mutableStateOf(true) }; var sota by rememberSaveable { mutableStateOf(true) }; var wwff by rememberSaveable { mutableStateOf(true) }
     val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) lastKnownPoint(context)?.let { selected -> point = selected; grid = maidenheadGrid(selected.latitude, selected.longitude) }
     }
-    LaunchedEffect(grid) { maidenheadCenter(grid)?.let { point = it }; portable.pota.searchParks("", stationGrid = grid, nearby = true); portable.sotaCatalogue.search("", stationGrid = grid, nearby = true) }
-    val nearbyPota = portable.pota.parkResults.filter { (it.distanceKm ?: Double.MAX_VALUE) <= radius }
-    val nearbySota = portable.sotaCatalogue.results.filter { (it.distanceKm ?: Double.MAX_VALUE) <= radius }
-    val nearbyWwff = portable.recentWwff("").mapNotNull { ref ->
-        val p = if (ref.latitude != null && ref.longitude != null) GeoPoint(ref.latitude, ref.longitude) else null
-        p?.let { ref to distanceKm(point, it) }
-    }.filter { it.second <= radius }
-    val mapReferences = buildList {
-        if ((program == "ALL" || program == "POTA") && pota) nearbyPota.forEach { row ->
-            if (row.latitude != null && row.longitude != null) add(PlanningMapReference("POTA", row.reference, row.name, GeoPoint(row.latitude, row.longitude)))
-        }
-        if ((program == "ALL" || program == "SOTA") && sota) nearbySota.forEach { row ->
-            if (row.latitude != null && row.longitude != null) add(PlanningMapReference("SOTA", row.code, row.name, GeoPoint(row.latitude, row.longitude)))
-        }
-        if ((program == "ALL" || program == "WWFF") && wwff) nearbyWwff.forEach { (row, _) ->
-            add(PlanningMapReference("WWFF", row.code, row.name, GeoPoint(row.latitude!!, row.longitude!!)))
-        }
+    LaunchedEffect(grid, radius, portable.pota.parkMetadata, portable.sotaCatalogue.metadata) {
+        val origin = maidenheadCenter(grid) ?: return@LaunchedEffect
+        point = origin
+        catalogueBusy = true
+        try {
+            val (potaResult, sotaResult) = coroutineScope {
+                val parks = async { portable.pota.nearbyParks(grid, radius) }
+                val summits = async { portable.sotaCatalogue.nearbySummits(grid, radius) }
+                parks.await() to summits.await()
+            }
+            invalidPotaCoordinates = potaResult.invalidCoordinates
+            invalidSotaCoordinates = sotaResult.invalidCoordinates
+            catalogueRows = withContext(Dispatchers.Default) {
+                potaResult.rows.mapNotNull { row ->
+                    if (row.latitude == null || row.longitude == null) null else ActivationCatalogReference("POTA", row.reference, row.name, row.grid, GeoPoint(row.latitude, row.longitude), row.active, POTA_PARK_URL)
+                } + sotaResult.rows.mapNotNull { row ->
+                    if (row.latitude == null || row.longitude == null) null else ActivationCatalogReference("SOTA", row.code, row.name, row.grid, GeoPoint(row.latitude, row.longitude), row.active, SOTA_SUMMITS_URL)
+                }
+            }
+        } finally { catalogueBusy = false }
     }
+    LaunchedEffect(catalogueRows, point, radius, program, pota, sota, wwff, catalogueSort) {
+        val enabled = buildSet {
+            if (pota && (program == "ALL" || program == "POTA")) add("POTA")
+            if (sota && (program == "ALL" || program == "SOTA")) add("SOTA")
+            if (wwff && (program == "ALL" || program == "WWFF")) add("WWFF")
+        }
+        nearbyRows = withContext(Dispatchers.Default) { nearbyActivationReferences(point, radius, catalogueRows, enabled, catalogueSort) }
+    }
+    val mapReferences = nearbyRows.map { PlanningMapReference(it.program, it.reference, it.name, it.point) }
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             OutlinedTextField(grid, { grid = it.uppercase(Locale.US).take(8) }, label = { Text("Grid") }, modifier = Modifier.weight(1f))
@@ -316,14 +338,24 @@ private fun operationStatusColor(status: String): Color = when (status) {
             listOf("ALL", "POTA", "SOTA", "WWFF").forEach { value -> FilterChip(program == value, { program = value }, { Text(value) }) }
             listOf(25.0, 50.0, 100.0, 250.0).forEach { value -> FilterChip(radius == value, { radius = value }, { Text("${value.toInt()} km") }) }
         } }
+        item { Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text("SORT", color = OpsMuted, modifier = Modifier.align(Alignment.CenterVertically))
+            ActivationCatalogSort.entries.forEach { value -> FilterChip(catalogueSort == value, { catalogueSort = value }, { Text(value.label) }) }
+        } }
         item { Text("OVERLAYS", color = OpsAmber, fontWeight = FontWeight.Black); Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             FilterChip(cq, { cq = !cq }, { Text("CQ ZONES") }); FilterChip(itu, { itu = !itu }, { Text("ITU ZONES") }); FilterChip(states, { states = !states }, { Text("STATES") })
             FilterChip(pota, { pota = !pota }, { Text("POTA") }); FilterChip(sota, { sota = !sota }, { Text("SOTA") }); FilterChip(wwff, { wwff = !wwff }, { Text("WWFF") })
         }; if (cq || itu || states) Text("CQ/ITU/state boundary polygons are not packaged in this Android build; toggles are retained but no boundary is fabricated.", color = OpsMuted) }
-        item { Text("NEARBY REFERENCES", color = OpsAmber, fontWeight = FontWeight.Black) }
-        if ((program == "ALL" || program == "POTA") && pota) items(nearbyPota.take(20), key = { "P${it.reference}" }) { row -> ReferenceRow("POTA", row.reference, row.name, row.distanceKm, row.bearingDegrees, if (row.active) "ACTIVE CATALOGUE" else "RETIRED") { editing = planFor("POTA", row.reference, row.name, row.grid.ifBlank { grid }, row.latitude ?: point.latitude, row.longitude ?: point.longitude) } }
-        if ((program == "ALL" || program == "SOTA") && sota) items(nearbySota.take(20), key = { "S${it.code}" }) { row -> ReferenceRow("SOTA", row.code, row.name, row.distanceKm, row.bearingDegrees, if (row.active) "ACTIVE CATALOGUE" else "EXPIRED") { editing = planFor("SOTA", row.code, row.name, row.grid.ifBlank { grid }, row.latitude ?: point.latitude, row.longitude ?: point.longitude) } }
-        if ((program == "ALL" || program == "WWFF") && wwff) items(nearbyWwff.take(20), key = { "W${it.first.code}" }) { (row, distance) -> ReferenceRow("WWFF", row.code, row.name, distance, initialBearingDegrees(point, GeoPoint(row.latitude!!, row.longitude!!)), "RECENT SPOT/AGENDA CACHE") { editing = planFor("WWFF", row.code, row.name, row.grid.ifBlank { grid }, row.latitude!!, row.longitude!!) } }
+        item { Surface(color = OpsPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("CATALOGUE AUTHORITIES", color = OpsAmber, fontWeight = FontWeight.Black)
+            Text("POTA · ${if (portable.pota.parkMetadata.ready) if (portable.pota.parkMetadata.stale) "OFFLINE CACHE / STALE" else "READY" else "NOT DOWNLOADED"} · ${portable.pota.parkMetadata.rowCount} references · ${nearbyRows.count { it.program == "POTA" }} nearby · $invalidPotaCoordinates without coordinates\nSource: $POTA_PARK_URL · imported ${catalogueTime(portable.pota.parkMetadata.importedAt)}", color = OpsMuted)
+            Text("SOTA · ${if (portable.sotaCatalogue.metadata.ready) if (portable.sotaCatalogue.metadata.stale) "OFFLINE CACHE / STALE" else "READY" else "NOT DOWNLOADED"} · ${portable.sotaCatalogue.metadata.rowCount} summits · ${nearbyRows.count { it.program == "SOTA" }} nearby · $invalidSotaCoordinates without coordinates\nSource: $SOTA_SUMMITS_URL · imported ${catalogueTime(portable.sotaCatalogue.metadata.importedAt)}", color = OpsMuted)
+            Text("WWFF · PROVIDER UNAVAILABLE · 0 catalogue references · 0 nearby\nNo stable, licensed structured full-directory contract has been verified. Live Spotline/agendas are not substituted for a catalogue.", color = OpsDanger)
+            if (catalogueBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        } } }
+        item { Text("NEARBY REFERENCES · ${nearbyRows.size}", color = OpsAmber, fontWeight = FontWeight.Black) }
+        if (!catalogueBusy && nearbyRows.isEmpty()) item { EmptyOperations("No catalogue references within the inclusive ${radius.toInt()} km radius for the selected programmes.") }
+        items(nearbyRows.take(100), key = { "${it.program}:${it.reference}" }) { row -> ReferenceRow(row.program, row.reference, row.name, row.distanceKm, row.bearingDegrees, if (row.active) "ACTIVE CATALOGUE" else "RETIRED / EXPIRED") { editing = planFor(row.program, row.reference, row.name, row.grid.ifBlank { grid }, row.point.latitude, row.point.longitude) } }
         item { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("SAVED PLANS", color = OpsAmber, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f)); Button({ editing = planFor("GENERAL", "", "New activation", grid, point.latitude, point.longitude) }) { Text("NEW PLAN") } } }
         if (controller.plans.isEmpty()) item { EmptyOperations("No saved activation plans. Plans are local and survive app upgrades.") }
         items(controller.plans, key = ActivationPlan::id) { plan -> Surface(color = OpsPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) { Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -442,6 +474,7 @@ private fun planFor(program: String, ref: String, name: String, grid: String, la
     latitude = lat, longitude = lon, startEpoch = Instant.now().epochSecond + 3600)
 
 private fun localTime(epoch: Long) = Instant.ofEpochSecond(epoch).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+private fun catalogueTime(epoch: Long) = if (epoch <= 0) "never" else localTime(epoch)
 private fun formatContestTime(epoch: Long, utc: Boolean) = Instant.ofEpochSecond(epoch).atZone(if (utc) ZoneOffset.UTC else ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("EEE dd MMM HH:mm"))
 private fun distanceBearing(stationGrid: String, target: GeoPoint): String = maidenheadCenter(stationGrid)?.let { "%.0f km · %03d° from %s".format(distanceKm(it, target), initialBearingDegrees(it, target), stationGrid) } ?: "station grid unavailable"
 

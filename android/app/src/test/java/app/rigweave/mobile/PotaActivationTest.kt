@@ -89,7 +89,11 @@ class PotaActivationTest {
         assertTrue(commands.isEmpty())
     }
 
-    @Test fun sotaLiveRemainsDisabledWithoutApproval() { assertFalse(SOTA_LIVE_APPROVED) }
+    @Test fun sotaLiveUsesTheOperatorApprovedReceiveOnlyClusterEndpoint() {
+        assertTrue(SOTA_LIVE_APPROVED)
+        assertEquals("cluster.sota.org.uk", SOTA_CLUSTER_HOST)
+        assertEquals(7300, SOTA_CLUSTER_PORT)
+    }
 
     @Test fun invalidOrEmptyExportReturnsCorrectionInsteadOfFile() {
         val empty = buildPotaExports(session, emptyList(), dayOne + 60)

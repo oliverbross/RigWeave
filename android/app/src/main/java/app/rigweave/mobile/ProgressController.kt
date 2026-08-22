@@ -114,6 +114,7 @@ internal class ProgressController(context: Context, private val database: QsoDat
     private val bandHistoryCache = BandHistoryCache()
     private var completedBandHealthKey: Any? = null
     private var fastSnapshotKey: Any? = null
+    private var scopeGeneration = 0L
     private var bandHealthGeneration = 0L
     var snapshot by mutableStateOf(ProgressSnapshot()); private set
     var bandHealthSnapshot by mutableStateOf(HamClockBandHealthSnapshot()); private set
@@ -143,6 +144,10 @@ internal class ProgressController(context: Context, private val database: QsoDat
             .putString("portable_program", applied.portableProgram).putBoolean("include_conflicted", applied.includeConflicted)
             .putBoolean("include_deleted", false).apply()
         lastKey = null
+        scopeGeneration++
+        refreshJob?.cancel()
+        refreshJob = null
+        pendingRefresh = null
     }
 
     fun selectAward(value: AwardKind) {
@@ -171,41 +176,49 @@ internal class ProgressController(context: Context, private val database: QsoDat
         syncAttention: Int,
         cty: CtyController,
         sotaCatalogue: SotaCatalogue,
+        logAuthorityIdentity: String,
     ) {
         val key = listOf(database.changeToken(), filters, goalStore.goals, syncAttention, cty.dataRevision,
-            progressSpotIdentity(dxSpots, portableSpots))
+            progressSpotIdentity(dxSpots, portableSpots), logAuthorityIdentity)
         if (key == lastKey) return
         if (refreshJob?.isActive == true) {
-            pendingRefresh = { refresh(filters, dxSpots, portableSpots, syncAttention, cty, sotaCatalogue) }
+            pendingRefresh = { refresh(filters, dxSpots, portableSpots, syncAttention, cty, sotaCatalogue, logAuthorityIdentity) }
             return
         }
         lastKey = key
+        val requestedGeneration = scopeGeneration
         refreshJob = scope.launch {
             busy = true
             try {
                 val databaseToken=database.changeToken()
-                val requestedFastKey=listOf(databaseToken,filters,goalStore.goals,syncAttention)
+                val requestedFastKey=listOf(databaseToken,filters,goalStore.goals,syncAttention,logAuthorityIdentity)
                 if (requestedFastKey != fastSnapshotKey) {
                     val fast=withContext(Dispatchers.IO) {
                         StabilityDiagnostics.timedQuery("LOG_INTELLIGENCE_FAST", filters.hashCode().toUInt().toString(16), "PROJECTION_CORE", { it.totalQsos }) {
                             repository.fastSnapshot(filters,goalStore.goals,syncAttention)
                         }
                     }
-                    snapshot=fast
-                    fastSnapshotKey=requestedFastKey
+                    if (requestedGeneration == scopeGeneration) {
+                        snapshot=fast
+                        fastSnapshotKey=requestedFastKey
+                    }
                 }
                 val result=withContext(Dispatchers.IO){
                     StabilityDiagnostics.timedQuery("LOG_INTELLIGENCE", filters.hashCode().toUInt().toString(16), "PROJECTION_AGGREGATES", { it.totalQsos }) {
                         repository.snapshot(filters,goalStore.goals,dxSpots,portableSpots,syncAttention,cty::lookup)
                     }
                 }
-                stationProfiles=result.stationProfiles.keys.sorted();stationCallsigns=result.stationCallsigns.keys.sorted()
-                operators=result.operators.keys.sorted();submodes=result.submodes.keys.sorted()
-                snapshot=result
+                if (requestedGeneration == scopeGeneration) {
+                    stationProfiles=result.stationProfiles.keys.sorted();stationCallsigns=result.stationCallsigns.keys.sorted()
+                    operators=result.operators.keys.sorted();submodes=result.submodes.keys.sorted()
+                    snapshot=result
+                }
             } finally {
-                busy = false
-                refreshJob = null
-                pendingRefresh.also { pendingRefresh = null }?.invoke()
+                if (requestedGeneration == scopeGeneration) {
+                    busy = false
+                    refreshJob = null
+                    pendingRefresh.also { pendingRefresh = null }?.invoke()
+                }
             }
         }
     }

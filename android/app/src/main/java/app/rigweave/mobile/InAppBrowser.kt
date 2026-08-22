@@ -3,9 +3,11 @@ package app.rigweave.mobile
 import android.content.Intent
 import android.net.Uri
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceError
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.CookieManager
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -35,6 +37,32 @@ internal fun validatedExternalBrowserUrl(candidate: String): String? = runCatchi
     }?.toString()
 }.getOrNull()
 
+internal enum class InAppBrowserSite { ORDINARY, POTA, SOTA }
+
+internal data class InAppBrowserPolicy(
+    val site: InAppBrowserSite,
+    val javaScript: Boolean,
+    val domStorage: Boolean,
+)
+
+internal fun inAppBrowserPolicy(candidate: String): InAppBrowserPolicy? {
+    val validated = validatedInAppBrowserUrl(candidate) ?: return null
+    val host = URI(validated).host.lowercase()
+    return when (host) {
+        "pota.app", "www.pota.app" -> InAppBrowserPolicy(InAppBrowserSite.POTA, javaScript = true, domStorage = true)
+        "sotadata.org.uk", "www.sotadata.org.uk" -> InAppBrowserPolicy(InAppBrowserSite.SOTA, javaScript = true, domStorage = true)
+        else -> InAppBrowserPolicy(InAppBrowserSite.ORDINARY, javaScript = false, domStorage = false)
+    }
+}
+
+private fun WebView.applyBrowserPolicy(policy: InAppBrowserPolicy) {
+    settings.javaScriptEnabled = policy.javaScript
+    settings.domStorageEnabled = policy.domStorage
+    CookieManager.getInstance().apply {
+        setAcceptThirdPartyCookies(this@applyBrowserPolicy, false)
+    }
+}
+
 @Stable
 internal class InAppBrowserState {
     var url by mutableStateOf<String?>(null)
@@ -59,6 +87,8 @@ internal fun InAppBrowserDialog(state: InAppBrowserState) {
     var canGoBack by remember(url) { mutableStateOf(false) }
     var canGoForward by remember(url) { mutableStateOf(false) }
     var pendingExternalUrl by remember(url) { mutableStateOf<String?>(null) }
+    var renderError by remember(url) { mutableStateOf<String?>(null) }
+    val launchPolicy = inAppBrowserPolicy(url) ?: return
     Dialog(onDismissRequest = state::close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxWidth(.92f).fillMaxHeight(.90f), shape = MaterialTheme.shapes.large,
             tonalElevation = 8.dp) {
@@ -82,10 +112,10 @@ internal fun InAppBrowserDialog(state: InAppBrowserState) {
                     IconButton(state::close) { Icon(Icons.Outlined.Close, "Close") }
                 }
                 if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-                AndroidView(factory = { browserContext ->
-                    WebView(browserContext).apply {
-                        settings.javaScriptEnabled = false
-                        settings.domStorageEnabled = false
+                Box(Modifier.fillMaxSize()) {
+                    AndroidView(factory = { browserContext ->
+                        WebView(browserContext).apply {
+                        applyBrowserPolicy(launchPolicy)
                         settings.cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
                         settings.allowFileAccess = false
                         settings.allowContentAccess = false
@@ -99,13 +129,33 @@ internal fun InAppBrowserDialog(state: InAppBrowserState) {
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                                 val target = request?.url?.toString().orEmpty()
-                                if (validatedInAppBrowserUrl(target) != null) return false
+                                val targetPolicy = inAppBrowserPolicy(target)
+                                if (targetPolicy != null) {
+                                    val currentPolicy = inAppBrowserPolicy(currentUrl) ?: launchPolicy
+                                    if (currentPolicy.javaScript && targetPolicy.site != currentPolicy.site) {
+                                        pendingExternalUrl = validatedExternalBrowserUrl(target)
+                                        return true
+                                    }
+                                    view?.applyBrowserPolicy(targetPolicy)
+                                    return false
+                                }
                                 pendingExternalUrl = validatedExternalBrowserUrl(target)
                                 return true
                             }
                             override fun onPageStarted(view: WebView?, target: String?, favicon: android.graphics.Bitmap?) {
                                 loading = true
-                                validatedInAppBrowserUrl(target.orEmpty())?.let { currentUrl = it }
+                                renderError = null
+                                validatedInAppBrowserUrl(target.orEmpty())?.let {
+                                    currentUrl = it
+                                    inAppBrowserPolicy(it)?.let { policy -> view?.applyBrowserPolicy(policy) }
+                                }
+                            }
+                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                                if (request?.isForMainFrame == true) {
+                                    loading = false
+                                    renderError = error?.description?.toString()?.takeIf(String::isNotBlank)
+                                        ?: "The page could not be rendered securely."
+                                }
                             }
                             override fun onPageFinished(view: WebView?, target: String?) {
                                 loading = false
@@ -120,8 +170,24 @@ internal fun InAppBrowserDialog(state: InAppBrowserState) {
                         }
                         webView = this
                         loadUrl(url)
+                        }
+                    }, update = { webView = it }, modifier = Modifier.fillMaxSize())
+                    renderError?.let { error ->
+                        Surface(Modifier.align(Alignment.Center).padding(24.dp), shape = MaterialTheme.shapes.medium, tonalElevation = 8.dp) {
+                            Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("PAGE UNAVAILABLE", style = MaterialTheme.typography.titleMedium)
+                                Spacer(Modifier.height(6.dp))
+                                Text(error, style = MaterialTheme.typography.bodyMedium)
+                                Spacer(Modifier.height(10.dp))
+                                Button({
+                                    validatedExternalBrowserUrl(currentUrl)?.let {
+                                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) }
+                                    }
+                                }) { Icon(Icons.Outlined.OpenInNew, null); Spacer(Modifier.width(5.dp)); Text("OPEN EXTERNALLY") }
+                            }
+                        }
                     }
-                }, update = { webView = it }, modifier = Modifier.fillMaxSize())
+                }
             }
         }
     }

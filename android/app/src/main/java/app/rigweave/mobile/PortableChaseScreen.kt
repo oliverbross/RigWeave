@@ -13,6 +13,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -43,6 +46,13 @@ import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.expressions.Expression
+import org.maplibre.android.style.layers.Property
+import org.maplibre.android.style.layers.PropertyFactory
+import org.maplibre.android.style.layers.SymbolLayer
+import org.maplibre.android.style.sources.GeoJsonSource
+import org.json.JSONArray
+import org.json.JSONObject
 import java.time.Instant
 import java.util.Locale
 import kotlin.math.floor
@@ -85,6 +95,11 @@ internal fun PortableChaseScreen(
     var sort by rememberSaveable { mutableStateOf(runCatching { PortableSort.valueOf(prefs.getString("sort", PortableSort.RECOMMENDED.name)!!) }.getOrDefault(PortableSort.RECOMMENDED)) }
     var now by remember { mutableLongStateOf(Instant.now().epochSecond) }
     var pendingTune by remember { mutableStateOf<Pair<PortableSpot, Boolean>?>(null) }
+
+    DisposableEffect(controller) {
+        onDispose { controller.setSotaClusterActive(false) }
+    }
+    LaunchedEffect(foreground) { controller.setSotaClusterActive(foreground) }
 
     LaunchedEffect(controller.requestedSpotId, controller.rankedOpportunities) {
         controller.requestedSpotId?.let { id ->
@@ -296,11 +311,24 @@ internal fun PortableChaseScreen(
     val context = LocalContext.current; val inAppBrowser = LocalInAppBrowserState.current; var query by rememberSaveable { mutableStateOf("") }; var association by rememberSaveable { mutableStateOf("") }; var region by rememberSaveable { mutableStateOf("") }; var grid by rememberSaveable { mutableStateOf(stationGrid) }; var nearby by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(query, association, region, grid, nearby, catalogue.metadata.ready) { delay(180); catalogue.search(query, association, region, grid, nearby) }
     Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) { Surface(color = PortablePanel, shape = RoundedCornerShape(10.dp), border = androidx.compose.foundation.BorderStroke(1.dp, PortableRaised)) { Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Column { Text(if (catalogue.metadata.ready) "SOTA SUMMIT DATABASE ${if (catalogue.metadata.stale) "STALE" else "READY"}" else "DOWNLOAD OFFICIAL SOTA SUMMITS", color = PortableAmber, fontWeight = FontWeight.Black); Text(if (catalogue.metadata.ready) "${catalogue.metadata.rowCount} summits · offline search available" else "Explicit, staged app-private import from SOTA", color = PortableMuted) }; if (catalogue.busy) OutlinedButton(catalogue::cancelUpdate) { Text("Cancel") } else Button(catalogue::update) { Text(if (catalogue.metadata.ready) "Update now" else "Download") } }; if (catalogue.busy) LinearProgressIndicator({ catalogue.progress / 100f }, Modifier.fillMaxWidth()); if (catalogue.metadata.failure.isNotBlank()) Text(catalogue.metadata.failure, color = PortableAmber); Text("Summit data © Summits on the Air. RigWeave is independent.", color = PortableMuted, fontSize = 11.sp) } }
-        if (catalogue.metadata.ready) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) { OutlinedTextField(query, { query = it.uppercase() }, label = { Text("Reference or summit") }, modifier = Modifier.weight(2f), singleLine = true); OutlinedTextField(association, { association = it }, label = { Text("Association") }, modifier = Modifier.weight(1f), singleLine = true); OutlinedTextField(region, { region = it }, label = { Text("Region") }, modifier = Modifier.weight(1f), singleLine = true); OutlinedTextField(grid, { grid = it.uppercase().take(8) }, label = { Text("Station / manual grid") }, modifier = Modifier.width(160.dp), singleLine = true); FilterChip(nearby, { nearby = !nearby }, { Text("Nearby") }, leadingIcon = { Icon(Icons.Outlined.NearMe, null) }) }; LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(catalogue.results, key = SotaSummit::code) { summit -> Row(Modifier.fillMaxWidth().background(PortablePanel, RoundedCornerShape(8.dp)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("${summit.code} · ${summit.name}", color = PortableInk, fontWeight = FontWeight.Bold); Text(listOf(summit.association, summit.region, summit.altitudeM?.let { "$it m" }, summit.points?.let { "$it points" }, summit.distanceKm?.let { "%.1f km · %03d°".format(it, summit.bearingDegrees ?: 0) }, if (summit.active) "VALID" else "RETIRED").filterNotNull().filter(String::isNotBlank).joinToString(" · "), color = PortableMuted) }; IconButton({ inAppBrowser?.open("https://www.sotadata.org.uk/en/summit/${summit.code}") }) { Icon(Icons.Outlined.OpenInNew, "Open official SOTA summit page") } } } } }
+        if (catalogue.metadata.ready) { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) { OutlinedTextField(query, { query = it.uppercase() }, label = { Text("Reference or summit") }, modifier = Modifier.weight(2f), singleLine = true); OutlinedTextField(association, { association = it }, label = { Text("Association") }, modifier = Modifier.weight(1f), singleLine = true); OutlinedTextField(region, { region = it }, label = { Text("Region") }, modifier = Modifier.weight(1f), singleLine = true); OutlinedTextField(grid, { grid = it.uppercase().take(8) }, label = { Text("Station / manual grid") }, modifier = Modifier.width(160.dp), singleLine = true); FilterChip(nearby, { nearby = !nearby }, { Text("Nearby") }, leadingIcon = { Icon(Icons.Outlined.NearMe, null) }) }; LazyVerticalGrid(columns = GridCells.Adaptive(360.dp), modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) { gridItems(catalogue.results, key = SotaSummit::code) { summit -> Row(Modifier.fillMaxWidth().background(PortablePanel, RoundedCornerShape(8.dp)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("${summit.code} · ${summit.name}", color = PortableInk, fontWeight = FontWeight.Bold); Text(listOf(summit.association, summit.region, summit.altitudeM?.let { "$it m" }, summit.points?.let { "$it points" }, summit.distanceKm?.let { "%.1f km · %03d°".format(it, summit.bearingDegrees ?: 0) }, if (summit.active) "VALID" else "RETIRED").filterNotNull().filter(String::isNotBlank).joinToString(" · "), color = PortableMuted) }; IconButton({ inAppBrowser?.open("https://www.sotadata.org.uk/en/summit/${summit.code}") }) { Icon(Icons.Outlined.OpenInNew, "Open official SOTA summit page") } } } } }
     }
 }
 
-@Composable private fun WwffPlaces(controller: PortableController, modifier: Modifier) { val inAppBrowser = LocalInAppBrowserState.current; var query by rememberSaveable { mutableStateOf("") }; val rows = remember(controller.wwffSpots, query) { controller.recentWwff(query) }; Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) { Surface(color = PortablePanel, shape = RoundedCornerShape(10.dp), border = androidx.compose.foundation.BorderStroke(1.dp, PortableRaised)) { Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) { Text("WWFF LIVE-CACHE PLACES", color = PortableAmber, fontWeight = FontWeight.Black); Text("Search covers only recently seen Spotline references. The full WWFF Directory is not stored because programme permission is required.", color = PortableMuted); Button({ inAppBrowser?.open("https://wwff.co/directory/") }) { Icon(Icons.Outlined.OpenInNew, null); Spacer(Modifier.width(6.dp)); Text("Open official WWFF Directory") } } }; OutlinedTextField(query, { query = it.uppercase() }, label = { Text("Recent reference or name") }, leadingIcon = { Icon(Icons.Outlined.Search, null) }, modifier = Modifier.fillMaxWidth(), singleLine = true); LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(rows, key = PortableReference::code) { ref -> Row(Modifier.fillMaxWidth().background(PortablePanel, RoundedCornerShape(8.dp)).padding(10.dp)) { Column { Text("${ref.code} · ${ref.name.ifBlank { "Name unavailable" }}", color = PortableInk, fontWeight = FontWeight.Bold); if (ref.activeAgenda.isNotBlank()) Text("ACTIVE AGENDA · ${ref.activeAgenda}", color = PortableMuted) } } } } } }
+@Composable private fun WwffPlaces(controller: PortableController, modifier: Modifier) {
+    val inAppBrowser = LocalInAppBrowserState.current
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Surface(color = PortablePanel, shape = RoundedCornerShape(10.dp), border = androidx.compose.foundation.BorderStroke(1.dp, PortableRaised)) {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text("WWFF CATALOGUE · PROVIDER UNAVAILABLE", color = PortableDanger, fontWeight = FontWeight.Black)
+                Text("0 catalogue references · 0 nearby · no last-good directory cache", color = PortableMuted)
+                Text("A stable, licensed structured full-directory contract has not been verified. RigWeave will not substitute live Spotline or agenda rows for the place catalogue. Live WWFF activity remains available on On Air.", color = PortableMuted)
+                Text("Live provider: ${controller.wwffStatus.kind.name} · ${controller.wwffStatus.count} active · source attribution WWFF Spotline/agendas", color = PortableMuted, fontSize = 11.sp)
+                Button({ inAppBrowser?.open("https://wwff.co/directory/") }) { Icon(Icons.Outlined.OpenInNew, null); Spacer(Modifier.width(6.dp)); Text("Open official WWFF Directory") }
+            }
+        }
+    }
+}
 
 @Composable private fun PortableMap(rows: List<PortableOpportunity>, selectedId: String?, select: (String) -> Unit, modifier: Modifier) {
     val valid = rows.filter { it.spot.latitude != null && it.spot.longitude != null }
@@ -317,8 +345,8 @@ internal fun PortableChaseScreen(
 
 @Composable private fun PortableNativeMap(rows: List<PortableOpportunity>, selectedId: String?, select: (String) -> Unit, modifier: Modifier) {
     val context = LocalContext.current; val lifecycle = LocalLifecycleOwner.current.lifecycle; val currentSelect by rememberUpdatedState(select); val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null) } }; val markerSelections = remember { mutableMapOf<Long, String>() }; var map by remember { mutableStateOf<MapLibreMap?>(null) }; var styleReady by remember { mutableStateOf(false) }; var userMoved by remember { mutableStateOf(false) }
-    DisposableEffect(mapView, lifecycle) { val observer = LifecycleEventObserver { _, event -> when (event) { Lifecycle.Event.ON_START -> mapView.onStart(); Lifecycle.Event.ON_RESUME -> mapView.onResume(); Lifecycle.Event.ON_PAUSE -> mapView.onPause(); Lifecycle.Event.ON_STOP -> mapView.onStop(); else -> Unit } }; lifecycle.addObserver(observer); mapView.getMapAsync { ready -> map = ready; ready.uiSettings.isAttributionEnabled = true; ready.uiSettings.isLogoEnabled = true; ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { styleReady = true }; ready.addOnCameraMoveStartedListener { reason -> if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }; ready.setOnMarkerClickListener { marker -> markerSelections[marker.id]?.let(currentSelect); false } }; onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null } }
-    val markerHash = rows.joinToString { it.spot.id }; LaunchedEffect(map, styleReady, markerHash, selectedId) { val ready = map ?: return@LaunchedEffect; if (!styleReady) return@LaunchedEffect; ready.clear(); markerSelections.clear(); rows.groupBy { "${floor(it.spot.latitude!! / 3)}:${floor(it.spot.longitude!! / 3)}" }.values.forEach { group -> val chosen = group.firstOrNull { it.spot.id == selectedId } ?: group.first(); val isSelected = chosen.spot.id == selectedId; val color = when { isSelected -> android.graphics.Color.rgb(233, 167, 43); chosen.spot.programs.size > 1 -> android.graphics.Color.rgb(244, 201, 78); chosen.spot.programs.contains(PortableProgram.POTA) -> android.graphics.Color.rgb(66, 199, 123); chosen.spot.programs.contains(PortableProgram.SOTA) -> android.graphics.Color.rgb(101, 166, 199); else -> android.graphics.Color.rgb(196, 129, 216) }; val title = if (isSelected || group.size == 1) chosen.spot.callsign else "${group.size} portable activities"; val place = chosen.spot.references.joinToString(" · ") { "${it.program.label} ${it.code} · ${it.name.ifBlank { "Name unavailable" }}" }; val marker = ready.addMarker(MarkerOptions().position(LatLng(group.map { it.spot.latitude!! }.average(), group.map { it.spot.longitude!! }.average())).title(title).snippet(place).icon(portableMarker(context, color, group.size > 1))); markerSelections[marker.id] = chosen.spot.id; if (isSelected) marker.showInfoWindow(ready, mapView) } }
+    DisposableEffect(mapView, lifecycle) { val observer = LifecycleEventObserver { _, event -> when (event) { Lifecycle.Event.ON_START -> mapView.onStart(); Lifecycle.Event.ON_RESUME -> mapView.onResume(); Lifecycle.Event.ON_PAUSE -> mapView.onPause(); Lifecycle.Event.ON_STOP -> mapView.onStop(); else -> Unit } }; lifecycle.addObserver(observer); mapView.getMapAsync { ready -> map = ready; ready.uiSettings.isAttributionEnabled = true; ready.uiSettings.isLogoEnabled = true; ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { style -> installPortableLabelLayers(style); styleReady = true }; ready.addOnCameraMoveStartedListener { reason -> if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }; ready.setOnMarkerClickListener { marker -> markerSelections[marker.id]?.let(currentSelect); false }; ready.addOnMapClickListener { point -> val feature = ready.queryRenderedFeatures(ready.projection.toScreenLocation(point), PORTABLE_SELECTED_LABEL_LAYER, PORTABLE_LABEL_LAYER).firstOrNull(); feature?.getStringProperty("spot_id")?.let(currentSelect); feature != null } }; onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null } }
+    val markerHash = rows.joinToString { "${it.spot.id}:${it.spot.latitude}:${it.spot.longitude}:${it.spot.callsign}" }; LaunchedEffect(map, styleReady, markerHash, selectedId) { val ready = map ?: return@LaunchedEffect; if (!styleReady) return@LaunchedEffect; ready.style?.let { style -> installPortableLabelLayers(style); style.getSourceAs<GeoJsonSource>(PORTABLE_LABEL_SOURCE)?.setGeoJson(portableLabelGeoJson(rows, selectedId)) }; ready.clear(); markerSelections.clear(); rows.groupBy { "${floor(it.spot.latitude!! / 3)}:${floor(it.spot.longitude!! / 3)}" }.values.forEach { group -> val chosen = group.firstOrNull { it.spot.id == selectedId } ?: group.first(); val isSelected = chosen.spot.id == selectedId; val color = when { isSelected -> android.graphics.Color.rgb(233, 167, 43); chosen.spot.programs.size > 1 -> android.graphics.Color.rgb(244, 201, 78); chosen.spot.programs.contains(PortableProgram.POTA) -> android.graphics.Color.rgb(66, 199, 123); chosen.spot.programs.contains(PortableProgram.SOTA) -> android.graphics.Color.rgb(101, 166, 199); else -> android.graphics.Color.rgb(196, 129, 216) }; val title = if (isSelected || group.size == 1) chosen.spot.callsign else "${group.size} portable activities"; val place = chosen.spot.references.joinToString(" · ") { "${it.program.label} ${it.code} · ${it.name.ifBlank { "Name unavailable" }}" }; val marker = ready.addMarker(MarkerOptions().position(LatLng(group.map { it.spot.latitude!! }.average(), group.map { it.spot.longitude!! }.average())).title(title).snippet(place).icon(portableMarker(context, color, group.size > 1))); markerSelections[marker.id] = chosen.spot.id; if (isSelected) marker.showInfoWindow(ready, mapView) } }
     LaunchedEffect(map, styleReady, selectedId) {
         val ready = map ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
@@ -329,6 +357,47 @@ internal fun PortableChaseScreen(
         ready.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(latitude, longitude), 8.0), 450)
     }
     LaunchedEffect(map, styleReady, markerHash) { val ready = map ?: return@LaunchedEffect; if (!styleReady || rows.isEmpty() || userMoved) return@LaunchedEffect; if (rows.size == 1) ready.cameraPosition = CameraPosition.Builder().target(LatLng(rows[0].spot.latitude!!, rows[0].spot.longitude!!)).zoom(6.0).build() else runCatching { val bounds = LatLngBounds.Builder().also { b -> rows.forEach { b.include(LatLng(it.spot.latitude!!, it.spot.longitude!!)) } }.build(); ready.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, 70), 500) } }; AndroidView({ mapView }, modifier)
+}
+
+private const val PORTABLE_LABEL_SOURCE = "portable-coordinate-labels"
+private const val PORTABLE_LABEL_LAYER = "portable-coordinate-labels-visible"
+private const val PORTABLE_SELECTED_LABEL_LAYER = "portable-coordinate-label-selected"
+
+private fun installPortableLabelLayers(style: Style) {
+    if (style.getSourceAs<GeoJsonSource>(PORTABLE_LABEL_SOURCE) == null) style.addSource(GeoJsonSource(PORTABLE_LABEL_SOURCE, portableLabelGeoJson(emptyList(), null)))
+    if (style.getLayerAs<SymbolLayer>(PORTABLE_LABEL_LAYER) == null) {
+        style.addLayer(SymbolLayer(PORTABLE_LABEL_LAYER, PORTABLE_LABEL_SOURCE).withProperties(
+            PropertyFactory.textField(Expression.get("label")), PropertyFactory.textSize(12f),
+            PropertyFactory.textColor(android.graphics.Color.WHITE), PropertyFactory.textHaloColor(android.graphics.Color.rgb(6, 21, 28)),
+            PropertyFactory.textHaloWidth(1.5f), PropertyFactory.textOffset(arrayOf(0f, 1.25f)),
+            PropertyFactory.textAnchor(Property.TEXT_ANCHOR_TOP), PropertyFactory.textAllowOverlap(false), PropertyFactory.textOptional(true),
+        ).apply { setFilter(Expression.neq(Expression.get("selected"), true)); setMinZoom(6.0f) })
+    }
+    if (style.getLayerAs<SymbolLayer>(PORTABLE_SELECTED_LABEL_LAYER) == null) {
+        style.addLayer(SymbolLayer(PORTABLE_SELECTED_LABEL_LAYER, PORTABLE_LABEL_SOURCE).withProperties(
+            PropertyFactory.textField(Expression.get("label")), PropertyFactory.textSize(13f),
+            PropertyFactory.textColor(android.graphics.Color.rgb(255, 215, 118)), PropertyFactory.textHaloColor(android.graphics.Color.rgb(6, 21, 28)),
+            PropertyFactory.textHaloWidth(2f), PropertyFactory.textOffset(arrayOf(0f, 1.25f)),
+            PropertyFactory.textAnchor(Property.TEXT_ANCHOR_TOP), PropertyFactory.textAllowOverlap(true), PropertyFactory.textOptional(false),
+        ).apply { setFilter(Expression.eq(Expression.get("selected"), true)) })
+    }
+}
+
+internal fun portableLabelGeoJson(rows: List<PortableOpportunity>, selectedId: String?): String {
+    val features = JSONArray()
+    rows.forEach { row ->
+        val latitude = row.spot.latitude ?: return@forEach
+        val longitude = row.spot.longitude ?: return@forEach
+        val compactReference = row.spot.primary.let { "${it.program.label} ${it.code}" }
+        features.put(JSONObject()
+            .put("type", "Feature")
+            .put("geometry", JSONObject().put("type", "Point").put("coordinates", JSONArray().put(longitude).put(latitude)))
+            .put("properties", JSONObject()
+                .put("spot_id", row.spot.id)
+                .put("selected", row.spot.id == selectedId)
+                .put("label", "${row.spot.callsign} · $compactReference")))
+    }
+    return JSONObject().put("type", "FeatureCollection").put("features", features).toString()
 }
 
 private fun portableMarker(context: Context, color: Int, cluster: Boolean): org.maplibre.android.annotations.Icon { val size = (if (cluster) 34 else 24) * context.resources.displayMetrics.density; val bitmap = Bitmap.createBitmap(size.toInt(), size.toInt(), Bitmap.Config.ARGB_8888); val canvas = Canvas(bitmap); val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color }; canvas.drawCircle(size / 2, size / 2, size * .34f, paint); paint.style = Paint.Style.STROKE; paint.strokeWidth = size * .09f; paint.color = android.graphics.Color.WHITE; canvas.drawCircle(size / 2, size / 2, size * .34f, paint); return IconFactory.getInstance(context).fromBitmap(bitmap) }

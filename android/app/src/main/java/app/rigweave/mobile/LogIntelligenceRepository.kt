@@ -100,11 +100,19 @@ internal class LogIntelligenceRepository(private val database:QsoDatabase){
         val activity=activity(where,args,filters.period)
         val heatmap=db.rawQuery("SELECT CAST(strftime('%w',created_at,'unixepoch') AS INTEGER),CAST(strftime('%H',created_at,'unixepoch') AS INTEGER),COUNT(*) FROM qso_projection p WHERE $where GROUP BY 1,2",args).use{c->buildList{while(c.moveToNext())add(ProgressHeatCell((c.getInt(0)+6)%7,c.getInt(1),c.getInt(2)))}}
         val localHeatmap=db.rawQuery("SELECT CAST(strftime('%w',created_at,'unixepoch','localtime') AS INTEGER),CAST(strftime('%H',created_at,'unixepoch','localtime') AS INTEGER),COUNT(*) FROM qso_projection p WHERE $where GROUP BY 1,2",args).use{c->buildList{while(c.moveToNext())add(ProgressHeatCell((c.getInt(0)+6)%7,c.getInt(1),c.getInt(2)))}}
+        var invalidContactGrids = 0
+        val contacts=db.rawQuery("SELECT grid_norm,COUNT(*) FROM qso_projection p WHERE $where AND grid_norm<>'' GROUP BY grid_norm ORDER BY COUNT(*) DESC LIMIT 5000",args).use { cursor -> buildList {
+            while(cursor.moveToNext()) {
+                val grid=cursor.getString(0).filterNot(Char::isWhitespace).uppercase(Locale.US)
+                val point=maidenheadCenter(grid)
+                if(point==null) invalidContactGrids+=cursor.getInt(1) else add(ProgressContactPoint(grid,point.latitude,point.longitude))
+            }
+        }.distinctBy(ProgressContactPoint::grid) }
         val bestDx=db.rawQuery("SELECT callsign_norm,country_norm,distance_km,band_norm,mode_norm FROM qso_projection p WHERE $where AND distance_km>0 ORDER BY distance_km DESC LIMIT 10",args).use{c->buildList{while(c.moveToNext())add(BestDxContact(c.getString(0),c.getString(1),c.getDouble(2),c.getString(3),c.getString(4)))}}
         val needsState=needsState(where,args,portable);val needs=buildNeeds(needsState,dxSpots,portableSpots,ctyLookup)
         val awards=awards(total,dxccMap,stateMap,cqMap,ituMap,continents,portable,where,args)
         val coverage=linkedMapOf("DXCC" to summary.dxccCoverage,"CQ zone" to summary.cqCoverage,"ITU zone" to summary.ituCoverage,"U.S. state" to summary.stateCoverage,"Grid" to summary.gridCoverage,"Distance" to summary.distanceCoverage,"TX power" to summary.powerCoverage,"Station profile" to summary.stationCoverage,"Portable reference" to summary.portableCoverage).mapValues{ProgressCoverage(it.value,total)}
-        val base=ProgressSnapshot(totalQsos=total,uniqueCalls=uniqueCalls,dxcc=dxcc,countries=summary.countries,grids=summary.grids,longestDistanceKm=summary.longestDistanceKm,qrpQsos=summary.qrpQsos,syncAttention=syncAttention,coverage=coverage,activity=activity,bands=bands,modes=modes,heatmap=heatmap,distance=distanceBuckets(where,args),needs=needs,states=ProgressCount(stateMap.size,stateMap.count{it.value.confirmed>0}),zones=ProgressCount(cqMap.size,cqMap.count{it.value.confirmed>0}),dxccByMode=dxccBreakdown("mode_family",where,args),dxccByBand=dxccBreakdown("band_norm",where,args),qrpDxcc=summary.qrpDxcc,portable=portable,operators=operators,years=years,months=months,confirmations=confirmations,satellite=satellite,antennas=antennas,activeDays=summary.activeDays,averageDistanceKm=summary.averageDistanceKm,unconfirmedDxccCount=dxccMap.count{it.value.confirmed==0},continents=continents,cqZones=cqMap,ituZones=ituMap,gridsConfirmed=summary.gridsConfirmed,geography=geography,bestDx=bestDx,submodes=submodes,recentDays=recentDays(where,args),localHeatmap=localHeatmap,confirmationDetails=confirmationDetails,stationProfiles=stationProfiles,stationCallsigns=stationCallsigns,radios=radios,awards=awards,detailed=true)
+        val base=ProgressSnapshot(totalQsos=total,uniqueCalls=uniqueCalls,dxcc=dxcc,countries=summary.countries,grids=summary.grids,longestDistanceKm=summary.longestDistanceKm,qrpQsos=summary.qrpQsos,syncAttention=syncAttention,coverage=coverage,activity=activity,bands=bands,modes=modes,heatmap=heatmap,distance=distanceBuckets(where,args),contacts=contacts,needs=needs,states=ProgressCount(stateMap.size,stateMap.count{it.value.confirmed>0}),zones=ProgressCount(cqMap.size,cqMap.count{it.value.confirmed>0}),dxccByMode=dxccBreakdown("mode_family",where,args),dxccByBand=dxccBreakdown("band_norm",where,args),qrpDxcc=summary.qrpDxcc,portable=portable,operators=operators,years=years,months=months,confirmations=confirmations,satellite=satellite,antennas=antennas,activeDays=summary.activeDays,averageDistanceKm=summary.averageDistanceKm,unconfirmedDxccCount=dxccMap.count{it.value.confirmed==0},continents=continents,cqZones=cqMap,ituZones=ituMap,gridsConfirmed=summary.gridsConfirmed,geography=geography,bestDx=bestDx,submodes=submodes,recentDays=recentDays(where,args),localHeatmap=localHeatmap,confirmationDetails=confirmationDetails,stationProfiles=stationProfiles,stationCallsigns=stationCallsigns,radios=radios,awards=awards,invalidContactGrids=invalidContactGrids,detailed=true)
         val result = base.copy(goals=goals.take(4).map{GoalProgress(it,metricValue(it.metric,base))})
         cachedKey = key
         cachedNeedsState = needsState
@@ -181,14 +189,9 @@ internal class LogIntelligenceRepository(private val database:QsoDatabase){
             clauses += "p.station_callsign_norm=?"
             args += norm(f.stationCallsign)
         }
-        val from = when (f.period) {
-            ProgressPeriod.DAYS_30 -> Instant.now().epochSecond - 30 * 86400L
-            ProgressPeriod.DAYS_90 -> Instant.now().epochSecond - 90 * 86400L
-            ProgressPeriod.MONTHS_12 -> Instant.now().epochSecond - 365 * 86400L
-            ProgressPeriod.YEAR -> LocalDate.now(ZoneOffset.UTC).withDayOfYear(1).atStartOfDay().toEpochSecond(ZoneOffset.UTC)
-            ProgressPeriod.ALL -> null
-        }
-        from?.let { clauses += "p.created_at>=?"; args += it.toString() }
+        val bounds = progressPeriodBounds(f.period)
+        bounds.fromEpoch?.let { clauses += "p.created_at>=?"; args += it.toString() }
+        bounds.toEpochExclusive?.let { clauses += "p.created_at<?"; args += it.toString() }
         addIn("p.band_norm", f.selectedBands().map(::norm))
         addIn("p.mode_family", f.selectedModeFamilies().map { it.name })
         addIn("COALESCE(NULLIF(p.submode_norm,''),p.mode_norm)", f.selectedSubmodes().map(::norm))

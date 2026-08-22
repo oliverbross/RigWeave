@@ -23,6 +23,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,6 +40,9 @@ import java.net.URLEncoder
 import java.net.UnknownHostException
 import java.security.KeyStore
 import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -106,6 +111,29 @@ data class GroupsIoHomeSummary(
     val lastRefreshMillis: Long = 0,
     val offline: Boolean = true,
 )
+
+internal data class GroupsIoTimestampText(val row: String, val detail: String, val accessibility: String)
+
+internal fun groupsIoTimestampText(
+    epochMillis: Long,
+    nowMillis: Long = System.currentTimeMillis(),
+    zone: ZoneId = ZoneId.systemDefault(),
+): GroupsIoTimestampText {
+    if (epochMillis <= 0) return GroupsIoTimestampText("TIME UNKNOWN", "TIME UNKNOWN", "Time unknown")
+    val instant = Instant.ofEpochMilli(epochMillis)
+    val local = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").format(instant.atZone(zone))
+    val utc = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss 'UTC'").format(instant.atZone(ZoneOffset.UTC))
+    val ageSeconds = ((nowMillis - epochMillis) / 1_000L).coerceAtLeast(0)
+    val relative = when {
+        ageSeconds < 60 -> "just now"
+        ageSeconds < 3_600 -> "${ageSeconds / 60}m ago"
+        ageSeconds < 86_400 -> "${ageSeconds / 3_600}h ago"
+        ageSeconds < 7 * 86_400 -> "${ageSeconds / 86_400}d ago"
+        else -> ""
+    }
+    val row = if (relative.isBlank()) local else "$local · $relative"
+    return GroupsIoTimestampText(row, "$local local · $utc", "$local local time; $utc")
+}
 
 internal data class GroupsIoPage<T>(val values: List<T>, val nextPageToken: String?, val hasMore: Boolean)
 internal fun groupsIoDestinationVisible(enabled: Boolean, compact: Boolean): Boolean = enabled && !compact
@@ -625,7 +653,7 @@ private fun JSONObject.requiredString(vararg names: String): String = firstStrin
 internal fun JSONObject.firstLongOrNull(vararg names: String): Long? = names.firstNotNullOfOrNull { name -> if (has(name) && !isNull(name)) optLong(name).takeIf { it != 0L } else null }
 private fun JSONObject.requiredLong(vararg names: String): Long = firstLongOrNull(*names) ?: throw GroupsIoApiException("compatibility", "Groups.io response omitted ${names.first()}")
 private fun JSONObject.firstInt(vararg names: String): Int = names.firstNotNullOfOrNull { name -> if (has(name)) optInt(name) else null } ?: 0
-private fun JSONObject.instantMillis(vararg names: String): Long = names.firstNotNullOfOrNull { name -> firstString(name).takeIf(String::isNotBlank)?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() } } ?: System.currentTimeMillis()
+internal fun JSONObject.instantMillis(vararg names: String): Long = names.firstNotNullOfOrNull { name -> firstString(name).takeIf(String::isNotBlank)?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() } } ?: 0L
 
 class GroupsIoController(context: Context) {
     private val appContext = context.applicationContext
@@ -885,8 +913,8 @@ class GroupsIoController(context: Context) {
                 for (index in 0 until data.length()) {
                     val value = data.getJSONObject(index); val topicId = value.optLong("topic_id").takeIf { it > 0 } ?: value.optLong("thread_id").takeIf { it > 0 } ?: continue
                     val number = value.optLong("msg_num").takeIf { it > 0 } ?: continue
-                    val created = value.instantMillis("created", "date"); oldest = minOf(oldest, created)
-                    if (since != null && created < since) continue
+                    val created = value.instantMillis("created", "date"); if (created > 0) oldest = minOf(oldest, created)
+                    if (since != null && created > 0 && created < since) continue
                     val message = GroupsIoMessage(value.optLong("id").takeIf { it > 0 }, groupId, topicId, number, value.optLong("reply_to").takeIf { it > 0 },
                         value.optString("subject"), value.optString("name").ifBlank { "Unknown author" }, created, normaliseBody(value.optString("body")),
                         value.optBoolean("is_moderated", value.optBoolean("moderated")), false,
@@ -894,11 +922,11 @@ class GroupsIoController(context: Context) {
                     byTopic.getOrPut(topicId) { mutableListOf() } += message
                 }
                 byTopic.forEach { (topicId, values) ->
-                    if (db().topics(groupId, 100).none { it.id == topicId }) db().applyTopics(groupId, listOf(GroupsIoTopic(topicId, groupId, values.firstOrNull()?.subject.orEmpty(), now, values.size, false, values.minOfOrNull { it.number }, values.maxOfOrNull { it.number })), null, false, now)
+                    if (db().topics(groupId, 100).none { it.id == topicId }) db().applyTopics(groupId, listOf(GroupsIoTopic(topicId, groupId, values.firstOrNull()?.subject.orEmpty(), values.maxOfOrNull { it.createdMillis } ?: 0L, values.size, false, values.minOfOrNull { it.number }, values.maxOfOrNull { it.number })), null, false, now)
                     db().applyMessages(groupId, topicId, values, null, false, now)
                 }
                 val (next, remoteMore) = groupsIoPagination(root)
-                val reachedRange = since != null && oldest < since
+                val reachedRange = since != null && oldest != Long.MAX_VALUE && oldest < since
                 val more = remoteMore && !reachedRange
                 progress = progress.applyPage(byTopic.values.sumOf { it.size }, if (days == null) root.optInt("total_count").takeIf { it > 0 } else null, if (more) next else null, more); token = if (more) next else null
                 val stats = db().cacheStats(); val size = db().sizeBytes()
@@ -1061,8 +1089,10 @@ fun GroupsIoScreen(controller: GroupsIoController, compact: Boolean) {
         val visibleResults = if (onlineSearch) controller.onlineSearchResults else controller.searchResults
         if (visibleResults.isNotEmpty()) {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) { items(visibleResults, key = { "${it.groupId}:${it.messageNumber}" }) { result ->
-                ListItem(headlineContent = { Text(result.topicSubject) }, supportingContent = { Text("${result.groupName} · ${result.author}\n${result.snippet}", maxLines = 3, overflow = TextOverflow.Ellipsis) },
-                    modifier = Modifier.clickable { query = ""; if (onlineSearch) controller.openOnlineSearchResult(result) else controller.openSearchResult(result) })
+                val timestamp = groupsIoTimestampText(result.createdMillis)
+                ListItem(headlineContent = { Text(result.topicSubject) }, supportingContent = { Text("${result.groupName} · ${result.author} · ${timestamp.row}\n${result.snippet}", maxLines = 3, overflow = TextOverflow.Ellipsis) },
+                    modifier = Modifier.semantics { contentDescription = "${result.topicSubject}; ${timestamp.accessibility}" }
+                        .clickable { query = ""; if (onlineSearch) controller.openOnlineSearchResult(result) else controller.openSearchResult(result) })
             }
             if (onlineSearch && controller.onlineSearchHasMore) item { OutlinedButton({ controller.searchOnline(query, loadMore = true) }) { Text("Load More") } }
             }
@@ -1122,11 +1152,12 @@ fun GroupsIoScreen(controller: GroupsIoController, compact: Boolean) {
     else if (controller.topics.isEmpty()) item { Text("No downloaded topics for this group", color = Color(0xFFA5ADB2), modifier = Modifier.padding(16.dp)) }
     items(controller.topics, key = { it.id }) { topic ->
         val accent = groupsIoAccent(controller.groups.firstOrNull { it.id == topic.groupId }?.name.orEmpty())
+        val timestamp = groupsIoTimestampText(topic.updatedMillis)
         ListItem(headlineContent = { Text(topic.subject, fontWeight = if (controller.selectedTopicId == topic.id) FontWeight.Bold else FontWeight.Medium) },
-            supportingContent = { Text("${topic.messageCount} messages${if (topic.closed) " · closed" else ""}") },
+            supportingContent = { Text("${topic.messageCount} messages${if (topic.closed) " · closed" else ""} · ${timestamp.row}") },
             leadingContent = { Box(Modifier.width(5.dp).height(46.dp).background(accent, CircleShape)) },
             colors = ListItemDefaults.colors(containerColor = if (controller.selectedTopicId == topic.id) accent.copy(alpha = .12f) else Color(0xFF1B2228)),
-            modifier = Modifier.clickable { controller.selectTopic(topic.id) })
+            modifier = Modifier.semantics { contentDescription = "${topic.subject}; ${timestamp.accessibility}" }.clickable { controller.selectTopic(topic.id) })
     }
     if (controller.topicsHaveMore) item { OutlinedButton(controller::loadOlderTopics, enabled = !controller.busy, modifier = Modifier.padding(12.dp)) { Text("Load Older Topics") } }
     }
@@ -1141,6 +1172,7 @@ fun GroupsIoScreen(controller: GroupsIoController, compact: Boolean) {
     val newest = controller.messages.maxOfOrNull(GroupsIoMessage::number)
     items(controller.messages, key = { "${it.groupId}:${it.number}" }) { message ->
         val accent = groupsIoAccent(controller.groups.firstOrNull { it.id == message.groupId }?.name.orEmpty())
+        val timestamp = groupsIoTimestampText(message.createdMillis)
         Surface(color = Color(0xFF1B2228), shape = MaterialTheme.shapes.medium) { Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
             Surface(shape = CircleShape, color = accent.copy(alpha = .22f), modifier = Modifier.size(46.dp)) { Box(contentAlignment = Alignment.Center) {
                 Text(if (message.number == newest) "N" else message.author.firstOrNull()?.uppercase().orEmpty(), color = accent, fontWeight = FontWeight.Black)
@@ -1151,6 +1183,8 @@ fun GroupsIoScreen(controller: GroupsIoController, compact: Boolean) {
                     Text("${if (message.number == newest) "NEWEST · " else ""}#${message.number}", color = if (message.number == newest) accent else Color(0xFFA5ADB2))
                 }
                 if (message.subject.isNotBlank()) Text(message.subject, color = accent)
+                Text(timestamp.detail, color = Color(0xFFA5ADB2), style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.semantics { contentDescription = timestamp.accessibility })
                 Text(if (message.deleted) "Message unavailable or deleted" else message.body)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     TextButton({ controller.openReply(message) }, enabled = controller.capabilities?.canReply == true) { Text("Reply") }

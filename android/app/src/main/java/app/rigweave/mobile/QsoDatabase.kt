@@ -379,6 +379,18 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         }
     }
 
+    /** Bounded repair for older projections whose canonical QSO has a worked grid but grid_norm is empty. */
+    fun repairProjectionGridBatch(batchSize: Int = 250): Int {
+        val size = batchSize.coerceIn(50, 500)
+        val ids = readableDatabase.rawQuery(
+            """SELECT q.id FROM qso q JOIN qso_projection p ON p.qso_id=q.id
+                WHERE p.grid_norm='' AND TRIM(q.grid)<>'' ORDER BY q.created_at,q.id LIMIT $size""".trimIndent(), null,
+        ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+        if (ids.isEmpty()) return 0
+        transaction { qsos(ids).forEach { QsoProjectionStore.write(writableDatabase, it) } }
+        return ids.size
+    }
+
     fun verifyProjection(): ProjectionHealth {
         val db = writableDatabase
         val missing = db.rawQuery("SELECT COUNT(*) FROM qso q LEFT JOIN qso_projection p ON p.qso_id=q.id WHERE p.qso_id IS NULL", null)

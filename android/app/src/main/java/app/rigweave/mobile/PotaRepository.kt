@@ -124,6 +124,16 @@ internal class PotaController(context: Context, private val qsoDatabase: QsoData
         }
     }
 
+    suspend fun nearbyParks(stationGrid: String, radiusKm: Double, limit: Int = 1_000): CatalogueRows<PotaPark> = withContext(Dispatchers.IO) {
+        if (!parkMetadata.ready || !parksFile.exists()) return@withContext CatalogueRows(emptyList(), 0)
+        val database = SQLiteDatabase.openDatabase(parksFile.path, null, SQLiteDatabase.OPEN_READONLY)
+        val invalid = try {
+            database.rawQuery("SELECT COUNT(*) FROM parks WHERE latitude IS NULL OR longitude IS NULL", null)
+                .use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        } finally { database.close() }
+        CatalogueRows(queryParks("", "", maidenheadCenter(stationGrid), nearby = true, radiusKm = radiusKm, resultLimit = limit), invalid)
+    }
+
     fun updateParks() {
         if (parkBusy) return
         cancelParkImport = false
@@ -285,15 +295,22 @@ internal class PotaController(context: Context, private val qsoDatabase: QsoData
             download.sha256, download.bytes, updateAvailable = false, failure = "")
     }
 
-    private fun queryParks(query: String, location: String, station: GeoPoint?, nearby: Boolean): List<PotaPark> {
+    private fun queryParks(query: String, location: String, station: GeoPoint?, nearby: Boolean, radiusKm: Double? = null, resultLimit: Int = 100): List<PotaPark> {
         val db = SQLiteDatabase.openDatabase(parksFile.path, null, SQLiteDatabase.OPEN_READONLY)
         try {
             val q = query.trim().uppercase(Locale.US); val loc = location.trim().uppercase(Locale.US)
             val clauses = mutableListOf("1=1"); val args = mutableListOf<String>()
             if (q.isNotBlank()) { clauses += "(reference LIKE ? OR name_norm LIKE ?)"; args += "$q%"; args += "%$q%" }
             if (loc.isNotBlank()) { clauses += "location_norm LIKE ?"; args += "%$loc%" }
-            if (nearby && station != null) { clauses += "latitude IS NOT NULL AND longitude IS NOT NULL AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?"; args += (station.latitude - 15).coerceAtLeast(-90.0).toString(); args += (station.latitude + 15).coerceAtMost(90.0).toString(); args += (station.longitude - 20).coerceAtLeast(-180.0).toString(); args += (station.longitude + 20).coerceAtMost(180.0).toString() }
-            val limit = if (nearby) 500 else 100
+            if (nearby && station != null) {
+                val latDelta = radiusKm?.div(110.574)?.coerceAtLeast(.1) ?: 15.0
+                val longitudeScale = kotlin.math.cos(Math.toRadians(station.latitude)).coerceAtLeast(.05)
+                val lonDelta = radiusKm?.div(111.320 * longitudeScale)?.coerceAtMost(180.0) ?: 20.0
+                clauses += "latitude IS NOT NULL AND longitude IS NOT NULL AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?"
+                args += (station.latitude - latDelta).coerceAtLeast(-90.0).toString(); args += (station.latitude + latDelta).coerceAtMost(90.0).toString()
+                args += (station.longitude - lonDelta).coerceAtLeast(-180.0).toString(); args += (station.longitude + lonDelta).coerceAtMost(180.0).toString()
+            }
+            val limit = if (nearby) 5_000 else resultLimit.coerceIn(1, 500)
             val rows = buildList {
                 db.rawQuery("SELECT reference,name,active,entity_id,location,latitude,longitude,grid FROM parks WHERE ${clauses.joinToString(" AND ")} ORDER BY reference LIMIT $limit", args.toTypedArray()).use { cursor ->
                     while (cursor.moveToNext()) {
@@ -305,7 +322,10 @@ internal class PotaController(context: Context, private val qsoDatabase: QsoData
                     }
                 }
             }
-            return if (nearby) rows.sortedBy { it.distanceKm ?: Double.MAX_VALUE }.take(100) else rows
+            return if (nearby) rows.asSequence()
+                .filter { radiusKm == null || (it.distanceKm != null && it.distanceKm <= radiusKm) }
+                .sortedWith(compareBy<PotaPark> { it.distanceKm ?: Double.MAX_VALUE }.thenBy(PotaPark::reference))
+                .take(resultLimit.coerceIn(1, 1_000)).toList() else rows
         } finally { db.close() }
     }
 

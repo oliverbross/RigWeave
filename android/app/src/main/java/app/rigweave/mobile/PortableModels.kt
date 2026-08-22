@@ -9,7 +9,9 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.abs
 
-internal const val SOTA_LIVE_APPROVED = false
+internal const val SOTA_LIVE_APPROVED = true
+internal const val SOTA_CLUSTER_HOST = "cluster.sota.org.uk"
+internal const val SOTA_CLUSTER_PORT = 7300
 
 internal const val SOTA_SUMMITS_URL = "https://www.sotadata.org.uk/summitslist.csv"
 internal const val WWFF_SPOTS_URL = "https://spots.wwff.co/static/spots.json"
@@ -168,6 +170,51 @@ internal fun parseSotaSpots(raw: String, summits: Map<String, SotaSummit> = empt
         }
     }.filterNot { it.test }.distinctBy { listOf(it.callsign, it.primary.code, it.frequencyHz.toString(), modeFamily(it.mode)).joinToString("|") }
         .sortedByDescending(PortableSpot::spottedAt)
+}
+
+internal fun parseSotaClusterLine(
+    raw: String,
+    summits: Map<String, SotaSummit> = emptyMap(),
+    now: Long = Instant.now().epochSecond,
+): PortableSpot? {
+    if (!raw.startsWith("DX de ", ignoreCase = true)) return null
+    val colon = raw.indexOf(':', startIndex = 6)
+    if (colon < 0) return null
+    val spotter = raw.substring(6, colon).trim().portableCall()
+    val tokens = raw.substring(colon + 1).trim().split(Regex("\\s+")).filter(String::isNotBlank)
+    if (tokens.size < 4) return null
+    val frequencyHz = tokens[0].replace(',', '.').toDoubleOrNull()?.times(1_000)?.toLong()
+        ?.takeIf { it in 100_000L..1_000_000_000L } ?: return null
+    val callsign = tokens[1].portableCall().takeIf(String::isNotBlank) ?: return null
+    val referenceIndex = tokens.indexOfFirst { normalizeSotaReference(it).isNotBlank() }
+    if (referenceIndex < 2) return null
+    val code = normalizeSotaReference(tokens[referenceIndex])
+    val timeIndex = tokens.indexOfLast { Regex("^[0-2][0-9][0-5][0-9]Z$", RegexOption.IGNORE_CASE).matches(it) }
+    if (timeIndex <= referenceIndex) return null
+    val hhmm = tokens[timeIndex].dropLast(1)
+    val hour = hhmm.take(2).toIntOrNull()?.takeIf { it in 0..23 } ?: return null
+    val minute = hhmm.takeLast(2).toIntOrNull()?.takeIf { it in 0..59 } ?: return null
+    val nowUtc = Instant.ofEpochSecond(now).atZone(ZoneOffset.UTC)
+    var observed = nowUtc.toLocalDate().atTime(hour, minute).toEpochSecond(ZoneOffset.UTC)
+    if (observed > now + 5 * 60) observed -= 86_400
+    val comments = tokens.subList(referenceIndex + 1, timeIndex).joinToString(" ").portableText(320)
+    val summit = summits[code]
+    val mode = when {
+        Regex("\\bCW\\b", RegexOption.IGNORE_CASE).containsMatchIn(comments) -> "CW"
+        Regex("\\b(SSB|USB|LSB)\\b", RegexOption.IGNORE_CASE).containsMatchIn(comments) -> "SSB"
+        Regex("\\bFM\\b", RegexOption.IGNORE_CASE).containsMatchIn(comments) -> "FM"
+        Regex("\\b(FT8|FT4|RTTY|DIGI(?:TAL)?)\\b", RegexOption.IGNORE_CASE).containsMatchIn(comments) -> "DIGITAL"
+        else -> "UNKNOWN"
+    }
+    return PortableSpot(
+        id = "SOTA-CLUSTER:$callsign|$code|$frequencyHz|$observed",
+        programs = setOf(PortableProgram.SOTA), callsign = callsign, frequencyHz = frequencyHz, mode = mode,
+        references = listOf(PortableReference(PortableProgram.SOTA, code, summit?.name.orEmpty(), summit?.association.orEmpty(), summit?.region.orEmpty(),
+            summit?.altitudeM, summit?.points, summit?.latitude, summit?.longitude, summit?.grid.orEmpty())),
+        spottedAt = observed, expiresAt = observed + 60 * 60, source = "SOTA Cluster $SOTA_CLUSTER_HOST:$SOTA_CLUSTER_PORT",
+        spotter = spotter, comments = comments, latitude = summit?.latitude, longitude = summit?.longitude,
+        invalid = observed > now + 5 * 60, qrt = containsQrt(comments),
+    )
 }
 
 private data class WwffAgenda(val call: String, val reference: String, val start: Long, val end: Long, val details: String)

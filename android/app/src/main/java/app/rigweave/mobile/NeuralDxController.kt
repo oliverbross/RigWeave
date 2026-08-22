@@ -234,17 +234,23 @@ internal data class NeuralMySignal(val available:Boolean=false,val callsign:Stri
 internal data class GeoPoint(val latitude: Double, val longitude: Double)
 
 internal fun maidenheadCenter(raw: String): GeoPoint? {
-    val grid = raw.trim().uppercase(Locale.US)
-    if (grid.length < 4 || grid[0] !in 'A'..'R' || grid[1] !in 'A'..'R' ||
-        grid[2] !in '0'..'9' || grid[3] !in '0'..'9') return null
-    var lon = (grid[0] - 'A') * 20.0 - 180.0 + (grid[2] - '0') * 2.0 + 1.0
-    var lat = (grid[1] - 'A') * 10.0 - 90.0 + (grid[3] - '0') + 0.5
-    if (grid.length >= 6 && grid[4] in 'A'..'X' && grid[5] in 'A'..'X') {
-        // Replace the four-character square centre with the six-character subsquare centre.
-        lon += (grid[4] - 'A') / 12.0 - 23.0 / 24.0
-        lat += (grid[5] - 'A') / 24.0 - 23.0 / 48.0
+    val grid = raw.filterNot(Char::isWhitespace).uppercase(Locale.US)
+    if (grid.length !in setOf(4, 6, 8) || grid[0] !in 'A'..'R' || grid[1] !in 'A'..'R' ||
+        grid[2] !in '0'..'9' || grid[3] !in '0'..'9' ||
+        (grid.length >= 6 && (grid[4] !in 'A'..'X' || grid[5] !in 'A'..'X')) ||
+        (grid.length == 8 && (grid[6] !in '0'..'9' || grid[7] !in '0'..'9'))) return null
+    var lon = (grid[0] - 'A') * 20.0 - 180.0 + (grid[2] - '0') * 2.0
+    var lat = (grid[1] - 'A') * 10.0 - 90.0 + (grid[3] - '0')
+    var lonSize = 2.0; var latSize = 1.0
+    if (grid.length >= 6) {
+        lonSize /= 24.0; latSize /= 24.0
+        lon += (grid[4] - 'A') * lonSize; lat += (grid[5] - 'A') * latSize
     }
-    return GeoPoint(lat, lon)
+    if (grid.length == 8) {
+        lonSize /= 10.0; latSize /= 10.0
+        lon += (grid[6] - '0') * lonSize; lat += (grid[7] - '0') * latSize
+    }
+    return GeoPoint(lat + latSize / 2.0, lon + lonSize / 2.0)
 }
 
 internal fun dxDistanceKm(

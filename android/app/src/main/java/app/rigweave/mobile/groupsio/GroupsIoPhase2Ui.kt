@@ -117,15 +117,16 @@ private fun GroupsIoDraftsOutboxDialog(controller: GroupsIoController) {
                     item { Text(title, fontWeight = FontWeight.Bold) }
                     if (values.isEmpty()) item { Text("None", style = MaterialTheme.typography.bodySmall) }
                     items(values, key = { it.localId }) { value ->
+                        val timestamp = groupsIoTimestampText(value.updatedAtMillis)
                         ListItem(headlineContent = { Text(value.subject.ifBlank { "Untitled" }) },
-                            supportingContent = { Text("${value.state.wire}${value.lastErrorText?.let { " · $it" }.orEmpty()}") },
+                            supportingContent = { Text("${value.state.wire} · ${timestamp.row}${value.lastAttemptAtMillis?.let { " · attempted ${groupsIoTimestampText(it).row}" }.orEmpty()}${value.lastErrorText?.let { " · $it" }.orEmpty()}") },
                             trailingContent = { TextButton({ controller.openLocalDraft(value) }) { Text("Open") } })
                     }
                 }
                 item { Text("Server Drafts", fontWeight = FontWeight.Bold) }
                 if (controller.serverDrafts.isEmpty()) item { Text("Refresh explicitly to reconcile; local edits are never overwritten.", style = MaterialTheme.typography.bodySmall) }
                 items(controller.serverDrafts, key = { it.id }) { value ->
-                    ListItem(headlineContent = { Text(value.subject.ifBlank { "Server draft #${value.id}" }) }, supportingContent = { Text("Remote only · ${value.attachmentCount} attachment(s)") })
+                    ListItem(headlineContent = { Text(value.subject.ifBlank { "Server draft #${value.id}" }) }, supportingContent = { Text("Remote only · ${value.attachmentCount} attachment(s) · ${groupsIoTimestampText(value.updatedAtMillis).row}") })
                 }
             }
         },

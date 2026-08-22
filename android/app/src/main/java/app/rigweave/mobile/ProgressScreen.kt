@@ -101,6 +101,7 @@ internal fun ProgressScreen(
     portable: PortableController,
     syncHub: SyncHubController,
     cty: CtyController,
+    currentLogMode: LogMode,
     currentStationId: String,
     currentCallsign: String,
     compact: Boolean,
@@ -116,20 +117,28 @@ internal fun ProgressScreen(
     var section by rememberSaveable { mutableStateOf(ProgressSection.OVERVIEW) }
     var goalDialog by remember { mutableStateOf(false) }
     val filters = controller.filters
-    LaunchedEffect(currentStationId, currentCallsign) {
-        if (!filters.allStations && filters.stationProfileId.isBlank() && filters.stationCallsign.isBlank())
+    LaunchedEffect(currentLogMode, currentStationId, currentCallsign) {
+        if (currentLogMode == LogMode.WAVELOG) {
+            val available = currentStationId.isNotBlank() && currentCallsign.isNotBlank()
+            val desiredId = if (available) currentStationId else "__UNAVAILABLE_WAVELOG_MAPPING__"
+            val desiredCall = if (available) currentCallsign else ""
+            if (filters.allStations || filters.stationProfileId != desiredId || filters.stationCallsign != desiredCall)
+                controller.updateFilters(filters.copy(allStations = false, stationProfileId = desiredId, stationCallsign = desiredCall))
+        } else if (!filters.allStations && filters.stationProfileId.isBlank() && filters.stationCallsign.isBlank()) {
             controller.updateFilters(filters.copy(stationProfileId = currentStationId, stationCallsign = currentCallsign))
+        }
     }
     val portableSpots = portable.pota.spots.map(PotaSpot::toPortable) + portable.sotaSpots + portable.wwffSpots
     val deliveredStates = setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED)
     val attention = syncHub.records.count { it.state !in deliveredStates }
-    LaunchedEffect(filters, features.liveSpots, portableSpots, attention, controller.goalStore.goals, cty.dataRevision) {
-        controller.refresh(filters, features.liveSpots, portableSpots, attention, cty, portable.sotaCatalogue)
+    val logAuthorityIdentity = "${currentLogMode.name}|$currentStationId|$currentCallsign"
+    LaunchedEffect(filters, features.liveSpots, portableSpots, attention, controller.goalStore.goals, cty.dataRevision, logAuthorityIdentity) {
+        controller.refresh(filters, features.liveSpots, portableSpots, attention, cty, portable.sotaCatalogue, logAuthorityIdentity)
     }
-    LaunchedEffect(filters, features.liveSpots, portableSpots, attention, cty.dataRevision) {
+    LaunchedEffect(filters, features.liveSpots, portableSpots, attention, cty.dataRevision, logAuthorityIdentity) {
         while (true) {
             delay(1_000)
-            controller.refresh(filters, features.liveSpots, portableSpots, attention, cty, portable.sotaCatalogue)
+            controller.refresh(filters, features.liveSpots, portableSpots, attention, cty, portable.sotaCatalogue, logAuthorityIdentity)
         }
     }
     val snapshot = controller.snapshot
@@ -141,8 +150,14 @@ internal fun ProgressScreen(
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("LOG INTELLIGENCE", color = ProgressInk, style = MaterialTheme.typography.headlineMedium)
-                        Text(if (filters.allStations) "ALL LOCAL DATA" else currentCallsign.ifBlank { "CURRENT STATION" },
-                            color = ProgressMuted)
+                        val scopeText = when {
+                            currentLogMode == LogMode.WAVELOG && currentStationId.isBlank() -> "WAVELOG · SELECTED STATION MAPPING UNAVAILABLE"
+                            currentLogMode == LogMode.WAVELOG -> "WAVELOG · ${currentCallsign.ifBlank { "CALL UNKNOWN" }} · station $currentStationId"
+                            filters.allStations -> "LOCAL LOG · ALL LOCAL DATA"
+                            else -> "LOCAL LOG · ${filters.stationCallsign.ifBlank { currentCallsign.ifBlank { "CURRENT STATION" } }}"
+                        }
+                        Text(scopeText, color = if ("UNAVAILABLE" in scopeText) MaterialTheme.colorScheme.error else ProgressMuted)
+                        Text(progressPeriodBounds(filters.period).label, color = ProgressMuted, fontSize = 12.sp)
                     }
                     if (controller.busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = ProgressAmber)
                     OutlinedButton({ goalDialog = true }, enabled = controller.goalStore.goals.size < 4) { Text("PIN GOAL") }
@@ -164,14 +179,18 @@ internal fun ProgressScreen(
                         controller.stationProfiles.forEach { add("PROFILE:$it" to "Profile $it") }
                         controller.stationCallsigns.forEach { add("CALL:$it" to it) }
                     }
-                    ProgressSingleFilterMenu("Station", stationChoice, stationChoices) { value ->
-                        controller.updateFilters(when {
-                            value == "ALL" -> filters.copy(allStations = true, stationProfileId = "", stationCallsign = "")
-                            value.startsWith("PROFILE:") -> filters.copy(allStations = false, stationProfileId = value.substringAfter(':'), stationCallsign = "")
-                            value.startsWith("CALL:") -> filters.copy(allStations = false, stationProfileId = "", stationCallsign = value.substringAfter(':'))
-                            else -> filters.copy(allStations = false, stationProfileId = currentStationId, stationCallsign = currentCallsign)
-                        })
-                    }
+                    if (currentLogMode == LogMode.WAVELOG) {
+                        Surface(color = ProgressRaised, shape = RoundedCornerShape(18.dp)) {
+                            Text("Station · ${currentCallsign.ifBlank { "UNAVAILABLE" }}", modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = ProgressInk)
+                        }
+                    } else ProgressSingleFilterMenu("Station", stationChoice, stationChoices) { value ->
+                            controller.updateFilters(when {
+                                value == "ALL" -> filters.copy(allStations = true, stationProfileId = "", stationCallsign = "")
+                                value.startsWith("PROFILE:") -> filters.copy(allStations = false, stationProfileId = value.substringAfter(':'), stationCallsign = "")
+                                value.startsWith("CALL:") -> filters.copy(allStations = false, stationProfileId = "", stationCallsign = value.substringAfter(':'))
+                                else -> filters.copy(allStations = false, stationProfileId = currentStationId, stationCallsign = currentCallsign)
+                            })
+                        }
                     ProgressSingleFilterMenu("Period", filters.period, ProgressPeriod.entries.map { it to it.label }) {
                         controller.updateFilters(filters.copy(period = it))
                     }
@@ -436,7 +455,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.overviewItems(
             if (snapshot.contacts.isEmpty()) Text("No valid contact grids in this scope.", color = ProgressMuted)
             else {
                 ProgressContactMap(snapshot.contacts, Modifier.fillMaxWidth().height(if (compact) 240.dp else 320.dp))
-                Text("${snapshot.contacts.size} unique valid grids · map failure does not affect statistics", color = ProgressMuted, fontSize = 11.sp)
+                Text("${snapshot.contacts.size} exact-grid points · ${snapshot.invalidContactGrids} invalid grid rows · map failure does not affect statistics", color = ProgressMuted, fontSize = 11.sp)
             }
         }
     }
@@ -515,8 +534,11 @@ private fun androidx.compose.foundation.lazy.LazyListScope.geographyItems(
     } }
     item { ProgressCard("GRIDS & CONTACT MAP") {
         Text("${snapshot.grids} worked · ${snapshot.gridsConfirmed} locally confirmed", color = ProgressInk)
-        if (snapshot.contacts.isEmpty()) Text("No valid contact grids in this scope.", color = ProgressMuted)
-        else ProgressContactMap(snapshot.contacts, Modifier.fillMaxWidth().height(if (compact) 240.dp else 340.dp))
+        if (snapshot.contacts.isEmpty()) Text("No valid contact grids in this scope · ${snapshot.invalidContactGrids} invalid grid rows", color = ProgressMuted)
+        else {
+            ProgressContactMap(snapshot.contacts, Modifier.fillMaxWidth().height(if (compact) 240.dp else 340.dp))
+            Text("${snapshot.contacts.size} EXACT GRID · ${snapshot.invalidContactGrids} INVALID · approximate entity layer not enabled", color = ProgressMuted)
+        }
     } }
     item { ProgressCard("BEST DX") {
         if (snapshot.bestDx.isEmpty()) Text("Distance is unknown for this scope.", color = ProgressMuted)

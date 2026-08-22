@@ -124,7 +124,7 @@ class ProgressModelsTest {
         val result=buildProgressSnapshot(listOf(qso("1",now,dxcc="291")),ProgressFilters(allStations=true),
             ctyLookup={lookups++;null})
         assertEquals(1,result.coverage.getValue("DXCC").available);assertEquals(0,result.coverage.getValue("Grid").available)
-        assertEquals(0,lookups);assertFalse(SOTA_LIVE_APPROVED)
+        assertEquals(0,lookups)
     }
 
     @Test fun majorAwardFamiliesShareOneFilteredSnapshot() {

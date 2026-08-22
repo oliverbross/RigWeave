@@ -17,6 +17,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -272,7 +275,7 @@ internal fun PotaChaseScreen(
                 FilterChip(nearby, { nearby = !nearby }, { Text("Nearby") }, leadingIcon = { Icon(Icons.Outlined.NearMe, null) })
                 OutlinedButton({ if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) lastDeviceGrid(context)?.let { grid = it; nearby = true } else permission.launch(Manifest.permission.ACCESS_FINE_LOCATION) }, modifier = Modifier.heightIn(min = 48.dp)) { Icon(Icons.Outlined.MyLocation, "Use device location") }
             }
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) { items(controller.parkResults, key = PotaPark::reference) { park ->
+            LazyVerticalGrid(columns = GridCells.Adaptive(360.dp), modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) { gridItems(controller.parkResults, key = PotaPark::reference) { park ->
                 Row(Modifier.fillMaxWidth().background(PotaPanel, RoundedCornerShape(8.dp)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("${park.reference} · ${park.name}", color = PotaInk, fontWeight = FontWeight.Bold); Text(listOf(park.location, park.grid, park.distanceKm?.let { "%.1f km · %03d°".format(it, park.bearingDegrees ?: 0) }, if (park.active) "ACTIVE" else "INACTIVE").filterNotNull().filter(String::isNotBlank).joinToString(" · "), color = PotaMuted) }; IconButton({ inAppBrowser?.open("https://pota.app/#/park/${park.reference}") }) { Icon(Icons.Outlined.OpenInNew, "Open official POTA park page") } }
             } }
         }

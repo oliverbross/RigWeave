@@ -14,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -21,15 +22,20 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStreamReader
 import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.URL
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 
 internal data class ProviderStatus(
@@ -38,6 +44,8 @@ internal data class ProviderStatus(
     val count: Int = 0,
     val error: String = "",
 )
+
+internal data class CatalogueRows<T>(val rows: List<T>, val invalidCoordinates: Int)
 
 internal data class SotaCatalogueMetadata(
     val ready: Boolean = false,
@@ -63,6 +71,7 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
     private val wwffMutex = Mutex()
     private val wwffCache = File(appContext.filesDir, "wwff-spots.json")
     private val wwffAgendaCache = File(appContext.filesDir, "wwff-agendas.json")
+    private val clusterPrefs = appContext.getSharedPreferences("dx_cluster", Context.MODE_PRIVATE)
     private val logRepository=PortableLogRepository(qsoDatabase)
     val pota = PotaController(appContext, qsoDatabase)
     val sotaCatalogue = SotaCatalogue(appContext)
@@ -75,11 +84,17 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
     var rankedOpportunities by mutableStateOf<List<PortableOpportunity>>(emptyList()); private set
     private var opportunityJob: Job? = null
     private var opportunityKey: Any? = null
+    private var sotaClusterSocket: Socket? = null
+    private var sotaClusterJob: Job? = null
+    private var sotaClusterGeneration = 0
+    private var sotaClusterActive = false
+    private var sotaClusterLogin = ""
+    private val resolvedSummits = ConcurrentHashMap<String, SotaSummit>()
 
     init { loadWwffCache() }
 
-    fun close() { scope.cancel(); pota.close(); sotaCatalogue.close() }
-    fun refreshAll() { pota.refreshSpots(); refreshWwff() }
+    fun close() { stopSotaCluster(); scope.cancel(); pota.close(); sotaCatalogue.close() }
+    fun refreshAll() { pota.refreshSpots(); refreshWwff(); ensureSotaCluster(); resolveSotaSpots() }
     fun refreshWwff() { scope.launch { refreshWwffNow() } }
     fun notifyQsoChanged() { lastQsoRevision=qsoDatabase.changeToken();opportunityKey=null;pota.notifyQsoChanged() }
 
@@ -88,6 +103,14 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
         if (wwffStatus.kind == PortableFeedKind.LIVE && now - wwffStatus.fetchedAt > 90) wwffStatus = wwffStatus.copy(kind = PortableFeedKind.CACHED)
         if (wwffStatus.fetchedAt > 0 && now - wwffStatus.fetchedAt > 60 * 60) wwffStatus = wwffStatus.copy(kind = PortableFeedKind.STALE)
         if (qsoDatabase.changeToken() != lastQsoRevision) notifyQsoChanged()
+        if (sotaStatus.kind == PortableFeedKind.LIVE && now - sotaStatus.fetchedAt > 90) sotaStatus = sotaStatus.copy(kind = PortableFeedKind.CACHED)
+        if (sotaStatus.fetchedAt > 0 && now - sotaStatus.fetchedAt > 60 * 60) sotaStatus = sotaStatus.copy(kind = PortableFeedKind.STALE)
+        ensureSotaCluster()
+    }
+
+    fun setSotaClusterActive(active: Boolean) {
+        sotaClusterActive = active
+        if (active) ensureSotaCluster() else stopSotaCluster()
     }
 
     fun providerStatus(program: PortableProgram): ProviderStatus = when (program) {
@@ -120,6 +143,94 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
         val q = query.trim().uppercase(Locale.US)
         return wwffSpots.flatMap(PortableSpot::references).filter { it.program == PortableProgram.WWFF &&
             (q.isBlank() || it.code.contains(q) || it.name.uppercase(Locale.US).contains(q)) }.distinctBy(PortableReference::code).take(100)
+    }
+
+    private fun configuredClusterLogin(): String = clusterPrefs.getString("callsign", "").orEmpty().trim().uppercase(Locale.US)
+
+    private fun ensureSotaCluster() {
+        if (!sotaClusterActive) return
+        val login = configuredClusterLogin()
+        if (login.isBlank()) {
+            stopSotaCluster()
+            sotaStatus = ProviderStatus(PortableFeedKind.UNAVAILABLE, error = "Configure a DX-cluster username in Settings")
+            return
+        }
+        if (sotaClusterJob?.isActive == true && login == sotaClusterLogin) return
+        stopSotaCluster(updateStatus = false)
+        sotaClusterLogin = login
+        val generation = ++sotaClusterGeneration
+        sotaStatus = ProviderStatus(if (sotaSpots.isEmpty()) PortableFeedKind.LOADING else PortableFeedKind.CACHED,
+            sotaStatus.fetchedAt, sotaSpots.size, "Connecting to $SOTA_CLUSTER_HOST:$SOTA_CLUSTER_PORT")
+        sotaClusterJob = scope.launch(Dispatchers.IO) {
+            var attempt = 0
+            while (sotaClusterActive && generation == sotaClusterGeneration) {
+                try {
+                    val socket = Socket().apply { connect(InetSocketAddress(SOTA_CLUSTER_HOST, SOTA_CLUSTER_PORT), 12_000); keepAlive = true }
+                    sotaClusterSocket = socket
+                    val output = socket.getOutputStream()
+                    output.write((login + "\r\n").toByteArray(Charsets.UTF_8)); output.flush()
+                    delay(1_500)
+                    if (!sotaClusterActive || generation != sotaClusterGeneration) break
+                    output.write("sh/dx 50\r\n".toByteArray(Charsets.UTF_8)); output.flush()
+                    withContext(Dispatchers.Main.immediate) {
+                        sotaStatus = ProviderStatus(PortableFeedKind.LIVE, Instant.now().epochSecond, sotaSpots.size,
+                            "Receive-only $SOTA_CLUSTER_HOST:$SOTA_CLUSTER_PORT")
+                    }
+                    attempt = 0
+                    BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8)).use { reader ->
+                        while (sotaClusterActive && generation == sotaClusterGeneration) {
+                            val line = reader.readLine() ?: break
+                            val provisional = parseSotaClusterLine(line) ?: continue
+                            val code = provisional.primary.code
+                            val summit = resolvedSummits[code] ?: sotaCatalogue.lookup(setOf(code))[code]?.also { resolvedSummits[code] = it }
+                            val spot = parseSotaClusterLine(line, summit?.let { mapOf(code to it) }.orEmpty()) ?: continue
+                            withContext(Dispatchers.Main.immediate) { publishSotaClusterSpot(spot) }
+                        }
+                    }
+                } catch (error: Throwable) {
+                    if (sotaClusterActive && generation == sotaClusterGeneration) withContext(Dispatchers.Main.immediate) {
+                        sotaStatus = ProviderStatus(if (sotaSpots.isEmpty()) PortableFeedKind.FAILED else PortableFeedKind.CACHED,
+                            sotaStatus.fetchedAt, sotaSpots.size, "SOTA cluster reconnecting: ${error.message?.take(100) ?: "connection failed"}")
+                    }
+                } finally {
+                    runCatching { sotaClusterSocket?.close() }; sotaClusterSocket = null
+                }
+                if (!sotaClusterActive || generation != sotaClusterGeneration) break
+                delay(minOf(30, 1 shl minOf(attempt++, 4)) * 1_000L)
+            }
+        }
+    }
+
+    private fun publishSotaClusterSpot(spot: PortableSpot) {
+        val key: (PortableSpot) -> String = { "${it.callsign}|${it.primary.code}|${it.frequencyHz}" }
+        sotaSpots = (listOf(spot) + sotaSpots).distinctBy(key).sortedByDescending(PortableSpot::spottedAt).take(250)
+        sotaStatus = ProviderStatus(PortableFeedKind.LIVE, maxOf(sotaStatus.fetchedAt, spot.spottedAt),
+            sotaSpots.count { it.activeAt(Instant.now().epochSecond) }, "Receive-only $SOTA_CLUSTER_HOST:$SOTA_CLUSTER_PORT")
+        opportunityKey = null
+    }
+
+    private fun resolveSotaSpots() {
+        val current = sotaSpots
+        val references = current.map { it.primary.code }.filter(String::isNotBlank).toSet()
+        if (!sotaCatalogue.metadata.ready || references.isEmpty()) return
+        scope.launch {
+            val summits = withContext(Dispatchers.IO) { sotaCatalogue.lookup(references) }
+            resolvedSummits.putAll(summits)
+            sotaSpots = current.map { spot ->
+                val summit = summits[spot.primary.code] ?: return@map spot
+                spot.copy(references = listOf(PortableReference(PortableProgram.SOTA, summit.code, summit.name, summit.association, summit.region,
+                    summit.altitudeM, summit.points, summit.latitude, summit.longitude, summit.grid)), latitude = summit.latitude, longitude = summit.longitude)
+            }
+            opportunityKey = null
+        }
+    }
+
+    private fun stopSotaCluster(updateStatus: Boolean = true) {
+        sotaClusterGeneration++
+        sotaClusterJob?.cancel(); sotaClusterJob = null
+        runCatching { sotaClusterSocket?.close() }; sotaClusterSocket = null
+        if (updateStatus) sotaStatus = ProviderStatus(if (sotaSpots.isEmpty()) PortableFeedKind.UNAVAILABLE else PortableFeedKind.CACHED,
+            sotaStatus.fetchedAt, sotaSpots.size, if (sotaSpots.isEmpty()) "SOTA cluster inactive" else "SOTA cluster paused · cached spots retained")
     }
 
     private suspend fun refreshWwffNow(now: Long = Instant.now().epochSecond) = wwffMutex.withLock {
@@ -211,6 +322,15 @@ internal class SotaCatalogue(context: Context) {
     fun search(query: String, association: String = "", region: String = "", stationGrid: String = "", nearby: Boolean = false) {
         scope.launch { results = withContext(Dispatchers.IO) { if (!metadata.ready || !activeDb.exists()) emptyList() else query(query, association, region, maidenheadCenter(stationGrid), nearby) } }
     }
+    suspend fun nearbySummits(stationGrid: String, radiusKm: Double, limit: Int = 1_000): CatalogueRows<SotaSummit> = withContext(Dispatchers.IO) {
+        if (!metadata.ready || !activeDb.exists()) return@withContext CatalogueRows(emptyList(), 0)
+        val database = SQLiteDatabase.openDatabase(activeDb.path, null, SQLiteDatabase.OPEN_READONLY)
+        val invalid = try {
+            database.rawQuery("SELECT COUNT(*) FROM summits WHERE latitude IS NULL OR longitude IS NULL", null)
+                .use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        } finally { database.close() }
+        CatalogueRows(query("", "", "", maidenheadCenter(stationGrid), nearby = true, radiusKm = radiusKm, resultLimit = limit), invalid)
+    }
     fun lookup(references: Set<String>): Map<String, SotaSummit> = if (!metadata.ready || references.isEmpty() || !activeDb.exists()) emptyMap() else runCatching {
         val db = SQLiteDatabase.openDatabase(activeDb.path, null, SQLiteDatabase.OPEN_READONLY)
         try { references.chunked(200).flatMap { chunk -> db.rawQuery("SELECT code,association,region,name,alt_m,alt_ft,points,bonus,latitude,longitude,grid,valid_from,valid_to FROM summits WHERE code IN (${chunk.joinToString { "?" }})", chunk.toTypedArray()).use(::readSummits) }.associateBy(SotaSummit::code) } finally { db.close() }
@@ -286,21 +406,31 @@ internal class SotaCatalogue(context: Context) {
         progress = 100; return SotaCatalogueMetadata(true, imported, download.epoch, Instant.now().epochSecond, download.etag, download.modified, download.sha, download.bytes)
     }
 
-    private fun query(query: String, association: String, region: String, station: GeoPoint?, nearby: Boolean): List<SotaSummit> {
+    private fun query(query: String, association: String, region: String, station: GeoPoint?, nearby: Boolean, radiusKm: Double? = null, resultLimit: Int = 100): List<SotaSummit> {
         val db = SQLiteDatabase.openDatabase(activeDb.path, null, SQLiteDatabase.OPEN_READONLY)
         try {
             val q = query.trim().uppercase(Locale.US); val a = association.trim().uppercase(Locale.US); val r = region.trim().uppercase(Locale.US); val clauses = mutableListOf("1=1"); val args = mutableListOf<String>()
             if (q.isNotBlank()) { clauses += "(code LIKE ? OR name_norm LIKE ?)"; args += "$q%"; args += "%$q%" }; if (a.isNotBlank()) { clauses += "association_norm LIKE ?"; args += "%$a%" }; if (r.isNotBlank()) { clauses += "region_norm LIKE ?"; args += "%$r%" }
-            if (nearby && station != null) { clauses += "latitude IS NOT NULL AND longitude IS NOT NULL AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?"; args += (station.latitude - 15).coerceAtLeast(-90.0).toString(); args += (station.latitude + 15).coerceAtMost(90.0).toString(); args += (station.longitude - 20).coerceAtLeast(-180.0).toString(); args += (station.longitude + 20).coerceAtMost(180.0).toString() }
+            if (nearby && station != null) {
+                val latDelta = radiusKm?.div(110.574)?.coerceAtLeast(.1) ?: 15.0
+                val longitudeScale = kotlin.math.cos(Math.toRadians(station.latitude)).coerceAtLeast(.05)
+                val lonDelta = radiusKm?.div(111.320 * longitudeScale)?.coerceAtMost(180.0) ?: 20.0
+                clauses += "latitude IS NOT NULL AND longitude IS NOT NULL AND latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?"
+                args += (station.latitude - latDelta).coerceAtLeast(-90.0).toString(); args += (station.latitude + latDelta).coerceAtMost(90.0).toString()
+                args += (station.longitude - lonDelta).coerceAtLeast(-180.0).toString(); args += (station.longitude + lonDelta).coerceAtMost(180.0).toString()
+            }
             val order = if (nearby && station != null) {
                 args += station.latitude.toString(); args += station.latitude.toString(); args += station.longitude.toString(); args += station.longitude.toString()
                 "((latitude - ?) * (latitude - ?) + (longitude - ?) * (longitude - ?)), code"
             } else "code"
-            val rows = db.rawQuery("SELECT code,association,region,name,alt_m,alt_ft,points,bonus,latitude,longitude,grid,valid_from,valid_to FROM summits WHERE ${clauses.joinToString(" AND ")} ORDER BY $order LIMIT ${if (nearby) 500 else 100}", args.toTypedArray()).use(::readSummits).map { summit ->
+            val rows = db.rawQuery("SELECT code,association,region,name,alt_m,alt_ft,points,bonus,latitude,longitude,grid,valid_from,valid_to FROM summits WHERE ${clauses.joinToString(" AND ")} ORDER BY $order LIMIT ${if (nearby) 5_000 else resultLimit.coerceIn(1, 500)}", args.toTypedArray()).use(::readSummits).map { summit ->
                 val point = if (summit.latitude != null && summit.longitude != null) GeoPoint(summit.latitude, summit.longitude) else null
                 summit.copy(distanceKm = if (station != null && point != null) distanceKm(station, point) else null, bearingDegrees = if (station != null && point != null) initialBearingDegrees(station, point) else null)
             }
-            return if (nearby) rows.sortedBy { it.distanceKm ?: Double.MAX_VALUE }.take(100) else rows
+            return if (nearby) rows.asSequence()
+                .filter { radiusKm == null || (it.distanceKm != null && it.distanceKm <= radiusKm) }
+                .sortedWith(compareBy<SotaSummit> { it.distanceKm ?: Double.MAX_VALUE }.thenBy(SotaSummit::code))
+                .take(resultLimit.coerceIn(1, 1_000)).toList() else rows
         } finally { db.close() }
     }
 
