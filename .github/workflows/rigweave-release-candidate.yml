@@ -1,0 +1,73 @@
+name: Release Candidate Gates
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main, feature/rigweave-final-convergence-v1]
+
+jobs:
+  contract-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: python3 scripts/check_release_candidate.py
+      - run: python3 -m unittest scripts/test_check_openhamclock_upstream.py
+      - run: test -s NOTICE && test -s core/third_party/iturhfprop/SOURCE_MANIFEST.json
+
+  rust-native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --manifest-path rust/rigweave-flex/Cargo.toml --locked
+      - run: cmake -S core -B build/core && cmake --build build/core && ctest --test-dir build/core --output-on-failure
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: "17"}
+      - uses: android-actions/setup-android@v3
+      - run: cd android && ./gradlew testDebugUnitTest lintDebug assembleDebug bundleDebug compileDebugAndroidTestSources --no-daemon
+      - run: python3 scripts/audit_android_package_size.py android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/bundle/debug/app-debug.aab
+
+  apple:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: xcodebuild -project ios/RigWeave.xcodeproj -scheme RigWeave -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+      - run: xcodebuild -project ios/RigWeave.xcodeproj -scheme RigWeave -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+
+  migration-matrix:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: "17"}
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: arm64-v8a
+          script: >-
+            cd android && ./gradlew connectedDebugAndroidTest --no-daemon
+            -Pandroid.testInstrumentationRunnerArguments.class=app.rigweave.mobile.QsoDatabaseInstrumentedTest,app.rigweave.mobile.NeuralDxStoreInstrumentedTest,app.rigweave.mobile.NexusDigiSessionStoreInstrumentedTest,app.rigweave.mobile.groupsio.GroupsIoDatabaseInstrumentedTest,app.rigweave.mobile.ConfigurationRecoveryInstrumentedTest
+
+  scale-soak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/run_release_soak.py
+
+  upstream-watchers:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/check_wavelog_upstream.py --verify-pinned-paths
+      - run: python3 scripts/check_openhamclock_upstream.py
+      - run: python3 scripts/check_nexus_upstream.py
+      - run: python3 scripts/check_neural_dx_watcher_upstream.py
