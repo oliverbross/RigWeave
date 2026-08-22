@@ -4,6 +4,7 @@ import app.rigweave.mobile.groupsio.GroupsIoController
 import app.rigweave.mobile.groupsio.GroupsIoScreen
 import app.rigweave.mobile.groupsio.GroupsIoSettingsPanel
 import app.rigweave.mobile.groupsio.groupsIoDestinationVisible
+import app.rigweave.mobile.keyer.*
 
 import android.Manifest
 import android.content.Intent
@@ -12,6 +13,8 @@ import android.net.Network
 import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.util.LruCache
+import android.view.KeyEvent as AndroidKeyEvent
+import android.view.inputmethod.InputMethodManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -64,6 +67,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -188,6 +194,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val activation = remember { PotaActivationController(context, database) }
     val features = remember { FeatureController(context) }
     val app = remember { AppController(context) }
+    val keyerProfiles = remember { KeyerProfileStore(context, app.macroLabels.toList(), app.macroTexts.toList(), app.voiceMacroLabels.toList(), app.cqRepeatSeconds) }
     val wavelog = remember { WavelogController(context, database) }
     val operatingContext = remember { OperatingContextAuthority() }
     val neuralDx = remember {
@@ -215,6 +222,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val connectivity = remember { context.getSystemService(ConnectivityManager::class.java) }
     var networkAvailable by remember { mutableStateOf(connectivity.activeNetwork != null) }
     var foreground by remember { mutableStateOf(true) }
+    var foregroundGeneration by remember { mutableLongStateOf(1L) }
     val voiceTx = remember { VoiceMacroTransmitController(context, transport, audio, voiceStore, app,
         radioState = { radio }, foreground = { foreground }, audioOperationIdle = { voiceAudio.state is VoiceAudioState.Idle }, onFrames = { frames ->
             NativeCore.feed(core, frames)
@@ -351,6 +359,10 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     }
     val connect: () -> Unit = { scope.launch { connectKx3() } }
     val direct: (String) -> Unit = { command -> scope.launch { accept(transport.send(command)) } }
+    val keyerRuntime = remember(keyerProfiles) { AndroidKeyerRuntime(keyerProfiles, app, voiceTx,
+        { radio }, { operatingContext.snapshot }, { foreground }, { foregroundGeneration }, direct, scope) }
+    val keyer = keyerRuntime.controller
+    val repeatCq = remember { RepeatCqController() }
     val panadapter = remember { PanadapterController(context, audio, { radio }, direct) }
     val sendKx: (String) -> Unit = { raw ->
         val command = raw.uppercase()
@@ -443,10 +455,10 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event -> when (event) {
             Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> {
-                foreground = true; features.setForeground(true); syncHub.setForeground(true); neuralDx.setForeground(true); wavelogNative.onForeground()
+                foreground = true; foregroundGeneration++; features.setForeground(true); syncHub.setForeground(true); neuralDx.setForeground(true); wavelogNative.onForeground()
             }
             Lifecycle.Event.ON_STOP, Lifecycle.Event.ON_DESTROY -> {
-                foreground = false; features.setForeground(false); syncHub.setForeground(false); neuralDx.setForeground(false); app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
+                foreground = false; foregroundGeneration++; repeatCq.stop(); keyer.stop(KeyerStopReason.Background); features.setForeground(false); syncHub.setForeground(false); neuralDx.setForeground(false); app.disarmAll(); voiceAudio.stopCurrent(); eqAudio.stop()
                 digi.stopRx("App left foreground · RX stopped")
                 digi.disarm()
                 voiceTx.stop("App left foreground; defensive RX cleanup requested")
@@ -466,6 +478,22 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         onDispose { runCatching { connectivity.unregisterNetworkCallback(callback) } }
     }
     LaunchedEffect(voiceAudio) { voiceAudio.onFailure = { app.updateVoiceMacrosArmed(false) } }
+    LaunchedEffect(contextSnapshot.generation, foregroundGeneration, radio.identity, radio.connected, radio.mode, keyerProfiles.activeProfileId) {
+        keyer.invalidate(); repeatCq.stop()
+    }
+    LaunchedEffect(repeatCq.state.active, keyerProfiles.repeatIntervalSeconds, keyerProfiles.repeatMaximumCycles,
+        keyerProfiles.repeatMaximumMinutes) {
+        val limits = RepeatCqLimits(keyerProfiles.repeatIntervalSeconds, keyerProfiles.repeatMaximumCycles, keyerProfiles.repeatMaximumMinutes)
+        while (repeatCq.state.active) {
+            delay(250)
+            if (repeatCq.due(limits, keyer.snapshot().active == null && keyer.snapshot().pending == null)) {
+                keyer.submit(KeyerAction.SendMessage(repeatCq.state.messageId), keyerRuntime.context())
+            }
+        }
+    }
+    LaunchedEffect(voiceTx.state) {
+        keyerRuntime.onVoiceStateChanged(voiceTx.state)
+    }
     DisposableEffect(Unit) { onDispose {
         app.disarmAll(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close(); groupsIo.close()
         scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelogNative.close(); wavelog.close(); callbook.close(); cty.close()
@@ -527,9 +555,32 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val inAppBrowser = rememberInAppBrowserState()
     CompositionLocalProvider(LocalInAppBrowserState provides inAppBrowser) {
     BoxWithConstraints(
-        Modifier.fillMaxSize().background(Chassis).windowInsetsPadding(WindowInsets.safeDrawing),
+        Modifier.fillMaxSize().background(Chassis).windowInsetsPadding(WindowInsets.safeDrawing).onPreviewKeyEvent { event ->
+            val native = event.nativeKeyEvent
+            val initialDown = event.type == KeyEventType.KeyDown && native.repeatCount == 0
+            val inputMethod = context.getSystemService(InputMethodManager::class.java)
+            if (initialDown && inputMethod.isAcceptingText && keyerProfiles.repeatStopsOnInput) repeatCq.stop()
+            val decision = KeyerHotkeyDispatcher.dispatch(
+                KeyerKeyEvent(
+                    chord = androidFunctionChord(native),
+                    escape = native.keyCode == AndroidKeyEvent.KEYCODE_ESCAPE,
+                    initialDown = initialDown,
+                    textInputFocused = inputMethod.isAcceptingText,
+                    foreground = foreground,
+                    modalOpen = pendingRisk != null || pendingVoiceSlot != null || pendingHomeReceiveTune != null,
+                ),
+                enabled = keyerProfiles.hotkeysEnabled,
+            bindings = keyerProfiles.bindingsForActive(),
+                keyerActive = keyer.snapshot().active != null || voiceTx.isBusy,
+            )
+            decision.action?.let { keyer.submit(it, keyerRuntime.context()) }
+            decision.consumed
+        },
     ) {
-        if (maxWidth >= 700.dp) Row(Modifier.fillMaxSize()) {
+        if (keyerProfiles.showStrip) KeyerHotkeyStrip(keyerProfiles.activeStripProfile(), keyer.snapshot(),
+            keyer.availability(keyerRuntime.context()), { keyer.submit(it, keyerRuntime.context()) }, Modifier.align(Alignment.TopCenter).fillMaxWidth())
+        val keyerStripInset = if (keyerProfiles.showStrip) 76.dp else 0.dp
+        if (maxWidth >= 700.dp) Row(Modifier.fillMaxSize().padding(top = keyerStripInset)) {
             NavigationRail(containerColor = Panel) {
                 Image(
                     painter = painterResource(R.drawable.rigweave_logo_mark),
@@ -547,7 +598,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             }
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
-                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
+                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, keyerProfiles, keyer, repeatCq, false, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
                 { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.DX, source = "Navigation", reason = "Open DX workspace")) },
@@ -567,13 +618,13 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 pendingHomeQsoId, { pendingHomeQsoId = null },
                 { id -> dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.LOGBOOK, qsoId = id,
                     source = "Home QSO marker", reason = "Open exact QSO")) })
-        } else Scaffold(bottomBar = { NavigationBar(containerColor = Panel) {
+        } else Scaffold(modifier = Modifier.padding(top = keyerStripInset), bottomBar = { NavigationBar(containerColor = Panel) {
             Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.OPERATIONS || it == Destination.GROUPS_IO }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
-                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
+                voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, keyerProfiles, keyer, repeatCq, true, { destination = Destination.EQ }, { destination = Destination.RADIO },
                 connect, send, direct, requestVoice, clearCwDecode, { spot -> executePortableTune(radio.connected, spot, direct) },
                 { spot -> if (executePortableTune(radio.connected, spot, direct)) { pendingPortableDraft = toPortableLogDraft(spot); destination = Destination.RADIO } },
                 { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.DX, source = "Navigation", reason = "Open DX workspace")) },
@@ -625,6 +676,7 @@ private fun navIcon(item: Destination) = when (item) {
     portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
     transport: UsbRadioTransport, flex: FlexRadioController, digi: DigiController, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
     eqStudio: EqStudioController, groupsIo: GroupsIoController, operatingContext: OperatingContextSnapshot,
+    keyerProfiles: KeyerProfileStore, keyer: KeyerController, repeatCq: RepeatCqController,
     compact: Boolean, openEq: () -> Unit, closeEq: () -> Unit,
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
     tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openDx: () -> Unit, openPortable: () -> Unit,
@@ -798,7 +850,7 @@ private fun navIcon(item: Destination) = when (item) {
                     "Review receive-only downlink change")
             }, prepareSatelliteLogger)
         Destination.SETTINGS -> SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, syncHub, callbook, cty, audio, panadapter, app,
-            transport, flex, digi, voiceStore, voiceAudio, voiceTx, groupsIo, operatingContext, openEq, openSync, openDigi, openGroupsIo, connect, direct)
+            transport, flex, digi, voiceStore, voiceAudio, voiceTx, groupsIo, operatingContext, keyerProfiles, keyer, repeatCq, openEq, openSync, openDigi, openGroupsIo, connect, direct)
     }
 }
 
@@ -4022,7 +4074,7 @@ private fun statusColourForeground(argb: Int): Color {
     audio: AudioMonitorController, panadapter: PanadapterController, app: AppController, transport: UsbRadioTransport,
     flex: FlexRadioController, digi: DigiController, voiceStore: VoiceMacroStore,
     voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, groupsIo: GroupsIoController,
-    operatingContext: OperatingContextSnapshot,
+    operatingContext: OperatingContextSnapshot, keyerProfiles: KeyerProfileStore, keyer: KeyerController, repeatCq: RepeatCqController,
     openEq: () -> Unit, openSync: () -> Unit, openDigi: () -> Unit, openGroupsIo: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
     var section by remember { mutableStateOf(SettingsSection.RADIO) }
@@ -4307,6 +4359,7 @@ private fun statusColourForeground(argb: Int): Color {
                         Text(voiceAudio.status, color = if (voiceAudio.state is VoiceAudioState.Idle) Muted else Hold)
                     }
                 }
+                KeyerSettingsUi(keyerProfiles, repeatCq, voiceAudio::previewPlan, { keyer.stop(); voiceTx.forceRx() })
             }
         }
         if (section == SettingsSection.ALERTS) SettingsCard("FIELD / DISPLAY / ALERTS") {

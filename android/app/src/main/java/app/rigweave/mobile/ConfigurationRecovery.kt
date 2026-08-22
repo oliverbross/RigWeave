@@ -32,6 +32,10 @@ private data class PreferenceSection(
 class ConfigurationRecovery(private val context: Context) {
     private val sections = listOf(
         PreferenceSection("app", "rigweave-app") { key -> !unsafeKey(key) },
+        PreferenceSection("keyer", "rigweave-keyer") { key -> key in setOf(
+            "keyer_document", "keyer_document_last_good", "hotkeys_enabled", "show_strip", "fallback_general", "active_profile",
+            "repeat_interval_seconds", "repeat_maximum_cycles", "repeat_maximum_minutes", "repeat_stops_on_input"
+        ) },
         PreferenceSection("navigation", "navigation") { true },
         PreferenceSection("home_hamclock", "rigweave-hamclock-layout") { key -> !unsafeKey(key) },
         PreferenceSection("digi", "rigweave-digi") { key -> !unsafeKey(key) },
