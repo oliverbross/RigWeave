@@ -1,5 +1,6 @@
 package app.rigweave.mobile
 
+import app.rigweave.mobile.keyer.VoiceMacroPlan
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -59,8 +60,12 @@ class VoiceMacroTransmitController(
     init { routes.onTxRouteInvalidated = { stop("Selected voice TX route changed or disappeared") } }
 
     fun send(slot: Int) {
+        sendPlan(VoiceMacroPlan(listOf(slot)))
+    }
+
+    fun sendPlan(plan: VoiceMacroPlan) {
         if (isBusy) return
-        scope.launch { mutex.withLock { runMacro(slot) } }
+        scope.launch { mutex.withLock { runPlan(plan) } }
     }
 
     fun stop(reason: String = "Voice macro stopped by operator") {
@@ -87,10 +92,10 @@ class VoiceMacroTransmitController(
         stop("Voice TX controller closed"); releaseAudio(); routes.onTxRouteInvalidated = null; scope.cancel()
     }
 
-    private suspend fun runMacro(slot: Int) {
+    private suspend fun runPlan(plan: VoiceMacroPlan) {
         val radio = radioState()
         val invalid = when {
-            slot !in 0 until VOICE_MACRO_COUNT || !store.hasRecording(slot) -> "Voice macro recording is unavailable"
+            plan.slotIds.any { it !in 0 until VOICE_MACRO_COUNT || !store.hasRecording(it) } -> "Voice plan contains a missing recording"
             !app.voiceMacrosArmed -> "Voice macros are not armed"
             !foreground() -> "RigWeave is not in the foreground"
             !audioOperationIdle() -> "Recording or preview is active"
@@ -100,10 +105,14 @@ class VoiceMacroTransmitController(
             else -> null
         }
         if (invalid != null) { fail(invalid, false); return }
-        val pcm = runCatching { store.read(slot) }.getOrElse { fail("Voice macro validation failed: ${it.message}", false); return }
+        val clips = runCatching { plan.slotIds.map(store::read) }
+            .getOrElse { fail("Voice plan validation failed: ${it.message}", false); return }
+        val pcm = runCatching { composeVoicePlan(clips, plan.interClipSilenceMillis) }
+            .getOrElse { fail(it.message ?: "Voice plan is invalid", false); return }
+        val displaySlot = plan.slotIds.first()
         active.set(true); progress = 0f; state = VoiceTransmitState.Preflighting; log("Preflight started")
         transport.beginVoiceOperation()
-        val io = AndroidVoiceTxIo(slot, pcm)
+        val io = AndroidVoiceTxIo(displaySlot, pcm)
         val result = try { withContext(NonCancellable) { executeVoiceTxSequence(io) } }
         finally {
             active.set(false); releaseAudio(); transport.endVoiceOperation()
