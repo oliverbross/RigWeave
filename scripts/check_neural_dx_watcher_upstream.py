@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -17,7 +18,15 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pin", default=REVIEWED)
     args = parser.parse_args()
-    request = urllib.request.Request(API, headers={"Accept": "application/vnd.github+json", "User-Agent": "RigWeave-upstream-watch"})
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "RigWeave-upstream-watch",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(API, headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
             current = json.load(response)["sha"]
