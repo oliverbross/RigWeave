@@ -907,17 +907,17 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             else if (value.equals("N", true)) clauses += "($normalized = '' OR $normalized IN ('N','NO','0','FALSE'))"
             else { clauses += "$normalized = ?"; args += value.trim().uppercase() }
         }
-        fun numeric(expression: String, value: String) {
+        fun numeric(expression: String, value: String, scale: Double = 1.0) {
             val raw = value.trim().replace(',', '.')
             if (raw.isBlank() || raw == "*") return
             Regex("^(-?\\d+(?:\\.\\d+)?)\\s*(?:\\.\\.|-)\\s*(-?\\d+(?:\\.\\d+)?)$").matchEntire(raw)?.let {
                 val first = it.groupValues[1].toDouble(); val second = it.groupValues[2].toDouble()
                 clauses += "CAST($expression AS REAL) BETWEEN ? AND ?"
-                args += minOf(first, second).toString(); args += maxOf(first, second).toString(); return
+                args += (minOf(first, second) * scale).toString(); args += (maxOf(first, second) * scale).toString(); return
             }
             val match = Regex("^(>=|<=|>|<|=)?\\s*(-?\\d+(?:\\.\\d+)?)$").matchEntire(raw) ?: return
             clauses += "CAST($expression AS REAL) ${match.groupValues[1].ifBlank { ">=" }} ?"
-            args += match.groupValues[2]
+            args += (match.groupValues[2].toDouble() * scale).toString()
         }
 
         clauses += "1=1"
@@ -949,7 +949,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
         text(extra("SAT_NAME"), filter.satellite); text(extra("SAT_MODE"), filter.satelliteMode)
         text(extra("ORBIT"), filter.orbit); text("(${json("comment")} || ' ' || notes)", filter.comment)
         text(json("qslMessage"), filter.qslMessage); text("notes", filter.notes)
-        numeric(json("distanceKm"), filter.distance); numeric("(${json("durationSeconds")} / 60.0)", filter.duration)
+        numeric(json("distanceKm"), filter.distance); numeric(json("durationSeconds"), filter.duration, 60.0)
         status(json("qslSent"), filter.qslSent); status(json("qslReceived"), filter.qslReceived)
         choice(json("qslMethod"), filter.qslSentMethod); choice(json("qslReceivedMethod"), filter.qslReceivedMethod)
         status(json("lotwSent"), filter.lotwSent); status(json("lotwReceived"), filter.lotwReceived)
