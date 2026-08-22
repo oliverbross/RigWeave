@@ -28,7 +28,7 @@ Serials have reservation ID, owner, timestamp and `RESERVED/COMMITTED/RELEASED/C
 
 ## UI and exports
 
-`ContestWorkspace` is a standalone responsive Compose surface with setup, logging, score/multipliers, review, network and export callbacks. It has compact and wide layouts, keyboard-compatible text fields, explicit Log/Clear controls and colour-independent text states. It is deliberately not wired into root navigation in this branch.
+`ContestWorkspace` is a responsive Compose surface with setup, logging, score/multipliers, review, network and export callbacks. It has compact and wide layouts, keyboard-compatible text fields, explicit Log/Clear controls and colour-independent text states. The semantic integration adds a native top-level Contest destination backed by one `ContestRuntime`; it does not duplicate Contest, keyer, QSO or network authorities.
 
 ADIF export is a bounded sequence of session QSOs. Cabrillo uses `START-OF-LOG: 3.0`, deterministic ordering, category/header validation, a typed formatter boundary and `VALID/VALID_WITH_WARNINGS/BLOCKED`. No online submission is performed.
 

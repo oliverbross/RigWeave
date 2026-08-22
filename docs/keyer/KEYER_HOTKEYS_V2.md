@@ -2,7 +2,7 @@
 
 ## Architecture and safety
 
-`keyer/` defines immutable actions, profiles, bindings, templates, queue snapshots, typed failures, and `KeyerDispatchPort`. `ContestKeyerIntentAdapterInput` is the future Contest Core boundary; it grants no CAT, PTT, audio, or arming authority.
+`keyer/` defines immutable actions, profiles, bindings, templates, queue snapshots, typed failures, and `KeyerDispatchPort`. `ContestKeyerIntentAdapterInput` is the integrated Contest Core boundary; it grants no CAT, PTT, audio, or arming authority.
 
 The queue permits one active and one pending transmit. Pending work expires after five seconds; Stop bypasses the limit; duplicate active and third transmit requests are rejected. Runtime state is never persisted. Each item binds to operating-context generation, foreground epoch, radio identity, mode, and profile. Background, disconnect, identity/mode/profile/generation change, route loss, disarm, or unsafe TX state clears work.
 
@@ -21,3 +21,7 @@ The tappable horizontal strip presents chord, label, mode, profile, ACTIVE/PENDI
 `RepeatCqController` is an explicit-start, non-persistent scheduler domain with 2–600 second interval, 1–50 cycle cap, and 1–30 minute cap. Busy ticks are skipped and do not backlog. Runtime repeat state is not restored. WPM actions return unavailable. `CwKeyerBackend` is an extension point; WinKeyer is `NOT IMPLEMENTED`. Apple parity remains later work.
 
 Automated evidence covers templates, serials, queue identity, focus/repeat/conflicts, repeat limits, composition, and the existing TX/RX sequence. On 2026-08-22, `:app:testDebugUnitTest` passed 463 tests in 58 suites (zero failed/error/skipped), including 27 Task A JVM test methods; `:app:lintDebug`, `:app:assembleDebug`, and `:app:assembleDebugAndroidTest` passed. Seven focused Android instrumentation methods compiled into the instrumentation APK but were not executed because no device/emulator run is authorised by this source-only task. No APK install or physical microphone, speaker, DigiRig, radio, CAT, PTT, RF, or on-air test is authorised or claimed.
+
+## Semantic integration
+
+`ContestRuntime` now maps Contest Run/Search-and-Pounce role and supported CW/voice mode into typed `ContestKeyerIntent` dispatch through the one production `KeyerController`. Contest does not receive CAT, PTT, audio, arming or queue ownership. Escape, backgrounding and the integrated Stop action converge on the existing fail-closed keyer/repeat-CQ stop path. Unsupported/DIGITAL Contest mode remains unavailable; there is no fallback transmit route.

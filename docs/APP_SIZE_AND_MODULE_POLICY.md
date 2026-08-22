@@ -2,6 +2,10 @@
 
 RigWeave remains one coherent product. Neural DX, HamClock, Wavelog, and Groups.io are not separate user-facing applications or dynamic feature modules.
 
+Keyer, Contest/N1MM and DX Chaser remain Kotlin/Compose code and small schema-1 private stores in the
+same base module. They add no model/runtime payload, upstream desktop binary, provider database,
+P.533/ITU data, test screenshot family or dynamic feature.
+
 Internal gates:
 
 - universal debug APK: at most 130 MB;

@@ -9,11 +9,14 @@
 | Wavelog | Source complete | Existing fake transport/cache suites; authenticated live acceptance pending |
 | Groups.io | Source complete | All-groups local recent summary/FTS; authenticated live acceptance pending |
 | Digi | Source complete for existing modes | Schema 2 durable sessions; RTTY/PSK limitations remain labelled |
+| Keyer/Hotkeys | Integrated on Android | One production controller; Contest typed intents; physical keyboard/audio/radio acceptance pending |
+| Contest/N1MM | Integrated on Android | Schema 1, native destination, canonical QSO/Wavelog path and bounded default-off network runtime; live peer pending |
+| DX Chaser | Integrated on Android | Schema 1, Digi subpage, exact local-decode eligibility and canonical outcome feedback; live FT acceptance pending |
 | Neural DX / HamClock | Source complete | Empirical observations only; no P.533 claim |
 | Apple destinations | Complete | Simulator and unsigned generic-device builds pass; orbital pass engine remains a platform gap |
 | Release | Candidate only | No install, signing, deployment, store submission or RF validation performed |
 
-Fixed schema truth: QSO 13, projection 2, Neural 5, Digi 2, Groups.io 2. P.533 remains `LICENSE_BLOCKED`.
+Fixed schema truth: QSO 13, projection 2, Neural 5, Digi 2, Groups.io 2, Contest 1, DX Chaser 1. P.533 remains `LICENSE_BLOCKED`.
 
 ## Bounded backlog
 

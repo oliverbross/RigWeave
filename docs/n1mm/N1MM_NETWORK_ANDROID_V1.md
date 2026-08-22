@@ -34,3 +34,7 @@ This is a **MULTI-OP NETWORK FOUNDATION**: peer/status/talk/claim/score/rate/QSO
 ## Automated protocol evidence — 2026-08-22
 
 The final 459-test JVM pass includes framing, split/concatenated streams, malformed UTF-8, six-NUL fields, all typed command schemas, contact round-trip, XML hardening, policy, safe-add bridge behavior, dedupe/rate bounds, 10,000-QSO rebuild, loopback TCP/UDP, strict interface/subnet/contest/rule trust and link cleanup. Four contest/N1MM instrumentation cases compiled into the instrumentation APK but were not executed because no Android device was attached. No live N1MM+ station or multi-computer LAN acceptance is claimed; follow `N1MM_LIVE_ACCEPTANCE.md` for that evidence layer.
+
+## Semantic integration
+
+The application now owns exactly one `N1mmNetworkController` scoped to the active Contest runtime. It remains disabled, loopback-only, unarmed and non-restoring by default; entering Contest does not start networking. Background, context loss and the integrated Stop action close it. Health and future Band Maps receive bounded sanitized/read-only state only. Live N1MM+ and LAN interoperability remain pending physical acceptance.

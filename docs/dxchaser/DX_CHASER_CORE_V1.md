@@ -8,8 +8,8 @@
   `52d5b2e4d39a8e174000971ada3ac0c9f0442625`, GPL-3.0.
 - Implementation: independent Kotlin/Compose design. No upstream source, fixture, Qt/provider/radio code or Club Log-derived data was
   copied or adapted; `NOTICE` is unchanged.
-- Owned production source is confined to `android/app/src/main/java/app/rigweave/mobile/dxchaser/`. The branch also owns focused
-  package tests, these documents, and the read-only watcher/workflow. No central wiring file is changed.
+- Core ownership remains confined to `android/app/src/main/java/app/rigweave/mobile/dxchaser/`. The semantic integration adds only
+  narrow adapters, production lifecycle/navigation wiring, focused tests and integration documentation outside that package.
 
 ## Product architecture
 
@@ -20,7 +20,7 @@
 - `DxChaserPorts`: narrow input/output, future Digi/review/QSO adapters and bounded journal contract.
 - `DxChaserStore`: private schema-v1 SQLite journal and inactive settings store.
 - `DxChaserSettings` / `DxChaserRarityParser`: clamped settings plus bounded provenance-bearing manual JSON rarity import.
-- `DxChaserScreen`: native responsive Compose workspace; this branch deliberately does not add a root destination.
+- `DxChaserScreen`: native responsive Compose workspace, integrated as the DX Chaser subpage of the existing Digi destination.
 
 ## Eligibility and score truth
 
@@ -58,9 +58,11 @@ Cross-band intelligence requires material need, enabled/receivable band, current
 kinds, no unavailable Band Health/outlook truth, no engaged QSO and no active review cooldown. It emits receive review only. Review
 acceptance still requires an exact new local decode and normal Digi safety; the core never sends CAT or changes TX state.
 
-The later integration contract covers Digi preparation, receive review and canonical QSO outcomes. Keyer/Hotkeys may map operator
-commands but cannot bypass Digi safety. Contest remains read-only context and separate scoring. Band Maps consumes the immutable
-bounded read-only snapshot without calling the engine or database.
+The semantic integration routes exact current-slot candidates through Digi preparation, receive review and canonical QSO outcomes.
+It revalidates foreground, FT8/FT4 mode, live RX, local modem, operator TX enable, RX confirmation, session/decode/slot/callsign and
+dial frequency before using the existing Digi selection/call path; it never enables TX. Contest remains read-only context and separate
+scoring, blocking incompatible bands/modes, duplicates and trusted claims while adding only a bounded multiplier bonus. Band Maps
+later consumes the immutable bounded read-only snapshot without calling the engine or database.
 
 ## Compose workspace
 

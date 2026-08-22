@@ -94,3 +94,7 @@ one message and the correct parity but never queue a follow-up; the operator
 must arm and send it. Auto-CQ is unavailable while automatic sequencing is off.
 Reference recordings, companion rows and legacy second-resolution history are
 visible for review/manual drafts but cannot start or advance on-air automation.
+
+## DX Chaser integration
+
+DX Chaser is a subpage of the Digi workspace and consumes only exact current-session FT8/FT4 local decodes. Its typed adapter must revalidate foreground state, selected weak-signal mode, live RX, local modem availability, explicit operator TX enable, confirmed RX, session/decode/slot/callsign identity and dial frequency before invoking the existing Digi prepare/select path. The adapter never enables TX, owns no modem/sequencer, and cannot bypass normal Digi safety. Cross-band suggestions route to receive review only; canonical QSO outcomes return through the existing mutation authority.
