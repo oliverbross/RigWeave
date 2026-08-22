@@ -359,16 +359,7 @@ private struct KX3ControlDeck: View {
     }
 
     private var tuningIndicator: some View {
-        VStack(spacing: 5) {
-            Text("CWT").font(.caption.bold())
-            HStack(alignment: .bottom, spacing: 3) {
-                ForEach(0..<7, id: \.self) { index in
-                    Capsule().fill(index == 3 ? RigTheme.amber : Color.secondary.opacity(0.45))
-                        .frame(width: 5, height: CGFloat(8 + (3 - abs(3 - index)) * 4))
-                }
-            }.accessibilityHidden(true)
-        }
-        .frame(minWidth: 88).padding(10).background(Color.black.opacity(0.28)).clipShape(RoundedRectangle(cornerRadius: 8))
+        KX3TuningIndicator()
     }
 
     private var statusLine: some View {
@@ -407,6 +398,31 @@ private struct KX3ControlDeck: View {
 
     private func flag(_ text: String, active: Bool) -> some View {
         Text(text).font(.caption2.bold()).foregroundStyle(active ? RigTheme.amber : .secondary)
+    }
+}
+
+private struct KX3TuningIndicator: View {
+    private let heights: [CGFloat] = [8, 12, 16, 20, 16, 12, 8]
+
+    var body: some View {
+        VStack(spacing: 5) {
+            Text("CWT").font(.caption.bold())
+            HStack(alignment: .bottom, spacing: 3) {
+                ForEach(heights.indices, id: \.self) { index in
+                    tuningBar(index: index)
+                }
+            }
+            .accessibilityHidden(true)
+        }
+        .frame(minWidth: 88)
+        .padding(10)
+        .background(Color.black.opacity(0.28))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func tuningBar(index: Int) -> some View {
+        let color = index == 3 ? RigTheme.amber : Color.secondary.opacity(0.45)
+        return Capsule().fill(color).frame(width: 5, height: heights[index])
     }
 }
 
