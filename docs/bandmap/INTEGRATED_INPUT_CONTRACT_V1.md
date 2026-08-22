@@ -59,4 +59,3 @@ PTT, start TUNE, change TX frequency, enable Digi TX, send a macro, start a chas
 
 Snapshots are immutable, bounded and generation-stamped. Missing, stale or unknown values stay
 unknown; consumers must never invent a dupe, multiplier, need, probability, peer claim or RF result.
-

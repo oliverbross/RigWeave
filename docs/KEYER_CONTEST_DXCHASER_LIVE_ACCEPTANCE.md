@@ -40,4 +40,3 @@ does not prove physical UI, keyboard, audio, radio, network peer, authenticated 
 Record device model, app exact SHA, peer versions, radio/audio route, operator confirmations and
 observed results. Never infer RF, PTT, authenticated Wavelog or N1MM+ success from this source/build
 record. Do not install as part of this integration programme.
-
