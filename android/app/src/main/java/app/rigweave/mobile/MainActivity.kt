@@ -137,7 +137,7 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Log Intelligence"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), OPERATIONS("Operations"), GROUPS_IO("Groups.io"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Intelligence"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), OPERATIONS("Operations"), GROUPS_IO("Groups.io"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
@@ -872,19 +872,26 @@ private fun navIcon(item: Destination) = when (item) {
                 SegmentedButton(false, openDigi, SegmentedButtonDefaults.itemShape(1, 2)) { Text("Digi") }
             }
             PotaActivationStrip(activation, radio, openActivation)
-            Box(Modifier.weight(1f)) {
-                if (app.radioFamily == RadioFamily.FLEXRADIO) FlexRadioScreen(flex, openLogbook)
-                else if (!compact || !app.panadapterEnabled) RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty,
-                    features, voiceStore, voiceTx, connect, send, direct, requestVoice, clearCwDecode,
-                    portableDraft, consumePortableDraft, portable::notifyQsoChanged)
-                else Column(Modifier.fillMaxSize()) {
-                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
-                        SegmentedButton(!compactPanadapter, { compactPanadapter = false }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Controls") }
-                        SegmentedButton(compactPanadapter, { compactPanadapter = true }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("Panadapter") }
+            BoxWithConstraints(Modifier.weight(1f)) {
+                val showCompactBandMap = bandMaps.settings.showOnRadioScreen && maxWidth >= 760.dp
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(if (showCompactBandMap) 8.dp else 0.dp)) {
+                    if (showCompactBandMap) CompactRadioBandMap(bandMaps, operatingContext, app, workspaceAction,
+                        Modifier.fillMaxHeight().weight(.3f))
+                    Box(Modifier.fillMaxHeight().weight(if (showCompactBandMap) .7f else 1f)) {
+                        if (app.radioFamily == RadioFamily.FLEXRADIO) FlexRadioScreen(flex, openLogbook)
+                        else if (!compact || !app.panadapterEnabled) RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty,
+                            features, voiceStore, voiceTx, connect, send, direct, requestVoice, clearCwDecode,
+                            portableDraft, consumePortableDraft, portable::notifyQsoChanged)
+                        else Column(Modifier.fillMaxSize()) {
+                            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                                SegmentedButton(!compactPanadapter, { compactPanadapter = false }, SegmentedButtonDefaults.itemShape(0, 2)) { Text("Controls") }
+                                SegmentedButton(compactPanadapter, { compactPanadapter = true }, SegmentedButtonDefaults.itemShape(1, 2)) { Text("Panadapter") }
+                            }
+                            if (compactPanadapter) PanadapterScreen(panadapter, radio, features.liveSpots, true) { compactPanadapter = false }
+                            else RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty, features, voiceStore, voiceTx,
+                                connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
+                        }
                     }
-                    if (compactPanadapter) PanadapterScreen(panadapter, radio, features.liveSpots, true) { compactPanadapter = false }
-                    else RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty, features, voiceStore, voiceTx,
-                        connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
                 }
             }
         }

@@ -193,7 +193,12 @@ internal class BandMapController(
         rebuildJob = scope.launch {
             delay(90)
             val started = System.nanoTime(); val now = Instant.now().epochSecond
-            val preset = settings.presets.firstOrNull { it.id == settings.activePresetId } ?: settings.presets.firstOrNull() ?: builtInBandMapPresets.first()
+            val contestActive = inputs.contest.activeSession?.id?.value?.isNotBlank() == true
+            val requestedPreset = settings.presets.firstOrNull { it.id == settings.activePresetId }
+            val preset = requestedPreset?.takeUnless { it.id == "contest" && !contestActive }
+                ?: settings.presets.firstOrNull { it.id == "all-current" }
+                ?: settings.presets.firstOrNull { it.id != "contest" }
+                ?: builtInBandMapPresets.first()
             val base = index.coalesce(inputs.observations, settings.marks)
             val enriched = base.map { spot ->
                 val cty = inputs.ctyLookup(spot.callsign)

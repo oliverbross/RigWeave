@@ -19,6 +19,9 @@ internal data class BandMapSettings(
     val labelDensity: Int = 2,
     val linkedZoom: Boolean = false,
     val iaruRegion: BandMapIaruRegion = BandMapIaruRegion.UNKNOWN,
+    val jurisdiction: BandMapJurisdiction = BandMapJurisdiction.STATION_PROFILE,
+    val labelMetadata: Set<BandMapLabelMetadata> = emptySet(),
+    val showOnRadioScreen: Boolean = false,
     val viewports: Map<String, BandMapViewport> = emptyMap(),
     val palette: String = "COLOUR_VISION_FRIENDLY",
     val presets: List<BandMapPreset> = builtInBandMapPresets,
@@ -39,6 +42,9 @@ internal object BandMapSettingsCodec {
         .put("label_density", value.labelDensity)
         .put("linked_zoom", value.linkedZoom)
         .put("iaru_region", value.iaruRegion.name)
+        .put("jurisdiction", value.jurisdiction.name)
+        .put("label_metadata", JSONArray(value.labelMetadata.map(Enum<*>::name)))
+        .put("show_on_radio", value.showOnRadioScreen)
         .put("viewports", JSONObject().apply { value.viewports.filterKeys { it in bandMapVisibleBands }.forEach { (band, viewport) ->
             put(band, JSONObject().put("lower_hz", viewport.lowerHz).put("upper_hz", viewport.upperHz))
         } })
@@ -85,6 +91,9 @@ internal object BandMapSettingsCodec {
             selectedBands = bands, activePresetId = root.optString("active_preset", "all-current").take(64),
             labelDensity = density, linkedZoom = root.optBoolean("linked_zoom"),
             iaruRegion = runCatching { BandMapIaruRegion.valueOf(root.optString("iaru_region", BandMapIaruRegion.UNKNOWN.name)) }.getOrDefault(BandMapIaruRegion.UNKNOWN),
+            jurisdiction = runCatching { BandMapJurisdiction.valueOf(root.optString("jurisdiction", BandMapJurisdiction.STATION_PROFILE.name)) }.getOrDefault(BandMapJurisdiction.STATION_PROFILE),
+            labelMetadata = root.optJSONArray("label_metadata")?.strings()?.mapNotNull { runCatching { BandMapLabelMetadata.valueOf(it) }.getOrNull() }?.toSet().orEmpty(),
+            showOnRadioScreen = root.optBoolean("show_on_radio"),
             viewports = viewports,
             palette = root.optString("palette", "COLOUR_VISION_FRIENDLY").take(40), presets = presets, marks = marks,
             traversal = BandMapTraversal.valueOf(root.optString("traversal", BandMapTraversal.PRIORITY.name)),

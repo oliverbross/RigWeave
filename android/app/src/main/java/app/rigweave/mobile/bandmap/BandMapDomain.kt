@@ -12,6 +12,8 @@ internal enum class BandMapLayoutMode { MULTI_VERTICAL, MULTI_HORIZONTAL, GRID_O
 internal enum class BandMapDirection { LOW_TO_HIGH, HIGH_TO_LOW }
 internal enum class BandMapSegmentProfile { WHOLE, CW_DISPLAY, PHONE_DISPLAY, DIGI_DISPLAY, CUSTOM }
 internal enum class BandMapIaruRegion { REGION_1, REGION_2, REGION_3, UNKNOWN }
+internal enum class BandMapJurisdiction { STATION_PROFILE, IARU_REGION_1, IARU_REGION_2, IARU_REGION_3, REVIEWED_NATIONAL_PLAN, CUSTOM_PLAN }
+internal enum class BandMapLabelMetadata { AGE, BEARING, DISTANCE, MODE, SPOTTER, SOURCE, SNR }
 internal enum class BandMapOperatingSegmentKind { CW, DATA, PHONE, FM_REPEATER, BEACON_SATELLITE, CUSTOM }
 internal enum class BandMapEvidenceKind { CURRENT_OBSERVED, EMPIRICAL_OUTLOOK, HISTORICAL_PERSONAL }
 internal enum class BandMapEvidenceStatus { POSITIVE, NEUTRAL, NEGATIVE, UNKNOWN, UNAVAILABLE }
@@ -45,6 +47,13 @@ internal val bandMapBands = listOf(
 )
 
 internal val bandMapVisibleBands = listOf("160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m", "2m", "70cm", "23cm")
+
+internal fun BandMapIaruRegion.description() = when (this) {
+    BandMapIaruRegion.REGION_1 -> "Region 1 — Europe, Africa, Middle East and northern Asia"
+    BandMapIaruRegion.REGION_2 -> "Region 2 — the Americas"
+    BandMapIaruRegion.REGION_3 -> "Region 3 — the rest of Asia and the Pacific"
+    BandMapIaruRegion.UNKNOWN -> "Use station profile — regional guidance unresolved"
+}
 
 internal data class BandMapOperatingSegment(
     val band: String,

@@ -160,7 +160,7 @@ internal fun BandMapScreen(
     Column(keyboardModifier.fillMaxSize().focusable().background(MapBackground).padding(10.dp).testTag("band-map-screen"),
         verticalArrangement = Arrangement.spacedBy(8.dp)) {
         BandMapHeader(snapshot, keyer, { filterOpen = true })
-        PresetAndLayoutControls(controller)
+        PresetAndLayoutControls(controller, contestSnapshot.activeSession != null)
         BandControls(controller)
         if (snapshot.unavailableReasons.isNotEmpty()) Text(snapshot.unavailableReasons.joinToString(" · "), color = MapAmber, fontSize = 12.sp)
         Box(Modifier.weight(1f)) {
@@ -191,11 +191,13 @@ internal fun BandMapScreen(
     }
 }
 
-@Composable private fun PresetAndLayoutControls(controller: BandMapController) {
+@Composable private fun PresetAndLayoutControls(controller: BandMapController, contestActive: Boolean) {
     val settings = controller.settings
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        settings.presets.forEach { preset -> FilterChip(settings.activePresetId == preset.id,
+        settings.presets.filter { it.id != "contest" || contestActive }.forEach { preset -> FilterChip(settings.activePresetId == preset.id,
             { controller.updateSettings { it.copy(activePresetId = preset.id, selectedLayout = preset.layout) } }, { Text(preset.label) }) }
+        if (!contestActive) Text("Contest S&P · start a Contest session", color = MapMuted, fontSize = 11.sp,
+            modifier = Modifier.align(Alignment.CenterVertically))
         Spacer(Modifier.width(8.dp))
         BandMapLayoutMode.entries.forEach { layout -> FilterChip(settings.selectedLayout == layout,
             { controller.updateSettings { it.copy(selectedLayout = layout) } }, { Text(layout.name.replace('_', ' ')) }) }
@@ -242,7 +244,7 @@ internal fun BandMapScreen(
                 Text(band.uppercase(), color = MapAmber, fontWeight = FontWeight.Black)
                 Text("${rows.size} visible · ${rows.count { it.spot.contest.newMultipliers.isNotEmpty() }} multipliers", color = MapMuted, fontSize = 11.sp)
                 MiniFrequencyAxis(controller.visibleSegment(band))
-                rows.take(4).forEach { SpotLabel(it, statuses[it.spot.id], app, select, showFrequency = true) }
+                rows.take(4).forEach { SpotLabel(it, statuses[it.spot.id], app, select, controller.settings.labelMetadata) }
                 if (rows.size > 5) Text("+${rows.size - 5} more", color = MapCyan, fontSize = 11.sp)
             } }
         }
@@ -278,7 +280,8 @@ internal fun BandMapScreen(
                 val event = awaitPointerEvent(); if (event.type == PointerEventType.Scroll) {
                     val change = event.changes.firstOrNull() ?: continue
                     val delta = change.scrollDelta.y
-                    if (delta != 0f) { controller.zoom(band, if (delta > 0f) 1.35 else .74); change.consume() }
+                    if (delta != 0f) { controller.zoom(band, if (delta > 0f) 1.35 else .74,
+                        segment.lowerHz + (segment.spanHz * (change.position.x / size.width.coerceAtLeast(1))).toLong()); change.consume() }
                 }
             } } }) {
             val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
@@ -307,6 +310,12 @@ internal fun BandMapScreen(
                         val x = BandMapLayoutEngine.coordinate(tx, segment) * size.width; drawLine(MapMagenta, Offset(x, 0f), Offset(x, y), 3f)
                     }
                 }
+                placements.forEach { placed ->
+                    val anchorX = placed.primary * size.width
+                    val labelY = 22.dp.toPx() + placed.lane * 28.dp.toPx()
+                    drawLine(MapGrid, Offset(anchorX, y), Offset(anchorX, labelY), 1f)
+                    drawCircle(MapAmber, 2.5.dp.toPx(), Offset(anchorX, y))
+                }
             }
             Text("${band.uppercase()} · ${formatBandMapFrequency(segment.lowerHz)}–${formatBandMapFrequency(segment.upperHz)}", color = MapAmber,
                 fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.TopStart))
@@ -316,25 +325,31 @@ internal fun BandMapScreen(
             }
             rows.forEach { ranked -> placements.firstOrNull { it.id == ranked.spot.id }?.let { placed ->
                 Box(Modifier.offset { IntOffset((placed.primary * widthPx).roundToInt().coerceIn(0, (widthPx - 105).roundToInt().coerceAtLeast(0)), placed.lane * 28) }
-                    .widthIn(max = 150.dp)) { SpotLabel(ranked, statuses[ranked.spot.id], app, select, showFrequency = expanded,
+                    .widthIn(max = 150.dp)) { SpotLabel(ranked, statuses[ranked.spot.id], app, select, controller.settings.labelMetadata,
                         stackMembers = placed.memberIds.mapNotNull { id -> rows.firstOrNull { it.spot.id == id } }) }
             } }
         }
     }
 }
 
-@Composable private fun VerticalLane(band: String, rows: List<BandMapRankedSpot>, controller: BandMapController, statuses: Map<String, SpotLogStatus>, app: AppController, select: (BandMapRankedSpot) -> Unit) {
+@Composable private fun VerticalLane(band: String, rows: List<BandMapRankedSpot>, controller: BandMapController,
+    statuses: Map<String, SpotLogStatus>, app: AppController, select: (BandMapRankedSpot) -> Unit,
+    modifier: Modifier = Modifier.width(230.dp).fillMaxHeight(), radioContext: OperatingContextSnapshot? = null) {
     val segment = controller.visibleSegment(band)
-    Surface(color = MapPanel, shape = RoundedCornerShape(9.dp), modifier = Modifier.width(230.dp).fillMaxHeight()) {
+    Surface(color = MapPanel, shape = RoundedCornerShape(9.dp), modifier = modifier) {
         BoxWithConstraints(Modifier.fillMaxSize().padding(8.dp)
             .pointerInput(band, segment) { detectTransformGestures { centroid, pan, zoom, _ ->
                 if (abs(zoom - 1f) > .02f) controller.zoom(band, 1.0 / zoom, segment.lowerHz + (segment.spanHz * (centroid.y / size.height.coerceAtLeast(1))).toLong())
                 if (abs(pan.y) > 3f) controller.pan(band, (-pan.y / size.height.coerceAtLeast(1)).toDouble())
             } }
+            .pointerInput(band, segment) { detectTapGestures(onDoubleTap = { point ->
+                controller.zoom(band, .5, segment.lowerHz + (segment.spanHz * (point.y / size.height.coerceAtLeast(1))).toLong())
+            }) }
             .pointerInput(band, segment) { awaitPointerEventScope { while (true) {
                 val event = awaitPointerEvent(); if (event.type == PointerEventType.Scroll) {
                     val change = event.changes.firstOrNull() ?: continue; val delta = change.scrollDelta.y
-                    if (delta != 0f) { controller.zoom(band, if (delta > 0f) 1.35 else .74); change.consume() }
+                    if (delta != 0f) { controller.zoom(band, if (delta > 0f) 1.35 else .74,
+                        segment.lowerHz + (segment.spanHz * (change.position.y / size.height.coerceAtLeast(1))).toLong()); change.consume() }
                 }
             } } }) {
             val heightPx = with(LocalDensity.current) { maxHeight.toPx() }
@@ -343,6 +358,30 @@ internal fun BandMapScreen(
                 val x = 18.dp.toPx(); drawLine(MapGrid, Offset(x, 0f), Offset(x, size.height), 2f)
                 BandMapLayoutEngine.ticks(segment, size.height.roundToInt()).forEach { tick ->
                     val y = tick.position * size.height; drawLine(MapGrid, Offset(x - 5f, y), Offset(x + if (tick.major) 15f else 8f, y), 1f)
+                }
+                radioContext?.let { context ->
+                    val rx = context.receiveFrequencyHz.value
+                    val bandwidth = context.receiveBandwidthHz.value
+                    if (rx in segment.lowerHz..segment.upperHz && bandwidth > 0) {
+                        val top = BandMapLayoutEngine.coordinate(rx - bandwidth / 2, segment) * size.height
+                        val bottom = BandMapLayoutEngine.coordinate(rx + bandwidth / 2, segment) * size.height
+                        drawRect(MapCyan.copy(alpha = .16f), Offset(0f, top.coerceAtLeast(0f)),
+                            androidx.compose.ui.geometry.Size(size.width, (bottom - top).coerceAtLeast(1f)))
+                    }
+                    if (rx in segment.lowerHz..segment.upperHz) {
+                        val y = BandMapLayoutEngine.coordinate(rx, segment) * size.height
+                        drawLine(MapCyan, Offset(0f, y), Offset(size.width, y), 3f)
+                    }
+                    context.transmitFrequencyHz.value?.takeIf { context.split.value && it in segment.lowerHz..segment.upperHz }?.let { tx ->
+                        val y = BandMapLayoutEngine.coordinate(tx, segment) * size.height
+                        drawLine(MapMagenta, Offset(0f, y), Offset(size.width, y), 3f)
+                    }
+                }
+                placements.forEach { placed ->
+                    val anchorY = placed.primary * size.height
+                    val labelX = (28 + placed.lane * 6).dp.toPx()
+                    drawLine(MapGrid, Offset(x, anchorY), Offset(labelX, anchorY), 1f)
+                    drawCircle(MapAmber, 2.5.dp.toPx(), Offset(x, anchorY))
                 }
             }
             Text("${band.uppercase()} · ${formatBandMapFrequency(segment.lowerHz)}–${formatBandMapFrequency(segment.upperHz)}", color = MapAmber,
@@ -353,29 +392,66 @@ internal fun BandMapScreen(
             }
             rows.forEach { ranked -> placements.firstOrNull { it.id == ranked.spot.id }?.let { placed ->
                 Box(Modifier.offset { IntOffset(28 + placed.lane * 6, (placed.primary * heightPx).roundToInt().coerceIn(0, (heightPx - 28).roundToInt().coerceAtLeast(0))) }
-                    .width(190.dp)) { SpotLabel(ranked, statuses[ranked.spot.id], app, select,
+                    .width(190.dp)) { SpotLabel(ranked, statuses[ranked.spot.id], app, select, controller.settings.labelMetadata,
                         stackMembers = placed.memberIds.mapNotNull { id -> rows.firstOrNull { it.spot.id == id } }) }
             } }
         }
     }
 }
 
-@Composable private fun SpotLabel(ranked: BandMapRankedSpot, status: SpotLogStatus?, app: AppController, select: (BandMapRankedSpot) -> Unit, showFrequency: Boolean = false, stackMembers: List<BandMapRankedSpot> = listOf(ranked)) {
+@Composable internal fun CompactRadioBandMap(
+    controller: BandMapController,
+    operatingContext: OperatingContextSnapshot,
+    app: AppController,
+    onAction: (WorkspaceAction) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val snapshot = controller.snapshot
+    val activeBand = bandMapBands.firstOrNull { operatingContext.receiveFrequencyHz.value in it.lowerHz..it.upperHz }?.name
+        ?: snapshot.selectedBands.firstOrNull()
+    var selected by remember(snapshot.generation, activeBand) { mutableStateOf<BandMapRankedSpot?>(null) }
+    if (activeBand == null) return
+    Column(modifier.background(MapBackground).padding(6.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Text("BAND MAP · $activeBand", color = MapAmber, fontWeight = FontWeight.Black, fontSize = 12.sp)
+        Text("RX cyan · TX magenta · receive review only", color = MapMuted, fontSize = 9.sp)
+        VerticalLane(activeBand, snapshot.rankedSpots.filter { it.spot.band == activeBand }, controller, emptyMap(), app,
+            { selected = it; controller.select(it.spot.id) }, Modifier.fillMaxWidth().weight(1f), operatingContext)
+    }
+    selected?.let { ranked ->
+        AlertDialog(onDismissRequest = { selected = null; controller.select(null) },
+            title = { Text(ranked.spot.callsign) },
+            text = { Text("${formatBandMapFrequency(ranked.spot.frequencyHz)} · ${ranked.spot.modeFamily.name}\nReviewing this action never transmits.") },
+            confirmButton = { Button({
+                controller.workspaceAction(ranked.spot, WorkspaceDestination.RADIO, snapshot.contextGeneration)?.let(onAction)
+                selected = null; controller.select(null)
+            }) { Text("REVIEW RX") } },
+            dismissButton = { OutlinedButton({ selected = null; controller.select(null) }) { Text("CLOSE") } })
+    }
+}
+
+@Composable private fun SpotLabel(ranked: BandMapRankedSpot, status: SpotLogStatus?, app: AppController, select: (BandMapRankedSpot) -> Unit,
+    metadata: Set<BandMapLabelMetadata> = emptySet(), stackMembers: List<BandMapRankedSpot> = listOf(ranked)) {
     val spot = ranked.spot
     var stackOpen by remember(stackMembers.map { it.spot.id }) { mutableStateOf(false) }
     val accent = when { spot.contest.newMultipliers.isNotEmpty() -> MapMagenta; spot.need.entity == BandMapNeedTruth.NEEDED -> MapGreen; spot.chaser.eligible == true -> MapCyan; else -> MapAmber }
-    Row(Modifier.padding(1.dp).background(MapBackground.copy(alpha = .92f), RoundedCornerShape(4.dp)).border(1.dp, accent, RoundedCornerShape(4.dp))
-        .clickable { if (stackMembers.size > 1) stackOpen = true else select(ranked) }.padding(horizontal = 5.dp, vertical = 3.dp)
-        .semantics { contentDescription = "${spot.callsign}, ${spot.band}, ${spot.frequencyHz} hertz, priority ${ranked.score}, ${ranked.explanation}" },
-        verticalAlignment = Alignment.CenterVertically) {
-        Text(spot.callsign, color = MapText, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        status?.let {
-            Text(" CS ${it.callStatus}", color = Color(app.spotStatusColour(SPOT_STATUS_CS, it.callStatus)), fontWeight = FontWeight.Bold, fontSize = 9.sp)
-            Text(" DS ${it.dxccStatus}", color = Color(app.spotStatusColour(SPOT_STATUS_DS, it.dxccStatus)), fontWeight = FontWeight.Bold, fontSize = 9.sp)
+    Column(Modifier.padding(1.dp).clickable { if (stackMembers.size > 1) stackOpen = true else select(ranked) }.padding(horizontal = 3.dp, vertical = 1.dp)
+        .semantics { contentDescription = "${spot.callsign}, ${spot.band}, ${spot.frequencyHz} hertz, call status ${status?.callStatus ?: "unknown"}, entity status ${status?.dxccStatus ?: "unknown"}, priority ${ranked.score}" }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(spot.callsign, color = MapText, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (stackMembers.size > 1) Text(" +${stackMembers.size - 1}", color = MapMagenta, fontWeight = FontWeight.Black, fontSize = 9.sp)
         }
-        if (showFrequency) Text(" ${formatBandMapFrequency(spot.frequencyHz)}", color = MapMuted, fontSize = 9.sp)
-        if (spot.sources.size > 1) Text(" ·${spot.sources.size}", color = MapCyan, fontSize = 9.sp)
-        if (stackMembers.size > 1) Text(" +${stackMembers.size - 1}", color = MapMagenta, fontWeight = FontWeight.Black, fontSize = 9.sp)
+        Text(formatBandMapFrequency(spot.frequencyHz), color = MapMuted, fontSize = 9.sp)
+        val observation = spot.observations.maxByOrNull(BandMapSourceObservation::observedEpoch)
+        val details = buildList {
+            if (BandMapLabelMetadata.AGE in metadata) add("${((Instant.now().epochSecond - spot.newestObservationEpoch).coerceAtLeast(0) / 60)}m")
+            if (BandMapLabelMetadata.BEARING in metadata) observation?.bearingDegrees?.let { add("$it°") }
+            if (BandMapLabelMetadata.DISTANCE in metadata) observation?.distanceKm?.let { add("$it km") }
+            if (BandMapLabelMetadata.MODE in metadata) add(spot.submode.ifBlank { spot.modeFamily.name })
+            if (BandMapLabelMetadata.SPOTTER in metadata) observation?.spotterCallsign?.takeIf(String::isNotBlank)?.let(::add)
+            if (BandMapLabelMetadata.SOURCE in metadata) add(spot.sources.joinToString("/") { it.name })
+            if (BandMapLabelMetadata.SNR in metadata) observation?.snr?.let { add("$it dB") }
+        }
+        if (details.isNotEmpty()) Text(details.joinToString(" · "), color = MapCyan, fontSize = 8.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
     if (stackOpen) AlertDialog(onDismissRequest = { stackOpen = false }, title = { Text("${stackMembers.size} spots at this position") },
         text = { LazyColumn { items(stackMembers.take(20), key = { it.spot.id }) { member ->
@@ -528,8 +604,20 @@ internal fun BandMapSettingsPanel(controller: BandMapController) {
         Text("DISPLAY GUIDANCE REGION", style = MaterialTheme.typography.labelMedium)
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             BandMapIaruRegion.entries.forEach { region -> FilterChip(value.iaruRegion == region,
-                { controller.updateSettings { it.copy(iaruRegion = region) } }, { Text(region.name.replace('_', ' ')) }) }
+                { controller.updateSettings { it.copy(iaruRegion = region) } }, { Text(region.description()) }) }
         }
+        Text("OPERATING JURISDICTION", style = MaterialTheme.typography.labelMedium)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            BandMapJurisdiction.entries.forEach { jurisdiction -> FilterChip(value.jurisdiction == jurisdiction,
+                { controller.updateSettings { it.copy(jurisdiction = jurisdiction) } }, { Text(jurisdiction.name.replace('_', ' ')) }) }
+        }
+        Text("LABEL METADATA · default is callsign and exact frequency only", style = MaterialTheme.typography.labelMedium)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            BandMapLabelMetadata.entries.forEach { metadata -> FilterChip(metadata in value.labelMetadata, { controller.updateSettings {
+                current -> current.copy(labelMetadata = if (metadata in current.labelMetadata) current.labelMetadata - metadata else current.labelMetadata + metadata)
+            } }, { Text(metadata.name) }) }
+        }
+        FilterChip(value.showOnRadioScreen, { controller.updateSettings { it.copy(showOnRadioScreen = !it.showOnRadioScreen) } }, { Text("SHOW BAND MAP ON RADIO SCREEN") })
         Text("RigWeave reviewed IARU display guidance 2026-08 · operating guidance only, not country-specific regulatory authority · 60m uncertainty explicit",
             style = MaterialTheme.typography.bodySmall)
         Text("Settings, editable built-in presets, layouts, selected bands and local marks are included in configuration backup. Restore never triggers CAT, Keyer, Digi or DX Chaser actions.",
