@@ -6,13 +6,17 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
@@ -304,7 +308,78 @@ internal fun PortableChaseScreen(
 
 @Composable private fun PortablePlaces(controller: PortableController, stationGrid: String, selectedProgram: String, modifier: Modifier) {
     var program by rememberSaveable { mutableStateOf(if (selectedProgram == "ALL") "POTA" else selectedProgram) }
-    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) { SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) { listOf("POTA", "SOTA", "WWFF").forEachIndexed { index, item -> SegmentedButton(program == item, { program = item }, SegmentedButtonDefaults.itemShape(index, 3)) { Text(when (item) { "POTA" -> "POTA Parks"; "SOTA" -> "SOTA Summits"; else -> "WWFF" }) } } }; when (program) { "POTA" -> PotaParks(controller.pota, stationGrid, Modifier.weight(1f)); "SOTA" -> SotaPlaces(controller.sotaCatalogue, stationGrid, Modifier.weight(1f)); else -> WwffPlaces(controller, Modifier.weight(1f)) } }
+    val pages = listOf("POTA", "SOTA", "WWFF", "CATALOGUES")
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) { pages.forEachIndexed { index, item ->
+            SegmentedButton(program == item, { program = item }, SegmentedButtonDefaults.itemShape(index, pages.size)) {
+                Text(when (item) { "POTA" -> "POTA Parks"; "SOTA" -> "SOTA Summits"; "WWFF" -> "WWFF"; else -> "More catalogues" })
+            }
+        } }
+        when (program) {
+            "POTA" -> PotaParks(controller.pota, stationGrid, Modifier.weight(1f))
+            "SOTA" -> SotaPlaces(controller.sotaCatalogue, stationGrid, Modifier.weight(1f))
+            "WWFF" -> WwffPlaces(controller, Modifier.weight(1f))
+            else -> PortableCataloguePlaces(controller.catalogues, Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable private fun PortableCataloguePlaces(registry: PortableCatalogueRegistry, modifier: Modifier) {
+    val context = LocalContext.current
+    val inAppBrowser = LocalInAppBrowserState.current
+    var programme by rememberSaveable { mutableStateOf(PortableCatalogueProgram.IOTA) }
+    var query by rememberSaveable { mutableStateOf("") }
+    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        runCatching { context.contentResolver.openInputStream(uri)?.use { input ->
+            val output = java.io.ByteArrayOutputStream(); val buffer = ByteArray(32_768); var total = 0
+            while (true) { val count = input.read(buffer); if (count < 0) break; total += count
+                require(total <= 32_000_000) { "Import exceeds 32 MB" }; output.write(buffer, 0, count) }
+            registry.importAuthorised(programme, output.toByteArray(), uri.lastPathSegment.orEmpty())
+        } }
+    }
+    LaunchedEffect(programme, query, registry.statuses) { registry.search(programme, query) }
+    Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            PortableCatalogueProgram.entries.forEach { item -> FilterChip(programme == item, { programme = item }, { Text(item.label) }) }
+        }
+        val status = registry.statuses.getValue(programme)
+        Surface(color = PortablePanel, shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, PortableRaised)) {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("${programme.label} · ${status.state.name.replace('_', ' ')}", color = if (status.state in setOf(PortableCatalogueState.AVAILABLE, PortableCatalogueState.OFFLINE_CACHE, PortableCatalogueState.USER_IMPORT)) PortableHealthy else PortableAmber, fontWeight = FontWeight.Black)
+                        Text("${status.rowCount} rows · ${if (status.updatedAt > 0) "updated ${Instant.ofEpochSecond(status.updatedAt)}" else "never updated"} · ${status.digest.take(12).ifBlank { "no digest" }}", color = PortableMuted)
+                        Text(status.reason, color = PortableMuted)
+                        Text(status.source, color = PortableBlue, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (programme == PortableCatalogueProgram.IOTA) Button(registry::refreshIota, enabled = !status.busy) { Text(if (status.rowCount > 0) "UPDATE" else "DOWNLOAD") }
+                    else OutlinedButton({ importer.launch(arrayOf("text/csv", "text/comma-separated-values", "application/octet-stream")) }) { Text("IMPORT") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton({ inAppBrowser?.open(status.source) }) { Icon(Icons.Outlined.OpenInNew, null); Spacer(Modifier.width(5.dp)); Text("OFFICIAL SOURCE") }
+                    Text("No scraping · no bundled directory · private last-good only", color = PortableMuted, fontSize = 11.sp,
+                        modifier = Modifier.align(Alignment.CenterVertically))
+                }
+            }
+        }
+        OutlinedTextField(query, { query = it.take(100) }, Modifier.fillMaxWidth(),
+            label = { Text("Reference, name, DXCC, entity, country or region") }, singleLine = true)
+        if (status.rowCount == 0) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("Provider is ${status.state.name.replace('_', ' ').lowercase()} — this is not an empty result.", color = PortableMuted)
+        } else LazyVerticalGrid(GridCells.Adaptive(330.dp), Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            gridItems(registry.results, key = { "${it.programme}:${it.reference}" }) { place ->
+                Surface(color = PortablePanel, shape = RoundedCornerShape(8.dp)) { Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("${place.reference} · ${place.name}", color = PortableInk, fontWeight = FontWeight.Bold)
+                    Text(listOf(place.entity, place.dxcc.takeIf(String::isNotBlank)?.let { "DXCC $it" }, place.region,
+                        place.members.takeIf { it.isNotEmpty() }?.let { "${it.size} listed islands" }).filterNotNull().filter(String::isNotBlank).joinToString(" · "), color = PortableMuted)
+                    Text(if (place.latitudeMin != null && place.latitudeMax != null && place.longitudeMin != null && place.longitudeMax != null)
+                        "Official bounds available · no fabricated centroid" else "No valid provider geometry · not mapped", color = PortableMuted, fontSize = 11.sp)
+                    if (place.officialUrl.isNotBlank()) TextButton({ inAppBrowser?.open(place.officialUrl) }) { Text("OFFICIAL DETAIL") }
+                } }
+            }
+        }
+    }
 }
 
 @Composable private fun SotaPlaces(catalogue: SotaCatalogue, stationGrid: String, modifier: Modifier) {
@@ -317,12 +392,14 @@ internal fun PortableChaseScreen(
 
 @Composable private fun WwffPlaces(controller: PortableController, modifier: Modifier) {
     val inAppBrowser = LocalInAppBrowserState.current
+    val catalogue = controller.catalogues.statuses.getValue(PortableCatalogueProgram.WWFF)
     Column(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Surface(color = PortablePanel, shape = RoundedCornerShape(10.dp), border = androidx.compose.foundation.BorderStroke(1.dp, PortableRaised)) {
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text("WWFF CATALOGUE · PROVIDER UNAVAILABLE", color = PortableDanger, fontWeight = FontWeight.Black)
-                Text("0 catalogue references · 0 nearby · no last-good directory cache", color = PortableMuted)
-                Text("A stable, licensed structured full-directory contract has not been verified. RigWeave will not substitute live Spotline or agenda rows for the place catalogue. Live WWFF activity remains available on On Air.", color = PortableMuted)
+                Text("WWFF CATALOGUE · ${catalogue.state.name.replace('_', ' ')}", color = if (catalogue.rowCount > 0) PortableHealthy else PortableDanger, fontWeight = FontWeight.Black)
+                Text("${catalogue.rowCount} catalogue references · ${catalogue.digest.take(12).ifBlank { "no digest" }}", color = PortableMuted)
+                Text(if (catalogue.rowCount > 0) "Authorised user-selected app-private directory is available in More catalogues."
+                    else "The official directory is not downloaded or scraped. Oliver Bross OM0RX may select his authorised CSV in More catalogues; live Spotline remains separate.", color = PortableMuted)
                 Text("Live provider: ${controller.wwffStatus.kind.name} · ${controller.wwffStatus.count} active · source attribution WWFF Spotline/agendas", color = PortableMuted, fontSize = 11.sp)
                 Button({ inAppBrowser?.open("https://wwff.co/directory/") }) { Icon(Icons.Outlined.OpenInNew, null); Spacer(Modifier.width(6.dp)); Text("Open official WWFF Directory") }
             }

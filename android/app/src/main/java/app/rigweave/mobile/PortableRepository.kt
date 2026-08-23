@@ -76,6 +76,7 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
     private val logRepository=PortableLogRepository(qsoDatabase)
     val pota = PotaController(appContext, qsoDatabase)
     val sotaCatalogue = SotaCatalogue(appContext)
+    val catalogues = PortableCatalogueRegistry(appContext)
 
     var sotaSpots by mutableStateOf<List<PortableSpot>>(emptyList()); private set
     var wwffSpots by mutableStateOf<List<PortableSpot>>(emptyList()); private set
@@ -94,8 +95,9 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
 
     init { loadWwffCache() }
 
-    fun close() { stopSotaCluster(); scope.cancel(); pota.close(); sotaCatalogue.close() }
-    fun refreshAll() { pota.refreshSpots(); refreshWwff(); ensureSotaCluster(); resolveSotaSpots() }
+    fun close() { stopSotaCluster(); scope.cancel(); pota.close(); sotaCatalogue.close(); catalogues.close() }
+    fun refreshAll() { pota.refreshSpots(); refreshWwff(); ensureSotaCluster(); resolveSotaSpots();
+        if (catalogues.statuses.getValue(PortableCatalogueProgram.IOTA).rowCount == 0) catalogues.refreshIota() }
     fun refreshWwff() { scope.launch { refreshWwffNow() } }
     fun notifyQsoChanged() { lastQsoRevision=qsoDatabase.changeToken();opportunityKey=null;pota.notifyQsoChanged() }
 
