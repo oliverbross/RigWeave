@@ -10,10 +10,12 @@ import android.util.Base64
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,6 +32,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
@@ -655,6 +658,29 @@ private fun JSONObject.requiredLong(vararg names: String): Long = firstLongOrNul
 private fun JSONObject.firstInt(vararg names: String): Int = names.firstNotNullOfOrNull { name -> if (has(name)) optInt(name) else null } ?: 0
 internal fun JSONObject.instantMillis(vararg names: String): Long = names.firstNotNullOfOrNull { name -> firstString(name).takeIf(String::isNotBlank)?.let { runCatching { Instant.parse(it).toEpochMilli() }.getOrNull() } } ?: 0L
 
+data class GroupsIoSyncSettings(
+    val defaultLookbackDays: Int = 30,
+    val defaultMaximumMessages: Int = 500,
+    val defaultArchiveDepth: Int = 2_000,
+    val attachmentAutoDownload: Boolean = false,
+    val maximumAttachmentBytes: Long = 8L * 1024 * 1024,
+    val offlineRetentionDays: Int = 180,
+    val refreshOnOpen: Boolean = true,
+    val foregroundRefreshMinutes: Int = 15,
+    val includeMutedGroups: Boolean = false,
+    val draftRetentionDays: Int = 365,
+    val showNewMessagePreview: Boolean = false,
+)
+
+data class GroupsIoGroupOverride(
+    val enabled: Boolean = true,
+    val inheritGlobal: Boolean = true,
+    val lookbackDays: Int = 30,
+    val maximumMessages: Int = 500,
+    val attachments: Boolean = false,
+    val retentionDays: Int = 180,
+)
+
 class GroupsIoController(context: Context) {
     private val appContext = context.applicationContext
     private val settings = appContext.getSharedPreferences("rigweave-groupsio", Context.MODE_PRIVATE)
@@ -692,6 +718,9 @@ class GroupsIoController(context: Context) {
     var archiveRangeDays by mutableStateOf<Int?>(365); private set
     var selectedMessage by mutableStateOf<GroupsIoMessage?>(null); private set
     var incomingAttachments by mutableStateOf<List<GroupsIoIncomingAttachment>>(emptyList()); private set
+    var syncSettings by mutableStateOf(loadSyncSettings()); private set
+    var groupOverrides by mutableStateOf(loadGroupOverrides()); private set
+    var newMessagePreview by mutableStateOf<GroupsIoMessage?>(null); private set
     var showAttachments by mutableStateOf(false); private set
     private var homeRecent by mutableStateOf<List<GroupsIoSearchResult>>(emptyList())
     val homeSummary: GroupsIoHomeSummary get() = GroupsIoHomeSummary(
@@ -712,6 +741,72 @@ class GroupsIoController(context: Context) {
         if (!value) { if (composerDraft != null) autosaveComposer(); operation?.cancel(); archiveProgress = archiveProgress.paused(); busy = false; status = "Groups.io disabled · drafts and downloaded data preserved" }
         else loadCachedGroups()
     }
+
+    fun updateSyncSettings(value: GroupsIoSyncSettings) {
+        syncSettings = value.copy(
+            defaultLookbackDays = value.defaultLookbackDays.coerceIn(1, 3650), defaultMaximumMessages = value.defaultMaximumMessages.coerceIn(50, 20_000),
+            defaultArchiveDepth = value.defaultArchiveDepth.coerceIn(100, 100_000), maximumAttachmentBytes = value.maximumAttachmentBytes.coerceIn(256_000, 50L * 1024 * 1024),
+            offlineRetentionDays = value.offlineRetentionDays.coerceIn(7, 3650), foregroundRefreshMinutes = value.foregroundRefreshMinutes.coerceIn(5, 240),
+            draftRetentionDays = value.draftRetentionDays.coerceIn(7, 3650))
+        settings.edit().putString("sync_settings_v1", JSONObject().apply {
+            put("lookback", syncSettings.defaultLookbackDays); put("maximum", syncSettings.defaultMaximumMessages); put("archive", syncSettings.defaultArchiveDepth)
+            put("attachments", syncSettings.attachmentAutoDownload); put("attachment_bytes", syncSettings.maximumAttachmentBytes); put("retention", syncSettings.offlineRetentionDays)
+            put("open", syncSettings.refreshOnOpen); put("cadence", syncSettings.foregroundRefreshMinutes); put("muted", syncSettings.includeMutedGroups)
+            put("drafts", syncSettings.draftRetentionDays); put("preview", syncSettings.showNewMessagePreview)
+        }.toString()).apply()
+    }
+
+    fun updateGroupOverride(groupId: Long, value: GroupsIoGroupOverride) {
+        groupOverrides = groupOverrides + (groupId to value.copy(lookbackDays = value.lookbackDays.coerceIn(1, 3650),
+            maximumMessages = value.maximumMessages.coerceIn(50, 20_000), retentionDays = value.retentionDays.coerceIn(7, 3650)))
+        saveGroupOverrides()
+    }
+
+    fun applyGlobalToAll() { groupOverrides = groups.associate { it.id to GroupsIoGroupOverride() }; saveGroupOverrides() }
+    fun applyGlobalToGroups(groupIds: Set<Long>) {
+        groupOverrides = groupOverrides + groupIds.associateWith { GroupsIoGroupOverride() }
+        saveGroupOverrides()
+    }
+    fun resetGroupOverride(groupId: Long) { groupOverrides = groupOverrides - groupId; saveGroupOverrides() }
+
+    fun maybeForegroundRefresh(force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!enabled || !connected || busy || (!force && now - lastSyncMillis < syncSettings.foregroundRefreshMinutes * 60_000L)) return
+        replaceOperation {
+            val key = credentials.load().takeIf(String::isNotBlank) ?: return@replaceOperation
+            var newest: GroupsIoMessage? = null
+            val activeGroups = db().groups().filter { groupOverrides[it.id]?.enabled != false }.take(50)
+            activeGroups.forEach { group ->
+                ensureActive()
+                val topicPage = api.topics(key, group.id)
+                val syncAt = System.currentTimeMillis()
+                db().applyTopics(group.id, topicPage.values, topicPage.nextPageToken, topicPage.hasMore, syncAt)
+                val override = groupOverrides[group.id]
+                val lookback = if (override?.inheritGlobal == false) override.lookbackDays else syncSettings.defaultLookbackDays
+                val maximum = if (override?.inheritGlobal == false) override.maximumMessages else syncSettings.defaultMaximumMessages
+                val cutoff = syncAt - lookback * 86_400_000L
+                topicPage.values.asSequence().filter { it.updatedMillis >= cutoff }.take(12).forEach { topic ->
+                    ensureActive()
+                    val before = db().messages(topic.id, limit = 1_000).maxOfOrNull(GroupsIoMessage::number) ?: 0L
+                    val page = api.messages(key, group.id, topic.id)
+                    db().applyMessages(group.id, topic.id, page.values.take(maximum), page.nextPageToken, page.hasMore, syncAt)
+                    page.values.filter { it.number > before }.maxByOrNull(GroupsIoMessage::createdMillis)?.let { candidate ->
+                        if (newest == null || candidate.createdMillis > newest!!.createdMillis) newest = candidate
+                    }
+                }
+            }
+            settings.edit().putLong("last_sync", now).apply()
+            val savedGroups = db().groups(); val stats = db().cacheStats(); val size = db().sizeBytes(); val recent = db().recentMessages()
+            withContext(Dispatchers.Main) {
+                groups = savedGroups; cacheStats = stats; storageBytes = size; homeRecent = recent; lastSyncMillis = now
+                if (syncSettings.showNewMessagePreview && newest != null) newMessagePreview = newest
+                status = "Foreground sync complete · ${activeGroups.size} groups · no background polling"
+            }
+        }
+    }
+
+    fun dismissNewMessagePreview() { newMessagePreview = null }
+    fun openNewMessagePreview() { newMessagePreview?.let { message -> newMessagePreview = null; selectGroup(message.groupId); selectTopic(message.topicId); selectedMessage = message } }
 
     fun loadCachedGroups() {
         if (!enabled) return
@@ -1040,6 +1135,23 @@ class GroupsIoController(context: Context) {
     )
     private fun db(): GroupsIoDatabase = database ?: GroupsIoDatabase(appContext).also { database = it }
 
+    private fun loadSyncSettings(): GroupsIoSyncSettings = settings.getString("sync_settings_v1", null)?.let { text -> runCatching {
+        JSONObject(text).let { value -> GroupsIoSyncSettings(value.optInt("lookback", 30), value.optInt("maximum", 500), value.optInt("archive", 2_000),
+            value.optBoolean("attachments"), value.optLong("attachment_bytes", 8L * 1024 * 1024), value.optInt("retention", 180),
+            value.optBoolean("open", true), value.optInt("cadence", 15), value.optBoolean("muted"), value.optInt("drafts", 365), value.optBoolean("preview")) }
+    }.getOrNull() } ?: GroupsIoSyncSettings()
+
+    private fun loadGroupOverrides(): Map<Long, GroupsIoGroupOverride> = settings.getString("group_overrides_v1", null)?.let { text -> runCatching {
+        val rows = JSONArray(text); buildMap { (0 until rows.length()).forEach { index -> rows.getJSONObject(index).let { value -> put(value.getLong("id"),
+            GroupsIoGroupOverride(value.optBoolean("enabled", true), value.optBoolean("inherit", true), value.optInt("lookback", 30),
+                value.optInt("maximum", 500), value.optBoolean("attachments"), value.optInt("retention", 180))) } } }
+    }.getOrNull() } ?: emptyMap()
+
+    private fun saveGroupOverrides() { settings.edit().putString("group_overrides_v1", JSONArray().apply { groupOverrides.forEach { (id, value) -> put(JSONObject().apply {
+        put("id", id); put("enabled", value.enabled); put("inherit", value.inheritGlobal); put("lookback", value.lookbackDays)
+        put("maximum", value.maximumMessages); put("attachments", value.attachments); put("retention", value.retentionDays)
+    }) } }.toString()).apply() }
+
     private fun replaceOperation(block: suspend CoroutineScope.() -> Unit) {
         operation?.cancel(); operation = scope.launch {
             withContext(Dispatchers.Main) { busy = true; status = "Contacting Groups.io…" }
@@ -1064,7 +1176,15 @@ fun GroupsIoScreen(controller: GroupsIoController, compact: Boolean) {
     var query by remember { mutableStateOf("") }
     var showOffline by remember { mutableStateOf(false) }
     var onlineSearch by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { controller.loadCachedGroups() }
+    LaunchedEffect(controller.enabled, controller.connected, controller.syncSettings.refreshOnOpen, controller.syncSettings.foregroundRefreshMinutes) {
+        controller.loadCachedGroups()
+        if (controller.syncSettings.refreshOnOpen) controller.maybeForegroundRefresh(force = true)
+        while (isActive) {
+            delay(controller.syncSettings.foregroundRefreshMinutes * 60_000L)
+            controller.maybeForegroundRefresh()
+        }
+    }
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column { Text("Groups.io", color = Color(0xFFF4F0E8), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold); Text(controller.status, color = Color(0xFFA5ADB2), style = MaterialTheme.typography.bodySmall) }
@@ -1108,6 +1228,18 @@ fun GroupsIoScreen(controller: GroupsIoController, compact: Boolean) {
     }
     GroupsIoPhase2Overlays(controller)
     if (showOffline) GroupsIoOfflineDialog(controller) { showOffline = false }
+    controller.newMessagePreview?.let { message ->
+        Card(Modifier.align(Alignment.TopEnd).fillMaxWidth(.22f).heightIn(max = 220.dp).padding(12.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF25323A))) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("NEW GROUPS.IO MESSAGE", color = Color(0xFFE9A72B), fontWeight = FontWeight.Black)
+                Text(message.subject.ifBlank { "Message #${message.number}" }, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("${message.author} · ${groupsIoTimestampText(message.createdMillis).row}", style = MaterialTheme.typography.labelSmall)
+                Text(normaliseBody(message.body).take(240), maxLines = 4, overflow = TextOverflow.Ellipsis)
+                Row { TextButton(controller::openNewMessagePreview) { Text("OPEN") }; TextButton(controller::dismissNewMessagePreview) { Text("DISMISS") } }
+            }
+        }
+    }
+    }
 }
 
 @Composable private fun GroupsList(controller: GroupsIoController, modifier: Modifier) = LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1206,6 +1338,7 @@ fun GroupsIoSettingsPanel(controller: GroupsIoController, openGroupsIo: () -> Un
     var candidate by remember { mutableStateOf("") }
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmDeleteAll by remember { mutableStateOf(false) }
+    var selectedGroups by remember { mutableStateOf<Set<Long>>(emptySet()) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column { Text("Groups.io enabled", fontWeight = FontWeight.Bold); Text("Disabled by default; no sync or startup work when off", style = MaterialTheme.typography.bodySmall) }
@@ -1220,6 +1353,64 @@ fun GroupsIoSettingsPanel(controller: GroupsIoController, openGroupsIo: () -> Un
         }
         Text(controller.status, color = if (controller.connected) Color(0xFF42C77B) else Color(0xFFA5ADB2))
         Text("Downloaded storage: ${controller.storageBytes / 1024} KiB", style = MaterialTheme.typography.bodySmall)
+        HorizontalDivider()
+        Text("SYNC & STORAGE DEFAULTS", fontWeight = FontWeight.Black)
+        Text("Automatic work runs only while RigWeave is foregrounded. No permanent background polling.", style = MaterialTheme.typography.bodySmall)
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            listOf(7, 30, 90, 365).forEach { days -> FilterChip(controller.syncSettings.defaultLookbackDays == days,
+                { controller.updateSyncSettings(controller.syncSettings.copy(defaultLookbackDays = days)) }, { Text("$days day lookback") }) }
+            listOf(250, 500, 1_000, 5_000).forEach { count -> FilterChip(controller.syncSettings.defaultMaximumMessages == count,
+                { controller.updateSyncSettings(controller.syncSettings.copy(defaultMaximumMessages = count)) }, { Text("$count messages") }) }
+        }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            FilterChip(controller.syncSettings.refreshOnOpen, { controller.updateSyncSettings(controller.syncSettings.copy(refreshOnOpen = !controller.syncSettings.refreshOnOpen)) }, { Text("REFRESH ON OPEN") })
+            listOf(5, 15, 30, 60).forEach { minutes -> FilterChip(controller.syncSettings.foregroundRefreshMinutes == minutes,
+                { controller.updateSyncSettings(controller.syncSettings.copy(foregroundRefreshMinutes = minutes)) }, { Text("${minutes}m foreground") }) }
+            FilterChip(controller.syncSettings.attachmentAutoDownload, { controller.updateSyncSettings(controller.syncSettings.copy(attachmentAutoDownload = !controller.syncSettings.attachmentAutoDownload)) }, { Text("AUTO-DOWNLOAD ATTACHMENTS") })
+            FilterChip(controller.syncSettings.showNewMessagePreview, { controller.updateSyncSettings(controller.syncSettings.copy(showNewMessagePreview = !controller.syncSettings.showNewMessagePreview)) }, { Text("TOP-RIGHT NEW MESSAGE PREVIEW") })
+        }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            listOf(30, 90, 180, 365).forEach { days -> FilterChip(controller.syncSettings.offlineRetentionDays == days,
+                { controller.updateSyncSettings(controller.syncSettings.copy(offlineRetentionDays = days)) }, { Text("$days day retention") }) }
+            listOf(2L, 8L, 20L).forEach { mib -> FilterChip(controller.syncSettings.maximumAttachmentBytes == mib * 1024 * 1024,
+                { controller.updateSyncSettings(controller.syncSettings.copy(maximumAttachmentBytes = mib * 1024 * 1024)) }, { Text("$mib MiB attachments") }) }
+            FilterChip(controller.syncSettings.includeMutedGroups, { controller.updateSyncSettings(controller.syncSettings.copy(includeMutedGroups = !controller.syncSettings.includeMutedGroups)) }, { Text("INCLUDE MUTED") })
+        }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            listOf(500, 2_000, 10_000).forEach { depth -> FilterChip(controller.syncSettings.defaultArchiveDepth == depth,
+                { controller.updateSyncSettings(controller.syncSettings.copy(defaultArchiveDepth = depth)) }, { Text("$depth archive depth") }) }
+            listOf(30, 180, 365, 730).forEach { days -> FilterChip(controller.syncSettings.draftRetentionDays == days,
+                { controller.updateSyncSettings(controller.syncSettings.copy(draftRetentionDays = days)) }, { Text("$days day drafts") }) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(controller::applyGlobalToAll, enabled = controller.groups.isNotEmpty()) { Text("APPLY GLOBAL TO ALL") }
+            OutlinedButton({ controller.applyGlobalToGroups(selectedGroups); selectedGroups = emptySet() }, enabled = selectedGroups.isNotEmpty()) { Text("APPLY TO SELECTED") }
+            OutlinedButton({ controller.maybeForegroundRefresh(force = true) }, enabled = controller.connected && !controller.busy) { Text("REFRESH ALL ENABLED") }
+        }
+        Text("PER-GROUP OVERRIDES", fontWeight = FontWeight.Black)
+        controller.groups.forEach { group ->
+            val override = controller.groupOverrides[group.id] ?: GroupsIoGroupOverride()
+            Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(group.id in selectedGroups, { checked -> selectedGroups = if (checked) selectedGroups + group.id else selectedGroups - group.id })
+                        Text(group.title, fontWeight = FontWeight.Bold)
+                    }
+                    Switch(override.enabled, { controller.updateGroupOverride(group.id, override.copy(enabled = it)) })
+                }
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    FilterChip(override.inheritGlobal, { controller.updateGroupOverride(group.id, override.copy(inheritGlobal = !override.inheritGlobal)) }, { Text("INHERIT GLOBAL") })
+                    if (!override.inheritGlobal) {
+                        listOf(7, 30, 90).forEach { days -> FilterChip(override.lookbackDays == days, { controller.updateGroupOverride(group.id, override.copy(lookbackDays = days)) }, { Text("$days days") }) }
+                        listOf(250, 500, 1_000).forEach { count -> FilterChip(override.maximumMessages == count, { controller.updateGroupOverride(group.id, override.copy(maximumMessages = count)) }, { Text("$count max") }) }
+                        FilterChip(override.attachments, { controller.updateGroupOverride(group.id, override.copy(attachments = !override.attachments)) }, { Text("ATTACHMENTS") })
+                        listOf(30, 180, 365).forEach { days -> FilterChip(override.retentionDays == days, { controller.updateGroupOverride(group.id, override.copy(retentionDays = days)) }, { Text("$days retention") }) }
+                    }
+                    TextButton({ controller.resetGroupOverride(group.id) }) { Text("RESET") }
+                }
+                Text("Archive ${if (group.downloadArchives) "available" else "not downloaded"} · last sync ${groupsIoTimestampText(group.lastSyncMillis).row}", style = MaterialTheme.typography.bodySmall)
+            } }
+        }
         TextButton({ controller.disconnect() }, enabled = controller.connected) { Text("Disconnect Groups.io") }
         TextButton({ confirmDelete = true }) { Text("Clear Downloaded Groups.io Cache") }
         TextButton({ confirmDeleteAll = true }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Delete All Local Groups.io Data") }
