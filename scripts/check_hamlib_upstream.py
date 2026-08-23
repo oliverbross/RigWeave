@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import re
 import sys
+import urllib.error
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -95,12 +97,25 @@ def verify_source() -> list[str]:
 
 
 def check_latest() -> list[str]:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "RigWeave-Hamlib-Watcher",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(
         "https://api.github.com/repos/Hamlib/Hamlib/releases/latest",
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "RigWeave-Hamlib-Watcher"},
+        headers=headers,
     )
-    with urllib.request.urlopen(request, timeout=20) as response:
-        latest = json.load(response).get("tag_name", "")
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            latest = json.load(response).get("tag_name", "")
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as error:
+        return [f"unable to check latest stable release: {error}"]
+    if not latest:
+        return ["latest stable release response omitted tag_name"]
     if latest != VERSION:
         return [f"new stable release requires review: selected={VERSION} latest={latest}"]
     return []

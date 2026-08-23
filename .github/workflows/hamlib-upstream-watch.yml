@@ -17,4 +17,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Verify pin, source, licences, registry, and current stable
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/check_hamlib_upstream.py --check-latest
