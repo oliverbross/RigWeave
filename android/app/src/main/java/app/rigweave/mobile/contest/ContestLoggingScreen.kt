@@ -38,8 +38,11 @@ import java.time.format.DateTimeFormatter
     }, verticalArrangement = Arrangement.spacedBy(gap)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.weight(1f)) {
-                Text("${state.definition.humanName} · ${state.session.state} · ${state.session.role.name.replace('_', ' ')}",
-                    style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "${state.definition.humanName} · ${state.session.state} · ${state.session.role.name.replace('_', ' ')}",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
                 Text("${state.operatingBand} · ${state.operatingMode} · " +
                     if (state.operatingFrequencyHz > 0) "%.3f MHz".format(state.operatingFrequencyHz / 1_000_000.0) else "FREQUENCY UNAVAILABLE",
                     color = MaterialTheme.colorScheme.onSurfaceVariant)

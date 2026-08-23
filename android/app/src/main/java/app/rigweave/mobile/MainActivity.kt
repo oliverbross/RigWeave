@@ -873,11 +873,20 @@ private fun navIcon(item: Destination) = when (item) {
             }
             PotaActivationStrip(activation, radio, openActivation)
             BoxWithConstraints(Modifier.weight(1f)) {
-                val showCompactBandMap = bandMaps.settings.showOnRadioScreen && maxWidth >= 760.dp
-                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(if (showCompactBandMap) 8.dp else 0.dp)) {
-                    if (showCompactBandMap) CompactRadioBandMap(bandMaps, operatingContext, app, workspaceAction,
-                        Modifier.fillMaxHeight().weight(.3f))
-                    Box(Modifier.fillMaxHeight().weight(if (showCompactBandMap) .7f else 1f)) {
+                val supportsCompactBandMap = maxWidth >= 760.dp
+                val showCompactBandMap = bandMaps.settings.showOnRadioScreen && supportsCompactBandMap
+                Column(Modifier.fillMaxSize()) {
+                    if (supportsCompactBandMap) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.End) {
+                        FilterChip(
+                            selected = showCompactBandMap,
+                            onClick = { bandMaps.updateSettings { it.copy(showOnRadioScreen = !it.showOnRadioScreen) } },
+                            label = { Text(if (showCompactBandMap) "VERTICAL BAND MAP · ON" else "VERTICAL BAND MAP · OFF") },
+                        )
+                    }
+                    Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(if (showCompactBandMap) 8.dp else 0.dp)) {
+                        if (showCompactBandMap) CompactRadioBandMap(bandMaps, operatingContext, app, workspaceAction,
+                            Modifier.fillMaxHeight().weight(.3f))
+                        Box(Modifier.fillMaxHeight().weight(if (showCompactBandMap) .7f else 1f)) {
                         if (app.radioFamily == RadioFamily.FLEXRADIO) FlexRadioScreen(flex, openLogbook)
                         else if (!compact || !app.panadapterEnabled) RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty,
                             features, voiceStore, voiceTx, connect, send, direct, requestVoice, clearCwDecode,
@@ -890,6 +899,7 @@ private fun navIcon(item: Destination) = when (item) {
                             if (compactPanadapter) PanadapterScreen(panadapter, radio, features.liveSpots, true) { compactPanadapter = false }
                             else RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty, features, voiceStore, voiceTx,
                                 connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
+                        }
                         }
                     }
                 }

@@ -78,6 +78,15 @@ class BandMapDomainTest {
         assertEquals(1f, BandMapLayoutEngine.coordinate(segment.lowerHz, segment, BandMapDirection.HIGH_TO_LOW))
     }
 
+    @Test fun regionalDisplayRailsExposeModeColoursIncludingFmWhereApplicable() {
+        val hf = BandMapDisplayPlans.forBand("20m", BandMapIaruRegion.REGION_1)
+        assertEquals(listOf(BandMapOperatingSegmentKind.CW, BandMapOperatingSegmentKind.DATA, BandMapOperatingSegmentKind.PHONE),
+            hf.segments.map(BandMapOperatingSegment::kind))
+        val vhf = BandMapDisplayPlans.forBand("2m", BandMapIaruRegion.REGION_1)
+        assertTrue(vhf.segments.any { it.kind == BandMapOperatingSegmentKind.FM_REPEATER })
+        assertFalse(vhf.regulatoryAuthority)
+    }
+
     @Test fun customSegmentsClipWithoutChangingSpotTruth() {
         val source = spot()
         val filter = BandMapFilter(bands = setOf("20m"), segments = listOf(BandMapSegment("20m", "FT8 slice", 14_073_000, 14_075_000)))
@@ -123,12 +132,18 @@ class BandMapDomainTest {
     }
 
     @Test fun malformedPresetImportPreservesLastGoodCandidate() {
-        val expected = BandMapSettings(callStatusFilters = setOf("NC", "NB"), dxccStatusFilters = setOf("ATNO"))
+        val expected = BandMapSettings(callStatusFilters = setOf("NC", "NB"), dxccStatusFilters = setOf("ATNO"),
+            laneSize = 1, spotLabelSizeSp = 13, frequencyLabelEvery = 1,
+            labelMetadata = setOf(BandMapLabelMetadata.AGE, BandMapLabelMetadata.BEARING))
         val good = BandMapSettingsCodec.encode(expected)
         val decoded = BandMapSettingsCodec.decode(good)
         assertEquals(expected.selectedBands, decoded.selectedBands)
         assertEquals(expected.callStatusFilters, decoded.callStatusFilters)
         assertEquals(expected.dxccStatusFilters, decoded.dxccStatusFilters)
+        assertEquals(expected.laneSize, decoded.laneSize)
+        assertEquals(expected.spotLabelSizeSp, decoded.spotLabelSizeSp)
+        assertEquals(expected.frequencyLabelEvery, decoded.frequencyLabelEvery)
+        assertEquals(expected.labelMetadata, decoded.labelMetadata)
         assertThrows(IllegalArgumentException::class.java) { BandMapSettingsCodec.decode(good.replace("\"label_density\":2", "\"label_density\":99")) }
         assertThrows(IllegalArgumentException::class.java) { BandMapSettingsCodec.decode(good.replace("\"ATNO\"", "\"INVALID\"")) }
     }

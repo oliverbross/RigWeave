@@ -1,5 +1,6 @@
 package app.rigweave.mobile
 
+import android.view.MotionEvent
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -294,24 +295,32 @@ internal fun PotaChaseScreen(
 @Composable private fun PotaNativeMap(rows: List<PotaOpportunity>, selectedId: String?, select: (String) -> Unit, modifier: Modifier) {
     val context = LocalContext.current; val lifecycle = LocalLifecycleOwner.current.lifecycle
     val currentRows by rememberUpdatedState(rows); val currentSelect by rememberUpdatedState(select)
-    val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null) } }
+    val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply {
+        onCreate(null)
+        setOnTouchListener { view, event ->
+            view.parent?.requestDisallowInterceptTouchEvent(event.actionMasked !in setOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL))
+            false
+        }
+    } }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }; var styleReady by remember { mutableStateOf(false) }
+    val markerSelections = remember { mutableMapOf<Long, String>() }
     DisposableEffect(mapView, lifecycle) {
         val observer = LifecycleEventObserver { _, event -> when (event) { Lifecycle.Event.ON_START -> mapView.onStart(); Lifecycle.Event.ON_RESUME -> mapView.onResume(); Lifecycle.Event.ON_PAUSE -> mapView.onPause(); Lifecycle.Event.ON_STOP -> mapView.onStop(); else -> Unit } }
         lifecycle.addObserver(observer); if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) mapView.onStart(); if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) mapView.onResume()
-        mapView.getMapAsync { ready -> map = ready; ready.uiSettings.isAttributionEnabled = true; ready.uiSettings.isLogoEnabled = true; ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { styleReady = true }; ready.setOnMarkerClickListener { marker -> currentRows.firstOrNull { marker.title.startsWith(it.spot.id + "|") }?.let { currentSelect(it.spot.id) }; false } }
+        mapView.getMapAsync { ready -> map = ready; ready.uiSettings.isAttributionEnabled = true; ready.uiSettings.isLogoEnabled = true; ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { styleReady = true }; ready.setOnMarkerClickListener { marker -> markerSelections[marker.id]?.let(currentSelect); true } }
         onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null }
     }
     val markerHash = rows.joinToString { it.spot.id }
     LaunchedEffect(map, styleReady, markerHash, selectedId) {
-        val ready = map ?: return@LaunchedEffect; if (!styleReady) return@LaunchedEffect; ready.clear()
+        val ready = map ?: return@LaunchedEffect; if (!styleReady) return@LaunchedEffect; ready.clear(); markerSelections.clear()
         val clustered = rows.groupBy { row -> "${floor(row.spot.latitude!! / 3)}:${floor(row.spot.longitude!! / 3)}" }
         clustered.values.forEach { group ->
             val chosen = group.firstOrNull { it.spot.id == selectedId } ?: group.first()
             val color = if (chosen.spot.id == selectedId) android.graphics.Color.rgb(233, 167, 43) else if (!chosen.worked.parkWorked) android.graphics.Color.rgb(66, 199, 123) else android.graphics.Color.rgb(165, 173, 178)
-            ready.addMarker(MarkerOptions().position(LatLng(group.map { it.spot.latitude!! }.average(), group.map { it.spot.longitude!! }.average()))
-                .title(chosen.spot.id + "|" + if (group.size > 1) "${group.size} POTA spots" else "${chosen.spot.callsign} · ${chosen.spot.reference}")
+            val marker = ready.addMarker(MarkerOptions().position(LatLng(group.map { it.spot.latitude!! }.average(), group.map { it.spot.longitude!! }.average()))
+                .title(if (group.size > 1) "${group.size} POTA spots" else "${chosen.spot.callsign} · ${chosen.spot.reference}")
                 .snippet(if (group.size > 1) "Tap then zoom for this cluster" else chosen.spot.parkName).icon(potaMarker(context, color, group.size > 1)))
+            markerSelections[marker.id] = chosen.spot.id
         }
     }
     LaunchedEffect(map, styleReady, markerHash) {

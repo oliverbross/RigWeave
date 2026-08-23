@@ -34,7 +34,11 @@ import java.time.format.DateTimeFormatter
     Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.weight(1f)) {
-                Text("CONTEST REVIEW", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    "CONTEST REVIEW",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
                 Text("${state.score.reviewQsos} review · ${state.score.duplicates} duplicates · ${state.score.zeroPointValidQsos} valid zero-point",
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

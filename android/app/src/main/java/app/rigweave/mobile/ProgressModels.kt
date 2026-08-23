@@ -64,7 +64,13 @@ internal data class ProgressCoverage(val available: Int, val total: Int) { val l
 internal data class ProgressCount(val worked: Int, val confirmed: Int)
 internal data class ProgressBucket(val label: String, val count: Int)
 internal data class ProgressHeatCell(val day: Int, val hour: Int, val count: Int)
-internal data class ProgressContactPoint(val grid: String, val latitude: Double, val longitude: Double)
+internal data class ProgressContactPoint(
+    val grid: String,
+    val latitude: Double,
+    val longitude: Double,
+    val dxcc: String = "",
+    val country: String = "",
+)
 internal data class ConfirmationProgress(val confirmed: Int, val total: Int) {
     val percent get() = if (total == 0) null else confirmed * 100.0 / total
 }
@@ -426,7 +432,9 @@ internal fun buildProgressSnapshot(
         "Station profile" to rows.count { it.stationProfileId.isNotBlank() || it.stationCallsign.isNotBlank() },
         "Portable reference" to rows.count { it.potaRef.isNotBlank() || it.potaRefs.isNotEmpty() || it.sotaRef.isNotBlank() || it.wwffRef.isNotBlank() },
     ).mapValues { ProgressCoverage(it.value,rows.size) }
-    val contacts = rows.mapNotNull { q -> maidenheadCenter(q.grid)?.let { ProgressContactPoint(q.grid.uppercase(Locale.US),it.latitude,it.longitude) } }
+    val contacts = rows.mapNotNull { q -> maidenheadCenter(q.grid)?.let {
+        ProgressContactPoint(q.grid.uppercase(Locale.US), it.latitude, it.longitude, dxccFor(q), countryFor(q))
+    } }
         .distinctBy(ProgressContactPoint::grid)
     val base = ProgressSnapshot(rows,rows.size,rows.map { it.callsign.uppercase(Locale.US) }.filter(String::isNotBlank).distinct().size,
         ProgressCount(workedDxcc.size,confirmedDxcc.size),

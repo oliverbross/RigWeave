@@ -17,6 +17,9 @@ internal data class BandMapSettings(
     val selectedBands: List<String> = listOf("40m", "20m", "15m", "10m"),
     val activePresetId: String = "all-current",
     val labelDensity: Int = 2,
+    val laneSize: Int = 2,
+    val spotLabelSizeSp: Int = 11,
+    val frequencyLabelEvery: Int = 2,
     val linkedZoom: Boolean = false,
     val iaruRegion: BandMapIaruRegion = BandMapIaruRegion.UNKNOWN,
     val jurisdiction: BandMapJurisdiction = BandMapJurisdiction.STATION_PROFILE,
@@ -42,6 +45,9 @@ internal object BandMapSettingsCodec {
         .put("bands", JSONArray(value.selectedBands))
         .put("active_preset", value.activePresetId)
         .put("label_density", value.labelDensity)
+        .put("lane_size", value.laneSize)
+        .put("spot_label_size_sp", value.spotLabelSizeSp)
+        .put("frequency_label_every", value.frequencyLabelEvery)
         .put("linked_zoom", value.linkedZoom)
         .put("iaru_region", value.iaruRegion.name)
         .put("jurisdiction", value.jurisdiction.name)
@@ -80,6 +86,9 @@ internal object BandMapSettingsCodec {
                 row.optLong("created", Instant.now().epochSecond), row.optString("note").take(80))
         }.orEmpty()
         val density = root.optInt("label_density", 2); require(density in 1..3) { "Invalid label density" }
+        val laneSize = root.optInt("lane_size", 2); require(laneSize in 1..3) { "Invalid band-map lane size" }
+        val spotLabelSizeSp = root.optInt("spot_label_size_sp", 11); require(spotLabelSizeSp in 9..16) { "Invalid spot label size" }
+        val frequencyLabelEvery = root.optInt("frequency_label_every", 2); require(frequencyLabelEvery in setOf(1, 2, 5)) { "Invalid frequency label interval" }
         val viewports = buildMap {
             root.optJSONObject("viewports")?.let { values -> values.keys().asSequence().take(bandMapVisibleBands.size).forEach { band ->
                 if (band in bandMapVisibleBands) values.optJSONObject(band)?.let { row ->
@@ -97,7 +106,8 @@ internal object BandMapSettingsCodec {
             enabled = root.optBoolean("enabled", true), navigationVisible = root.optBoolean("navigation_visible", true),
             selectedLayout = BandMapLayoutMode.valueOf(root.optString("layout", BandMapLayoutMode.MULTI_VERTICAL.name)),
             selectedBands = bands, activePresetId = root.optString("active_preset", "all-current").take(64),
-            labelDensity = density, linkedZoom = root.optBoolean("linked_zoom"),
+            labelDensity = density, laneSize = laneSize, spotLabelSizeSp = spotLabelSizeSp,
+            frequencyLabelEvery = frequencyLabelEvery, linkedZoom = root.optBoolean("linked_zoom"),
             iaruRegion = runCatching { BandMapIaruRegion.valueOf(root.optString("iaru_region", BandMapIaruRegion.UNKNOWN.name)) }.getOrDefault(BandMapIaruRegion.UNKNOWN),
             jurisdiction = runCatching { BandMapJurisdiction.valueOf(root.optString("jurisdiction", BandMapJurisdiction.STATION_PROFILE.name)) }.getOrDefault(BandMapJurisdiction.STATION_PROFILE),
             labelMetadata = root.optJSONArray("label_metadata")?.strings()?.mapNotNull { runCatching { BandMapLabelMetadata.valueOf(it) }.getOrNull() }?.toSet().orEmpty(),

@@ -9,9 +9,9 @@ This branch is the operator-driven correction pass for the protected Lenovo land
 - Home uses one content-bounded `Shack` action.
 - Contest uses schema 2 temporary entries. Logging stages locally; only the explicit restart-safe Merge to Logbook action invokes the canonical mutation coordinator. N1MM safe additions are staging-only.
 - Super Check Partial uses the official `supercheckpartial.com` discovery/download contract, validates SQLite/schema/size, and atomically retains a private last-good database. Absence means unavailable, never invalid callsign.
-- Band Maps v2 uses classic frequency ladders, callsign-only ladder labels, density-correct collision lanes, focal zoom, persistent CS/DS filters with the configured status colours, 160m–23cm selection, region/jurisdiction truth, and an optional shared-controller Radio ladder.
-- Intelligence uses content-sized KPI cards, stable category colours, count-derived heatmap intensity/legend, persistent map camera, bounded coordinate rows and full-screen map presentation.
-- Portable labels are coordinate-anchored. Places exposes official IOTA JSON plus truthful blocked/import states for WWBOTA, WWFF, Castles and Lighthouses.
+- Band Maps v2 uses correctly named horizontal rails and vertical ladders, callsign-only ladder labels, direct touch pan/pinch, compact/standard/wide lane sizing, configurable spot label and frequency-label density, optional age/bearing metadata, persistent CS/DS filters with configured colours, coloured regional operating-guidance segments, 160m–23cm selection, and an optional discoverable vertical Radio ladder.
+- Intelligence uses centered content-sized KPI cards, stable category colours, count-derived heatmap intensity/legend, Home-map-equivalent native pan/pinch lifecycle, persistent camera, bounded coordinate rows, DXCC labels beside contact dots and full-screen map presentation.
+- Portable call/reference/location labels and selected details are coordinate-anchored through the map style rather than a detached popup. Places exposes official IOTA JSON plus truthful blocked/import states for WWBOTA, WWFF, Castles and Lighthouses.
 - Groups.io supports foreground automatic download defaults, per-group overrides and an optional top-right new-message excerpt. There is no permanent background poller.
 
 ## Evidence boundary

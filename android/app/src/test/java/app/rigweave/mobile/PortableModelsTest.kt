@@ -60,6 +60,16 @@ class PortableModelsTest {
         assertEquals(first.score, second.score); assertEquals(first.reasons, second.reasons)
     }
 
+    @Test fun portableMapLabelCarriesCallReferenceAndLocationAtTheCoordinate() {
+        val live = spot(PortableProgram.POTA, "AU-0001", 14_062_000, now - 60).copy(
+            references = listOf(PortableReference(PortableProgram.POTA, "AU-0001", "Blue Mountains", latitude = -33.7, longitude = 150.3)),
+            latitude = -33.7, longitude = 150.3,
+        )
+        val json = portableLabelGeoJson(listOf(PortableOpportunity(live, emptyMap(), 0, emptyList())), live.id)
+        assertTrue(json.contains("OM0RX/P")); assertTrue(json.contains("POTA AU-0001")); assertTrue(json.contains("Blue Mountains"))
+        assertTrue(json.contains("150.3")); assertTrue(json.contains("-33.7"))
+    }
+
     private fun spot(program: PortableProgram, reference: String, frequency: Long, time: Long) = PortableSpot(
         "$program:$reference", setOf(program), "OM0RX/P", frequency, "CW", listOf(PortableReference(program, reference, "Place")), time, time + 3600, program.label
     )

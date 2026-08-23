@@ -83,11 +83,14 @@ internal object BandMapDisplayPlans {
             BandMapIaruRegion.UNKNOWN -> listOf(0L, 20L, 40L, 100L)
         }
         fun at(percent: Long) = definition.lowerHz + width * percent / 100L
-        val rows = listOf(
-            BandMapOperatingSegment(band, BandMapOperatingSegmentKind.CW, at(split[0]), at(split[1]), "CW", "solid"),
-            BandMapOperatingSegment(band, BandMapOperatingSegmentKind.DATA, at(split[1]), at(split[2]), "DATA", "diagonal"),
-            BandMapOperatingSegment(band, BandMapOperatingSegmentKind.PHONE, at(split[2]), at(split[3]), "PHONE", "dots"),
-        )
+        val fmShare = band in setOf("10m", "6m", "4m", "2m", "70cm", "23cm")
+        val phoneUpper = if (fmShare) at(82L) else at(split[3])
+        val rows = buildList {
+            add(BandMapOperatingSegment(band, BandMapOperatingSegmentKind.CW, at(split[0]), at(split[1]), "CW", "solid"))
+            add(BandMapOperatingSegment(band, BandMapOperatingSegmentKind.DATA, at(split[1]), at(split[2]), "DATA", "diagonal"))
+            add(BandMapOperatingSegment(band, BandMapOperatingSegmentKind.PHONE, at(split[2]), phoneUpper, "SSB / PHONE", "dots"))
+            if (fmShare) add(BandMapOperatingSegment(band, BandMapOperatingSegmentKind.FM_REPEATER, phoneUpper, at(100L), "FM / REPEATER", "crosshatch"))
+        }
         return BandMapDisplayPlan(region, segments = rows)
     }
 }

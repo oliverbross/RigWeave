@@ -1,5 +1,6 @@
 package app.rigweave.mobile
 
+import android.view.MotionEvent
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -421,9 +422,38 @@ internal fun PortableChaseScreen(
 }
 
 @Composable private fun PortableNativeMap(rows: List<PortableOpportunity>, selectedId: String?, select: (String) -> Unit, modifier: Modifier) {
-    val context = LocalContext.current; val lifecycle = LocalLifecycleOwner.current.lifecycle; val currentSelect by rememberUpdatedState(select); val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null) } }; val markerSelections = remember { mutableMapOf<Long, String>() }; var map by remember { mutableStateOf<MapLibreMap?>(null) }; var styleReady by remember { mutableStateOf(false) }; var userMoved by remember { mutableStateOf(false) }
-    DisposableEffect(mapView, lifecycle) { val observer = LifecycleEventObserver { _, event -> when (event) { Lifecycle.Event.ON_START -> mapView.onStart(); Lifecycle.Event.ON_RESUME -> mapView.onResume(); Lifecycle.Event.ON_PAUSE -> mapView.onPause(); Lifecycle.Event.ON_STOP -> mapView.onStop(); else -> Unit } }; lifecycle.addObserver(observer); mapView.getMapAsync { ready -> map = ready; ready.uiSettings.isAttributionEnabled = true; ready.uiSettings.isLogoEnabled = true; ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { style -> installPortableLabelLayers(style); styleReady = true }; ready.addOnCameraMoveStartedListener { reason -> if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }; ready.setOnMarkerClickListener { marker -> markerSelections[marker.id]?.let(currentSelect); false }; ready.addOnMapClickListener { point -> val feature = ready.queryRenderedFeatures(ready.projection.toScreenLocation(point), PORTABLE_SELECTED_LABEL_LAYER, PORTABLE_LABEL_LAYER).firstOrNull(); feature?.getStringProperty("spot_id")?.let(currentSelect); feature != null } }; onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null } }
-    val markerHash = rows.joinToString { "${it.spot.id}:${it.spot.latitude}:${it.spot.longitude}:${it.spot.callsign}" }; LaunchedEffect(map, styleReady, markerHash, selectedId) { val ready = map ?: return@LaunchedEffect; if (!styleReady) return@LaunchedEffect; ready.style?.let { style -> installPortableLabelLayers(style); style.getSourceAs<GeoJsonSource>(PORTABLE_LABEL_SOURCE)?.setGeoJson(portableLabelGeoJson(rows, selectedId)) }; ready.clear(); markerSelections.clear(); rows.groupBy { "${floor(it.spot.latitude!! / 3)}:${floor(it.spot.longitude!! / 3)}" }.values.forEach { group -> val chosen = group.firstOrNull { it.spot.id == selectedId } ?: group.first(); val isSelected = chosen.spot.id == selectedId; val color = when { isSelected -> android.graphics.Color.rgb(233, 167, 43); chosen.spot.programs.size > 1 -> android.graphics.Color.rgb(244, 201, 78); chosen.spot.programs.contains(PortableProgram.POTA) -> android.graphics.Color.rgb(66, 199, 123); chosen.spot.programs.contains(PortableProgram.SOTA) -> android.graphics.Color.rgb(101, 166, 199); else -> android.graphics.Color.rgb(196, 129, 216) }; val title = if (isSelected || group.size == 1) chosen.spot.callsign else "${group.size} portable activities"; val place = chosen.spot.references.joinToString(" · ") { "${it.program.label} ${it.code} · ${it.name.ifBlank { "Name unavailable" }}" }; val marker = ready.addMarker(MarkerOptions().position(LatLng(group.map { it.spot.latitude!! }.average(), group.map { it.spot.longitude!! }.average())).title(title).snippet(place).icon(portableMarker(context, color, group.size > 1))); markerSelections[marker.id] = chosen.spot.id; if (isSelected) marker.showInfoWindow(ready, mapView) } }
+    val context = LocalContext.current; val lifecycle = LocalLifecycleOwner.current.lifecycle; val currentSelect by rememberUpdatedState(select); val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null); setOnTouchListener { view, event -> view.parent?.requestDisallowInterceptTouchEvent(event.actionMasked !in setOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)); false } } }; val markerSelections = remember { mutableMapOf<Long, String>() }; var map by remember { mutableStateOf<MapLibreMap?>(null) }; var styleReady by remember { mutableStateOf(false) }; var userMoved by remember { mutableStateOf(false) }
+    DisposableEffect(mapView, lifecycle) {
+        var started = false; var resumed = false; var destroyed = false
+        fun start() { if (!started && !destroyed) { mapView.onStart(); started = true } }
+        fun resume() { start(); if (!resumed && !destroyed) { mapView.onResume(); resumed = true } }
+        fun pause() { if (resumed && !destroyed) { mapView.onPause(); resumed = false } }
+        fun stop() { pause(); if (started && !destroyed) { mapView.onStop(); started = false } }
+        fun destroy() { if (!destroyed) { stop(); mapView.onDestroy(); destroyed = true } }
+        val observer = LifecycleEventObserver { _, event -> when (event) {
+            Lifecycle.Event.ON_START -> start(); Lifecycle.Event.ON_RESUME -> resume(); Lifecycle.Event.ON_PAUSE -> pause()
+            Lifecycle.Event.ON_STOP -> stop(); Lifecycle.Event.ON_DESTROY -> destroy(); else -> Unit
+        } }
+        lifecycle.addObserver(observer)
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) start()
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) resume()
+        var disposed = false
+        mapView.getMapAsync { ready ->
+            if (disposed) return@getMapAsync
+            map = ready
+            ready.uiSettings.apply {
+                isAttributionEnabled = true; isLogoEnabled = true; isCompassEnabled = true
+                isZoomGesturesEnabled = true; isScrollGesturesEnabled = true; isRotateGesturesEnabled = true; isTiltGesturesEnabled = false
+            }
+            ready.setMinZoomPreference(.8); ready.setMaxZoomPreference(14.0)
+            ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { style -> installPortableLabelLayers(style); styleReady = true }
+            ready.addOnCameraMoveStartedListener { reason -> if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }
+            ready.setOnMarkerClickListener { marker -> markerSelections[marker.id]?.let(currentSelect); true }
+            ready.addOnMapClickListener { point -> val feature = ready.queryRenderedFeatures(ready.projection.toScreenLocation(point), PORTABLE_SELECTED_LABEL_LAYER, PORTABLE_LABEL_LAYER).firstOrNull(); feature?.getStringProperty("spot_id")?.let(currentSelect); feature != null }
+        }
+        onDispose { disposed = true; lifecycle.removeObserver(observer); styleReady = false; map = null; destroy() }
+    }
+    val markerHash = rows.joinToString { "${it.spot.id}:${it.spot.latitude}:${it.spot.longitude}:${it.spot.callsign}" }; LaunchedEffect(map, styleReady, markerHash, selectedId) { val ready = map ?: return@LaunchedEffect; if (!styleReady) return@LaunchedEffect; ready.style?.let { style -> installPortableLabelLayers(style); style.getSourceAs<GeoJsonSource>(PORTABLE_LABEL_SOURCE)?.setGeoJson(portableLabelGeoJson(rows, selectedId)) }; ready.clear(); markerSelections.clear(); rows.groupBy { "${floor(it.spot.latitude!! / 3)}:${floor(it.spot.longitude!! / 3)}" }.values.forEach { group -> val chosen = group.firstOrNull { it.spot.id == selectedId } ?: group.first(); val isSelected = chosen.spot.id == selectedId; val color = when { isSelected -> android.graphics.Color.rgb(233, 167, 43); chosen.spot.programs.size > 1 -> android.graphics.Color.rgb(244, 201, 78); chosen.spot.programs.contains(PortableProgram.POTA) -> android.graphics.Color.rgb(66, 199, 123); chosen.spot.programs.contains(PortableProgram.SOTA) -> android.graphics.Color.rgb(101, 166, 199); else -> android.graphics.Color.rgb(196, 129, 216) }; val title = if (isSelected || group.size == 1) chosen.spot.callsign else "${group.size} portable activities"; val place = chosen.spot.references.joinToString(" · ") { "${it.program.label} ${it.code} · ${it.name.ifBlank { it.region.ifBlank { it.association.ifBlank { "Location unavailable" } } }}" }; val marker = ready.addMarker(MarkerOptions().position(LatLng(group.map { it.spot.latitude!! }.average(), group.map { it.spot.longitude!! }.average())).title(title).snippet(place).icon(portableMarker(context, color, group.size > 1))); markerSelections[marker.id] = chosen.spot.id } }
     LaunchedEffect(map, styleReady, selectedId) {
         val ready = map ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
@@ -466,13 +496,14 @@ internal fun portableLabelGeoJson(rows: List<PortableOpportunity>, selectedId: S
         val latitude = row.spot.latitude ?: return@forEach
         val longitude = row.spot.longitude ?: return@forEach
         val compactReference = row.spot.primary.let { "${it.program.label} ${it.code}" }
+        val location = row.spot.primary.let { it.name.ifBlank { it.region.ifBlank { it.association.ifBlank { "Location unavailable" } } } }
         features.put(JSONObject()
             .put("type", "Feature")
             .put("geometry", JSONObject().put("type", "Point").put("coordinates", JSONArray().put(longitude).put(latitude)))
             .put("properties", JSONObject()
                 .put("spot_id", row.spot.id)
                 .put("selected", row.spot.id == selectedId)
-                .put("label", "${row.spot.callsign} · $compactReference")))
+                .put("label", "${row.spot.callsign} · $compactReference\n$location")))
     }
     return JSONObject().put("type", "FeatureCollection").put("features", features).toString()
 }

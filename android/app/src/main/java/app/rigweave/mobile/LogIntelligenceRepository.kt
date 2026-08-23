@@ -101,11 +101,13 @@ internal class LogIntelligenceRepository(private val database:QsoDatabase){
         val heatmap=db.rawQuery("SELECT CAST(strftime('%w',created_at,'unixepoch') AS INTEGER),CAST(strftime('%H',created_at,'unixepoch') AS INTEGER),COUNT(*) FROM qso_projection p WHERE $where GROUP BY 1,2",args).use{c->buildList{while(c.moveToNext())add(ProgressHeatCell((c.getInt(0)+6)%7,c.getInt(1),c.getInt(2)))}}
         val localHeatmap=db.rawQuery("SELECT CAST(strftime('%w',created_at,'unixepoch','localtime') AS INTEGER),CAST(strftime('%H',created_at,'unixepoch','localtime') AS INTEGER),COUNT(*) FROM qso_projection p WHERE $where GROUP BY 1,2",args).use{c->buildList{while(c.moveToNext())add(ProgressHeatCell((c.getInt(0)+6)%7,c.getInt(1),c.getInt(2)))}}
         var invalidContactGrids = 0
-        val contacts=db.rawQuery("SELECT grid_norm,COUNT(*) FROM qso_projection p WHERE $where AND grid_norm<>'' GROUP BY grid_norm ORDER BY COUNT(*) DESC LIMIT 5000",args).use { cursor -> buildList {
+        val contacts=db.rawQuery("SELECT grid_norm,COUNT(*),GROUP_CONCAT(DISTINCT NULLIF(dxcc,'')),GROUP_CONCAT(DISTINCT NULLIF(country_norm,'')) FROM qso_projection p WHERE $where AND grid_norm<>'' GROUP BY grid_norm ORDER BY COUNT(*) DESC LIMIT 5000",args).use { cursor -> buildList {
             while(cursor.moveToNext()) {
                 val grid=cursor.getString(0).filterNot(Char::isWhitespace).uppercase(Locale.US)
                 val point=maidenheadCenter(grid)
-                if(point==null) invalidContactGrids+=cursor.getInt(1) else add(ProgressContactPoint(grid,point.latitude,point.longitude))
+                if(point==null) invalidContactGrids+=cursor.getInt(1) else add(ProgressContactPoint(
+                    grid, point.latitude, point.longitude, cursor.getString(2).orEmpty(), cursor.getString(3).orEmpty(),
+                ))
             }
         }.distinctBy(ProgressContactPoint::grid) }
         val bestDx=db.rawQuery("SELECT callsign_norm,country_norm,distance_km,band_norm,mode_norm FROM qso_projection p WHERE $where AND distance_km>0 ORDER BY distance_km DESC LIMIT 10",args).use{c->buildList{while(c.moveToNext())add(BestDxContact(c.getString(0),c.getString(1),c.getDouble(2),c.getString(3),c.getString(4)))}}

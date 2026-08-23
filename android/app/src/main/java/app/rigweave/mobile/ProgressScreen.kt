@@ -1,7 +1,6 @@
 package app.rigweave.mobile
 
-import android.graphics.Bitmap
-import android.graphics.Paint
+import android.view.MotionEvent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -72,14 +71,34 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
 import org.maplibre.android.MapLibre
-import org.maplibre.android.annotations.IconFactory
-import org.maplibre.android.annotations.MarkerOptions
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.expressions.Expression
+import org.maplibre.android.style.layers.CircleLayer
+import org.maplibre.android.style.layers.Property
+import org.maplibre.android.style.layers.SymbolLayer
+import org.maplibre.android.style.layers.PropertyFactory.circleColor
+import org.maplibre.android.style.layers.PropertyFactory.circleRadius
+import org.maplibre.android.style.layers.PropertyFactory.circleStrokeColor
+import org.maplibre.android.style.layers.PropertyFactory.circleStrokeWidth
+import org.maplibre.android.style.layers.PropertyFactory.textAllowOverlap
+import org.maplibre.android.style.layers.PropertyFactory.textAnchor
+import org.maplibre.android.style.layers.PropertyFactory.textColor
+import org.maplibre.android.style.layers.PropertyFactory.textField
+import org.maplibre.android.style.layers.PropertyFactory.textFont
+import org.maplibre.android.style.layers.PropertyFactory.textHaloColor
+import org.maplibre.android.style.layers.PropertyFactory.textHaloWidth
+import org.maplibre.android.style.layers.PropertyFactory.textIgnorePlacement
+import org.maplibre.android.style.layers.PropertyFactory.textOffset
+import org.maplibre.android.style.layers.PropertyFactory.textSize
+import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.geojson.Feature
+import org.maplibre.geojson.FeatureCollection
+import org.maplibre.geojson.Point
 import java.util.Locale
 import kotlin.math.max
 
@@ -741,7 +760,11 @@ private fun androidx.compose.foundation.lazy.LazyListScope.portableItems(
 @Composable private fun Kpi(label: String, value: String, alert: Boolean = false, action: (() -> Unit)? = null) {
     Card(onClick = action ?: {}, modifier = Modifier.widthIn(min = 76.dp, max = 190.dp).heightIn(min = 76.dp),
         colors = CardDefaults.cardColors(containerColor = ProgressPanel)) {
-        Column(Modifier.padding(horizontal = 11.dp, vertical = 10.dp)) {
+        Column(
+            Modifier.heightIn(min = 76.dp).padding(horizontal = 11.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             Text(label, color = ProgressMuted, fontSize = 10.sp, maxLines = 1)
             Text(value, color = if (alert) ProgressAmber else ProgressInk, style = MaterialTheme.typography.titleLarge, maxLines = 1)
         }
@@ -980,7 +1003,13 @@ private fun shortChartLabel(value:String)=when{
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val currentRows by rememberUpdatedState(rows)
-    val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null) } }
+    val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply {
+        onCreate(null)
+        setOnTouchListener { view, event ->
+            view.parent?.requestDisallowInterceptTouchEvent(event.actionMasked !in setOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL))
+            false
+        }
+    } }
     var map by remember { mutableStateOf<org.maplibre.android.maps.MapLibreMap?>(null) }
     var ready by remember { mutableStateOf(false) }
     var fullScreen by rememberSaveable { mutableStateOf(false) }
@@ -989,18 +1018,35 @@ private fun shortChartLabel(value:String)=when{
     var savedLongitude by rememberSaveable { mutableStateOf(0.0) }
     var savedZoom by rememberSaveable { mutableStateOf(1.0) }
     DisposableEffect(mapView, lifecycle) {
+        var started = false
+        var resumed = false
+        var destroyed = false
+        fun start() { if (!started && !destroyed) { mapView.onStart(); started = true } }
+        fun resume() { start(); if (!resumed && !destroyed) { mapView.onResume(); resumed = true } }
+        fun pause() { if (resumed && !destroyed) { mapView.onPause(); resumed = false } }
+        fun stop() { pause(); if (started && !destroyed) { mapView.onStop(); started = false } }
+        fun destroy() { if (!destroyed) { stop(); mapView.onDestroy(); destroyed = true } }
         val observer = LifecycleEventObserver { _, event -> when (event) {
-            Lifecycle.Event.ON_START -> mapView.onStart(); Lifecycle.Event.ON_RESUME -> mapView.onResume()
-            Lifecycle.Event.ON_PAUSE -> mapView.onPause(); Lifecycle.Event.ON_STOP -> mapView.onStop(); else -> Unit
+            Lifecycle.Event.ON_START -> start(); Lifecycle.Event.ON_RESUME -> resume()
+            Lifecycle.Event.ON_PAUSE -> pause(); Lifecycle.Event.ON_STOP -> stop()
+            Lifecycle.Event.ON_DESTROY -> destroy(); else -> Unit
         } }
         lifecycle.addObserver(observer)
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) start()
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) resume()
+        var disposed = false
         mapView.getMapAsync { value ->
+            if (disposed) return@getMapAsync
             map = value
-            value.uiSettings.isAttributionEnabled = false
-            value.uiSettings.isLogoEnabled = false
-            value.uiSettings.isAttributionEnabled = true
-            value.uiSettings.isLogoEnabled = true
-            value.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) {
+            value.uiSettings.apply {
+                isAttributionEnabled = true; isLogoEnabled = true; isCompassEnabled = true
+                isZoomGesturesEnabled = true; isScrollGesturesEnabled = true
+                isRotateGesturesEnabled = true; isTiltGesturesEnabled = false
+            }
+            value.setMinZoomPreference(.8)
+            value.setMaxZoomPreference(14.0)
+            value.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { style ->
+                installProgressContactLayers(style)
                 ready = true
                 if (cameraInitialized) value.cameraPosition = CameraPosition.Builder()
                     .target(LatLng(savedLatitude, savedLongitude)).zoom(savedZoom).build()
@@ -1012,19 +1058,14 @@ private fun shortChartLabel(value:String)=when{
                 cameraInitialized = true
             }
         }
-        onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null }
+        onDispose { disposed = true; lifecycle.removeObserver(observer); map = null; ready = false; destroy() }
     }
     LaunchedEffect(map, ready, rows) {
         val value = map ?: return@LaunchedEffect
         if (!ready) return@LaunchedEffect
-        value.clear()
-        currentRows.groupBy { (it.latitude / 5).toInt() to (it.longitude / 5).toInt() }.values.forEach { group ->
-            val bitmap = Bitmap.createBitmap(24, 24, Bitmap.Config.ARGB_8888)
-            val canvas = android.graphics.Canvas(bitmap)
-            canvas.drawCircle(12f, 12f, 8f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = android.graphics.Color.rgb(101,166,199) })
-            value.addMarker(MarkerOptions().position(LatLng(group.map(ProgressContactPoint::latitude).average(),
-                group.map(ProgressContactPoint::longitude).average())).title(if (group.size == 1) group.first().grid else "${group.size} contact grids")
-                .icon(IconFactory.getInstance(context).fromBitmap(bitmap)))
+        value.style?.let { style ->
+            installProgressContactLayers(style)
+            style.getSourceAs<GeoJsonSource>(PROGRESS_CONTACT_SOURCE)?.setGeoJson(progressContactFeatures(currentRows))
         }
         if (!cameraInitialized && rows.size == 1) value.cameraPosition = CameraPosition.Builder().target(LatLng(rows[0].latitude,rows[0].longitude)).zoom(5.0).build()
         else if (!cameraInitialized) runCatching {
@@ -1051,3 +1092,40 @@ private fun shortChartLabel(value:String)=when{
         }
     }
 }
+
+private const val PROGRESS_CONTACT_SOURCE = "progress-contact-points"
+private const val PROGRESS_CONTACT_DOT_LAYER = "progress-contact-dots"
+private const val PROGRESS_CONTACT_LABEL_LAYER = "progress-contact-dxcc-labels"
+
+private fun installProgressContactLayers(style: Style) {
+    if (style.getSourceAs<GeoJsonSource>(PROGRESS_CONTACT_SOURCE) == null) {
+        style.addSource(GeoJsonSource(PROGRESS_CONTACT_SOURCE, FeatureCollection.fromFeatures(emptyArray())))
+    }
+    if (style.getLayerAs<CircleLayer>(PROGRESS_CONTACT_DOT_LAYER) == null) {
+        style.addLayer(CircleLayer(PROGRESS_CONTACT_DOT_LAYER, PROGRESS_CONTACT_SOURCE).withProperties(
+            circleColor("#65A6C7"), circleRadius(5f), circleStrokeColor("#E8F0F2"), circleStrokeWidth(1.2f),
+        ))
+    }
+    if (style.getLayerAs<SymbolLayer>(PROGRESS_CONTACT_LABEL_LAYER) == null) {
+        style.addLayer(SymbolLayer(PROGRESS_CONTACT_LABEL_LAYER, PROGRESS_CONTACT_SOURCE).withProperties(
+            textField(Expression.get("label")), textSize(11.5f), textColor("#E8F0F2"),
+            textFont(arrayOf("Noto Sans Regular")), textHaloColor("#091015"), textHaloWidth(1.5f),
+            textOffset(arrayOf(0f, 1.15f)), textAnchor(Property.TEXT_ANCHOR_TOP),
+            textAllowOverlap(false), textIgnorePlacement(false),
+        ).apply { setMinZoom(3.0f) })
+    }
+}
+
+private fun progressContactFeatures(rows: List<ProgressContactPoint>): FeatureCollection = FeatureCollection.fromFeatures(rows.map { row ->
+    val entity = row.dxcc.split(',').map(String::trim).filter(String::isNotBlank).distinct()
+    val countries = row.country.split(',').map(String::trim).filter(String::isNotBlank).distinct()
+    val label = when {
+        entity.isNotEmpty() -> "DXCC ${entity.take(3).joinToString("/")}${if (entity.size > 3) " +${entity.size - 3}" else ""}${countries.firstOrNull()?.let { " · $it" }.orEmpty()}"
+        countries.isNotEmpty() -> countries.first()
+        else -> "DXCC unavailable · ${row.grid}"
+    }
+    Feature.fromGeometry(Point.fromLngLat(row.longitude, row.latitude)).apply {
+        addStringProperty("label", label)
+        addStringProperty("grid", row.grid)
+    }
+})

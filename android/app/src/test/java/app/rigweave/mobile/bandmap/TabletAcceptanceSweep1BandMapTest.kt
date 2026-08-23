@@ -50,7 +50,7 @@ class TabletAcceptanceSweep1BandMapTest {
     @Test fun iaruDisplayPlanIsGuidanceNotRegulatoryAuthority() {
         val plan = BandMapDisplayPlans.forBand("20m", BandMapIaruRegion.REGION_1)
         assertFalse(plan.regulatoryAuthority)
-        assertEquals(listOf("CW", "DATA", "PHONE"), plan.segments.map { it.label })
+        assertEquals(listOf("CW", "DATA", "SSB / PHONE"), plan.segments.map { it.label })
         assertTrue(plan.segments.zipWithNext().all { (left, right) -> left.upperHz == right.lowerHz })
     }
 }
