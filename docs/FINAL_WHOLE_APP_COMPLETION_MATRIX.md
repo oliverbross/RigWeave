@@ -1,5 +1,9 @@
 # Final whole-application completion matrix
 
+## Tablet Acceptance Sweep 2 delta
+
+Sweep 2 adds Contest schema-2 staging/merge, validated private SCP, Band Maps v2 and shared Radio ladder, Intelligence presentation/map corrections, typed portable catalogue truth and Groups.io foreground sync settings. Final hosted/device evidence remains governed by `TABLET_ACCEPTANCE_SWEEP_2_LIVE_CHECKLIST.md` and cannot be inferred from source completion.
+
 ## Tablet Acceptance Sweep 1 delta
 
 The fix/tablet-acceptance-sweep-1 source closes the 41 owner-observed acceptance items recorded in TABLET_ACCEPTANCE_SWEEP_1.md: Home/Settings convergence, complete Contest workspaces, interactive Band Maps, authority-scoped Log Intelligence, tablet layouts, Portable map/browser corrections, catalog-truth Operations, Groups.io server timestamps, and shared CS/DS presentation. This row is source-complete only; exact-SHA hosted, protected-tablet presentation, authenticated-service, audio and RF evidence remain separate gates.

@@ -22,6 +22,11 @@ REQUIRED_DOCS = [
     "PRIVACY_AND_DATA_INVENTORY.md",
     "THIRD_PARTY_AND_PROVENANCE_AUDIT.md",
     "FINAL_LIVE_ACCEPTANCE_CHECKLIST.md",
+    "TABLET_ACCEPTANCE_SWEEP_2.md",
+    "BAND_MAPS_V2_OPERATOR_GUIDE.md",
+    "CONTEST_COCKPIT_AND_SESSION_LOG_V2.md",
+    "PORTABLE_CATALOGUE_PROVIDER_MATRIX.md",
+    "TABLET_ACCEPTANCE_SWEEP_2_LIVE_CHECKLIST.md",
 ]
 SCHEMA_PATTERNS = {
     "QSO schema 16": r"class QsoDatabase[^\n]+SQLiteOpenHelper\(context, databaseName, null, 16\)",
@@ -29,7 +34,8 @@ SCHEMA_PATTERNS = {
     "Digi schema 2": r"SQLiteOpenHelper\(context, databaseName, null, 2\)",
     "Groups.io schema 2": r"SQLiteOpenHelper\(appContext, databaseName, null, 2\)",
     "projection contract 5": r"QSO schema 16 · projection contract 5 · Neural 5 · Digi 2 · Groups\.io 2",
-    "Contest schema 1": r"class ContestSessionStore[^\n]+SQLiteOpenHelper\(context, name, null, 1\)",
+    "Contest schema 2": r"class ContestSessionStore[^\n]+SQLiteOpenHelper\(context, name, null, 2\)",
+    "Contest staging table": r"CREATE TABLE IF NOT EXISTS contest_qso_entry",
     "DX Chaser schema 1": r"class DxChaserStore[^\n]+SQLiteOpenHelper\(context, DATABASE_NAME, null, 1\)",
     "Band Maps preferences only": r"BAND_MAP_PREFERENCES\s*=\s*\"rigweave-bandmaps-v1\"",
 }

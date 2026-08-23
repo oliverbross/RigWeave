@@ -1,5 +1,9 @@
 # Contest Core Android v1
 
+## Sweep 2 schema and authority amendment
+
+Contest schema 2 now owns temporary `contest_qso_entry` bodies during an event. No staged QSO enters canonical `rigweave.sqlite` until explicit confirmed merge through `QsoMutationCoordinator`; repeated and partial merges retain per-row state for safe retry. N1MM safe additions stage only. SCP is a separate validated app-private read-only assistance cache and never defines callsign validity.
+
 ## Sweep 1 operator workspace
 
 Setup, Logging, Review and Network are now full tablet workspaces over the existing Contest authorities. Setup is definition-driven; Logging exposes eight configurable panels, dynamic exchanges, live context and canonical mutation; Review provides bounded canonical rows, filters, local-only deletion and export previews; Network exposes safe N1MM state, trust, counters and controls. Score rebuilds are latest-generation background work. No Contest surface directly owns CAT, PTT, TUNE, Digi, Chaser or remote Wavelog mutation.

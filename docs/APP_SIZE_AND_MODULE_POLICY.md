@@ -1,5 +1,9 @@
 # Android app size and module policy
 
+## Sweep 2 package decision
+
+No SCP, IOTA, WWFF, WWBOTA, Castle or Lighthouse directory is packaged. All accepted catalogues are bounded app-private runtime caches or user-selected imports. Sweep 2 adds Kotlin/Compose and schema code only; final APK/AAB sizes are recorded from final-tip artifacts.
+
 ## Sweep 1 package decision
 
 Sweep 1 adds no embedded provider catalogue, model, binary payload, or P.533 material. POTA/SOTA catalogues remain bounded runtime caches in app-private storage and SOTA cluster rows are transient. The pre-final local debug artifacts remain below the 130 MB APK and 60 MB AAB ceilings; final sizes and SHA-256 values are recorded only after the final source commit is built.

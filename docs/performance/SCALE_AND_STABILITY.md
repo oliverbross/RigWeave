@@ -1,5 +1,9 @@
 # Scale and stability
 
+## Tablet Acceptance Sweep 2
+
+Band Maps retains the bounded input/index and six-lane placement model. Contest session reads are indexed and capped at 10,000 rows; merges are serial, idempotent and restart-safe. SCP suggestions are bounded to 30 and the database to 16 MiB. IOTA is bounded to 8 MiB/5,000 groups; user CSV imports to 32 MiB/250,000 rows; visible catalogue results to 500. Intelligence maps consume bounded projections and retain user camera state. Groups.io foreground refresh bounds groups, topics and messages.
+
 ## Tablet Acceptance Sweep 1
 
 Log Intelligence work stays on bounded projection queries with latest-generation cancellation and an explicit local/Wavelog authority identity. Contest score rebuilds run off the interface thread and apply only the latest active-session generation. Band Map placement is linear over a bounded input with six lanes and exact chooser membership capped at 20. Activation Planner catalog work runs off-main over at most 5,000 source rows and returns at most 1,000 deduplicated inclusive-radius results. The established disposable 100k-logbook, 180-day Neural, 20k-Digi, 30k-Groups and provider-lifecycle soak passes.

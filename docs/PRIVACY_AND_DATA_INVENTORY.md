@@ -1,5 +1,9 @@
 # Privacy and Data Inventory
 
+## Sweep 2 private caches and settings
+
+SCP.DB, IOTA JSON and user-selected lawful portable CSV files are stored only in app-private storage with source metadata and SHA-256. None is bundled or uploaded. Contest schema 2 stores temporary event QSOs until explicit merge. Groups.io auto-download runs only while its foreground screen is active; preview excerpts are transient Compose state and no message body enters diagnostics.
+
 ## Sweep 1 Portable and browser data
 
 Portable SOTA may open a receive-only TCP session to cluster.sota.org.uk:7300 while the Portable workspace is foregrounded. The login value is read from the existing user-configured DX-cluster username; it is not hard-coded, copied into reports, or used to post spots. Parsed rows are bounded, expire after one hour, and are enriched from the existing app-private SOTA catalogue cache for map coordinates. POTA/SOTA in-app pages enable JavaScript and DOM storage only on exact reviewed HTTPS hosts; unreviewed redirects lose that privilege and require external-browser confirmation. Third-party cookies, file/content access, and mixed content remain disabled.

@@ -1,5 +1,9 @@
 # Release Candidate Readiness
 
+## Tablet Acceptance Sweep 2 candidate
+
+The Sweep 2 candidate must pass all local commands, exact-SHA hosted validation, package/hash gates and protected in-place installation before PASS. Provider/licence-blocked catalogue programmes are acceptable only with explicit registry truth and no scraping/bundling. Source/build success is not device, service, audio or RF evidence.
+
 ## Tablet Acceptance Sweep 1 candidate
 
 The Sweep 1 feature branch passes the local 557-test Android JVM suite, APK/AAB and Android-test packaging, lint with zero errors, Rust (97 passed), native core (2/2), both unsigned Apple build targets, package/ITU payload audit, release-candidate privacy/provenance contract, and disposable scale/soak profile. These are pre-final-tip local gates; the exact pushed SHA must still pass the hosted seven-job workflow before a PASS verdict.

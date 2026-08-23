@@ -1,5 +1,9 @@
 # RigWeave Intelligent Band Maps v1
 
+## Sweep 2 renderer amendment
+
+V2 replaces the label-box presentation with frequency-anchored classic lanes, callsign-first default labels, focal zoom, leader lines and deterministic stacks. The persisted Radio setting now renders the same snapshot/controller as a compact active-band vertical ladder with RX/TX/split truth. Contest S&P is inactive outside a live Contest session. See `../BAND_MAPS_V2_OPERATOR_GUIDE.md`.
+
 ## Sweep 1 interaction and presentation
 
 The operator-visible selector is restricted to 160m through 23cm. All four layouts show labelled frequency axes and reviewed Region 1/2/3 operating guidance explicitly marked non-regulatory. Per-band viewports support bounded pinch, wheel/trackpad, buttons, double-click/tap, drag and keyboard zoom/pan with safe persistence/reset. Dense labels use six deterministic lanes plus bounded exact-member stacks; Grid and Single layouts preserve selected frequency, while Single adds RX, TX/split and passband markers. Shared CS/DS configured tokens drive status colour and text.
