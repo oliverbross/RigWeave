@@ -61,7 +61,27 @@ val buildRustFlex by tasks.registering(Exec::class) {
         "build", "--release")
 }
 
-tasks.matching { it.name.startsWith("configureCMake") }.configureEach { dependsOn(buildRustFlex) }
+val hamlibSource = rootProject.file("../core/third_party/hamlib")
+val hamlibBuildScript = file("src/main/cpp/hamlib/build_android.sh")
+val hamlibOutput = layout.buildDirectory.dir("hamlib")
+val buildHamlibAndroid by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Build the pinned Hamlib radio library for every Android ABI"
+    val sdkRoot = providers.environmentVariable("ANDROID_SDK_ROOT")
+        .orElse(providers.environmentVariable("ANDROID_HOME"))
+    inputs.dir(hamlibSource)
+    inputs.file(hamlibBuildScript)
+    outputs.files(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64").map {
+        hamlibOutput.map { root -> root.file("$it/libhamlib.a") }
+    })
+    commandLine("bash", hamlibBuildScript.absolutePath, hamlibSource.absolutePath,
+        hamlibOutput.get().asFile.absolutePath,
+        file("${sdkRoot.get()}/ndk/${android.ndkVersion}").absolutePath)
+}
+
+tasks.matching { it.name.startsWith("configureCMake") }.configureEach {
+    dependsOn(buildRustFlex, buildHamlibAndroid)
+}
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2025.10.00")
