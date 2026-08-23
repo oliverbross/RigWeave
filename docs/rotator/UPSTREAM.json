@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "rigweave_frozen_sha": "4cd3aa3b401a9f7bc9838b94217444d5b4cae3bc",
+  "radio_station_pro": {
+    "commit": "e3df89c4bec2eed3e56570a538ea881cf9b203be",
+    "tree": "42c23a547a90f9b0b798d4488cf61446b8e4e9a4",
+    "reviewed_tree_manifest_sha256": "e93798268ed56d9bcda159c6b310283ca5c7d89fb9f208d50212ef9a5436fdf1"
+  },
+  "microham_arco": {
+    "manual_version": "4.1",
+    "manual_date": "2024-12-10",
+    "manual_sha256": "daa5084ac5034c65b0bfb5f19a0e339ac26429624d511043ec186d21e8bd17b4",
+    "firmware_version": "4.2.B",
+    "firmware_date": "2025-01-03",
+    "firmware_sha256": "541649ed3c429205d7054d6c2cb6fc9f09ba2448aa72132d697671b8714589fc",
+    "history_sha256": "69dad8ea98ebde86f86276812d6213b3f7fa598d944acf39e5291bbcea957e92"
+  },
+  "hamlib": {
+    "tag": "4.7.2",
+    "commit": "40f63488fe0bd751b147f48d62fd217bf53713a0",
+    "tree": "56a42afe2ace9dd1b43729168bb73ca46a812848",
+    "rotlist_sha256": "c6726ef1cebedf12667811d66794794348b35f3fea4e380cd74b3c09eb5e4f2b",
+    "rotctld_sha256": "f829177a3a90a247dc78b6bacd8e30aa7219169e9450a431e603c9c3571b4883",
+    "licence_sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+  }
+}
