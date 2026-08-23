@@ -65,6 +65,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -89,6 +91,10 @@ private val ProgressMuted = Color(0xFF8EA2AA)
 private val ProgressAmber = Color(0xFFE9A72B)
 private val ProgressGreen = Color(0xFF48C78E)
 private val ProgressBlue = Color(0xFF65A6C7)
+private val ProgressChartPalette = listOf(
+    Color(0xFF65A6C7), Color(0xFF48C78E), Color(0xFFE9A72B), Color(0xFFB47FD1),
+    Color(0xFFE37B6F), Color(0xFF7CC7C4), Color(0xFFD6C45C), Color(0xFF8197D8),
+)
 private enum class ProgressSection(val label: String) {
     OVERVIEW("OVERVIEW"), ACTIVITY("ACTIVITY"), GEOGRAPHY("GEOGRAPHY"), CONFIRMATIONS("CONFIRMATIONS"),
     OPERATORS("OPERATORS"), PORTABLE("PORTABLE"), SATELLITE("SATELLITE"), NEEDS("NEEDS"), AWARDS("AWARDS")
@@ -733,7 +739,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.portableItems(
 }
 
 @Composable private fun Kpi(label: String, value: String, alert: Boolean = false, action: (() -> Unit)? = null) {
-    Card(onClick = action ?: {}, modifier = Modifier.widthIn(min = 126.dp),
+    Card(onClick = action ?: {}, modifier = Modifier.width(178.dp).heightIn(min = 88.dp),
         colors = CardDefaults.cardColors(containerColor = ProgressPanel)) {
         Column(Modifier.padding(12.dp)) {
             Text(label, color = ProgressMuted, fontSize = 10.sp)
@@ -817,6 +823,12 @@ private fun detailedValue(snapshot:ProgressSnapshot,value:Int)=if(snapshot.detai
                 }
             }
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+            listOf("zero" to 0f, "low" to .22f, "medium" to .48f, "high" to .74f, "maximum" to 1f).forEach { (label, intensity) ->
+                Box(Modifier.size(14.dp).background(ProgressGreen.copy(alpha = .06f + .94f * intensity), RoundedCornerShape(2.dp)))
+                Text(label, color = ProgressMuted, fontSize = 11.sp)
+            }
+        }
         val peak = rows.maxByOrNull(ProgressHeatCell::count)
         Text("${formatChartCount(total)} QSOs in the matrix · peak ${peak?.let { "${weekdays[it.day]} ${it.hour.toString().padStart(2, '0')}:00–${((it.hour + 1) % 24).toString().padStart(2, '0')}:00 · ${formatChartCount(it.count)} QSOs" } ?: "none"}",
             color = ProgressInk, fontSize = 17.sp)
@@ -878,11 +890,12 @@ internal fun visibleProgressChartRows(rows: List<ProgressBucket>, order: Progres
     val highest = max(1, rows.maxOfOrNull(ProgressBucket::count) ?: 1)
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.Bottom) {
         rows.forEach { row ->
+            val categoryColor = ProgressChartPalette[Math.floorMod(row.label.uppercase(Locale.US).hashCode(), ProgressChartPalette.size)]
             Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(chartCompactCount(row.count), color = ProgressInk, fontSize = 12.sp, maxLines = 1)
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
                     Box(Modifier.fillMaxWidth(.72f).fillMaxHeight(row.count.toFloat() / highest)
-                        .background(ProgressBlue, RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp)))
+                        .background(categoryColor, RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp)))
                 }
                 Text(shortChartLabel(row.label), color = ProgressMuted, fontSize = 12.sp, maxLines = 1)
             }
@@ -963,13 +976,18 @@ private fun shortChartLabel(value:String)=when{
         dismissButton = { TextButton(dismiss) { Text("CANCEL") } })
 }
 
-@Composable private fun ProgressContactMap(rows: List<ProgressContactPoint>, modifier: Modifier) {
+@Composable private fun ProgressContactMap(rows: List<ProgressContactPoint>, modifier: Modifier, allowFullScreen: Boolean = true) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val currentRows by rememberUpdatedState(rows)
     val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null) } }
     var map by remember { mutableStateOf<org.maplibre.android.maps.MapLibreMap?>(null) }
     var ready by remember { mutableStateOf(false) }
+    var fullScreen by rememberSaveable { mutableStateOf(false) }
+    var cameraInitialized by rememberSaveable { mutableStateOf(false) }
+    var savedLatitude by rememberSaveable { mutableStateOf(0.0) }
+    var savedLongitude by rememberSaveable { mutableStateOf(0.0) }
+    var savedZoom by rememberSaveable { mutableStateOf(1.0) }
     DisposableEffect(mapView, lifecycle) {
         val observer = LifecycleEventObserver { _, event -> when (event) {
             Lifecycle.Event.ON_START -> mapView.onStart(); Lifecycle.Event.ON_RESUME -> mapView.onResume()
@@ -982,7 +1000,17 @@ private fun shortChartLabel(value:String)=when{
             value.uiSettings.isLogoEnabled = false
             value.uiSettings.isAttributionEnabled = true
             value.uiSettings.isLogoEnabled = true
-            value.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { ready = true }
+            value.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) {
+                ready = true
+                if (cameraInitialized) value.cameraPosition = CameraPosition.Builder()
+                    .target(LatLng(savedLatitude, savedLongitude)).zoom(savedZoom).build()
+            }
+            value.addOnCameraIdleListener {
+                val position = value.cameraPosition
+                val target = position.target ?: return@addOnCameraIdleListener
+                savedLatitude = target.latitude; savedLongitude = target.longitude; savedZoom = position.zoom
+                cameraInitialized = true
+            }
         }
         onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null }
     }
@@ -998,15 +1026,28 @@ private fun shortChartLabel(value:String)=when{
                 group.map(ProgressContactPoint::longitude).average())).title(if (group.size == 1) group.first().grid else "${group.size} contact grids")
                 .icon(IconFactory.getInstance(context).fromBitmap(bitmap)))
         }
-        if (rows.size == 1) value.cameraPosition = CameraPosition.Builder().target(LatLng(rows[0].latitude,rows[0].longitude)).zoom(5.0).build()
-        else runCatching {
+        if (!cameraInitialized && rows.size == 1) value.cameraPosition = CameraPosition.Builder().target(LatLng(rows[0].latitude,rows[0].longitude)).zoom(5.0).build()
+        else if (!cameraInitialized) runCatching {
             val bounds = LatLngBounds.Builder().also { builder -> rows.forEach { builder.include(LatLng(it.latitude,it.longitude)) } }.build()
             value.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds,60),400)
         }
     }
     Box(modifier.background(ProgressBackground).border(1.dp,ProgressRaised,RoundedCornerShape(8.dp))) {
         AndroidView({ mapView }, Modifier.fillMaxSize())
+        if (allowFullScreen) OutlinedButton({ fullScreen = true }, Modifier.align(Alignment.TopEnd).padding(8.dp)) { Text("FULL SCREEN") }
         Text("OpenFreeMap © OpenMapTiles · OpenStreetMap", color = ProgressMuted, fontSize = 9.sp,
             modifier = Modifier.align(Alignment.BottomEnd).background(ProgressPanel.copy(alpha=.85f)).padding(4.dp))
+    }
+    if (fullScreen) Dialog(onDismissRequest = { fullScreen = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize().padding(8.dp), color = ProgressBackground) {
+            Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column { Text("CONTACT MAP", color = ProgressAmber, fontWeight = FontWeight.Black)
+                        Text("Current Intelligence filters · ${rows.size} bounded coordinate rows", color = ProgressMuted, fontSize = 11.sp) }
+                    OutlinedButton({ fullScreen = false }) { Text("CLOSE") }
+                }
+                ProgressContactMap(rows, Modifier.fillMaxWidth().weight(1f), allowFullScreen = false)
+            }
+        }
     }
 }
