@@ -33,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -146,8 +147,12 @@ internal fun BandMapScreen(
             (controller.settings.dxccStatusFilters.isEmpty() || status?.dxccStatus in controller.settings.dxccStatusFilters)
     }
     val visibleSnapshot = snapshot.copy(rankedSpots = visibleRows)
-    var selected by remember(snapshot.selectedSpotId, visibleRows) {
+    var selected by remember {
         mutableStateOf(visibleRows.firstOrNull { it.spot.id == snapshot.selectedSpotId })
+    }
+    val openSpot: (BandMapRankedSpot) -> Unit = { ranked ->
+        selected = ranked
+        controller.select(ranked.spot.id)
     }
     var filterOpen by remember { mutableStateOf(false) }
     val keyboardModifier = Modifier.onPreviewKeyEvent { event ->
@@ -173,10 +178,10 @@ internal fun BandMapScreen(
         if (snapshot.unavailableReasons.isNotEmpty()) Text(snapshot.unavailableReasons.joinToString(" · "), color = MapAmber, fontSize = 12.sp)
         Box(Modifier.weight(1f)) {
             when (visibleSnapshot.layout) {
-                BandMapLayoutMode.GRID_OVERVIEW -> BandGrid(visibleSnapshot, controller, statuses, app) { selected = it }
-                BandMapLayoutMode.MULTI_HORIZONTAL -> HorizontalBandRows(visibleSnapshot, controller, statuses, app) { selected = it }
-                BandMapLayoutMode.SINGLE_EXPANDED -> SingleExpanded(visibleSnapshot, controller, statuses, app, operatingContext) { selected = it }
-                BandMapLayoutMode.MULTI_VERTICAL -> VerticalBandColumns(visibleSnapshot, controller, statuses, app) { selected = it }
+                BandMapLayoutMode.GRID_OVERVIEW -> BandGrid(visibleSnapshot, controller, statuses, app, openSpot)
+                BandMapLayoutMode.MULTI_HORIZONTAL -> HorizontalBandRows(visibleSnapshot, controller, statuses, app, openSpot)
+                BandMapLayoutMode.SINGLE_EXPANDED -> SingleExpanded(visibleSnapshot, controller, statuses, app, operatingContext, openSpot)
+                BandMapLayoutMode.MULTI_VERTICAL -> VerticalBandColumns(visibleSnapshot, controller, statuses, app, openSpot)
             }
         }
     }
@@ -272,6 +277,7 @@ internal fun BandMapScreen(
     statuses: Map<String, SpotLogStatus>, app: AppController, select: (BandMapRankedSpot) -> Unit, expanded: Boolean = false,
     radioContext: OperatingContextSnapshot? = null) {
     val segment = controller.visibleSegment(band)
+    val currentSegment by rememberUpdatedState(segment)
     val laneHeight = when (controller.settings.laneSize) {
         1 -> if (expanded) 320.dp else 170.dp
         3 -> if (expanded) 520.dp else 320.dp
@@ -279,16 +285,17 @@ internal fun BandMapScreen(
     }
     Surface(color = MapPanel, shape = RoundedCornerShape(9.dp), modifier = Modifier.fillMaxWidth().height(laneHeight)) {
         BoxWithConstraints(Modifier.fillMaxSize().padding(8.dp)
-            .pointerInput(band, segment) { detectTransformGestures { centroid, pan, zoom, _ ->
-                if (abs(zoom - 1f) > .02f) controller.zoom(band, 1.0 / zoom, segment.lowerHz + (segment.spanHz * (centroid.x / size.width.coerceAtLeast(1))).toLong())
+            .pointerInput(band) { detectTransformGestures { centroid, pan, zoom, _ ->
+                val activeSegment = currentSegment
+                if (abs(zoom - 1f) > .02f) controller.zoom(band, 1.0 / zoom, activeSegment.lowerHz + (activeSegment.spanHz * (centroid.x / size.width.coerceAtLeast(1))).toLong())
                 if (abs(pan.x) > 3f) controller.pan(band, (-pan.x / size.width.coerceAtLeast(1)).toDouble())
             } }
-            .pointerInput(band, segment) { awaitPointerEventScope { while (true) {
+            .pointerInput(band) { awaitPointerEventScope { while (true) {
                 val event = awaitPointerEvent(); if (event.type == PointerEventType.Scroll) {
                     val change = event.changes.firstOrNull() ?: continue
                     val delta = change.scrollDelta.y
-                    if (delta != 0f) { controller.zoom(band, if (delta > 0f) 1.35 else .74,
-                        segment.lowerHz + (segment.spanHz * (change.position.x / size.width.coerceAtLeast(1))).toLong()); change.consume() }
+                    if (delta != 0f) { val activeSegment = currentSegment; controller.zoom(band, if (delta > 0f) 1.35 else .74,
+                        activeSegment.lowerHz + (activeSegment.spanHz * (change.position.x / size.width.coerceAtLeast(1))).toLong()); change.consume() }
                 }
             } } }) {
             val density = LocalDensity.current
@@ -333,6 +340,7 @@ internal fun BandMapScreen(
             }
             Text("${band.uppercase()} · ${formatBandMapFrequency(segment.lowerHz)}–${formatBandMapFrequency(segment.upperHz)}", color = MapAmber,
                 fontWeight = FontWeight.Black, modifier = Modifier.align(Alignment.TopStart))
+            BandScaleControls(band, controller, Modifier.align(Alignment.TopEnd))
             BandMapLayoutEngine.ticks(segment, widthPx.roundToInt()).filterIndexed { index, _ -> index % controller.settings.frequencyLabelEvery == 0 }.forEach { tick ->
                 Text(formatBandMapFrequency(tick.frequencyHz), color = MapMuted, fontSize = 9.sp,
                     modifier = Modifier.align(Alignment.BottomStart).offset { IntOffset((tick.position * widthPx).roundToInt().coerceIn(0, (widthPx - 70).roundToInt().coerceAtLeast(0)), 0) })
@@ -355,17 +363,19 @@ internal fun BandMapScreen(
     modifier: Modifier = Modifier.width(when (controller.settings.laneSize) { 1 -> 180.dp; 3 -> 300.dp; else -> 230.dp }).fillMaxHeight(),
     radioContext: OperatingContextSnapshot? = null) {
     val segment = controller.visibleSegment(band)
+    val currentSegment by rememberUpdatedState(segment)
     Surface(color = MapPanel, shape = RoundedCornerShape(9.dp), modifier = modifier) {
         BoxWithConstraints(Modifier.fillMaxSize().padding(8.dp)
-            .pointerInput(band, segment) { detectTransformGestures { centroid, pan, zoom, _ ->
-                if (abs(zoom - 1f) > .02f) controller.zoom(band, 1.0 / zoom, segment.lowerHz + (segment.spanHz * (centroid.y / size.height.coerceAtLeast(1))).toLong())
+            .pointerInput(band) { detectTransformGestures { centroid, pan, zoom, _ ->
+                val activeSegment = currentSegment
+                if (abs(zoom - 1f) > .02f) controller.zoom(band, 1.0 / zoom, activeSegment.lowerHz + (activeSegment.spanHz * (centroid.y / size.height.coerceAtLeast(1))).toLong())
                 if (abs(pan.y) > 3f) controller.pan(band, (-pan.y / size.height.coerceAtLeast(1)).toDouble())
             } }
-            .pointerInput(band, segment) { awaitPointerEventScope { while (true) {
+            .pointerInput(band) { awaitPointerEventScope { while (true) {
                 val event = awaitPointerEvent(); if (event.type == PointerEventType.Scroll) {
                     val change = event.changes.firstOrNull() ?: continue; val delta = change.scrollDelta.y
-                    if (delta != 0f) { controller.zoom(band, if (delta > 0f) 1.35 else .74,
-                        segment.lowerHz + (segment.spanHz * (change.position.y / size.height.coerceAtLeast(1))).toLong()); change.consume() }
+                    if (delta != 0f) { val activeSegment = currentSegment; controller.zoom(band, if (delta > 0f) 1.35 else .74,
+                        activeSegment.lowerHz + (activeSegment.spanHz * (change.position.y / size.height.coerceAtLeast(1))).toLong()); change.consume() }
                 }
             } } }) {
             val density = LocalDensity.current
@@ -419,8 +429,9 @@ internal fun BandMapScreen(
                     drawCircle(markerColors[placed.id] ?: MapAmber, 3.dp.toPx(), Offset(x, anchorY))
                 }
             }
-            Text("${band.uppercase()} · ${formatBandMapFrequency(segment.lowerHz)}–${formatBandMapFrequency(segment.upperHz)}", color = MapAmber,
-                fontWeight = FontWeight.Black, fontSize = 11.sp, modifier = Modifier.align(Alignment.TopEnd))
+            Text(band.uppercase(), color = MapAmber, fontWeight = FontWeight.Black, fontSize = 11.sp,
+                modifier = Modifier.align(Alignment.TopStart))
+            BandScaleControls(band, controller, Modifier.align(Alignment.TopEnd))
             BandMapLayoutEngine.ticks(segment, heightPx.roundToInt()).filterIndexed { index, _ -> index % controller.settings.frequencyLabelEvery == 0 }.forEach { tick ->
                 Text(formatBandMapFrequency(tick.frequencyHz), color = MapMuted, fontSize = 8.sp,
                     modifier = Modifier.offset { IntOffset(0, (tick.position * heightPx).roundToInt().coerceIn(0, (heightPx - 18).roundToInt().coerceAtLeast(0))) })
@@ -447,11 +458,12 @@ internal fun BandMapScreen(
     val snapshot = controller.snapshot
     val activeBand = bandMapBands.firstOrNull { operatingContext.receiveFrequencyHz.value in it.lowerHz..it.upperHz }?.name
         ?: snapshot.selectedBands.firstOrNull()
-    var selected by remember(snapshot.generation, activeBand) { mutableStateOf<BandMapRankedSpot?>(null) }
+    var selected by remember(activeBand) { mutableStateOf<BandMapRankedSpot?>(null) }
     if (activeBand == null) return
     Column(modifier.background(MapBackground).padding(6.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Text("BAND MAP · $activeBand", color = MapAmber, fontWeight = FontWeight.Black, fontSize = 12.sp)
-        Text("RX cyan · TX magenta · receive review only", color = MapMuted, fontSize = 9.sp)
+        BandScaleControls(activeBand, controller, Modifier.fillMaxWidth())
+        Text("Drag/pinch · RX cyan · TX magenta", color = MapMuted, fontSize = 8.sp)
         VerticalLane(activeBand, snapshot.rankedSpots.filter { it.spot.band == activeBand }, controller, emptyMap(), app,
             { selected = it; controller.select(it.spot.id) }, Modifier.fillMaxWidth().weight(1f), operatingContext)
     }
@@ -464,6 +476,24 @@ internal fun BandMapScreen(
                 selected = null; controller.select(null)
             }) { Text("REVIEW RX") } },
             dismissButton = { OutlinedButton({ selected = null; controller.select(null) }) { Text("CLOSE") } })
+    }
+}
+
+@Composable private fun BandScaleControls(band: String, controller: BandMapController, modifier: Modifier = Modifier) {
+    val span = controller.visibleSegment(band).spanHz
+    val spanLabel = if (span >= 1_000L) "${(span + 500L) / 1_000L} kHz" else "$span Hz"
+    Row(modifier.background(MapBackground.copy(alpha = .88f), RoundedCornerShape(8.dp)),
+        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(44.dp).clickable { controller.zoom(band, 1.5) }
+            .semantics { contentDescription = "Widen $band band map spacing" }, contentAlignment = Alignment.Center) {
+            Text("−", color = MapText, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        }
+        Text(spanLabel, color = MapCyan, fontSize = 9.sp, maxLines = 1,
+            modifier = Modifier.semantics { contentDescription = "$band band map span $span hertz" })
+        Box(Modifier.size(44.dp).clickable { controller.zoom(band, 2.0 / 3.0) }
+            .semantics { contentDescription = "Narrow $band band map spacing" }, contentAlignment = Alignment.Center) {
+            Text("+", color = MapText, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }
 

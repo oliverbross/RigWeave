@@ -134,7 +134,11 @@ class BandMapDomainTest {
     @Test fun malformedPresetImportPreservesLastGoodCandidate() {
         val expected = BandMapSettings(callStatusFilters = setOf("NC", "NB"), dxccStatusFilters = setOf("ATNO"),
             laneSize = 1, spotLabelSizeSp = 13, frequencyLabelEvery = 1,
-            labelMetadata = setOf(BandMapLabelMetadata.AGE, BandMapLabelMetadata.BEARING))
+            labelMetadata = setOf(BandMapLabelMetadata.AGE, BandMapLabelMetadata.BEARING),
+            viewports = mapOf(
+                "20m" to BandMapViewport(14_050_000L, 14_100_000L),
+                "40m" to BandMapViewport(7_000_000L, 7_080_000L),
+            ))
         val good = BandMapSettingsCodec.encode(expected)
         val decoded = BandMapSettingsCodec.decode(good)
         assertEquals(expected.selectedBands, decoded.selectedBands)
@@ -144,6 +148,7 @@ class BandMapDomainTest {
         assertEquals(expected.spotLabelSizeSp, decoded.spotLabelSizeSp)
         assertEquals(expected.frequencyLabelEvery, decoded.frequencyLabelEvery)
         assertEquals(expected.labelMetadata, decoded.labelMetadata)
+        assertEquals(expected.viewports, decoded.viewports)
         assertThrows(IllegalArgumentException::class.java) { BandMapSettingsCodec.decode(good.replace("\"label_density\":2", "\"label_density\":99")) }
         assertThrows(IllegalArgumentException::class.java) { BandMapSettingsCodec.decode(good.replace("\"ATNO\"", "\"INVALID\"")) }
     }
