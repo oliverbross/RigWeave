@@ -919,7 +919,7 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
                 Text(weatherText, color = HcCyan, fontFamily = FontFamily.Monospace, fontSize = 16.sp)
                 StatusPill(if (radio.connected) "CAT LIVE" else "CAT OFFLINE", radio.connected)
                 StatusPill(if (app.transmitArmed) "TX ARMED" else "SAFE / RX", !app.transmitArmed)
-                ShackEntry(enterShack, shackDisplay, shackProfileName, compact = false); ConfigButton(configure); SyncButton(neuralDx.refreshing, refresh)
+                ShackEntry(enterShack, shackDisplay, shackProfileName, compact = true); ConfigButton(configure); SyncButton(neuralDx.refreshing, refresh)
             }
         }
     }
@@ -931,25 +931,9 @@ private fun HamClockHeader(call: String, grid: String, radio: RadioState, app: A
     profileName: String,
     compact: Boolean,
 ) {
-    if (compact) {
-        Button(open, modifier = Modifier.heightIn(min = 48.dp)) {
-            Icon(Icons.Outlined.DesktopWindows, contentDescription = "Enter Shack Display", Modifier.size(18.dp))
-            Spacer(Modifier.width(6.dp)); Text("SHACK")
-        }
-        return
-    }
-    Button(open, modifier = Modifier.widthIn(min = 230.dp).heightIn(min = 64.dp),
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)) {
-        Icon(Icons.Outlined.DesktopWindows, contentDescription = "Enter Shack Display", Modifier.size(26.dp))
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text("SHACK DISPLAY", fontWeight = FontWeight.Black)
-            Text("Full-screen station dashboard", fontSize = 11.sp, maxLines = 1)
-            Text("$profileName · ${preference.theme.name.replace('_', ' ')}" +
-                if (preference.keepScreenOn) " · SCREEN ON" else "", fontSize = 10.sp, maxLines = 1,
-                overflow = TextOverflow.Ellipsis)
-        }
-        Text("ENTER", fontWeight = FontWeight.Black, fontSize = 11.sp)
+    Button(open, modifier = Modifier.heightIn(min = 48.dp)) {
+        Icon(Icons.Outlined.DesktopWindows, contentDescription = "Open Shack display", Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp)); Text("Shack")
     }
 }
 
