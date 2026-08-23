@@ -448,7 +448,10 @@ internal fun PortableChaseScreen(
             ready.setMinZoomPreference(.8); ready.setMaxZoomPreference(14.0)
             ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { style -> installPortableLabelLayers(style); styleReady = true }
             ready.addOnCameraMoveStartedListener { reason -> if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }
-            ready.setOnMarkerClickListener { marker -> markerSelections[marker.id]?.let(currentSelect); true }
+            ready.setOnMarkerClickListener { marker ->
+                markerSelections[marker.id]?.let(currentSelect)
+                false // Preserve MapLibre's coordinate-anchored title/snippet window.
+            }
             ready.addOnMapClickListener { point -> val feature = ready.queryRenderedFeatures(ready.projection.toScreenLocation(point), PORTABLE_SELECTED_LABEL_LAYER, PORTABLE_LABEL_LAYER).firstOrNull(); feature?.getStringProperty("spot_id")?.let(currentSelect); feature != null }
         }
         onDispose { disposed = true; lifecycle.removeObserver(observer); styleReady = false; map = null; destroy() }
