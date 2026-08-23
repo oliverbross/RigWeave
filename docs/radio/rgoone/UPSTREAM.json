@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "retrieved_date": "2026-08-23",
+  "official_origins": [
+    "https://lz2jr.com/",
+    "https://lz2jr.com/blog/"
+  ],
+  "latest_firmware": "1.09",
+  "latest_cat_manual": "1.03",
+  "redistribution_policy": "Do not commit official manuals: no explicit redistribution grant was located on the official site or in the reviewed files.",
+  "sources": [
+    {
+      "id": "v6-operating-manual-1.01",
+      "url": "https://lz2jr.com/blog/wp-content/uploads/2026/01/Manual-RGO-ONE-V6-1.01.pdf",
+      "title": "RGO ONE V6 operating manual",
+      "edition": "1.01A, December 2025",
+      "bytes": 1642389,
+      "sha256": "4f362fc988b033fce2b2b2c982a07be1d3076d48fd21aded7fad89969862fa3f",
+      "last_modified": "Sun, 04 Jan 2026 20:18:56 GMT",
+      "permission": "REVIEW_ONLY_NO_EXPLICIT_REDISTRIBUTION_GRANT",
+      "watch": true
+    },
+    {
+      "id": "v6-cat-manual-1.03",
+      "url": "https://lz2jr.com/blog/wp-content/uploads/2026/06/RGO_ONE_V6_CAT_Manual1.03.pdf",
+      "title": "RGO ONE V6 CAT operation manual",
+      "edition": "1.03, firmware 1.08 and higher",
+      "bytes": 395336,
+      "sha256": "6dd8aa96ab92ed7aa666dc1dac2847bc0158fa7c1526f86d04dc9ecfa819d78b",
+      "last_modified": "Fri, 12 Jun 2026 13:37:50 GMT",
+      "permission": "REVIEW_ONLY_NO_EXPLICIT_REDISTRIBUTION_GRANT",
+      "watch": true
+    },
+    {
+      "id": "firmware-1.09-release-notes",
+      "url": "https://lz2jr.com/blog/wp-content/uploads/2026/08/FW-1.09-release-notes.txt",
+      "title": "RGO ONE V6 firmware 1.09 release notes",
+      "edition": "1.09, August 2026",
+      "bytes": 627,
+      "sha256": "5285a1a4bb36a3851730aeafb4b63974a3078f6e58d633f14dd7054bf8566852",
+      "last_modified": "Fri, 21 Aug 2026 10:43:44 GMT",
+      "permission": "FACTUAL_REVIEW_ONLY",
+      "watch": true
+    },
+    {
+      "id": "firmware-1.08-release-notes",
+      "url": "https://lz2jr.com/blog/wp-content/uploads/2026/06/FW-1.08-release-notes.txt",
+      "title": "RGO ONE V6 firmware 1.08 release notes",
+      "edition": "1.08, June 2026",
+      "bytes": 1394,
+      "sha256": "2115c6473815a6639351a62a5bef23dbcf01dd3aace55c3d953b01ad83e26e58",
+      "permission": "FACTUAL_REVIEW_ONLY",
+      "watch": false
+    },
+    {
+      "id": "af-option-manual-1.01",
+      "url": "https://lz2jr.com/blog/wp-content/uploads/2026/02/AF-option-manual-1.01.pdf",
+      "title": "RGO ONE Audio DSP filter option operating and installation manual",
+      "edition": "1.01",
+      "bytes": 587411,
+      "sha256": "f998c80fcd505de2570202ec71419b41e4bf4917779880be0cd8af8e478a8665",
+      "permission": "REVIEW_ONLY_NO_EXPLICIT_REDISTRIBUTION_GRANT",
+      "watch": true
+    },
+    {
+      "id": "legacy-operating-manual-2.00A",
+      "url": "https://lz2jr.com/blog/wp-content/uploads/2022/02/RGO-ONE-operating-manual-2.00A.pdf",
+      "title": "RGO ONE operating manual",
+      "edition": "2.00A, July 2020",
+      "bytes": 2034788,
+      "sha256": "4331715f11decd739d312d14e44431530e7b10a04f59c2d4bede827cad101f90",
+      "permission": "REVIEW_ONLY_NO_EXPLICIT_REDISTRIBUTION_GRANT",
+      "watch": true
+    },
+    {
+      "id": "legacy-operating-manual-1.01b",
+      "url": "https://lz2jr.com/blog/wp-content/uploads/2019/05/Manual-RGO-ONE-1.01b.pdf",
+      "title": "RGO ONE operating manual",
+      "edition": "1.01b, June 2019",
+      "bytes": 1500677,
+      "sha256": "47fa16156003add248c884bd002084d0ad6e4a9ec0dbc41d4e63bf2269144044",
+      "permission": "REVIEW_ONLY_NO_EXPLICIT_REDISTRIBUTION_GRANT",
+      "watch": false
+    },
+    {
+      "id": "atu-option-manual",
+      "url": "https://lz2jr.com/blog/wp-content/uploads/2019/05/ATU-manual.pdf",
+      "title": "RGO ONE internal ATU manual",
+      "edition": "official current listing, legacy module document",
+      "bytes": 1816457,
+      "sha256": "5ef77063d018669ad389de622157f4341a2a0d28ac52fba7cdb63af8be983338",
+      "permission": "REVIEW_ONLY_NO_EXPLICIT_REDISTRIBUTION_GRANT",
+      "watch": false
+    },
+    {
+      "id": "nb-option-manual-1.01A",
+      "url": "https://lz2jr.com/blog/wp-content/uploads/2022/05/NB-option-manual-rev.1.01A.pdf",
+      "title": "RGO ONE Noise Blanker option manual",
+      "edition": "1.01A",
+      "bytes": 2509085,
+      "sha256": "8f8af31b18545463f9f09d580e174d94184addb80ffb35bffd368f9985eda331",
+      "permission": "REVIEW_ONLY_NO_EXPLICIT_REDISTRIBUTION_GRANT",
+      "watch": true
+    },
+    {
+      "id": "vbf-option-manual-1.2",
+      "url": "https://lz2jr.com/blog/wp-content/uploads/2023/03/RGO-ONE-VBF-manual-v1.2-1.pdf",
+      "title": "RGO ONE VBF manual",
+      "edition": "1.2",
+      "bytes": 426461,
+      "sha256": "707d979d424ffa495f41e3e265f62e4c09e4e43dfd40af16318540dfbc4ed66c",
+      "permission": "REVIEW_ONLY_NO_EXPLICIT_REDISTRIBUTION_GRANT",
+      "watch": false
+    },
+    {
+      "id": "bpf160-60m-option-manual",
+      "url": "https://lz2jr.com/blog/wp-content/uploads/2021/06/BPF160-60m-operating-manual.pdf",
+      "title": "RGO ONE BPF 160/60m operating manual",
+      "edition": "official current listing, legacy module document",
+      "bytes": 2305313,
+      "sha256": "2f89833fc1de67c21fee779804c850e0d481ea35beab88c26736e6dd6357ae3c",
+      "permission": "REVIEW_ONLY_NO_EXPLICIT_REDISTRIBUTION_GRANT",
+      "watch": false
+    },
+    {
+      "id": "manuals-index",
+      "url": "https://lz2jr.com/blog/index.php/rgo-one-manuals/",
+      "title": "RGO ONE manuals",
+      "edition": "living official index retrieved 2026-08-23",
+      "bytes": 58022,
+      "sha256": "162db76fc4a307f2f6180977e091bfffa15c546250b1533d2b9e38cab4ca91ab",
+      "watch_url": "https://lz2jr.com/blog/wp-json/wp/v2/posts/1285?_fields=id,modified,slug,link,title,content",
+      "watch_bytes": 2993,
+      "watch_sha256": "107dd1bf34879d19ebce498ad4207b3eaf0b35f7c9dc0a85e39c028f4b9ca638",
+      "permission": "FACTUAL_REVIEW_ONLY",
+      "watch": true
+    },
+    {
+      "id": "firmware-index",
+      "url": "https://lz2jr.com/blog/index.php/rgo-one-v6-firmware-updates/",
+      "title": "RGO ONE V6 firmware updates",
+      "edition": "living official index, latest 1.09",
+      "bytes": 58519,
+      "sha256": "a24f3d9ff53ea3b8cc275aba2cbeded442ba46d38fc5a4c9bbe51b6bad5b62fa",
+      "watch_url": "https://lz2jr.com/blog/wp-json/wp/v2/posts/1263?_fields=id,modified,slug,link,title,content",
+      "watch_bytes": 2875,
+      "watch_sha256": "363de67b304888ace89e0338e825b0a2ff2676e3b1b0ae4fdd6b9b82937ba284",
+      "permission": "FACTUAL_REVIEW_ONLY",
+      "watch": true
+    },
+    {
+      "id": "v6-platform-announcement",
+      "url": "https://lz2jr.com/blog/index.php/rgo-one-v6-new-platform-change-announcement/",
+      "title": "RGO ONE V6 new platform change announcement",
+      "edition": "7 November 2025",
+      "bytes": 62497,
+      "sha256": "ad7481238ec7b90863a830e955900ff75b5e60bc7a2e797fa4ef30a5faa00684",
+      "watch_url": "https://lz2jr.com/blog/wp-json/wp/v2/posts/1222?_fields=id,modified,slug,link,title,content",
+      "watch_bytes": 3805,
+      "watch_sha256": "113dcebdc7e3b57cc3c91a4f8d0501a660c586a2c3935aa75c26644455130f0c",
+      "permission": "FACTUAL_REVIEW_ONLY",
+      "watch": true
+    },
+    {
+      "id": "firmware-1.09-post",
+      "url": "https://lz2jr.com/blog/index.php/new-firmware-v1-09-available/",
+      "title": "New firmware v1.09 available",
+      "edition": "21 August 2026",
+      "bytes": 57638,
+      "sha256": "572085807c954c4ad1f86bd70d18c1b3cd2b1e1e94f78736b73589dcbf8491ef",
+      "watch_url": "https://lz2jr.com/blog/wp-json/wp/v2/posts/1445?_fields=id,modified,slug,link,title,content",
+      "watch_bytes": 1038,
+      "watch_sha256": "6724b423b15307a37bf1a3fd879024c2c52a499bf6d30ef5958cab9fbb916312",
+      "permission": "FACTUAL_REVIEW_ONLY",
+      "watch": true
+    }
+  ],
+  "availability_findings": {
+    "legacy_cat_manual": "NOT_LOCATED_ON_OFFICIAL_MANUALS_INDEX_OR_WORDPRESS_MEDIA_SEARCH",
+    "serial_framing": "NOT_SPECIFIED_IN_REVIEWED_OFFICIAL_DOCUMENTS",
+    "filter_bandwidth_cat_command": "NOT_SPECIFIED_IN_CAT_MANUAL_1.03",
+    "usb_audio_descriptor_profile": "NOT_PUBLISHED_IN_REVIEWED_DOCUMENTS",
+    "transverter_rx_antenna_module_manual": "NOT_LOCATED",
+    "speech_processor_module_manual": "NOT_LOCATED"
+  }
+}
