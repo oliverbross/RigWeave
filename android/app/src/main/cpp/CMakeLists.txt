@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.22.1)
 project(rigweave_jni LANGUAGES CXX)
 
 set(CORE_ROOT ../../../../../core)
+get_filename_component(HAMLIB_SOURCE_ROOT "${CORE_ROOT}/third_party/hamlib" ABSOLUTE)
+get_filename_component(HAMLIB_BUILD_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/hamlib" ABSOLUTE)
 file(GLOB RIGWEAVE_SGP4_SOURCES CONFIGURE_DEPENDS ${CORE_ROOT}/third_party/sgp4/libsgp4/*.cc)
 get_filename_component(FLEX_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../rust/rigweave-flex" ABSOLUTE)
 if(ANDROID_ABI STREQUAL "armeabi-v7a")
@@ -18,9 +20,13 @@ endif()
 add_library(rigweave_flex STATIC IMPORTED)
 set_target_properties(rigweave_flex PROPERTIES IMPORTED_LOCATION
     ${FLEX_ROOT}/target/${FLEX_RUST_TARGET}/release/librigweave_flex.a)
+add_library(rigweave_hamlib STATIC IMPORTED)
+set_target_properties(rigweave_hamlib PROPERTIES IMPORTED_LOCATION
+    ${HAMLIB_BUILD_ROOT}/${ANDROID_ABI}/libhamlib.a)
 add_library(rigweave SHARED
     native_bridge.cpp
     hamclock_propagation_bridge.cpp
+    hamlib/hamlib_jni.cpp
     ${CORE_ROOT}/src/core.cpp
     ${CORE_ROOT}/src/features.cpp
     ${CORE_ROOT}/src/satellite.cpp
@@ -36,7 +42,13 @@ add_library(rigweave SHARED
     ${CORE_ROOT}/portable/src/sync_queue.cpp
     ${CORE_ROOT}/portable/src/wsjtx_protocol.cpp
     ${RIGWEAVE_SGP4_SOURCES})
-target_include_directories(rigweave PRIVATE ${CORE_ROOT}/include ${CORE_ROOT}/portable/include ${CORE_ROOT}/third_party/sgp4/libsgp4 ${FLEX_ROOT}/include)
-target_link_libraries(rigweave PRIVATE rigweave_flex log)
+target_include_directories(rigweave PRIVATE
+    ${HAMLIB_BUILD_ROOT}/${ANDROID_ABI}/include
+    ${HAMLIB_SOURCE_ROOT}/include
+    ${CORE_ROOT}/include
+    ${CORE_ROOT}/portable/include
+    ${CORE_ROOT}/third_party/sgp4/libsgp4
+    ${FLEX_ROOT}/include)
+target_link_libraries(rigweave PRIVATE rigweave_hamlib rigweave_flex log m)
 target_compile_features(rigweave PRIVATE cxx_std_17)
 target_compile_options(rigweave PRIVATE -Wall -Wextra -Wpedantic)
