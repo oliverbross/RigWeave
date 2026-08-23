@@ -884,7 +884,7 @@ private fun navIcon(item: Destination) = when (item) {
                         )
                     }
                     Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(if (showCompactBandMap) 8.dp else 0.dp)) {
-                        if (showCompactBandMap) CompactRadioBandMap(bandMaps, operatingContext, app, workspaceAction,
+                        if (showCompactBandMap) CompactRadioBandMap(bandMaps, database, cty, operatingContext, app, workspaceAction,
                             Modifier.fillMaxHeight().weight(.1f))
                         Box(Modifier.fillMaxHeight().weight(if (showCompactBandMap) .9f else 1f)) {
                         if (app.radioFamily == RadioFamily.FLEXRADIO) FlexRadioScreen(flex, openLogbook)

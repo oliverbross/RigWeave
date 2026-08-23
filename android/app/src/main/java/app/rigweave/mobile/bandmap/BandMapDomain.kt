@@ -13,7 +13,7 @@ internal enum class BandMapDirection { LOW_TO_HIGH, HIGH_TO_LOW }
 internal enum class BandMapSegmentProfile { WHOLE, CW_DISPLAY, PHONE_DISPLAY, DIGI_DISPLAY, CUSTOM }
 internal enum class BandMapIaruRegion { REGION_1, REGION_2, REGION_3, UNKNOWN }
 internal enum class BandMapJurisdiction { STATION_PROFILE, IARU_REGION_1, IARU_REGION_2, IARU_REGION_3, REVIEWED_NATIONAL_PLAN, CUSTOM_PLAN }
-internal enum class BandMapLabelMetadata { AGE, BEARING, DISTANCE, MODE, SPOTTER, SOURCE, SNR }
+internal enum class BandMapLabelMetadata { AGE, CALL_STATUS, DXCC_STATUS, BEARING, DISTANCE, MODE, SPOTTER, SOURCE, SNR }
 internal enum class BandMapOperatingSegmentKind { CW, DATA, PHONE, FM_REPEATER, BEACON_SATELLITE, CUSTOM }
 internal enum class BandMapEvidenceKind { CURRENT_OBSERVED, EMPIRICAL_OUTLOOK, HISTORICAL_PERSONAL }
 internal enum class BandMapEvidenceStatus { POSITIVE, NEUTRAL, NEGATIVE, UNKNOWN, UNAVAILABLE }
@@ -488,5 +488,24 @@ internal object BandMapLayoutEngine {
             }
         }
         return result
+    }
+
+    fun resolveVerticalLabels(placements: List<BandMapPlacedSpot>, heightPx: Float, labelHeightPx: Float, topPx: Float): Map<String, Float> {
+        val bottomPx = (heightPx - labelHeightPx).coerceAtLeast(topPx)
+        val positions = mutableMapOf<String, Float>()
+        var nextY = topPx
+        placements.sortedBy(BandMapPlacedSpot::primary).forEach { placed ->
+            val desired = (placed.primary * heightPx).coerceIn(topPx, bottomPx)
+            val resolved = maxOf(desired, nextY).coerceAtMost(bottomPx)
+            positions[placed.id] = resolved
+            nextY = resolved + labelHeightPx
+        }
+        var previousY = bottomPx
+        placements.sortedByDescending(BandMapPlacedSpot::primary).forEach { placed ->
+            val resolved = minOf(positions[placed.id] ?: previousY, previousY).coerceAtLeast(topPx)
+            positions[placed.id] = resolved
+            previousY = resolved - labelHeightPx
+        }
+        return positions
     }
 }

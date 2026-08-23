@@ -47,6 +47,18 @@ class TabletAcceptanceSweep1BandMapTest {
         assertTrue(ticks.all { it.frequencyHz in segment.lowerHz..segment.upperHz && it.position in 0f..1f })
     }
 
+    @Test fun narrowVerticalLabelsAreCollisionResolvedInsideTheLane() {
+        val placements = listOf(
+            BandMapPlacedSpot("a", .10f, 0),
+            BandMapPlacedSpot("b", .11f, 1),
+            BandMapPlacedSpot("c", .12f, 2),
+        )
+        val positions = BandMapLayoutEngine.resolveVerticalLabels(placements, heightPx = 1_000f, labelHeightPx = 44f, topPx = 52f)
+        val ordered = placements.map { positions.getValue(it.id) }
+        assertTrue(ordered.zipWithNext().all { (left, right) -> right - left >= 44f })
+        assertTrue(ordered.all { it in 52f..956f })
+    }
+
     @Test fun iaruDisplayPlanIsGuidanceNotRegulatoryAuthority() {
         val plan = BandMapDisplayPlans.forBand("20m", BandMapIaruRegion.REGION_1)
         assertFalse(plan.regulatoryAuthority)

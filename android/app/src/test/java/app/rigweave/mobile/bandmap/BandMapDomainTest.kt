@@ -134,7 +134,8 @@ class BandMapDomainTest {
     @Test fun malformedPresetImportPreservesLastGoodCandidate() {
         val expected = BandMapSettings(callStatusFilters = setOf("NC", "NB"), dxccStatusFilters = setOf("ATNO"),
             laneSize = 1, spotLabelSizeSp = 13, frequencyLabelEvery = 1,
-            labelMetadata = setOf(BandMapLabelMetadata.AGE, BandMapLabelMetadata.BEARING),
+            labelMetadata = setOf(BandMapLabelMetadata.AGE, BandMapLabelMetadata.CALL_STATUS,
+                BandMapLabelMetadata.DXCC_STATUS, BandMapLabelMetadata.BEARING),
             viewports = mapOf(
                 "20m" to BandMapViewport(14_050_000L, 14_100_000L),
                 "40m" to BandMapViewport(7_000_000L, 7_080_000L),
