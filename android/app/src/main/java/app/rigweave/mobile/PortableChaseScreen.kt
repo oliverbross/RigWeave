@@ -450,13 +450,48 @@ internal fun PortableChaseScreen(
             ready.addOnCameraMoveStartedListener { reason -> if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }
             ready.setOnMarkerClickListener { marker ->
                 markerSelections[marker.id]?.let(currentSelect)
-                false // Preserve MapLibre's coordinate-anchored title/snippet window.
+                marker.showInfoWindow(ready, mapView)
+                true
             }
             ready.addOnMapClickListener { point -> val feature = ready.queryRenderedFeatures(ready.projection.toScreenLocation(point), PORTABLE_SELECTED_LABEL_LAYER, PORTABLE_LABEL_LAYER).firstOrNull(); feature?.getStringProperty("spot_id")?.let(currentSelect); feature != null }
         }
         onDispose { disposed = true; lifecycle.removeObserver(observer); styleReady = false; map = null; destroy() }
     }
-    val markerHash = rows.joinToString { "${it.spot.id}:${it.spot.latitude}:${it.spot.longitude}:${it.spot.callsign}" }; LaunchedEffect(map, styleReady, markerHash, selectedId) { val ready = map ?: return@LaunchedEffect; if (!styleReady) return@LaunchedEffect; ready.style?.let { style -> installPortableLabelLayers(style); style.getSourceAs<GeoJsonSource>(PORTABLE_LABEL_SOURCE)?.setGeoJson(portableLabelGeoJson(rows, selectedId)) }; ready.clear(); markerSelections.clear(); rows.groupBy { "${floor(it.spot.latitude!! / 3)}:${floor(it.spot.longitude!! / 3)}" }.values.forEach { group -> val chosen = group.firstOrNull { it.spot.id == selectedId } ?: group.first(); val isSelected = chosen.spot.id == selectedId; val color = when { isSelected -> android.graphics.Color.rgb(233, 167, 43); chosen.spot.programs.size > 1 -> android.graphics.Color.rgb(244, 201, 78); chosen.spot.programs.contains(PortableProgram.POTA) -> android.graphics.Color.rgb(66, 199, 123); chosen.spot.programs.contains(PortableProgram.SOTA) -> android.graphics.Color.rgb(101, 166, 199); else -> android.graphics.Color.rgb(196, 129, 216) }; val title = if (isSelected || group.size == 1) chosen.spot.callsign else "${group.size} portable activities"; val place = chosen.spot.references.joinToString(" · ") { "${it.program.label} ${it.code} · ${it.name.ifBlank { it.region.ifBlank { it.association.ifBlank { "Location unavailable" } } }}" }; val marker = ready.addMarker(MarkerOptions().position(LatLng(group.map { it.spot.latitude!! }.average(), group.map { it.spot.longitude!! }.average())).title(title).snippet(place).icon(portableMarker(context, color, group.size > 1))); markerSelections[marker.id] = chosen.spot.id } }
+    val markerHash = rows.joinToString { "${it.spot.id}:${it.spot.latitude}:${it.spot.longitude}:${it.spot.callsign}" }
+    LaunchedEffect(map, styleReady, markerHash, selectedId) {
+        val ready = map ?: return@LaunchedEffect
+        if (!styleReady) return@LaunchedEffect
+        ready.style?.let { style ->
+            installPortableLabelLayers(style)
+            style.getSourceAs<GeoJsonSource>(PORTABLE_LABEL_SOURCE)?.setGeoJson(portableLabelGeoJson(rows, selectedId))
+        }
+        ready.clear()
+        markerSelections.clear()
+        rows.groupBy { "${floor(it.spot.latitude!! / 3)}:${floor(it.spot.longitude!! / 3)}" }.values.forEach { group ->
+            val chosen = group.firstOrNull { it.spot.id == selectedId } ?: group.first()
+            val isSelected = chosen.spot.id == selectedId
+            val color = when {
+                isSelected -> android.graphics.Color.rgb(233, 167, 43)
+                chosen.spot.programs.size > 1 -> android.graphics.Color.rgb(244, 201, 78)
+                chosen.spot.programs.contains(PortableProgram.POTA) -> android.graphics.Color.rgb(66, 199, 123)
+                chosen.spot.programs.contains(PortableProgram.SOTA) -> android.graphics.Color.rgb(101, 166, 199)
+                else -> android.graphics.Color.rgb(196, 129, 216)
+            }
+            val title = if (isSelected || group.size == 1) chosen.spot.callsign else "${group.size} portable activities"
+            val place = chosen.spot.references.joinToString(" · ") {
+                "${it.program.label} ${it.code} · ${it.name.ifBlank { it.region.ifBlank { it.association.ifBlank { "Location unavailable" } } }}"
+            }
+            val marker = ready.addMarker(
+                MarkerOptions()
+                    .position(LatLng(group.map { it.spot.latitude!! }.average(), group.map { it.spot.longitude!! }.average()))
+                    .title(title)
+                    .snippet(place)
+                    .icon(portableMarker(context, color, group.size > 1)),
+            )
+            markerSelections[marker.id] = chosen.spot.id
+            if (isSelected) marker.showInfoWindow(ready, mapView)
+        }
+    }
     LaunchedEffect(map, styleReady, selectedId) {
         val ready = map ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
