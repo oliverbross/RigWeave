@@ -38,6 +38,8 @@ data class ContestReviewRow(
     val invalid: Boolean = false,
     val reviewRequired: Boolean = false,
     val zeroPoint: Boolean = false,
+    val mergeState: String = "STAGED",
+    val issue: String = "",
 )
 
 data class ContestBandMapRow(
@@ -99,6 +101,8 @@ data class ContestWorkspaceState(
     val network: ContestNetworkState = ContestNetworkState(),
     val exportPreview: String = "",
     val statusMessage: String = "Contest setup ready; nothing is armed",
+    val scpStatus: ScpStatus = ScpStatus(),
+    val scpSuggestions: List<ScpSuggestion> = emptyList(),
 )
 
 data class ContestWorkspaceCallbacks(
@@ -119,6 +123,7 @@ data class ContestWorkspaceCallbacks(
     val onClear: () -> Unit = {},
     val onEditQso: (String, String, String, String) -> Unit = { _, _, _, _ -> },
     val onDeleteQso: (String) -> Unit = {},
+    val onMergeToLogbook: () -> Unit = {},
     val onRole: (ContestOperatingRole) -> Unit = {},
     val onStartSession: () -> Unit = {},
     val onKeyerIntent: (ContestKeyerIntent) -> Unit = {},
@@ -132,6 +137,8 @@ data class ContestWorkspaceCallbacks(
     val onExport: (String) -> Unit = {},
     val onOpenLogbook: () -> Unit = {},
     val onOpenSettings: () -> Unit = {},
+    val onRefreshScp: () -> Unit = {},
+    val onDeleteScp: () -> Unit = {},
 )
 
 @Composable fun ContestWorkspace(state: ContestWorkspaceState, callbacks: ContestWorkspaceCallbacks, modifier: Modifier = Modifier) {
@@ -166,7 +173,7 @@ data class ContestWorkspaceCallbacks(
 @Composable internal fun ContestScorePanel(state: ContestWorkspaceState, modifier: Modifier = Modifier) {
     Card(modifier.fillMaxWidth().semantics { contentDescription = "Claimed score and multipliers" }) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("CLAIMED SCORE", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("LOCAL CLAIMED SCORE", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(state.score.claimedScore.toString(), style = MaterialTheme.typography.headlineLarge)
             Text("${state.score.scoredQsos} scored · ${state.score.points} points · ${state.score.status.name}")
             state.score.multipliers.forEach { (type, count) -> Text("${type.name}: $count") }

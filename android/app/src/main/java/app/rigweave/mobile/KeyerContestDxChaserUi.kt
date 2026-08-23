@@ -66,6 +66,7 @@ internal fun IntegratedContestWorkspace(
             onClear = runtime::clearEntry,
             onEditQso = runtime::updateQso,
             onDeleteQso = runtime::deleteQso,
+            onMergeToLogbook = { runtime.mergeToLogbook() },
             onRole = runtime::changeRole,
             onStartSession = runtime::startSession,
             onKeyerIntent = { runtime.dispatchKeyer(it) },
@@ -79,6 +80,8 @@ internal fun IntegratedContestWorkspace(
             onExport = runtime::previewExport,
             onOpenLogbook = onOpenLogbook,
             onOpenSettings = onOpenSettings,
+            onRefreshScp = runtime::refreshScp,
+            onDeleteScp = runtime::deleteScp,
         ), Modifier.weight(1f))
     }
 }

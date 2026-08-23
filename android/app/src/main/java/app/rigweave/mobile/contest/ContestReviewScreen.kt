@@ -24,6 +24,7 @@ import java.time.format.DateTimeFormatter
     var networkOnly by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<ContestReviewRow?>(null) }
     var delete by remember { mutableStateOf<ContestReviewRow?>(null) }
+    var confirmMerge by remember { mutableStateOf(false) }
     val rows = state.reviewRows.filter { row ->
         (query.isBlank() || row.callsign.contains(query, true) || row.id.contains(query, true)) &&
             (band == "ALL" || row.band == band) && (mode == "ALL" || row.mode == mode) &&
@@ -38,6 +39,7 @@ import java.time.format.DateTimeFormatter
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Button(callbacks.onOpenLogbook) { Text("OPEN LOGBOOK") }
+            Button({ confirmMerge = true }, enabled = state.reviewRows.any { it.mergeState != "MERGED" }) { Text("MERGE TO LOGBOOK") }
         }
         OutlinedTextField(query, { query = it.take(80) }, label = { Text("Search callsign / QSO ID") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -65,15 +67,16 @@ import java.time.format.DateTimeFormatter
                                 Text("${utcDate(row.createdAt)} · ${row.band} ${row.mode} · ${"%.3f".format(row.frequencyHz / 1_000_000.0)} MHz")
                                 Text(listOf("DUPE".takeIf { row.duplicate }, "INVALID".takeIf { row.invalid },
                                     "REVIEW".takeIf { row.reviewRequired }, "ZERO POINT".takeIf { row.zeroPoint },
-                                    "NETWORK".takeIf { row.networkOrigin }).filterNotNull().joinToString(" · ").ifBlank { "VALID" },
+                                    "NETWORK".takeIf { row.networkOrigin }, row.mergeState).filterNotNull().joinToString(" · ").ifBlank { "VALID" },
                                     color = if (row.invalid || row.reviewRequired) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (row.issue.isNotBlank()) Text(row.issue, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                             }
                             Text("${row.rstSent} / ${row.rstReceived}")
                         }
                     }
                 }
                 if (rows.isEmpty()) item { Text("No Contest QSOs match these bounded filters", modifier = Modifier.padding(12.dp)) }
-                if (state.reviewHasMore) item { Text("More rows remain; this page is bounded to 100 canonical links.", modifier = Modifier.padding(12.dp)) }
+                if (state.reviewHasMore) item { Text("More rows remain; this page is bounded to 100 Contest session entries.", modifier = Modifier.padding(12.dp)) }
             }
         }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -89,9 +92,13 @@ import java.time.format.DateTimeFormatter
     selected?.let { row -> ContestEditDialog(row, { call, sent, received -> callbacks.onEditQso(row.id, call, sent, received); selected = null },
         { delete = row; selected = null }, { selected = null }) }
     delete?.let { row -> AlertDialog(onDismissRequest = { delete = null }, title = { Text("DELETE CONTEST QSO?") },
-        text = { Text("Delete ${row.callsign} through the canonical mutation coordinator? This is a single local operator action; no bulk remote delete is performed.") },
+        text = { Text("Delete the unmerged temporary Contest entry for ${row.callsign}? Canonical Logbook and Wavelog data are unchanged.") },
         confirmButton = { Button({ callbacks.onDeleteQso(row.id); delete = null }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("DELETE") } },
         dismissButton = { TextButton({ delete = null }) { Text("CANCEL") } }) }
+    if (confirmMerge) AlertDialog(onDismissRequest = { confirmMerge = false }, title = { Text("MERGE CONTEST SESSION TO LOGBOOK?") },
+        text = { Text("Each reviewed unmerged entry will pass through the canonical QSO mutation coordinator. Existing canonical duplicates fail safely and remain retryable; the normal Wavelog outbox remains the only upload path.") },
+        confirmButton = { Button({ callbacks.onMergeToLogbook(); confirmMerge = false }) { Text("MERGE REVIEWED ENTRIES") } },
+        dismissButton = { TextButton({ confirmMerge = false }) { Text("CANCEL") } })
 }
 
 @Composable private fun ContestEditDialog(row: ContestReviewRow, save: (String, String, String) -> Unit, delete: () -> Unit, dismiss: () -> Unit) {
@@ -108,7 +115,7 @@ import java.time.format.DateTimeFormatter
                 OutlinedTextField(received, { received = it.take(4) }, label = { Text("RST received") }, modifier = Modifier.weight(1f))
             }
         }
-    }, confirmButton = { Button({ save(call, sent, received) }, enabled = call.isNotBlank()) { Text("SAVE CANONICALLY") } },
+    }, confirmButton = { Button({ save(call, sent, received) }, enabled = call.isNotBlank() && row.mergeState != "MERGED") { Text("SAVE SESSION ENTRY") } },
         dismissButton = { Row { TextButton(delete) { Text("DELETE") }; TextButton(dismiss) { Text("CANCEL") } } })
 }
 

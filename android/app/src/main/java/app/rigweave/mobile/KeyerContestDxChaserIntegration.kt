@@ -176,10 +176,12 @@ class ContestRuntime(
     private val initialDefinition = registry.all().first().definition
     private val opportunityEvaluator = DefaultContestOpportunityEvaluator(registry)
     private val canonicalReader = ContestCanonicalQsoReader(store, database)
+    private val scp = SuperCheckPartialStore(context)
     private val keyerAdapter = ContestKeyerAdapter(keyer, profiles, operatingContext)
     private val mutationAdapter = ContestQsoMutationAdapter(mutations, store, serials)
     private val scoreScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var scoreGeneration = 0L
+    private var scpGeneration = 0L
     private var closed = false
     private var foreground = true
     private var networkArmed = false
@@ -197,6 +199,8 @@ class ContestRuntime(
     var panelLayout by mutableStateOf(loadPanelLayout()); private set
     var exportPreview by mutableStateOf(""); private set
     var lastMessage by mutableStateOf("Contest setup ready; nothing is armed"); private set
+    var scpStatus by mutableStateOf(scp.status()); private set
+    var scpSuggestions by mutableStateOf<List<ScpSuggestion>>(emptyList()); private set
 
     private var n1mmConfig = loadN1mmConfig()
     var n1mm = newN1mmController(); private set
@@ -257,7 +261,31 @@ class ContestRuntime(
     }
 
     fun setPage(value: ContestWorkspacePage) { workspacePage = value }
-    fun updateCallsign(value: String) { callsign = value.uppercase(Locale.US).filter { it.isLetterOrDigit() || it == '/' }.take(16) }
+    fun updateCallsign(value: String) {
+        callsign = value.uppercase(Locale.US).filter { it.isLetterOrDigit() || it == '/' }.take(16)
+        val requested = callsign
+        val generation = ++scpGeneration
+        if (requested.length < 2) { scpSuggestions = emptyList(); return }
+        scoreScope.launch {
+            val rows = runCatching { scp.suggest(requested) }.getOrElse { listOf(ScpSuggestion(requested, ScpMatchState.DATABASE_UNAVAILABLE)) }
+            withContext(Dispatchers.Main.immediate) {
+                if (!closed && generation == scpGeneration && callsign == requested) scpSuggestions = rows
+            }
+        }
+    }
+
+    fun refreshScp() {
+        scoreScope.launch {
+            val result = runCatching { scp.refresh(manual = true) }
+            withContext(Dispatchers.Main.immediate) {
+                result.onSuccess { scpStatus = it; lastMessage = "SCP ${it.rowCount} calls · ${it.generatedAt.ifBlank { "generation unavailable" }}" }
+                    .onFailure { lastMessage = "SCP refresh failed; last-good retained: ${it.message.orEmpty().take(120)}" }
+                updateCallsign(callsign)
+            }
+        }
+    }
+
+    fun deleteScp() { scp.delete(); scpStatus = scp.status(); scpSuggestions = emptyList(); lastMessage = "SCP private cache deleted; no Contest or QSO data changed" }
     fun updateRstSent(value: String) { rstSent = value.filter(Char::isDigit).take(3) }
     fun updateRstReceived(value: String) { rstReceived = value.filter(Char::isDigit).take(3) }
     fun setExchange(value: String) {
@@ -424,7 +452,13 @@ class ContestRuntime(
         val draft = ContestQsoDraft(qsoId, callsign, Instant.now().epochSecond, context.receiveFrequencyHz.value,
             band, mode, if (mode == ContestMode.CW) "599" else "59", if (mode == ContestMode.CW) "599" else "59",
             sent = sent, received = received)
-        val receipt = mutationAdapter.save(activeSession, definition, draft, reservation)
+        val staged = runCatching { store.stageQso(activeSession, draft, context.mode.value) }.getOrDefault(false)
+        val receipt = if (staged) ContestMutationReceipt(true, qsoId, false,
+            "Saved to the temporary Contest session log; merge to Logbook remains explicit")
+        else {
+            reservation?.let { runCatching { serials.release(it.id, activeSession.id) } }
+            ContestMutationReceipt(false, qsoId, false, "Temporary Contest log rejected a duplicate or invalid entry")
+        }
         if (receipt.saved) {
             rebuildScore()
             callsign = ""; exchangeText = ""
@@ -451,12 +485,7 @@ class ContestRuntime(
     }
 
     private fun priorDrafts(sessionId: ContestSessionId = activeSession.id): List<ContestQsoDraft> {
-        val page = canonicalReader.page(sessionId, limit = 101)
-        return page.rows.mapNotNull { qso ->
-            val band = ContestBand.entries.firstOrNull { it.label.equals(qso.band, true) } ?: return@mapNotNull null
-            val mode = when (qso.mode.uppercase(Locale.US)) { "CW" -> ContestMode.CW; "SSB", "USB", "LSB" -> ContestMode.SSB; else -> ContestMode.DIGITAL }
-            ContestQsoDraft(qso.id, qso.callsign, qso.createdAt, qso.frequencyHz, band, mode, qso.rstSent, qso.rstReceived)
-        }
+        return store.stagedQsos(sessionId, includeMerged = true, limit = 10_000).map(ContestSessionStore.StagedQso::draft)
     }
 
     fun digitalCompatible(): Boolean = activeSession.state != ContestSessionState.RUNNING ||
@@ -481,16 +510,41 @@ class ContestRuntime(
     }
 
     fun updateQso(id: String, call: String, sent: String, received: String) {
-        val row = database.qso(id) ?: run { lastMessage = "Canonical QSO was not found"; return }
-        mutations.update(row.copy(callsign = call.uppercase(Locale.US).take(24), rstSent = sent.take(4), rstReceived = received.take(4)), QsoOrigin.OPERATOR)
+        val row = store.stagedQsos(activeSession.id, true, 10_000).firstOrNull { it.draft.qsoId == id }
+            ?: run { lastMessage = "Contest session entry was not found"; return }
+        if (!store.updateStagedQso(activeSession.id, row.draft.copy(callsign = call.uppercase(Locale.US).take(24), rstSent = sent.take(4), rstReceived = received.take(4)))) {
+            lastMessage = "Merged Contest entries are immutable; repair the canonical QSO in Logbook"
+            return
+        }
         rebuildScore()
-        lastMessage = "Canonical QSO updated; Wavelog outbox ownership preserved"
+        lastMessage = "Temporary Contest entry updated; canonical Logbook remains unchanged"
     }
 
     fun deleteQso(id: String) {
-        mutations.delete(id, QsoDeleteIntent.LOCAL_ONLY, QsoOrigin.OPERATOR)
+        if (!store.deleteStagedQso(activeSession.id, id)) {
+            lastMessage = "Merged Contest entries cannot be deleted from the temporary log"
+            return
+        }
         rebuildScore()
-        lastMessage = "Canonical local QSO deleted; no remote delete was requested"
+        lastMessage = "Temporary Contest entry deleted; canonical Logbook remains unchanged"
+    }
+
+    fun mergeToLogbook(): Int {
+        val candidates = store.stagedQsos(activeSession.id, includeMerged = false, limit = 10_000)
+        var merged = 0
+        candidates.forEach { staged ->
+            val reservation = store.reservations(activeSession.id).firstOrNull {
+                it.state == ContestSerialState.RESERVED && it.owner.contains(staged.draft.qsoId)
+            }
+            val receipt = mutationAdapter.save(activeSession, definition, staged.draft, reservation)
+            store.markMergeResult(activeSession.id, staged.draft.qsoId,
+                receipt.qsoId.takeIf { receipt.saved }, receipt.qsoId.takeIf { receipt.saved }?.let { "local:${staged.draft.createdAt}:$it" }, receipt.detail)
+            if (receipt.saved) merged++
+        }
+        rebuildScore()
+        lastMessage = if (candidates.isEmpty()) "No unmerged Contest entries" else
+            "Merged $merged/${candidates.size} Contest entries through canonical QSO authority; failures remain retryable"
+        return merged
     }
 
     private fun rebuildScore() {
@@ -523,14 +577,15 @@ class ContestRuntime(
 
     fun workspaceState(bandMapRows: List<ContestBandMapRow> = emptyList(), clusterRows: List<ContestBandMapRow> = emptyList()): ContestWorkspaceState {
         val context = operatingContext()
-        val linked = canonicalReader.page(activeSession.id, limit = 101)
-        val calls = linked.rows.groupingBy { it.callsign.uppercase(Locale.US) }.eachCount()
-        val reviewRows = linked.rows.take(100).map { qso ->
-            val invalid = qso.callsign.isBlank() || qso.frequencyHz <= 0 || qso.mode.isBlank()
-            ContestReviewRow(qso.id, qso.callsign, qso.createdAt, qso.frequencyHz, qso.band, qso.mode,
-                qso.rstSent, qso.rstReceived, networkOrigin = qso.remoteId.isNotBlank(),
+        val staged = store.stagedQsos(activeSession.id, includeMerged = true, limit = 10_000)
+        val calls = staged.groupingBy { it.draft.callsign.uppercase(Locale.US) }.eachCount()
+        val reviewRows = staged.take(100).map { row ->
+            val qso = row.draft
+            val invalid = qso.callsign.isBlank() || qso.frequencyHz <= 0
+            ContestReviewRow(qso.qsoId, qso.callsign, qso.createdAt, qso.frequencyHz, qso.band.label, qso.mode.name,
+                qso.rstSent, qso.rstReceived, networkOrigin = qso.networkOriginId.isNotBlank(),
                 duplicate = (calls[qso.callsign.uppercase(Locale.US)] ?: 0) > 1, invalid = invalid,
-                reviewRequired = invalid, zeroPoint = false)
+                reviewRequired = invalid || row.mergeState == "FAILED", zeroPoint = false, mergeState = row.mergeState, issue = row.issue)
         }
         val livePeers = n1mm.peerSnapshots()
         if (livePeers.isNotEmpty()) peerCache = livePeers
@@ -544,11 +599,11 @@ class ContestRuntime(
             opportunity?.newMultipliers.orEmpty(), activeSession.score, validation(), wavelogBinding(),
             context.band.value.ifBlank { "UNAVAILABLE" }, context.mode.value.ifBlank { "UNAVAILABLE" }, context.receiveFrequencyHz.value,
             profiles.activeProfile().let { "${it.name} · ${keyer()?.snapshot()?.state ?: "UNAVAILABLE"}" },
-            panelLayout, bandMapRows.take(40), clusterRows.take(40), reviewRows, linked.rows.size > 100,
+            panelLayout, bandMapRows.take(40), clusterRows.take(40), reviewRows, staged.size > 100,
             ContestNetworkState(n1mmConfig.enabled, networkArmed, n1mm.active, n1mmConfig.mode.name,
                 n1mmConfig.bindAddress, n1mmConfig.tcpPort, n1mmConfig.stationName, n1mmConfig.lanBroadcastOptIn,
                 peers, n1mm.diagnosticCounters(), n1mm.diagnosticEvents().lastOrNull()?.safeReason.orEmpty()),
-            exportPreview, lastMessage)
+            exportPreview, lastMessage, scpStatus, scpSuggestions)
     }
 
     override fun snapshot() = ContestReadOnlySnapshot(activeSession, claims = emptyList(),

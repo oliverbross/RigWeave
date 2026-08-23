@@ -9,7 +9,9 @@ data class N1mmRemoteLink(val sourceStation:String,val remoteId:String,val remot
 interface N1mmRemoteLinkStore { fun find(sourceStation:String,remoteId:String,remoteRevision:String):N1mmRemoteLink?;fun put(link:N1mmRemoteLink) }
 class InMemoryN1mmRemoteLinkStore:N1mmRemoteLinkStore{private val rows=linkedMapOf<String,N1mmRemoteLink>();private fun key(s:String,id:String,r:String)="$s|$id|$r";override fun find(sourceStation:String,remoteId:String,remoteRevision:String)=synchronized(rows){rows[key(sourceStation,remoteId,remoteRevision)]};override fun put(link:N1mmRemoteLink){synchronized(rows){rows[key(link.sourceStation,link.remoteId,link.remoteRevision)]=link}}}
 
-class N1mmQsoBridge(private val repository:ContestRepository,private val links:N1mmRemoteLinkStore=InMemoryN1mmRemoteLinkStore()){
+fun interface N1mmContestStagingPort { fun stage(session:ContestSession,draft:ContestQsoDraft,remoteRevision:String):Boolean }
+
+class N1mmQsoBridge(private val staging:N1mmContestStagingPort,private val links:N1mmRemoteLinkStore=InMemoryN1mmRemoteLinkStore()){
     fun receiveAdd(command:N1mmTypedCommand,sourceStation:String,context:N1mmPolicyContext,session:ContestSession,definition:ContestDefinition,owner:String):N1mmBridgeResult{
         require(command.command in setOf(N1mmCommand.QSO,N1mmCommand.RESYNCQSO))
         val remoteId=command.values["Id"].orEmpty();val revision=command.values["Timestamp"].orEmpty()
@@ -18,10 +20,10 @@ class N1mmQsoBridge(private val repository:ContestRepository,private val links:N
         val decision=N1mmCommandPolicy.decide(command.command,context)
         if(decision!=N1mmPolicyDecision.AUTO_ACCEPT_SAFE_ADD)return N1mmBridgeResult(if(decision==N1mmPolicyDecision.TRUSTED_REVIEW)N1mmBridgeState.REVIEW_REQUIRED else N1mmBridgeState.MONITORED,reason="Network QSO was not eligible for safe automatic acceptance")
         val draft=map(command,sourceStation,remoteId)?:return N1mmBridgeResult(N1mmBridgeState.REVIEW_REQUIRED,reason="Remote QSO fields could not be mapped truthfully")
-        val saved=repository.save(session,definition,draft,owner,networkOrigin=false)
-        if(!saved.accepted)return N1mmBridgeResult(N1mmBridgeState.REJECTED,reason=saved.reason)
-        links.put(N1mmRemoteLink(sourceStation,remoteId,revision,saved.qsoId,"$sourceStation:$remoteId:$revision"))
-        return N1mmBridgeResult(N1mmBridgeState.ACCEPTED,saved.qsoId,"Accepted through canonical coordinator; origin tagged for loop prevention")
+        val staged=runCatching{staging.stage(session,draft,revision)}.getOrDefault(false)
+        if(!staged)return N1mmBridgeResult(N1mmBridgeState.REJECTED,reason="Network QSO could not be staged")
+        links.put(N1mmRemoteLink(sourceStation,remoteId,revision,draft.qsoId,"$sourceStation:$remoteId:$revision"))
+        return N1mmBridgeResult(N1mmBridgeState.ACCEPTED,draft.qsoId,"Accepted into the temporary Contest session log; explicit merge is still required")
     }
     fun receiveEditOrDelete(command:N1mmTypedCommand)=N1mmBridgeResult(N1mmBridgeState.REVIEW_REQUIRED,reason="Edits, deletes and checksum repair require explicit review in v1")
     private fun map(command:N1mmTypedCommand,source:String,id:String):ContestQsoDraft?{

@@ -51,10 +51,10 @@ import java.time.format.DateTimeFormatter
         }
         if (wide) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gap)) {
             ContestPanelColumn(state, callbacks, state.layout.panels.filter { it in setOf(ContestPanel.QSO_ENTRY, ContestPanel.BAND_MAP, ContestPanel.CLUSTER) },
-                Modifier.weight(1.55f), gap)
+                Modifier.weight(1.55f), gap, true)
             ContestPanelColumn(state, callbacks, state.layout.panels.filterNot { it in setOf(ContestPanel.QSO_ENTRY, ContestPanel.BAND_MAP, ContestPanel.CLUSTER) },
-                Modifier.weight(1f), gap)
-        } else ContestPanelColumn(state, callbacks, state.layout.panels, Modifier.fillMaxSize(), gap)
+                Modifier.weight(1f), gap, true)
+        } else ContestPanelColumn(state, callbacks, state.layout.panels, Modifier.fillMaxSize(), gap, false)
     }
     if (showLayout) ContestLayoutDialog(state.layout, callbacks.onLayout) { showLayout = false }
 }
@@ -65,11 +65,12 @@ import java.time.format.DateTimeFormatter
     panels: List<ContestPanel>,
     modifier: Modifier,
     gap: androidx.compose.ui.unit.Dp,
+    wide: Boolean,
 ) {
     LazyColumn(modifier, verticalArrangement = Arrangement.spacedBy(gap)) {
         items(panels, key = ContestPanel::name) { panel ->
             when (panel) {
-                ContestPanel.QSO_ENTRY -> ContestQsoEntryPanel(state, callbacks)
+                ContestPanel.QSO_ENTRY -> ContestQsoEntryPanel(state, callbacks, wide)
                 ContestPanel.BAND_MAP -> ContestRowsPanel("BAND MAP · READ ONLY", state.bandMapRows,
                     "No current Contest-band opportunities in the existing Band Map snapshot")
                 ContestPanel.CLUSTER -> ContestRowsPanel("CLUSTER / SPOTS · EXISTING SNAPSHOT", state.clusterRows,
@@ -81,7 +82,7 @@ import java.time.format.DateTimeFormatter
                 }
                 ContestPanel.SCORE_RATE -> ContestScorePanel(state)
                 ContestPanel.RECENT_QSOS -> ContestPanelCard("RECENT QSOS") {
-                    if (state.reviewRows.isEmpty()) Text("No canonical Contest QSOs yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (state.reviewRows.isEmpty()) Text("No temporary Contest entries yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     state.reviewRows.take(8).forEach { row ->
                         Text("${utcTime(row.createdAt)} · ${row.callsign} · ${row.band} ${row.mode} · ${"%.3f".format(row.frequencyHz / 1_000_000.0)}")
                     }
@@ -102,28 +103,44 @@ import java.time.format.DateTimeFormatter
     }
 }
 
-@Composable private fun ContestQsoEntryPanel(state: ContestWorkspaceState, callbacks: ContestWorkspaceCallbacks) {
+@Composable private fun ContestQsoEntryPanel(state: ContestWorkspaceState, callbacks: ContestWorkspaceCallbacks, wide: Boolean) {
     ContestPanelCard("QSO ENTRY") {
-        OutlinedTextField(state.callsign, callbacks.onCallsign, Modifier.fillMaxWidth().semantics { contentDescription = "Contest callsign" },
-            label = { Text("CALLSIGN") }, supportingText = { Text("Dupe ${state.dupe.name} · claimed by ${state.network.peers.firstOrNull()?.station ?: "none"}") }, singleLine = true)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(state.rstSent, callbacks.onRstSent, label = { Text("SENT RST") }, singleLine = true, modifier = Modifier.weight(1f))
-            OutlinedTextField(state.rstReceived, callbacks.onRstReceived, label = { Text("RECEIVED RST") }, singleLine = true, modifier = Modifier.weight(1f))
-            OutlinedTextField(if (state.operatingFrequencyHz > 0) state.operatingFrequencyHz.toString() else "UNAVAILABLE", {},
-                label = { Text("FREQUENCY HZ") }, enabled = false, modifier = Modifier.weight(1.3f))
+        val fields: @Composable RowScope.() -> Unit = {
+            OutlinedTextField(state.callsign, callbacks.onCallsign, Modifier.weight(2.2f).semantics { contentDescription = "Contest callsign" },
+                label = { Text("CALLSIGN") }, singleLine = true)
+            OutlinedTextField(state.rstSent, callbacks.onRstSent, label = { Text("RST S") }, singleLine = true, modifier = Modifier.weight(.8f))
+            OutlinedTextField(state.rstReceived, callbacks.onRstReceived, label = { Text("RST R") }, singleLine = true, modifier = Modifier.weight(.8f))
+            state.definition.receivedExchange.filterNot { it == ContestExchangeField.RST }.forEach { field ->
+                OutlinedTextField(state.receivedExchange[field].orEmpty(), { callbacks.onExchangeField(field, it) }, Modifier.weight(1.2f),
+                    label = { Text(field.name.replace('_', ' ')) }, singleLine = true)
+            }
+            Button(callbacks.onLog, enabled = state.session.state == ContestSessionState.RUNNING && state.callsign.isNotBlank(), modifier = Modifier.heightIn(min = 56.dp)) { Text("LOG") }
         }
-        state.definition.receivedExchange.filterNot { it == ContestExchangeField.RST }.forEach { field ->
-            OutlinedTextField(state.receivedExchange[field].orEmpty(), { callbacks.onExchangeField(field, it) }, Modifier.fillMaxWidth(),
-                label = { Text(field.name.replace('_', ' ')) }, singleLine = true)
+        if (wide) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), content = fields)
+        else Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(state.callsign, callbacks.onCallsign, Modifier.weight(2f), label = { Text("CALLSIGN") }, singleLine = true)
+                Button(callbacks.onLog, enabled = state.session.state == ContestSessionState.RUNNING && state.callsign.isNotBlank()) { Text("LOG") }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(state.rstSent, callbacks.onRstSent, label = { Text("RST S") }, singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedTextField(state.rstReceived, callbacks.onRstReceived, label = { Text("RST R") }, singleLine = true, modifier = Modifier.weight(1f))
+            }
+            state.definition.receivedExchange.filterNot { it == ContestExchangeField.RST }.forEach { field ->
+                OutlinedTextField(state.receivedExchange[field].orEmpty(), { callbacks.onExchangeField(field, it) }, Modifier.fillMaxWidth(), label = { Text(field.name.replace('_', ' ')) }, singleLine = true)
+            }
         }
+        Text("${state.operatingBand} · ${state.operatingMode} · ${if (state.operatingFrequencyHz > 0) state.operatingFrequencyHz else "frequency unavailable"} · Dupe ${state.dupe.name}",
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (state.scpSuggestions.isNotEmpty()) Text(state.scpSuggestions.take(8).joinToString(" · ") { "${it.callsign} ${it.state.name.replace('_', ' ')}" },
+            color = MaterialTheme.colorScheme.tertiary)
         if (state.definition.receivedExchange.isEmpty()) {
             OutlinedTextField(state.exchange, callbacks.onExchange, Modifier.fillMaxWidth(), label = { Text("RECEIVED EXCHANGE") }, singleLine = true)
         }
-        Text("Sent · ${state.definition.sentExchange.joinToString { it.name.replace('_', ' ') }} · Serial commits only after canonical save",
+        Text("Sent · ${state.definition.sentExchange.joinToString { it.name.replace('_', ' ') }} · temporary session log · serial commits only after canonical merge",
             color = MaterialTheme.colorScheme.onSurfaceVariant)
         state.validation.filter { it.field != null }.forEach { Text("${it.truth} · ${it.reason}", color = MaterialTheme.colorScheme.error) }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(callbacks.onLog, enabled = state.session.state == ContestSessionState.RUNNING && state.callsign.isNotBlank()) { Text("LOG") }
             OutlinedButton(callbacks.onClear) { Text("CLEAR / ESC") }
             OutlinedButton({ state.reviewRows.firstOrNull()?.let { callbacks.onEditQso(it.id, it.callsign, it.rstSent, it.rstReceived) } },
                 enabled = state.reviewRows.isNotEmpty()) { Text("EDIT LAST") }

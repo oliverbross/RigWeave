@@ -111,6 +111,22 @@ private val contestUtc = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").w
             }
         }
 
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("SUPER CHECK PARTIAL", style = MaterialTheme.typography.titleMedium)
+                Text(if (state.scpStatus.available) "READY · ${state.scpStatus.rowCount} calls · ${state.scpStatus.generatedAt.ifBlank { "generation unavailable" }}"
+                    else "DATABASE UNAVAILABLE · absence never makes a callsign invalid")
+                if (state.scpStatus.sha256.isNotBlank()) Text("SHA-256 ${state.scpStatus.sha256.take(16)}… · private offline last-good",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Official runtime download only · conditional cache · no bundled database · no Cabrillo upload",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(callbacks.onRefreshScp) { Text("REFRESH SCP.DB") }
+                    TextButton(callbacks.onDeleteScp, enabled = state.scpStatus.available) { Text("DELETE CACHE") }
+                }
+            }
+        }
+
         state.validation.forEach { issue ->
             AssistChip({}, { Text("${issue.truth}: ${issue.reason}") },
                 colors = AssistChipDefaults.assistChipColors(labelColor = if (issue.truth == ContestTruth.INVALID || issue.truth == ContestTruth.INCOMPLETE)
