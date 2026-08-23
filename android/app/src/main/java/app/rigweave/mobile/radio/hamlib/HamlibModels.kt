@@ -105,8 +105,12 @@ class HamlibModelRegistry private constructor(
     companion object {
         const val MAX_MODELS = 2048
         const val MAX_CAPABILITIES = 64
+        const val MAX_REGISTRY_BYTES = 8 * 1024 * 1024
 
         fun parse(libraryJson: String, modelsJson: String): HamlibModelRegistry {
+            require(libraryJson.length <= 16_384 && modelsJson.length <= MAX_REGISTRY_BYTES) {
+                "Hamlib registry response exceeds bound"
+            }
             val libraryObject = JSONObject(libraryJson)
             val root = JSONObject(modelsJson)
             val array = root.getJSONArray("models")

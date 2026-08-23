@@ -49,6 +49,6 @@ target_include_directories(rigweave PRIVATE
     ${CORE_ROOT}/portable/include
     ${CORE_ROOT}/third_party/sgp4/libsgp4
     ${FLEX_ROOT}/include)
-target_link_libraries(rigweave PRIVATE rigweave_hamlib rigweave_flex log m)
+target_link_libraries(rigweave PRIVATE rigweave_hamlib rigweave_flex android log m)
 target_compile_features(rigweave PRIVATE cxx_std_17)
 target_compile_options(rigweave PRIVATE -Wall -Wextra -Wpedantic)

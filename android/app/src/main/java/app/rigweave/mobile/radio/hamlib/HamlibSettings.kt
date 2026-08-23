@@ -48,6 +48,7 @@ data class HamlibSettingsDocument(
     companion object {
         const val MAX_PROFILES = 32
         fun parse(json: String): HamlibSettingsDocument {
+            require(json.length <= 1024 * 1024) { "Hamlib settings exceed bound" }
             val root = JSONObject(json)
             require(root.getInt("schema") == 1)
             val profiles = root.getJSONArray("profiles")

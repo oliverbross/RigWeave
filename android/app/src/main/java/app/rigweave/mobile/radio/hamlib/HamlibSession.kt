@@ -81,7 +81,8 @@ internal class HamlibSession(
     private val api: HamlibNativeApi,
 ) : Closeable {
     val handle: Long = api.create(modelId).also { check(it != 0L) { "Hamlib refused model $modelId" } }
-    private var closed = false
+    private var portClosed = false
+    private var destroyed = false
 
     fun setReadOnly(value: Boolean) = checked(api.readOnly(handle, value))
     fun configure(profile: HamlibSerialProfile) = checked(api.configureSerial(handle, profile))
@@ -90,10 +91,16 @@ internal class HamlibSession(
     fun snapshot() = HamlibModelRegistry.parseSnapshot(api.snapshot(handle))
     fun apply(action: HamlibAction) = checked(api.apply(handle, action))
 
-    override fun close() {
-        if (closed) return
-        closed = true
+    fun closePort() {
+        if (portClosed) return
+        portClosed = true
         api.close(handle)
+    }
+
+    override fun close() {
+        if (destroyed) return
+        closePort()
+        destroyed = true
         api.destroy(handle)
     }
 
@@ -146,6 +153,7 @@ class HamlibConnectionController internal constructor(
             bridge = newBridge
             connected(modelId, "serial", currentGeneration, pollIntervalMs)
         } catch (error: Throwable) {
+            newSession.closePort()
             newBridge?.stop()
             newSession.close()
             recordFailure(error)
@@ -198,6 +206,7 @@ class HamlibConnectionController internal constructor(
     private suspend fun disconnectLocked() {
         generation.incrementAndGet()
         pollJob?.cancel(); pollJob?.join(); pollJob = null
+        session?.closePort()
         bridge?.stop(); bridge = null
         session?.close(); session = null
         _snapshot.value = null

@@ -96,8 +96,7 @@ for abi in "${abis[@]}"; do
     fi
 
     make -C "$build_dir/src" -j"$jobs" libhamlib.la \
-        ROT_BACKENDEPS= AMP_BACKENDEPS= \
-        ACLOCAL=: AUTOCONF=: AUTOHEADER=: AUTOMAKE=:
+    ACLOCAL=: AUTOCONF=: AUTOHEADER=: AUTOMAKE=:
 
     cp "$build_dir/src/.libs/libhamlib.a" "$install_dir/libhamlib.a"
     cp "$build_dir/include/hamlib/config.h" "$install_dir/include/hamlib/config.h"
