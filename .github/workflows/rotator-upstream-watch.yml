@@ -1,0 +1,28 @@
+name: Rotator upstream watch
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * 3"
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Review pinned Rotator sources
+        env:
+          ROTATOR_UPSTREAM_TOKEN: ${{ secrets.ROTATOR_UPSTREAM_TOKEN }}
+        run: |
+          python3 scripts/check_rotator_upstreams.py --format markdown | tee rotator-upstream.md
+          python3 scripts/check_rotator_upstreams.py --format json > rotator-upstream.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rotator-upstream-review
+          path: |
+            rotator-upstream.md
+            rotator-upstream.json
