@@ -1,0 +1,27 @@
+Android cross compilation
+=========================
+
+Android port was originally written by Ladislav Vaiz (OK1ZIA, 2012)
+using a standalone Android.mk build system with a custom ltdl/dl
+wrapper (since removed).  The present autotools-based cross-compile
+instructions supersede that approach.
+
+Hamlib can be cross-compiled for Android using the NDK's standalone
+toolchains.  API level 28 is the minimum supported version; the
+following example targets 64-bit ARM (aarch64) with API 28.
+
+The authoritative unmodified file is from Hamlib tag 4.7.2, commit
+40f63488fe0bd751b147f48d62fd217bf53713a0. It is retained because the
+generated release archive omits this relevant build notice.
+
+Prerequisites
+-------------
+
+Install the Android NDK (e.g. via Android Studio's SDK Manager or
+`sdkmanager`). USB support (libusb) is not available in the Android cross
+build, so `--without-libusb` is required. RigWeave supplies an application-
+owned external serial bridge instead of granting Hamlib direct USB access.
+
+The upstream example and current RigWeave build decision are recorded in
+`docs/radio/hamlib/LICENCE_AND_PACKAGING.md` and
+`docs/radio/hamlib/TRANSPORT_BRIDGE.md`.

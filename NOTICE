@@ -116,3 +116,12 @@ GPL-3.0-only. No source from that current review was copied. Existing historical
 RigWeave digital-mode provenance remains in rust/rigweave-flex/UPSTREAM.md. The
 new cockpit, storage, UDP owner, spectrum bridge and workflow code are
 independently written RigWeave code.
+
+Hamlib 4.7.2 is incorporated from the official generated release archive at
+peeled commit 40f63488fe0bd751b147f48d62fd217bf53713a0 and tree
+56a42afe2ace9dd1b43729168bb73ca46a812848. Hamlib library and radio backend
+source is generally LGPL-2.1-or-later; original file-level notices,
+COPYING.LIB, COPYING, LICENSE, AUTHORS, and relevant README files are retained
+under core/third_party/hamlib. RigWeave modifies only the Android external-file-
+descriptor port hook and disables desktop microHam /dev discovery on Android.
+See docs/radio/hamlib/LICENCE_AND_PACKAGING.md and SOURCE_MANIFEST.json.

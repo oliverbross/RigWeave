@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "project": "Hamlib",
+  "repository": "https://github.com/Hamlib/Hamlib",
+  "selected_release": "4.7.2",
+  "release_date": "2026-06-21",
+  "tag_object": "f4fe0e5feab233cf45606f63d7f2fdcb7d5579dc",
+  "commit": "40f63488fe0bd751b147f48d62fd217bf53713a0",
+  "tree": "56a42afe2ace9dd1b43729168bb73ca46a812848",
+  "archive_url": "https://github.com/Hamlib/Hamlib/releases/download/4.7.2/hamlib-4.7.2.tar.gz",
+  "archive_sha256": "ae1fcf2dbc80ea0786ea8f047b09399c3f7737d1930442f61a031708ed33e88f",
+  "latest_stable_at_review": "4.7.2",
+  "latest_stable_reviewed_at": "2026-08-23",
+  "reviewed_master": "8319dc5d5b2e2b2e169dc6c318e9e8cf06daa0e2",
+  "master_selected": false,
+  "master_delta": {
+    "files_changed": 384,
+    "insertions": 65413,
+    "deletions": 6773,
+    "classification": [
+      "ANDROID_BUILD",
+      "API_ABI",
+      "TRANSPORT",
+      "MODEL_REGISTRY",
+      "BACKEND_CHANGE",
+      "SECURITY"
+    ],
+    "decision": "Reject mutable master for production. It contains Hamlib 5 ABI restructuring, a new streaming subsystem, backend changes, and Android build changes not present in the stable release."
+  },
+  "licence_digests": {
+    "COPYING": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+    "COPYING.LIB": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+    "LICENSE": "5d126027f62cc1fe3b167aab65cbad384360e56d1163e0ab9fd9e64f6aa4abad",
+    "AUTHORS": "659d97512f2858dc04315eac08c47e8fb3cd8f03a530f7d00c7b74d3d8821890",
+    "README": "be2ac7d9094854e20bf24dabcb3b4456023db2cb17cae2354f5576caf972c513"
+  }
+}
