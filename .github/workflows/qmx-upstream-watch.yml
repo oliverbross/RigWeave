@@ -1,0 +1,38 @@
+name: QMX upstream watch
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 0"
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - id: watch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          python3 scripts/check_qmx_panadapter_upstream.py \
+            --json-output qmx-upstream-watch.json \
+            --markdown-output qmx-upstream-watch.md
+          result=$?
+          echo "exit_code=$result" >> "$GITHUB_OUTPUT"
+          exit 0
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qmx-upstream-watch
+          path: |
+            qmx-upstream-watch.json
+            qmx-upstream-watch.md
+      - if: steps.watch.outputs.exit_code != '0'
+        run: exit "${{ steps.watch.outputs.exit_code }}"
