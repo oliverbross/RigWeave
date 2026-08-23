@@ -739,11 +739,11 @@ private fun androidx.compose.foundation.lazy.LazyListScope.portableItems(
 }
 
 @Composable private fun Kpi(label: String, value: String, alert: Boolean = false, action: (() -> Unit)? = null) {
-    Card(onClick = action ?: {}, modifier = Modifier.width(178.dp).heightIn(min = 88.dp),
+    Card(onClick = action ?: {}, modifier = Modifier.widthIn(min = 76.dp, max = 190.dp).heightIn(min = 76.dp),
         colors = CardDefaults.cardColors(containerColor = ProgressPanel)) {
-        Column(Modifier.padding(12.dp)) {
-            Text(label, color = ProgressMuted, fontSize = 10.sp)
-            Text(value, color = if (alert) ProgressAmber else ProgressInk, style = MaterialTheme.typography.titleLarge)
+        Column(Modifier.padding(horizontal = 11.dp, vertical = 10.dp)) {
+            Text(label, color = ProgressMuted, fontSize = 10.sp, maxLines = 1)
+            Text(value, color = if (alert) ProgressAmber else ProgressInk, style = MaterialTheme.typography.titleLarge, maxLines = 1)
         }
     }
 }

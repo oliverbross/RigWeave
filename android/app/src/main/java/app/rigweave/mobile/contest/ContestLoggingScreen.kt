@@ -49,11 +49,14 @@ import java.time.format.DateTimeFormatter
             }
             OutlinedButton({ showLayout = true }) { Text("PANELS") }
         }
-        if (wide) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gap)) {
-            ContestPanelColumn(state, callbacks, state.layout.panels.filter { it in setOf(ContestPanel.QSO_ENTRY, ContestPanel.BAND_MAP, ContestPanel.CLUSTER) },
-                Modifier.weight(1.55f), gap, true)
-            ContestPanelColumn(state, callbacks, state.layout.panels.filterNot { it in setOf(ContestPanel.QSO_ENTRY, ContestPanel.BAND_MAP, ContestPanel.CLUSTER) },
-                Modifier.weight(1f), gap, true)
+        if (wide) {
+            if (ContestPanel.QSO_ENTRY in state.layout.panels) ContestQsoEntryPanel(state, callbacks, true)
+            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                ContestPanelColumn(state, callbacks, state.layout.panels.filter { it in setOf(ContestPanel.BAND_MAP, ContestPanel.CLUSTER) },
+                    Modifier.weight(1.45f), gap, true)
+                ContestPanelColumn(state, callbacks, state.layout.panels.filterNot { it in setOf(ContestPanel.QSO_ENTRY, ContestPanel.BAND_MAP, ContestPanel.CLUSTER) },
+                    Modifier.weight(1f), gap, true)
+            }
         } else ContestPanelColumn(state, callbacks, state.layout.panels, Modifier.fillMaxSize(), gap, false)
     }
     if (showLayout) ContestLayoutDialog(state.layout, callbacks.onLayout) { showLayout = false }
@@ -153,12 +156,15 @@ import java.time.format.DateTimeFormatter
 @Composable private fun ContestRowsPanel(title: String, rows: List<ContestBandMapRow>, empty: String) {
     ContestPanelCard(title) {
         if (rows.isEmpty()) Text(empty, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        rows.take(12).forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(row.callsign, style = MaterialTheme.typography.titleSmall)
-                Text("${row.band} · ${"%.3f".format(row.frequencyHz / 1_000_000.0)} · ${row.status}")
+        rows.take(8).forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(row.callsign, style = MaterialTheme.typography.titleSmall, modifier = Modifier.width(92.dp))
+                Text("${row.band} · ${"%.3f".format(row.frequencyHz / 1_000_000.0)}", modifier = Modifier.width(128.dp))
+                Text(row.status, modifier = Modifier.weight(1f), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+        if (rows.size > 8) Text("+${rows.size - 8} more in the bounded snapshot", color = MaterialTheme.colorScheme.tertiary)
     }
 }
 

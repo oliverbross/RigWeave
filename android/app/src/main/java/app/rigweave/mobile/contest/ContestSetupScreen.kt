@@ -23,7 +23,7 @@ private val contestUtc = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").w
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.weight(1f)) {
-                Text("CONTEST SESSION", style = MaterialTheme.typography.headlineSmall)
+                Text("CONTEST SESSION", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
                 Text("${state.session.state} · ${state.session.role.name.replace('_', ' ')} · ${state.wavelogBinding}",
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -32,12 +32,14 @@ private val contestUtc = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").w
             OutlinedButton(callbacks.onOpenSettings) { Text("SETTINGS") }
         }
 
-        OutlinedTextField(search, { search = it.take(80) }, label = { Text("Search 13 reviewed definitions") },
-            singleLine = true, modifier = Modifier.fillMaxWidth())
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            definitions.forEach { definition ->
-                FilterChip(state.definition.id == definition.id, { callbacks.onDefinition(definition.id) },
-                    { Text(definition.humanName) }, enabled = editable)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedTextField(search, { search = it.take(80) }, label = { Text("Find contest") },
+                singleLine = true, modifier = Modifier.widthIn(min = 250.dp, max = 360.dp))
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                definitions.forEach { definition ->
+                    FilterChip(state.definition.id == definition.id, { callbacks.onDefinition(definition.id) },
+                        { Text(definition.humanName) }, enabled = editable)
+                }
             }
         }
 
@@ -74,25 +76,31 @@ private val contestUtc = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").w
                 label = { Text("Initial serial") }, enabled = editable && state.definition.serialRequired, modifier = Modifier.weight(.7f))
         }
 
-        ContestChoice("OPERATOR CLASS", listOf("SINGLE-OP", "MULTI-OP"), state.session.category.operator, editable) {
-            callbacks.onSession(state.session.copy(category = state.session.category.copy(operator = it)))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            ContestChoice("OPERATOR CLASS", listOf("SINGLE-OP", "MULTI-OP"), state.session.category.operator, editable, Modifier.weight(1f)) {
+                callbacks.onSession(state.session.copy(category = state.session.category.copy(operator = it)))
+            }
+            ContestChoice("ASSISTANCE", listOf("NON-ASSISTED", "ASSISTED"), state.session.category.assisted, editable, Modifier.weight(1f)) {
+                callbacks.onSession(state.session.copy(category = state.session.category.copy(assisted = it)))
+            }
         }
-        ContestChoice("ASSISTANCE", listOf("NON-ASSISTED", "ASSISTED"), state.session.category.assisted, editable) {
-            callbacks.onSession(state.session.copy(category = state.session.category.copy(assisted = it)))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            ContestChoice("BAND", listOf("ALL") + state.definition.allowedBands.map(ContestBand::label), state.session.category.band, editable, Modifier.weight(1f)) {
+                callbacks.onSession(state.session.copy(category = state.session.category.copy(band = it)))
+            }
+            ContestChoice("MODE", state.definition.allowedModes.map(ContestMode::name), state.session.category.mode.name, editable, Modifier.weight(1f)) {
+                callbacks.onSession(state.session.copy(category = state.session.category.copy(mode = ContestMode.valueOf(it))))
+            }
         }
-        ContestChoice("BAND", listOf("ALL") + state.definition.allowedBands.map(ContestBand::label), state.session.category.band, editable) {
-            callbacks.onSession(state.session.copy(category = state.session.category.copy(band = it)))
-        }
-        ContestChoice("MODE", state.definition.allowedModes.map(ContestMode::name), state.session.category.mode.name, editable) {
-            callbacks.onSession(state.session.copy(category = state.session.category.copy(mode = ContestMode.valueOf(it))))
-        }
-        ContestChoice("POWER", listOf("QRP", "LOW", "HIGH"), state.session.category.power, editable) {
-            callbacks.onSession(state.session.copy(category = state.session.category.copy(power = it)))
-        }
-        ContestChoice("STATION / TRANSMITTER", listOf("FIXED/ONE", "FIXED/TWO", "MOBILE/ONE", "PORTABLE/ONE"),
-            "${state.session.category.station}/${state.session.category.transmitter}", editable) { value ->
-            val parts = value.split('/')
-            callbacks.onSession(state.session.copy(category = state.session.category.copy(station = parts[0], transmitter = parts[1])))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            ContestChoice("POWER", listOf("QRP", "LOW", "HIGH"), state.session.category.power, editable, Modifier.weight(1f)) {
+                callbacks.onSession(state.session.copy(category = state.session.category.copy(power = it)))
+            }
+            ContestChoice("STATION / TRANSMITTER", listOf("FIXED/ONE", "FIXED/TWO", "MOBILE/ONE", "PORTABLE/ONE"),
+                "${state.session.category.station}/${state.session.category.transmitter}", editable, Modifier.weight(1f)) { value ->
+                val parts = value.split('/')
+                callbacks.onSession(state.session.copy(category = state.session.category.copy(station = parts[0], transmitter = parts[1])))
+            }
         }
         if (state.definition.family == ContestRuleFamily.ARRL_FIELD_DAY) {
             OutlinedTextField(state.session.category.overlay, { callbacks.onSession(state.session.copy(category = state.session.category.copy(overlay = it.uppercase().take(24)))) },
@@ -146,8 +154,9 @@ private val contestUtc = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").w
     }
 }
 
-@Composable private fun ContestChoice(label: String, values: List<String>, selected: String, enabled: Boolean, choose: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+@Composable private fun ContestChoice(label: String, values: List<String>, selected: String, enabled: Boolean,
+    modifier: Modifier = Modifier, choose: (String) -> Unit) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             values.distinct().forEach { value -> FilterChip(selected == value, { choose(value) }, { Text(value.replace('_', ' ')) }, enabled = enabled) }

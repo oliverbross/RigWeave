@@ -57,7 +57,18 @@ import java.time.format.DateTimeFormatter
             FilterChip(zeroOnly, { zeroOnly = !zeroOnly }, { Text("ZERO POINT") })
             FilterChip(networkOnly, { networkOnly = !networkOnly }, { Text("NETWORK ORIGIN") })
         }
-        Card(Modifier.fillMaxWidth().weight(1f)) {
+        if (rows.isEmpty()) {
+            Surface(Modifier.fillMaxWidth().heightIn(min = 190.dp), color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.large) {
+                Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("SESSION LOG IS EMPTY", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                    Text("Contest QSOs are staged here before an explicit merge to the canonical Logbook.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Open Logging, start or resume the session, then enter a callsign and exchange. Nothing has been written to the Logbook.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedButton({ callbacks.onPage(ContestWorkspacePage.LOGGING) }) { Text("OPEN LOGGING") }
+                }
+            }
+            Spacer(Modifier.weight(1f))
+        } else Card(Modifier.fillMaxWidth().weight(1f)) {
             LazyColumn(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(rows, key = ContestReviewRow::id) { row ->
                     Card(onClick = { selected = row }, modifier = Modifier.fillMaxWidth()) {
@@ -75,7 +86,6 @@ import java.time.format.DateTimeFormatter
                         }
                     }
                 }
-                if (rows.isEmpty()) item { Text("No Contest QSOs match these bounded filters", modifier = Modifier.padding(12.dp)) }
                 if (state.reviewHasMore) item { Text("More rows remain; this page is bounded to 100 Contest session entries.", modifier = Modifier.padding(12.dp)) }
             }
         }

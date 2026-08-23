@@ -123,9 +123,14 @@ class BandMapDomainTest {
     }
 
     @Test fun malformedPresetImportPreservesLastGoodCandidate() {
-        val good = BandMapSettingsCodec.encode(BandMapSettings())
-        assertEquals(BandMapSettings().selectedBands, BandMapSettingsCodec.decode(good).selectedBands)
+        val expected = BandMapSettings(callStatusFilters = setOf("NC", "NB"), dxccStatusFilters = setOf("ATNO"))
+        val good = BandMapSettingsCodec.encode(expected)
+        val decoded = BandMapSettingsCodec.decode(good)
+        assertEquals(expected.selectedBands, decoded.selectedBands)
+        assertEquals(expected.callStatusFilters, decoded.callStatusFilters)
+        assertEquals(expected.dxccStatusFilters, decoded.dxccStatusFilters)
         assertThrows(IllegalArgumentException::class.java) { BandMapSettingsCodec.decode(good.replace("\"label_density\":2", "\"label_density\":99")) }
+        assertThrows(IllegalArgumentException::class.java) { BandMapSettingsCodec.decode(good.replace("\"ATNO\"", "\"INVALID\"")) }
     }
 
     @Test fun twentyThousandObservationScaleIsBounded() {

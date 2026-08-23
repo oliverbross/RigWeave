@@ -21,6 +21,8 @@ internal data class BandMapSettings(
     val iaruRegion: BandMapIaruRegion = BandMapIaruRegion.UNKNOWN,
     val jurisdiction: BandMapJurisdiction = BandMapJurisdiction.STATION_PROFILE,
     val labelMetadata: Set<BandMapLabelMetadata> = emptySet(),
+    val callStatusFilters: Set<String> = emptySet(),
+    val dxccStatusFilters: Set<String> = emptySet(),
     val showOnRadioScreen: Boolean = false,
     val viewports: Map<String, BandMapViewport> = emptyMap(),
     val palette: String = "COLOUR_VISION_FRIENDLY",
@@ -44,6 +46,8 @@ internal object BandMapSettingsCodec {
         .put("iaru_region", value.iaruRegion.name)
         .put("jurisdiction", value.jurisdiction.name)
         .put("label_metadata", JSONArray(value.labelMetadata.map(Enum<*>::name)))
+        .put("call_status_filters", JSONArray(value.callStatusFilters.toList()))
+        .put("dxcc_status_filters", JSONArray(value.dxccStatusFilters.toList()))
         .put("show_on_radio", value.showOnRadioScreen)
         .put("viewports", JSONObject().apply { value.viewports.filterKeys { it in bandMapVisibleBands }.forEach { (band, viewport) ->
             put(band, JSONObject().put("lower_hz", viewport.lowerHz).put("upper_hz", viewport.upperHz))
@@ -85,6 +89,10 @@ internal object BandMapSettingsCodec {
                 }
             } }
         }
+        val callStatusFilters = root.optJSONArray("call_status_filters")?.strings()?.toSet().orEmpty()
+        val dxccStatusFilters = root.optJSONArray("dxcc_status_filters")?.strings()?.toSet().orEmpty()
+        require(callStatusFilters.all { it in setOf("NC", "NB", "NM", "W", "C") }) { "Invalid CS filter" }
+        require(dxccStatusFilters.all { it in setOf("ATNO", "W/NB", "C/NB", "W", "C") }) { "Invalid DS filter" }
         return BandMapSettings(
             enabled = root.optBoolean("enabled", true), navigationVisible = root.optBoolean("navigation_visible", true),
             selectedLayout = BandMapLayoutMode.valueOf(root.optString("layout", BandMapLayoutMode.MULTI_VERTICAL.name)),
@@ -93,6 +101,7 @@ internal object BandMapSettingsCodec {
             iaruRegion = runCatching { BandMapIaruRegion.valueOf(root.optString("iaru_region", BandMapIaruRegion.UNKNOWN.name)) }.getOrDefault(BandMapIaruRegion.UNKNOWN),
             jurisdiction = runCatching { BandMapJurisdiction.valueOf(root.optString("jurisdiction", BandMapJurisdiction.STATION_PROFILE.name)) }.getOrDefault(BandMapJurisdiction.STATION_PROFILE),
             labelMetadata = root.optJSONArray("label_metadata")?.strings()?.mapNotNull { runCatching { BandMapLabelMetadata.valueOf(it) }.getOrNull() }?.toSet().orEmpty(),
+            callStatusFilters = callStatusFilters, dxccStatusFilters = dxccStatusFilters,
             showOnRadioScreen = root.optBoolean("show_on_radio"),
             viewports = viewports,
             palette = root.optString("palette", "COLOUR_VISION_FRIENDLY").take(40), presets = presets, marks = marks,
