@@ -52,3 +52,7 @@ Sweep 2 gates are: arm64 debug APK at or below 130 MB, four-ABI release AAB at o
 The final local Sweep 2 package inputs produce an arm64-only debug APK of 58,293,188 bytes (`00b3c2eb7c6143d65e970d030ca096a48830d770c1cde76adc530a396d054be8`) and a four-ABI debug AAB of 55,606,070 bytes (`29cab575b7d403a1876780806a397f5a73b69ec1ac11136e23a0da4bca8b414f`). The AAB contains `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`; the APK contains only `arm64-v8a`. Both audits pass the executable, duplicate runtime, private-evidence, manual/firmware and ITU/P.533 exclusions. The universal APK was not rebuilt because it is unnecessary for the protected tablet.
 
 Sweep 3 adds Kotlin/Compose state and no new native archive, dynamic feature, geometry bundle, protected WWFF directory or executable. Its final artifacts retain the same 60 MB four-ABI AAB and 130 MB arm64 APK ceilings and require a fresh package audit.
+
+## Android lifecycle hardening package evidence
+
+The hardening adds a small C++ host-only lifecycle test target, Kotlin ownership helpers and no production payload family. The final local arm64 APK is 58,426,676 bytes (`f99b529f43e28bc16834fd80cd488293234d5399e04a972d2d87ae83240896b9`). The four-ABI AAB is 55,739,195 bytes (`e43aeb115149899d19d95060464fd5274cb74612d8a60c66a8fe3976aee8f053`). ABI membership, size ceilings, prohibited payloads, private evidence, rigctl/rigctld and duplicate libc++ checks pass.

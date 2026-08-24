@@ -36,3 +36,14 @@ Mandatory build, watcher, package, scale, hosted exact-SHA, push and device resu
 | Protected tablet | DEVICE_ACCEPTANCE_PENDING | Backup, `adb install -r`, launch and persistence evidence required. |
 
 Sweep 3 makes Radio, Hamlib, QMX/QMX+, RGO ONE, Rotator and WWFF operator-reachable through Settings and workspace routes. CQ/ITU/state geometry remains `PROVIDER_BLOCKED / UNAVAILABLE_DATA`; physical radio, RF and rotator-motion acceptance remains pending and is never inferred.
+
+## Android lifecycle hardening delta
+
+| Area | Verdict | Boundary |
+|---|---|---|
+| JNI handle owners | SOURCE_COMPLETE; SANITIZER_PASS | Feature, base CAT, Digi, Flex, Panadapter and Hamlib radio/rotator use checked retirement; stateless satellite/propagation calls remain stateless. |
+| Audio, map and browser lifecycle | SOURCE_COMPLETE | Audio callbacks retire before release; seven maps and two WebViews reject late callbacks and dispose deterministically. |
+| QSO schema 16 | SOURCE_COMPLETE; REOPEN_FIXTURE_COMPILED | Canonical row, projection relationship and settings metadata survive close/reopen; no downgrade/recreate. |
+| Hosted exact SHA | PENDING | Run release-candidate workflow after final documentation commit. |
+| Protected tablet | PENDING | Backup/hash, in-place install and extended soak only after hosted pass. |
+| Authenticated services, physical audio/radio/RF/rotator | LIVE_ACCEPTANCE_PENDING | Never inferred from source, package, process or navigation evidence. |

@@ -71,3 +71,7 @@ Local Sweep 2 package evidence is now available: the arm64 tablet APK is 58,293,
 ## Sweep 3 candidate gate
 
 Sweep 3 repairs the app-scoped cluster/Band Map flow, Settings reachability, Contest/map presentation, WWFF state split and foreground Groups.io alerts. It does not inherit Sweep 2 artifact, hosted or device evidence: sizes, hashes, exact-SHA CI and protected install must be recorded again at the final Sweep 3 SHA. See `TABLET_ACCEPTANCE_SWEEP_3.md` and its live checklist.
+
+## Android native lifecycle hardening v1
+
+The Sweep 3 source now has a complete JNI/long-lived-resource ownership audit and systematic checked-handle/generation repair. Local gates pass: 711 JVM tests; four-ABI bundle and instrumentation packaging; lint; arm64 APK; Rust 98 passed/one ignored; normal and ASan+UBSan CTest 3/3; unsigned generic iOS Simulator and iOS builds; release contract and package scans. The arm64 APK is 58,426,676 bytes (`f99b529f43e28bc16834fd80cd488293234d5399e04a972d2d87ae83240896b9`) and the four-ABI AAB is 55,739,195 bytes (`e43aeb115149899d19d95060464fd5274cb74612d8a60c66a8fe3976aee8f053`). Exact-SHA hosted and protected-tablet evidence remain separate gates.

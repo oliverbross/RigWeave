@@ -47,3 +47,7 @@ Local log ADIF export/import, configuration export/import and the sanitized supp
 - QMX UAC routing is accepted only when the route proves the expected stable-device digest; microphone fallback is prohibited.
 
 Sweep 3 adds safe alert/display profile definitions, global Contest defaults, muted Groups.io alert group identifiers, cluster counters/history-request metadata and rotator profile documents. It adds no raw cluster lines, Groups.io message bodies, credentials, private WWFF directory, CAT frames, RF payload or screen content to support bundles. Debug Groups.io alert injection is synthetic and is not persisted.
+
+## Native lifecycle hardening data boundary
+
+The lifecycle repair adds no persisted operator data. `NativeHandleOwner` and lifecycle generations contain only process-local numeric state. The schema-16 regression uses an isolated temporary database and deletes it after close. Package scans found no evidence directory, protected backup, test SQLite file, credential store, rigctl/rigctld executable or prohibited P.533 payload. Protected-tablet evidence records hashes, counts, UID and schema only; it must never print credential values or raw private records.
