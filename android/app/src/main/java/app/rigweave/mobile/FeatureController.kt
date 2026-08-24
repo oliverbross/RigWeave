@@ -191,8 +191,7 @@ internal suspend fun completeSolarRefresh(
 }
 
 class FeatureController internal constructor(private val context: Context, private val http: FeatureHttpTransport = FeatureUrlConnectionTransport()) {
-    @Volatile private var handle = NativeCore.featureCreate()
-    private val nativeLock = Any()
+    private val nativeSession = FeatureNativeSession()
     private val scope = CoroutineScope(Job() + Dispatchers.IO)
     private var workedSyncJob: Job? = null
     private var workedFingerprint: WorkedFingerprint? = null
@@ -207,7 +206,7 @@ class FeatureController internal constructor(private val context: Context, priva
     private var rbnMaintenanceGeneration = 0
     private var rbnStationCall = ""
     private var foreground = true
-    private var closed = false
+    @Volatile private var closed = false
     private var lastRbnObservedEpoch = 0L
     @Volatile private var rbnDirty = false
 
@@ -256,7 +255,7 @@ class FeatureController internal constructor(private val context: Context, priva
         if (!prefs.contains("port")) defaults.putInt("port", clusterPort)
         if (!prefs.contains("callsign")) defaults.putString("callsign", clusterCallsign)
         defaults.apply()
-        synchronized(nativeLock) { NativeCore.featureWatchlist(handle, watchlistText) }
+        nativeSession.setWatchlist(watchlistText)
         scheduleRbnPublish()
     }
 
@@ -264,7 +263,7 @@ class FeatureController internal constructor(private val context: Context, priva
         watchlistText = value.lineSequence().flatMap { it.split(',', ' ', ';').asSequence() }
             .map(String::trim).filter(String::isNotBlank).map(String::uppercase).distinct().take(32).joinToString("\n")
         prefs.edit().putString("watchlist", watchlistText).apply()
-        synchronized(nativeLock) { NativeCore.featureWatchlist(handle, watchlistText) }
+        nativeSession.setWatchlist(watchlistText)
         scheduleRbnPublish(immediate = true)
     }
 
@@ -349,10 +348,10 @@ class FeatureController internal constructor(private val context: Context, priva
                             }
                             // An RBN line is already represented by the typed RBN observation path.
                             // Do not also ingest it as a generic DX-cluster spot.
-                            val accepted = rbn == null && synchronized(nativeLock) {
-                                NativeCore.featureClusterLine(handle, line, lineEpoch)
-                            }
+                            val nativeGeneration = nativeSession.generation()
+                            val accepted = rbn == null && nativeSession.ingestClusterLine(line, lineEpoch)
                             withContext(Dispatchers.Main) {
+                                if (!nativeSession.isCurrent(nativeGeneration)) return@withContext
                                 val previous = clusterDiagnostics
                                 clusterDiagnostics = previous.copy(
                                     receivedLines = previous.receivedLines + 1,
@@ -463,9 +462,7 @@ class FeatureController internal constructor(private val context: Context, priva
                 val a = parseNoaaSummaryValue(geomagnetic, listOf("a_running", "A", "a_index")) ?: error("Unexpected NOAA A response")
                 completeSolarRefresh(
                     publishCore = {
-                        synchronized(nativeLock) {
-                            NativeCore.featureSolar(handle, flux, a, kp, Instant.now().epochSecond)
-                        }
+                        if (!nativeSession.setSolar(flux, a, kp, Instant.now().epochSecond)) return@completeSolarRefresh
                         refreshDX()
                     },
                     refreshOptionalSunspot = { refreshSunspotNumber() },
@@ -489,17 +486,14 @@ class FeatureController internal constructor(private val context: Context, priva
     }
 
     fun close() {
+        if (closed) return
         closed = true
         rbnMaintenanceGeneration++
         rbnMaintenanceJob?.cancel()
         rbnMaintenanceJob = null
         disconnectCluster()
         scope.cancel()
-        synchronized(nativeLock) {
-            val retiredHandle = handle
-            handle = 0L
-            if (retiredHandle != 0L) NativeCore.featureDestroy(retiredHandle)
-        }
+        nativeSession.close()
     }
 
     fun startWorkedLogSync(database: QsoDatabase, wavelog: WavelogController, cty: CtyController) {
@@ -516,19 +510,9 @@ class FeatureController internal constructor(private val context: Context, priva
                         val rows = if (hasSelectedAuthority) {
                             database.workedLog(stationId.takeIf { authority == LogMode.WAVELOG }, cty::country)
                         } else emptyList()
-                        synchronized(nativeLock) {
-                            require(fingerprint.ctyRevision == 0L || ctyText != null)
-                            if (ctyText != null) require(NativeCore.featureLoadCty(handle, ctyText))
-                            NativeCore.featureBeginWorkedSync(handle)
-                            if (hasSelectedAuthority) {
-                                rows.forEach { row ->
-                                    NativeCore.featureAddWorkedQso(handle, row.callsign, row.entity, row.band,
-                                        row.mode, row.submode, row.epoch, row.fromWavelog)
-                                }
-                                NativeCore.featureEndWorkedSync(handle)
-                            }
-                        }
-                        refreshDX()
+                        require(fingerprint.ctyRevision == 0L || ctyText != null)
+                        if (!nativeSession.synchronizeWorkedLog(ctyText, rows, hasSelectedAuthority)) return@launch
+                        if (!refreshDX()) return@launch
                         workedFingerprint = fingerprint
                     } catch (cancelled: kotlinx.coroutines.CancellationException) {
                         throw cancelled
@@ -541,10 +525,9 @@ class FeatureController internal constructor(private val context: Context, priva
         }
     }
 
-    private suspend fun refreshDX() {
-        val json = synchronized(nativeLock) {
-            NativeCore.featureDxSnapshot(handle, Instant.now().epochSecond)
-        }
+    private suspend fun refreshDX(): Boolean {
+        val nativeGeneration = nativeSession.generation()
+        val json = nativeSession.snapshot(Instant.now().epochSecond) ?: return false
         val root = JSONObject(json)
         fun loadSpots(name: String) = buildList {
             val rows = root.optJSONArray(name)
@@ -581,6 +564,7 @@ class FeatureController internal constructor(private val context: Context, priva
             solarRow?.optDouble("aIndex")?.toFloat() ?: 0f, solarRow?.optDouble("kpIndex")?.toFloat() ?: 0f,
             Instant.now().epochSecond)
         withContext(Dispatchers.Main) {
+            if (!nativeSession.isCurrent(nativeGeneration)) return@withContext
             spots = loaded; liveSpots = live; watchSpots = watched; dxBands = bands; dxRegions = regions
             dxTimeline = matrix("bandTimeline"); dxWorld = matrix("worldGrid"); dxSummary = summary; solar = parsedSolar
             learnedSpots = root.optInt("learnedSpots"); duplicateSpots = root.optInt("duplicateSpots")
@@ -588,6 +572,7 @@ class FeatureController internal constructor(private val context: Context, priva
             workedLog = decodeWorkedLog(root)
             clusterConnection = clusterConnection.copy(latestSpotEpoch = newestSpotEpoch)
         }
+        return nativeSession.isCurrent(nativeGeneration)
     }
 
     @Synchronized private fun scheduleRbnPublish(immediate: Boolean = false) {

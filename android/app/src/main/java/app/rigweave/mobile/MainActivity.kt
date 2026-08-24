@@ -183,7 +183,12 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
 
 @Composable private fun RigWeaveApp() {
     val context = LocalContext.current
-    val core = remember { NativeCore.create() }
+    val core = remember {
+        NativeHandleOwner(
+            NativeCore.create().also { check(it != 0L) { "Native CAT parser unavailable" } },
+            NativeCore::destroy,
+        )
+    }
     val transport = remember { UsbRadioTransport(context) }
     val database = remember { QsoDatabase.shared(context) }
     LaunchedEffect(database) {
@@ -248,7 +253,9 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val audio = remember { AudioMonitorController(context) }
     flex.attachAudioRoutes(audio)
     val cwDecoder = remember { CwDecodeBuffer() }
-    var kxRadio by remember { mutableStateOf(NativeCore.parseState(NativeCore.state(core))) }
+    var kxRadio by remember {
+        mutableStateOf(core.withHandle { NativeCore.parseState(NativeCore.state(it)) } ?: RadioState())
+    }
     var radio by remember { mutableStateOf(kxRadio) }
     var platformSnapshot by remember { mutableStateOf(RadioRuntimeSnapshot()) }
     val voiceStore = remember { VoiceMacroStore(context) { app.voiceMacroLabels.toList() } }
@@ -274,9 +281,13 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     }
     val voiceTx = remember { VoiceMacroTransmitController(context, transport, audio, voiceStore, app,
         radioState = { radio }, foreground = { foreground }, audioOperationIdle = { voiceAudio.state is VoiceAudioState.Idle }, onFrames = { frames ->
-            NativeCore.feed(core, frames)
-            kxRadio = NativeCore.parseState(NativeCore.state(core)).copy(cwDecodedText = cwDecoder.text)
-            if (selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT) radio = kxRadio
+            core.withHandle { handle ->
+                NativeCore.feed(handle, frames)
+                NativeCore.parseState(NativeCore.state(handle))
+            }?.let { parsed ->
+                kxRadio = parsed.copy(cwDecodedText = cwDecoder.text)
+                if (selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT) radio = kxRadio
+            }
         }) }
     var usbDetail by remember { mutableStateOf("No USB CAT adapter opened") }
     val navigationPrefs = remember { context.getSharedPreferences("navigation", android.content.Context.MODE_PRIVATE) }
@@ -442,8 +453,11 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         when (result) {
             is UsbResult.Connected -> {
                 cwDecoder.feed(result.cwFrames)
-                NativeCore.feed(core, result.frames)
-                kxRadio = NativeCore.parseState(NativeCore.state(core)).copy(cwDecodedText = cwDecoder.text)
+                val parsed = core.withHandle { handle ->
+                    NativeCore.feed(handle, result.frames)
+                    NativeCore.parseState(NativeCore.state(handle))
+                } ?: return
+                kxRadio = parsed.copy(cwDecodedText = cwDecoder.text)
                 if (selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT) radio = kxRadio
                 usbDetail = result.detail
             }
@@ -662,7 +676,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         app.disarmAll(); bandMaps.close(); chaser.close(); contest.close(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close(); groupsIo.close()
         scope.launch { transport.disconnect(); radioPlatform.close(); platformTransport.disconnect(); rotator.stopAndDisarm(); rotator.disconnect() }; hamlibRegistry.close()
         neuralDx.close(); features.close(); wavelogNative.close(); wavelog.close(); callbook.close(); cty.close()
-        portable.close(); progress.close(); operations.close(); syncHub.close(); NativeCore.destroy(core)
+        portable.close(); progress.close(); operations.close(); syncHub.close(); core.close()
     } }
     pendingRisk?.let { command ->
         val cwMacro = command.startsWith("KY ")
