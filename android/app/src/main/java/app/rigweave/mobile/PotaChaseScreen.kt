@@ -303,12 +303,14 @@ internal fun PotaChaseScreen(
         }
     } }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }; var styleReady by remember { mutableStateOf(false) }
+    val callbackLifecycle = remember(mapView) { LifecycleGeneration() }
     val markerSelections = remember { mutableMapOf<Long, String>() }
     DisposableEffect(mapView, lifecycle) {
+        val callbackGeneration = callbackLifecycle.next(); var disposed = false
         val observer = LifecycleEventObserver { _, event -> when (event) { Lifecycle.Event.ON_START -> mapView.onStart(); Lifecycle.Event.ON_RESUME -> mapView.onResume(); Lifecycle.Event.ON_PAUSE -> mapView.onPause(); Lifecycle.Event.ON_STOP -> mapView.onStop(); else -> Unit } }
         lifecycle.addObserver(observer); if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) mapView.onStart(); if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) mapView.onResume()
-        mapView.getMapAsync { ready -> map = ready; ready.uiSettings.isAttributionEnabled = true; ready.uiSettings.isLogoEnabled = true; ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { styleReady = true }; ready.setOnMarkerClickListener { marker -> markerSelections[marker.id]?.let(currentSelect); true } }
-        onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null }
+        mapView.getMapAsync { ready -> if (disposed || !callbackLifecycle.isCurrent(callbackGeneration)) return@getMapAsync; map = ready; ready.uiSettings.isAttributionEnabled = true; ready.uiSettings.isLogoEnabled = true; ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { if (callbackLifecycle.isCurrent(callbackGeneration)) styleReady = true }; ready.setOnMarkerClickListener { marker -> if (!callbackLifecycle.isCurrent(callbackGeneration)) false else { markerSelections[marker.id]?.let(currentSelect); true } } }
+        onDispose { disposed = true; callbackLifecycle.retire(); lifecycle.removeObserver(observer); map?.setOnMarkerClickListener(null); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null }
     }
     val markerHash = rows.joinToString { it.spot.id }
     LaunchedEffect(map, styleReady, markerHash, selectedId) {

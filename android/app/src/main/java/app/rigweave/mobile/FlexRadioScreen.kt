@@ -5,6 +5,7 @@ import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.view.ViewGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.lazy.LazyColumn
@@ -115,6 +116,8 @@ fun FlexRadioScreen(controller: FlexRadioController, openLog: () -> Unit) {
 private fun SmartLinkAuthDialog(authorizationUri: Uri, onRedirect: (Uri) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val allowedHost = authorizationUri.host
+    val callbackLifecycle = remember(authorizationUri) { LifecycleGeneration() }
+    val callbackGeneration = remember(authorizationUri) { callbackLifecycle.next() }
     val webView = remember(authorizationUri) {
         WebView(context).apply {
             settings.javaScriptEnabled = true
@@ -124,6 +127,7 @@ private fun SmartLinkAuthDialog(authorizationUri: Uri, onRedirect: (Uri) -> Unit
             settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             webViewClient = object : WebViewClient() {
                 private fun inspect(uri: Uri): Boolean {
+                    if (!callbackLifecycle.isCurrent(callbackGeneration)) return true
                     if (uri.scheme != "https" || uri.host != allowedHost) return true
                     if (!uri.fragment.isNullOrBlank() && uri.fragment.orEmpty().contains("state=")) {
                         onRedirect(uri)
@@ -142,8 +146,11 @@ private fun SmartLinkAuthDialog(authorizationUri: Uri, onRedirect: (Uri) -> Unit
     }
     DisposableEffect(webView) {
         onDispose {
+            callbackLifecycle.close()
             webView.stopLoading()
-            webView.loadUrl("about:blank")
+            webView.webViewClient = WebViewClient()
+            (webView.parent as? ViewGroup)?.removeView(webView)
+            webView.removeAllViews()
             webView.clearHistory()
             webView.destroy()
         }

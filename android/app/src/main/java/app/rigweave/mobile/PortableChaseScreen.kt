@@ -427,7 +427,9 @@ internal fun PortableChaseScreen(
 
 @Composable private fun PortableNativeMap(rows: List<PortableOpportunity>, selectedId: String?, select: (String) -> Unit, modifier: Modifier) {
     val context = LocalContext.current; val lifecycle = LocalLifecycleOwner.current.lifecycle; val currentSelect by rememberUpdatedState(select); val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null); setOnTouchListener { view, event -> view.parent?.requestDisallowInterceptTouchEvent(event.actionMasked !in setOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)); false } } }; val markerSelections = remember { mutableMapOf<Long, String>() }; var map by remember { mutableStateOf<MapLibreMap?>(null) }; var styleReady by remember { mutableStateOf(false) }; var userMoved by remember { mutableStateOf(false) }
+    val callbackLifecycle = remember(mapView) { LifecycleGeneration() }
     DisposableEffect(mapView, lifecycle) {
+        val callbackGeneration = callbackLifecycle.next()
         var started = false; var resumed = false; var destroyed = false
         fun start() { if (!started && !destroyed) { mapView.onStart(); started = true } }
         fun resume() { start(); if (!resumed && !destroyed) { mapView.onResume(); resumed = true } }
@@ -450,15 +452,18 @@ internal fun PortableChaseScreen(
                 isZoomGesturesEnabled = true; isScrollGesturesEnabled = true; isRotateGesturesEnabled = true; isTiltGesturesEnabled = false
             }
             ready.setMinZoomPreference(.8); ready.setMaxZoomPreference(14.0)
-            ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { style -> installPortableLabelLayers(style); styleReady = true }
-            ready.addOnCameraMoveStartedListener { reason -> if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }
+            ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { style ->
+                if (callbackLifecycle.isCurrent(callbackGeneration)) { installPortableLabelLayers(style); styleReady = true }
+            }
+            ready.addOnCameraMoveStartedListener { reason -> if (callbackLifecycle.isCurrent(callbackGeneration) && reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }
             ready.setOnMarkerClickListener { marker ->
+                if (!callbackLifecycle.isCurrent(callbackGeneration)) return@setOnMarkerClickListener false
                 markerSelections[marker.id]?.let(currentSelect)
                 true
             }
             ready.addOnMapClickListener { point -> val feature = ready.queryRenderedFeatures(ready.projection.toScreenLocation(point), PORTABLE_SELECTED_LABEL_LAYER, PORTABLE_LABEL_LAYER).firstOrNull(); feature?.getStringProperty("spot_id")?.let(currentSelect); feature != null }
         }
-        onDispose { disposed = true; lifecycle.removeObserver(observer); styleReady = false; map = null; destroy() }
+        onDispose { disposed = true; callbackLifecycle.retire(); lifecycle.removeObserver(observer); map?.setOnMarkerClickListener(null); styleReady = false; map = null; destroy() }
     }
     val markerHash = rows.joinToString { "${it.spot.id}:${it.spot.latitude}:${it.spot.longitude}:${it.spot.callsign}" }
     LaunchedEffect(map, styleReady, markerHash, selectedId) {

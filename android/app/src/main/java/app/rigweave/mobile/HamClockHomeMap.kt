@@ -584,6 +584,7 @@ internal fun HamClockHomeMap(
         MapLibre.getInstance(context.applicationContext)
         MapView(context).apply { onCreate(null) }
     }
+    val callbackLifecycle = remember(mapView) { LifecycleGeneration() }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var styleReady by remember { mutableStateOf(false) }
     var mapError by remember { mutableStateOf("") }
@@ -598,6 +599,7 @@ internal fun HamClockHomeMap(
     val currentOpenSelection by rememberUpdatedState(onOpenSelection)
 
     DisposableEffect(mapView, lifecycle) {
+        val callbackGeneration = callbackLifecycle.next()
         var started = false
         var resumed = false
         var destroyed = false
@@ -621,7 +623,7 @@ internal fun HamClockHomeMap(
         if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) resume()
         var disposed = false
         mapView.getMapAsync { ready ->
-            if (disposed) return@getMapAsync
+            if (disposed || !callbackLifecycle.isCurrent(callbackGeneration)) return@getMapAsync
             map = ready
             ready.uiSettings.apply {
                 isAttributionEnabled = true
@@ -639,6 +641,7 @@ internal fun HamClockHomeMap(
                 .zoom(preference.zoom)
                 .build()
             ready.addOnCameraMoveStartedListener { reason ->
+                if (!callbackLifecycle.isCurrent(callbackGeneration)) return@addOnCameraMoveStartedListener
                 val active = currentPreference
                 gestureInProgress = reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE
                 if (gestureInProgress) {
@@ -647,6 +650,7 @@ internal fun HamClockHomeMap(
                 }
             }
             ready.addOnCameraIdleListener {
+                if (!callbackLifecycle.isCurrent(callbackGeneration)) return@addOnCameraIdleListener
                 if (gestureInProgress) {
                     val active = currentPreference
                     pendingCamera = HamClockPendingCamera(ready.cameraPosition, cameraGeneration,
@@ -655,6 +659,7 @@ internal fun HamClockHomeMap(
                 gestureInProgress = false
             }
             ready.addOnMapClickListener { coordinate ->
+                if (!callbackLifecycle.isCurrent(callbackGeneration)) return@addOnMapClickListener false
                 val layerIds = activeLayerIds(currentPreference)
                 val screen = ready.projection.toScreenLocation(coordinate)
                 val hits = ready.queryRenderedFeatures(RectF(screen.x - hitSlopPx, screen.y - hitSlopPx,
@@ -681,6 +686,7 @@ internal fun HamClockHomeMap(
         }
         onDispose {
             disposed = true
+            callbackLifecycle.retire()
             styleGeneration += 1
             lifecycle.removeObserver(observer)
             map = null

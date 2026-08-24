@@ -415,6 +415,7 @@ private data class PlanningMapReference(val program:String,val code:String,val n
     val lifecycle=LocalLifecycleOwner.current.lifecycle
     val currentSelect by rememberUpdatedState(select)
     val mapView=remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null) } }
+    val callbackLifecycle=remember(mapView) { LifecycleGeneration() }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var styled by remember { mutableStateOf(false) }
     var userMoved by remember { mutableStateOf(false) }
@@ -422,6 +423,8 @@ private data class PlanningMapReference(val program:String,val code:String,val n
     val currentViewport by rememberUpdatedState(viewport)
     LaunchedEffect(resetKey) { userMoved = false; cameraFitted = false }
     DisposableEffect(mapView,lifecycle) {
+        val callbackGeneration=callbackLifecycle.next()
+        var disposed=false
         val observer=LifecycleEventObserver { _,event -> when(event) {
             Lifecycle.Event.ON_START -> mapView.onStart()
             Lifecycle.Event.ON_RESUME -> mapView.onResume()
@@ -431,12 +434,16 @@ private data class PlanningMapReference(val program:String,val code:String,val n
         } }
         lifecycle.addObserver(observer)
         mapView.getMapAsync { ready ->
+            if(disposed || !callbackLifecycle.isCurrent(callbackGeneration)) return@getMapAsync
             map=ready
             ready.uiSettings.isAttributionEnabled=true
             ready.uiSettings.isLogoEnabled=true
-            ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { styled=true }
-            ready.addOnCameraMoveStartedListener { reason -> if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }
+            ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) {
+                if(callbackLifecycle.isCurrent(callbackGeneration)) styled=true
+            }
+            ready.addOnCameraMoveStartedListener { reason -> if (callbackLifecycle.isCurrent(callbackGeneration) && reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }
             ready.addOnCameraIdleListener {
+                if(!callbackLifecycle.isCurrent(callbackGeneration)) return@addOnCameraIdleListener
                 if (userMoved) {
                     val centre = ready.cameraPosition.target ?: return@addOnCameraIdleListener
                     val bounds = ready.projection.visibleRegion.latLngBounds
@@ -444,9 +451,12 @@ private data class PlanningMapReference(val program:String,val code:String,val n
                     currentViewport(GeoPoint(centre.latitude, centre.longitude), radiusKm)
                 }
             }
-            ready.addOnMapClickListener { location -> currentSelect(GeoPoint(location.latitude,location.longitude)); true }
+            ready.addOnMapClickListener { location ->
+                if(!callbackLifecycle.isCurrent(callbackGeneration)) false
+                else { currentSelect(GeoPoint(location.latitude,location.longitude)); true }
+            }
         }
-        onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map=null }
+        onDispose { disposed=true;callbackLifecycle.retire();lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map=null }
     }
     val referenceHash=references.joinToString { "${it.program}:${it.code}:${it.point.latitude}:${it.point.longitude}" }
     LaunchedEffect(map,styled,point,grid,radius,referenceHash,resetKey) {

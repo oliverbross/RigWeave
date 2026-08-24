@@ -8,6 +8,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.CookieManager
+import android.view.ViewGroup
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -88,6 +89,8 @@ internal fun InAppBrowserDialog(state: InAppBrowserState) {
     var canGoForward by remember(url) { mutableStateOf(false) }
     var pendingExternalUrl by remember(url) { mutableStateOf<String?>(null) }
     var renderError by remember(url) { mutableStateOf<String?>(null) }
+    val callbackLifecycle = remember(url) { LifecycleGeneration() }
+    val callbackGeneration = remember(url) { callbackLifecycle.next() }
     val launchPolicy = inAppBrowserPolicy(url) ?: return
     Dialog(onDismissRequest = state::close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxWidth(.92f).fillMaxHeight(.90f), shape = MaterialTheme.shapes.large,
@@ -128,6 +131,7 @@ internal fun InAppBrowserDialog(state: InAppBrowserState) {
                         settings.setSupportMultipleWindows(false)
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                if (!callbackLifecycle.isCurrent(callbackGeneration)) return true
                                 val target = request?.url?.toString().orEmpty()
                                 val targetPolicy = inAppBrowserPolicy(target)
                                 if (targetPolicy != null) {
@@ -143,6 +147,7 @@ internal fun InAppBrowserDialog(state: InAppBrowserState) {
                                 return true
                             }
                             override fun onPageStarted(view: WebView?, target: String?, favicon: android.graphics.Bitmap?) {
+                                if (!callbackLifecycle.isCurrent(callbackGeneration)) return
                                 loading = true
                                 renderError = null
                                 validatedInAppBrowserUrl(target.orEmpty())?.let {
@@ -151,6 +156,7 @@ internal fun InAppBrowserDialog(state: InAppBrowserState) {
                                 }
                             }
                             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                                if (!callbackLifecycle.isCurrent(callbackGeneration)) return
                                 if (request?.isForMainFrame == true) {
                                     loading = false
                                     renderError = error?.description?.toString()?.takeIf(String::isNotBlank)
@@ -158,6 +164,7 @@ internal fun InAppBrowserDialog(state: InAppBrowserState) {
                                 }
                             }
                             override fun onPageFinished(view: WebView?, target: String?) {
+                                if (!callbackLifecycle.isCurrent(callbackGeneration)) return
                                 loading = false
                                 validatedInAppBrowserUrl(target.orEmpty())?.let { currentUrl = it }
                                 pageTitle = view?.title.orEmpty()
@@ -166,7 +173,9 @@ internal fun InAppBrowserDialog(state: InAppBrowserState) {
                             }
                         }
                         setDownloadListener { target, _, _, _, _ ->
-                            pendingExternalUrl = validatedExternalBrowserUrl(target)
+                            if (callbackLifecycle.isCurrent(callbackGeneration)) {
+                                pendingExternalUrl = validatedExternalBrowserUrl(target)
+                            }
                         }
                         webView = this
                         loadUrl(url)
@@ -207,10 +216,16 @@ internal fun InAppBrowserDialog(state: InAppBrowserState) {
     }
     DisposableEffect(url) {
         onDispose {
-            webView?.stopLoading()
-            webView?.loadUrl("about:blank")
-            webView?.removeAllViews()
-            webView?.destroy()
+            callbackLifecycle.close()
+            webView?.let { retiring ->
+                retiring.stopLoading()
+                retiring.webViewClient = WebViewClient()
+                retiring.setDownloadListener(null)
+                (retiring.parent as? ViewGroup)?.removeView(retiring)
+                retiring.removeAllViews()
+                retiring.destroy()
+            }
+            webView = null
         }
     }
 }

@@ -119,11 +119,13 @@ private fun NativeNeuralMap(
         MapLibre.getInstance(context.applicationContext)
         MapView(context).apply { onCreate(null) }
     }
+    val callbackLifecycle = remember(mapView) { LifecycleGeneration() }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var styleReady by remember { mutableStateOf(false) }
     val renderedAnnotations = remember(mapView) { RenderedMapAnnotations() }
 
     DisposableEffect(mapView, lifecycle) {
+        val callbackGeneration = callbackLifecycle.next()
         var started = false
         var resumed = false
         var destroyed = false
@@ -175,7 +177,7 @@ private fun NativeNeuralMap(
         if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) resume()
         var disposed = false
         mapView.getMapAsync { readyMap ->
-            if (disposed) return@getMapAsync
+            if (disposed || !callbackLifecycle.isCurrent(callbackGeneration)) return@getMapAsync
             map = readyMap
             readyMap.uiSettings.apply {
                 isAttributionEnabled = true
@@ -193,12 +195,14 @@ private fun NativeNeuralMap(
                 Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")
             else Style.Builder().fromJson(basemap.styleJson)
             readyMap.setStyle(style) {
+                if (!callbackLifecycle.isCurrent(callbackGeneration)) return@setStyle
                 renderedAnnotations.reset()
                 styleReady = true
             }
         }
         onDispose {
             disposed = true
+            callbackLifecycle.retire()
             lifecycle.removeObserver(observer)
             map?.let { readyMap ->
                 val annotations = renderedAnnotations.areas.values +

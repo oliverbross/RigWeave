@@ -417,10 +417,12 @@ private fun SatelliteFlightpathMap(
         MapLibre.getInstance(context.applicationContext)
         MapView(context).apply { onCreate(null) }
     }
+    val callbackLifecycle = remember(mapView) { LifecycleGeneration() }
     var map by remember { mutableStateOf<org.maplibre.android.maps.MapLibreMap?>(null) }
     var styled by remember { mutableStateOf(false) }
     var fittedPassKey by remember { mutableStateOf("") }
     DisposableEffect(mapView, lifecycle) {
+        val callbackGeneration = callbackLifecycle.next(); var disposed = false
         val watcher = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> mapView.onStart()
@@ -432,12 +434,17 @@ private fun SatelliteFlightpathMap(
         }
         lifecycle.addObserver(watcher)
         mapView.getMapAsync { ready ->
+            if (disposed || !callbackLifecycle.isCurrent(callbackGeneration)) return@getMapAsync
             map = ready
             ready.uiSettings.isAttributionEnabled = true
             ready.setMinZoomPreference(2.0)
-            ready.setStyle(Style.Builder().fromJson(satelliteMapStyle())) { styled = true }
+            ready.setStyle(Style.Builder().fromJson(satelliteMapStyle())) {
+                if (callbackLifecycle.isCurrent(callbackGeneration)) styled = true
+            }
         }
         onDispose {
+            disposed = true
+            callbackLifecycle.retire()
             lifecycle.removeObserver(watcher)
             mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map = null
         }

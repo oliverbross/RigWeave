@@ -1010,6 +1010,7 @@ private fun shortChartLabel(value:String)=when{
             false
         }
     } }
+    val callbackLifecycle = remember(mapView) { LifecycleGeneration() }
     var map by remember { mutableStateOf<org.maplibre.android.maps.MapLibreMap?>(null) }
     var ready by remember { mutableStateOf(false) }
     var fullScreen by rememberSaveable { mutableStateOf(false) }
@@ -1020,6 +1021,7 @@ private fun shortChartLabel(value:String)=when{
     var labelMode by rememberSaveable { mutableStateOf(ProgressContactLabelMode.PREFIX) }
     val currentLabelMode by rememberUpdatedState(labelMode)
     DisposableEffect(mapView, lifecycle) {
+        val callbackGeneration = callbackLifecycle.next()
         var started = false
         var resumed = false
         var destroyed = false
@@ -1048,12 +1050,14 @@ private fun shortChartLabel(value:String)=when{
             value.setMinZoomPreference(.8)
             value.setMaxZoomPreference(14.0)
             value.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { style ->
+                if (!callbackLifecycle.isCurrent(callbackGeneration)) return@setStyle
                 installProgressContactLayers(style)
                 ready = true
                 if (cameraInitialized) value.cameraPosition = CameraPosition.Builder()
                     .target(LatLng(savedLatitude, savedLongitude)).zoom(savedZoom).build()
             }
             value.addOnCameraIdleListener {
+                if (!callbackLifecycle.isCurrent(callbackGeneration)) return@addOnCameraIdleListener
                 val position = value.cameraPosition
                 val target = position.target ?: return@addOnCameraIdleListener
                 savedLatitude = target.latitude; savedLongitude = target.longitude; savedZoom = position.zoom
@@ -1062,7 +1066,7 @@ private fun shortChartLabel(value:String)=when{
                     progressContactFeatures(currentRows, currentLabelMode, GeoPoint(target.latitude, target.longitude)))
             }
         }
-        onDispose { disposed = true; lifecycle.removeObserver(observer); map = null; ready = false; destroy() }
+        onDispose { disposed = true; callbackLifecycle.retire(); lifecycle.removeObserver(observer); map = null; ready = false; destroy() }
     }
     LaunchedEffect(map, ready, rows, labelMode) {
         val value = map ?: return@LaunchedEffect

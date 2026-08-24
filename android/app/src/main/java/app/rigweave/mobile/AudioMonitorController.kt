@@ -55,6 +55,8 @@ class AudioMonitorController(private val context: Context) {
     private val prefs = context.getSharedPreferences("rigweave-audio-routes", Context.MODE_PRIVATE)
     private val main = Handler(Looper.getMainLooper())
     private val running = AtomicBoolean(false)
+    private val closed = AtomicBoolean(false)
+    private val lifecycle = LifecycleGeneration()
     private val frames = ArrayBlockingQueue<AudioFrame>(8)
     private var recorder: AudioRecord? = null
     private var player: AudioTrack? = null
@@ -159,7 +161,8 @@ class AudioMonitorController(private val context: Context) {
         it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC
     }
 
-    fun start() {
+    @Synchronized fun start() {
+        if (closed.get()) return
         if (running.get()) return
         if (!canStartAudioMonitor(audioOwner)) { status = "$audioOwner owns the selected audio device"; return }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -194,20 +197,24 @@ class AudioMonitorController(private val context: Context) {
         if (!record.setPreferredDevice(input) || !track.setPreferredDevice(output)) {
             record.release(); track.release(); status = "Android refused the selected monitor route"; return
         }
+        val generation = lifecycle.next()
         val focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
             .setAudioAttributes(attributes).setOnAudioFocusChangeListener { change ->
-                if (change == AudioManager.AUDIOFOCUS_LOSS) main.post { stop() }
+                if (change == AudioManager.AUDIOFOCUS_LOSS) main.post {
+                    if (lifecycle.isCurrent(generation)) stop()
+                }
             }.build()
         audioManager.requestAudioFocus(focus); focusRequest = focus
         automaticGainControl = if (AutomaticGainControl.isAvailable()) AutomaticGainControl.create(record.audioSessionId)?.apply { enabled = true } else null
         recorder = record; player = track; frames.clear(); audioOwner = AudioOwners.MONITOR
         record.startRecording(); track.setVolume(1f); track.play()
         running.set(true); enabled = true; status = "Starting selected USB audio monitor · ${rate / 1000} kHz"
-        captureThread = Thread({ captureLoop(record, input, frameSamples, rate) }, "RigWeave-USB-Capture").apply { start() }
-        playbackThread = Thread({ playbackLoop(track, output) }, "RigWeave-Speaker-Playback").apply { start() }
+        captureThread = Thread({ captureLoop(record, input, frameSamples, rate, generation) }, "RigWeave-USB-Capture").apply { start() }
+        playbackThread = Thread({ playbackLoop(track, output, generation) }, "RigWeave-Speaker-Playback").apply { start() }
     }
 
-    fun stop() {
+    @Synchronized fun stop() {
+        lifecycle.retire()
         running.set(false); enabled = false
         captureThread?.interrupt(); playbackThread?.interrupt()
         recorder?.let { runCatching { it.stop() }; it.release() }
@@ -220,17 +227,26 @@ class AudioMonitorController(private val context: Context) {
         if (audioOwner == AudioOwners.MONITOR) audioOwner = AudioOwners.NONE
     }
 
-    fun close() {
-        stop(); audioManager.unregisterAudioDeviceCallback(deviceCallback)
+    @Synchronized fun close() {
+        if (!closed.compareAndSet(false, true)) return
+        stop()
+        lifecycle.close()
+        audioManager.unregisterAudioDeviceCallback(deviceCallback)
     }
 
-    private fun captureLoop(record: AudioRecord, requestedInput: AudioDeviceInfo, frameSamples: Int, rate: Int) {
+    private fun captureLoop(
+        record: AudioRecord,
+        requestedInput: AudioDeviceInfo,
+        frameSamples: Int,
+        rate: Int,
+        generation: Long,
+    ) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
         var routeTicks = 0
         while (running.get() && recorder === record) {
             val samples = ShortArray(frameSamples)
             val count = record.read(samples, 0, samples.size, AudioRecord.READ_BLOCKING)
-            if (count <= 0) { fail("USB audio read failed ($count)"); return }
+            if (count <= 0) { fail(generation, "USB audio read failed ($count)"); return }
             var energy = 0.0
             val multiplier = gain
             for (index in 0 until count) {
@@ -238,17 +254,26 @@ class AudioMonitorController(private val context: Context) {
                 samples[index] = value.toShort(); energy += value.toDouble() * value
             }
             val rms = (sqrt(energy / count) / Short.MAX_VALUE).toFloat()
-            main.post { level = (0.8f * level + 0.2f * (rms * 4f)).coerceIn(0f, 1f) }
+            main.post {
+                if (lifecycle.isCurrent(generation)) level = (0.8f * level + 0.2f * (rms * 4f)).coerceIn(0f, 1f)
+            }
             if (!frames.offer(AudioFrame(samples, count))) { frames.poll(); frames.offer(AudioFrame(samples, count)) }
             if (++routeTicks >= 50) {
                 routeTicks = 0
-                if (record.routedDevice?.id != requestedInput.id) { fail("Selected USB RX route was lost; monitor stopped"); return }
-                main.post { status = "Monitoring selected USB input through tablet speaker · ${rate / 1000} kHz" }
+                if (record.routedDevice?.id != requestedInput.id) {
+                    fail(generation, "Selected USB RX route was lost; monitor stopped")
+                    return
+                }
+                main.post {
+                    if (lifecycle.isCurrent(generation)) {
+                        status = "Monitoring selected USB input through tablet speaker · ${rate / 1000} kHz"
+                    }
+                }
             }
         }
     }
 
-    private fun playbackLoop(track: AudioTrack, requestedOutput: AudioDeviceInfo) {
+    private fun playbackLoop(track: AudioTrack, requestedOutput: AudioDeviceInfo, generation: Long) {
         Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
         while (running.get() && player === track) {
             val frame = try { frames.poll(500, TimeUnit.MILLISECONDS) } catch (_: InterruptedException) { return }
@@ -256,21 +281,30 @@ class AudioMonitorController(private val context: Context) {
             var written = 0
             while (written < frame.count && running.get()) {
                 val result = track.write(frame.samples, written, frame.count - written, AudioTrack.WRITE_BLOCKING)
-                if (result <= 0) { fail("Tablet speaker write failed ($result)"); return }
+                if (result <= 0) { fail(generation, "Tablet speaker write failed ($result)"); return }
                 written += result
             }
-            if (track.routedDevice?.id != requestedOutput.id) { fail("Tablet speaker route was lost; monitor stopped"); return }
+            if (track.routedDevice?.id != requestedOutput.id) {
+                fail(generation, "Tablet speaker route was lost; monitor stopped")
+                return
+            }
         }
     }
 
     private fun devicesChanged() {
+        if (closed.get()) return
         val previousTx = selectedTx?.stableKey
         refreshDevices()
         if (enabled && selectedRxDevice() == null) stop()
         if (previousTx != null && selectedTxDevice() == null) onTxRouteInvalidated?.invoke()
     }
 
-    private fun fail(value: String) = main.post { stop(); status = value }
+    private fun fail(generation: Long, value: String) = main.post {
+        if (lifecycle.isCurrent(generation)) {
+            stop()
+            status = value
+        }
+    }
 
     private fun descriptor(device: AudioDeviceInfo): AudioRouteDescriptor {
         val address = if (Build.VERSION.SDK_INT >= 28) device.address.orEmpty() else ""

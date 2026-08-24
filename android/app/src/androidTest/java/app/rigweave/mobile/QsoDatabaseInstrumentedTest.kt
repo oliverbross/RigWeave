@@ -314,6 +314,49 @@ class QsoDatabaseInstrumentedTest {
         assertTrue(database.deliveries().isEmpty())
     }
 
+    @Test fun schemaSixteenReopenPreservesCanonicalQsoAndRepairsProjection() {
+        val qso = Qso(
+            id = "schema-16-reopen", callsign = "OM0RX", frequencyHz = 14_060_000, mode = "CW",
+            rstSent = "599", rstReceived = "579", createdAt = 1_700_000_250,
+            grid = "JN88TQ", stationCallsign = "OM0RX", stationProfileId = "7",
+        )
+        assertTrue(database.save(qso))
+        database.writableDatabase.execSQL(
+            "INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)",
+            arrayOf("schema-16-fixture", "preserved"),
+        )
+        database.writableDatabase.delete("qso_projection", "qso_id=?", arrayOf(qso.id))
+        assertEquals(1, database.verifyProjection().canonicalRows)
+        assertEquals(0, database.projectionHealth().projectionRows)
+
+        database.close()
+        database = QsoDatabase(context, databaseName)
+
+        database.readableDatabase.rawQuery("PRAGMA user_version", null).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(16, cursor.getInt(0))
+        }
+        assertEquals("OM0RX", database.qso(qso.id)?.stationCallsign)
+        database.readableDatabase.rawQuery(
+            "SELECT value FROM settings WHERE key=?",
+            arrayOf("schema-16-fixture"),
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("preserved", cursor.getString(0))
+        }
+        assertEquals(1, database.repairMissingProjectionRows())
+        val health = database.verifyProjection()
+        assertEquals(1, health.canonicalRows)
+        assertEquals(1, health.projectionRows)
+        database.readableDatabase.rawQuery(
+            "SELECT COUNT(*) FROM qso_projection p JOIN qso q ON q.id=p.qso_id WHERE p.qso_id=?",
+            arrayOf(qso.id),
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1, cursor.getInt(0))
+        }
+    }
+
     @Test fun versionSixMigrationPreservesQsoAndAddsDeliveryTable() {
         database.close()
         context.deleteDatabase(databaseName)
