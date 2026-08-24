@@ -6,7 +6,7 @@
 |---|---|---|
 | Source and semantic integration | Implemented | Exact source SHAs, merge ledger and focused tests. |
 | Android/native build | Local pass; hosted pending | APK/AAB audit, 688 JVM tests, 97 Rust tests, 2/2 CTests and unsigned iOS Simulator build passed locally. Exact-SHA hosted gates remain pending. |
-| Protected tablet preservation/install | Pending | `pm path`, hash-recorded backup, `adb install -r`, package/data checks. |
+| Protected tablet preservation/install | Passed | Existing package confirmed; UID 10352 and 146 non-cache hashes preserved; schema 16 and 67,223 QSO/projection rows preserved; PID survived 180 seconds and relaunch; crash buffer empty. |
 | QMX CAT identity and readback | Pending hardware | Owner-present, read-only connect and fresh readbacks. |
 | QMX UAC/IQ orientation | Pending hardware | Same-device route proof, 48 kHz stereo evidence and orientation review. |
 | RGO ONE V6 | Pending hardware | Explicit V6 profile, model ID 006 and fresh read-only values. |
@@ -21,3 +21,7 @@
 4. Compare displayed state with the physical controller/radio.
 5. For rotators, verify limits, wrap/cable path and heading-offset ownership before any separately confirmed motion.
 6. Record failures as unavailable/unknown; do not infer success from a build, install or log message.
+
+## Protected-tablet UI evidence
+
+The installed candidate rendered Radio as CAT offline with explicit Connect, rendered the radio profile Settings page with native QMX/QMX+/RGO choices and 304 embedded Hamlib models, and rendered the Rotator settings plus the empty Rotator workspace. The workspace reported zero configured profiles; no Connect, PTT, TUNE, park, motion or hardware action was invoked. Its temporary navigation opt-in was restored OFF and the prior Digi destination restored.

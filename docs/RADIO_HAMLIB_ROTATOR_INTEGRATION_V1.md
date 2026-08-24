@@ -14,7 +14,7 @@ The rotator workspace instantiates native serial, rotctld and embedded-Hamlib dr
 
 ## Local candidate evidence
 
-- The compiled Hamlib 4.7.2 catalogue exposes 302 radio models from 37 backends. The byte-preservation watcher passed at commit `40f63488fe0bd751b147f48d62fd217bf53713a0` with 1,048 verified files.
+- The installed Android Hamlib 4.7.2 catalogue exposes 304 radio models from 37 backends. The earlier host enumeration recorded 302; the final Android registry is the release count. The byte-preservation watcher passed at commit `40f63488fe0bd751b147f48d62fd217bf53713a0` with 1,048 verified files.
 - Android Kotlin compilation and 688 JVM tests passed. Android-test sources and APK packaging passed; final lint completed with 0 errors, 191 warnings and 40 hints.
 - Rust passed 97 tests with one intentional ignore; the Debug native core passed 2/2 CTests; the unsigned iOS Simulator regression build passed.
 - The arm64-only tablet APK is 58,293,188 bytes with SHA-256 `00b3c2eb7c6143d65e970d030ca096a48830d770c1cde76adc530a396d054be8`.
@@ -22,6 +22,6 @@ The rotator workspace instantiates native serial, rotctld and embedded-Hamlib dr
 - Both archives pass the prohibited-payload audit: no rigctl/rigctld executable, duplicate `libc++`, P.533 payload, manual, firmware or private evidence.
 - The QMX watcher reports review-required drift from the pinned v1.9.2 source to upstream v1.9.3; the pin was not changed during Sweep 2. RGO and Hamlib watchers are current. The private Radio Station Pro rotator source was unavailable; microHAM ARCO and Hamlib rotator pins report no change.
 
-Exact-SHA hosted validation and protected-tablet preservation/install evidence are recorded only after the semantic commits are pushed. Physical QMX, RGO ONE and rotator acceptance remains pending and is not inferred from these builds.
+The protected Lenovo install used only `adb install -r` with the arm64 candidate. UID 10352, all 146 pre-launch non-cache file hashes, schema 16, 67,223 QSOs and 67,223 projections were preserved. The same PID survived 180 seconds and relaunch, the crash buffer stayed empty, and Radio, Settings and the empty Rotator workspace rendered while every backend remained disconnected. Exact hosted run identity is reported externally alongside the immutable SHA it validates. Physical QMX, RGO ONE and rotator acceptance remains pending and is not inferred from these checks.
 
 See `RADIO_PLATFORM_OWNERSHIP.md`, `RADIO_PROFILE_AND_BACKEND_MATRIX.md`, `ROTATOR_INTEGRATION_AND_BAND_POLICY.md`, and `RADIO_ROTATOR_LIVE_ACCEPTANCE.md` for the detailed boundaries.
