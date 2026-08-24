@@ -14,7 +14,7 @@ namespace rigweave::desktop {
 int collectModel(const struct rig_caps *caps, void *data) {
     if (!caps || !data || caps->rig_model == RIG_MODEL_NONE) return 1;
     auto *models = static_cast<QVector<RadioModel> *>(data);
-    models->push_back({caps->rig_model, QString::fromUtf8(caps->mfg_name),
+    models->push_back({static_cast<int>(caps->rig_model), QString::fromUtf8(caps->mfg_name),
                        QString::fromUtf8(caps->model_name),
                        QStringLiteral("backend-%1").arg(RIG_BACKEND_NUM(caps->rig_model)),
                        QString::fromLatin1(rig_strstatus(caps->status)),
