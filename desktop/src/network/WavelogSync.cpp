@@ -48,7 +48,11 @@ QtWavelogEndpoint::QtWavelogEndpoint(QObject *parent):QObject(parent){}
 
 QUrl QtWavelogEndpoint::normalizedRoot(const QUrl &input) {
     QUrl url=input;if(url.scheme().isEmpty())url=QUrl(QStringLiteral("https://%1").arg(input.toString()));
-    if(url.scheme()!=QStringLiteral("https")||url.host().isEmpty())return{};url.setQuery(QString{});url.setFragment(QString{});
+    if (url.scheme()!=QStringLiteral("https")||url.host().isEmpty()) {
+        return {};
+    }
+    url.setQuery(QString{});
+    url.setFragment(QString{});
     QString path=url.path();while(path.endsWith('/'))path.chop(1);
     if(path.endsWith("/index.php"))path+="/api/v2";else if(!path.endsWith("/api/v2")&&!path.endsWith("/index.php/api/v2"))path+="/index.php/api/v2";
     if (!path.endsWith('/')) path += '/';
@@ -62,7 +66,11 @@ QVariantMap QtWavelogEndpoint::request(const QUrl &url,const QString &token,cons
     QEventLoop loop;QTimer timer;timer.setSingleShot(true);connect(&timer,&QTimer::timeout,reply,&QNetworkReply::abort);connect(reply,&QNetworkReply::finished,&loop,&QEventLoop::quit);timer.start(30000);loop.exec();
     const int status=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();const QByteArray bytes=reply->read(4194305);const QString networkError=reply->errorString().left(300);reply->deleteLater();
     if(bytes.size()>4194304)return{{"ok",false},{"status",status},{"error","Wavelog response exceeded 4 MiB bound"}};
-    if(status==204)return{{"ok",true},{"status",status}};QJsonParseError parse;const auto document=QJsonDocument::fromJson(bytes,&parse);
+    if (status==204) {
+        return{{"ok",true},{"status",status}};
+    }
+    QJsonParseError parse;
+    const auto document=QJsonDocument::fromJson(bytes,&parse);
     if(parse.error!=QJsonParseError::NoError||!document.isObject())return{{"ok",false},{"status",status},{"error",status?"Malformed Wavelog response":networkError}};
     QVariantMap result=document.object().toVariantMap();result.insert("ok",status>=200&&status<300);result.insert("status",status);if(status<200||status>=300){const auto e=result.value("error").toMap();result.insert("error",e.value("message",networkError).toString().left(300));}return result;
 }
