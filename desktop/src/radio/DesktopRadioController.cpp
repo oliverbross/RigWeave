@@ -52,21 +52,21 @@ void DesktopRadioController::disconnectRadio(){m_poll.stop();
     m_generation++;m_state="Disconnected";m_frequencyHz=0;m_mode.clear();emit snapshotChanged();}
 bool DesktopRadioController::requestFrequency(qulonglong hz){
 #ifdef RIGWEAVE_HAVE_HAMLIB
-    if(!m_rig||hz<100000||hz>10500000000ULL)return false;const int code=rig_set_freq(static_cast<RIG*>(m_rig),RIG_VFO_CURR,static_cast<freq_t>(hz));if(code!=RIG_OK){emit error(QString::fromLatin1(rigerror(code)));return false;}poll();return true;
+    if(!m_rig||hz<100000||hz>10500000000ULL){return false;}const int code=rig_set_freq(static_cast<RIG*>(m_rig),RIG_VFO_CURR,static_cast<freq_t>(hz));if(code!=RIG_OK){emit error(QString::fromLatin1(rigerror(code)));return false;}poll();return true;
 #else
     Q_UNUSED(hz);return false;
 #endif
 }
 bool DesktopRadioController::requestMode(const QString&value){
 #ifdef RIGWEAVE_HAVE_HAMLIB
-    if(!m_rig)return false;const rmode_t mode=rig_parse_mode(value.toUtf8().constData());if(mode==RIG_MODE_NONE)return false;const int code=rig_set_mode(static_cast<RIG*>(m_rig),RIG_VFO_CURR,mode,RIG_PASSBAND_NORMAL);if(code!=RIG_OK){emit error(QString::fromLatin1(rigerror(code)));return false;}poll();return true;
+    if(!m_rig){return false;}const rmode_t mode=rig_parse_mode(value.toUtf8().constData());if(mode==RIG_MODE_NONE){return false;}const int code=rig_set_mode(static_cast<RIG*>(m_rig),RIG_VFO_CURR,mode,RIG_PASSBAND_NORMAL);if(code!=RIG_OK){emit error(QString::fromLatin1(rigerror(code)));return false;}poll();return true;
 #else
     Q_UNUSED(value);return false;
 #endif
 }
 void DesktopRadioController::poll(){
 #ifdef RIGWEAVE_HAVE_HAMLIB
-    if(!m_rig)return;freq_t frequency=0;rmode_t mode=RIG_MODE_NONE;pbwidth_t width=0;auto*rig=static_cast<RIG*>(m_rig);if(rig_get_freq(rig,RIG_VFO_CURR,&frequency)==RIG_OK)m_frequencyHz=static_cast<quint64>(frequency);if(rig_get_mode(rig,RIG_VFO_CURR,&mode,&width)==RIG_OK)m_mode=QString::fromLatin1(rig_strrmode(mode));emit snapshotChanged();
+    if(!m_rig){return;}freq_t frequency=0;rmode_t mode=RIG_MODE_NONE;pbwidth_t width=0;auto*rig=static_cast<RIG*>(m_rig);if(rig_get_freq(rig,RIG_VFO_CURR,&frequency)==RIG_OK)m_frequencyHz=static_cast<quint64>(frequency);if(rig_get_mode(rig,RIG_VFO_CURR,&mode,&width)==RIG_OK)m_mode=QString::fromLatin1(rig_strrmode(mode));emit snapshotChanged();
 #endif
 }
 

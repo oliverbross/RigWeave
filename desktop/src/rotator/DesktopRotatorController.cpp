@@ -19,10 +19,10 @@ void DesktopRotatorController::disconnectRotator(){m_poll.stop();
     if(m_rotator){auto*rot=static_cast<ROT*>(m_rotator);rot_close(rot);rot_cleanup(rot);m_rotator=nullptr;}
 #endif
     m_state="Disconnected / automation disarmed";m_targetPrepared=false;emit snapshotChanged();emit preparedChanged();}
-bool DesktopRotatorController::prepareTarget(double azimuth,double elevation){if(azimuth<0||azimuth>450||elevation<-10||elevation>180)return false;m_preparedAzimuth=azimuth;m_preparedElevation=elevation;m_targetPrepared=true;emit preparedChanged();emit confirmationRequired(azimuth,elevation);return true;}
+bool DesktopRotatorController::prepareTarget(double azimuth,double elevation){if(azimuth<0||azimuth>450||elevation<-10||elevation>180){return false;}m_preparedAzimuth=azimuth;m_preparedElevation=elevation;m_targetPrepared=true;emit preparedChanged();emit confirmationRequired(azimuth,elevation);return true;}
 bool DesktopRotatorController::confirmMove(){
 #ifdef RIGWEAVE_HAVE_HAMLIB
-    if(!m_rotator||!m_targetPrepared)return false;m_targetPrepared=false;emit preparedChanged();const int code=rot_set_position(static_cast<ROT*>(m_rotator),azimuth_t(m_preparedAzimuth),elevation_t(m_preparedElevation));if(code!=RIG_OK){emit error(QString::fromLatin1(rigerror(code)));return false;}return true;
+    if(!m_rotator||!m_targetPrepared){return false;}m_targetPrepared=false;emit preparedChanged();const int code=rot_set_position(static_cast<ROT*>(m_rotator),azimuth_t(m_preparedAzimuth),elevation_t(m_preparedElevation));if(code!=RIG_OK){emit error(QString::fromLatin1(rigerror(code)));return false;}return true;
 #else
     return false;
 #endif
@@ -34,14 +34,14 @@ void DesktopRotatorController::stop(){
 }
 bool DesktopRotatorController::park(){
 #ifdef RIGWEAVE_HAVE_HAMLIB
-    if(!m_rotator)return false;const int code=rot_park(static_cast<ROT*>(m_rotator));if(code!=RIG_OK){emit error(QString::fromLatin1(rigerror(code)));return false;}return true;
+    if(!m_rotator){return false;}const int code=rot_park(static_cast<ROT*>(m_rotator));if(code!=RIG_OK){emit error(QString::fromLatin1(rigerror(code)));return false;}return true;
 #else
     return false;
 #endif
 }
 void DesktopRotatorController::poll(){
 #ifdef RIGWEAVE_HAVE_HAMLIB
-    if(!m_rotator)return;azimuth_t az=0;elevation_t el=0;if(rot_get_position(static_cast<ROT*>(m_rotator),&az,&el)==RIG_OK){m_azimuth=az;m_elevation=el;emit snapshotChanged();}
+    if(!m_rotator){return;}azimuth_t az=0;elevation_t el=0;if(rot_get_position(static_cast<ROT*>(m_rotator),&az,&el)==RIG_OK){m_azimuth=az;m_elevation=el;emit snapshotChanged();}
 #endif
 }
 } // namespace rigweave::desktop
