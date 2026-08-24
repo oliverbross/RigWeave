@@ -191,7 +191,7 @@ internal suspend fun completeSolarRefresh(
 }
 
 class FeatureController internal constructor(private val context: Context, private val http: FeatureHttpTransport = FeatureUrlConnectionTransport()) {
-    private val handle = NativeCore.featureCreate()
+    @Volatile private var handle = NativeCore.featureCreate()
     private val nativeLock = Any()
     private val scope = CoroutineScope(Job() + Dispatchers.IO)
     private var workedSyncJob: Job? = null
@@ -495,7 +495,11 @@ class FeatureController internal constructor(private val context: Context, priva
         rbnMaintenanceJob = null
         disconnectCluster()
         scope.cancel()
-        synchronized(nativeLock) { NativeCore.featureDestroy(handle) }
+        synchronized(nativeLock) {
+            val retiredHandle = handle
+            handle = 0L
+            if (retiredHandle != 0L) NativeCore.featureDestroy(retiredHandle)
+        }
     }
 
     fun startWorkedLogSync(database: QsoDatabase, wavelog: WavelogController, cty: CtyController) {
