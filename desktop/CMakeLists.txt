@@ -37,8 +37,12 @@ set(RIGWEAVE_DESKTOP_SERVICE_SOURCES
     src/rotator/DesktopRotatorController.cpp
     src/panadapter/DesktopPanadapter.cpp
 )
+file(GLOB RIGWEAVE_DESKTOP_SERVICE_HEADERS CONFIGURE_DEPENDS
+    "include/rigweave/desktop/*.hpp")
 
-add_library(rigweave_desktop_services STATIC ${RIGWEAVE_DESKTOP_SERVICE_SOURCES})
+add_library(rigweave_desktop_services STATIC
+    ${RIGWEAVE_DESKTOP_SERVICE_SOURCES}
+    ${RIGWEAVE_DESKTOP_SERVICE_HEADERS})
 target_include_directories(rigweave_desktop_services PUBLIC include)
 target_link_libraries(rigweave_desktop_services PUBLIC
     rigweave_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::QuickControls2 Qt6::Qml
