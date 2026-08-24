@@ -37,3 +37,11 @@ Configuration hashes detect accidental or malicious mutation but are not signatu
 ## Operator controls
 
 Local log ADIF export/import, configuration export/import and the sanitized support ZIP require deliberate operator actions. Existing cache-clear actions remove only re-fetchable provider/archive data; QSO records, drafts/outboxes and credential stores are not cleared by those controls. Data deletion remains in each owning workspace and is never triggered by navigation, a provider response or configuration restore.
+
+## Radio and rotator data
+
+- Radio and rotator USB identities are persisted as SHA-256 hashes; raw serial numbers are not placed in diagnostics or ordinary recovery exports.
+- Hamlib model number, bounded framing, poll cadence and read-only policy are configuration data. Authentication values are not part of radio profiles.
+- Rotator profiles may contain private LAN endpoints. Ordinary recovery export excludes those endpoints; restoring configuration clears connection, movement, automation-arm and tracking state.
+- Diagnostics retain bounded, sanitized errors and capability/settings digests. Raw CAT frames, serial numbers, authenticated endpoints, QSO data and audio are excluded.
+- QMX UAC routing is accepted only when the route proves the expected stable-device digest; microphone fallback is prohibited.

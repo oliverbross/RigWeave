@@ -125,3 +125,8 @@ COPYING.LIB, COPYING, LICENSE, AUTHORS, and relevant README files are retained
 under core/third_party/hamlib. RigWeave modifies only the Android external-file-
 descriptor port hook and disables desktop microHam /dev discovery on Android.
 See docs/radio/hamlib/LICENCE_AND_PACKAGING.md and SOURCE_MANIFEST.json.
+
+The Sweep 2 integration also uses the retained Hamlib rotator APIs and backend
+initializers from that same archive. No second Hamlib distribution is bundled.
+microHAM ARCO interoperability is limited to published compatibility protocols;
+no proprietary microHAM protocol implementation or source is included.

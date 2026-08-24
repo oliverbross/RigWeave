@@ -42,3 +42,11 @@ dynamic feature. Final debug artifacts:
 The deterministic audit reports APK delta +616,345 bytes versus the combined
 integration reference and +330,767 bytes versus Finish-Line. Both artifacts
 pass the ITU/P.533 payload scan and remain below the existing package ceilings.
+
+## Sweep 2 package strategy
+
+`rigweaveAbi` is the single-ABI tablet build property. `-PrigweaveAbi=arm64-v8a` narrows Android JNI, Rust and Hamlib outputs together; the default release bundle retains `arm64-v8a`, `armeabi-v7a`, `x86` and `x86_64`. Native compilation enables hidden visibility, section splitting and linker garbage collection. No dynamic feature, asset pack or second Hamlib archive is introduced.
+
+Sweep 2 gates are: arm64 debug APK at or below 130 MB, four-ABI release AAB at or below 60 MB, no developer tools/test corpora/source archives in either artifact, and no ITU/P.533 payload. Exact current sizes belong in release evidence only after the final SHA build.
+
+The final local Sweep 2 package inputs produce an arm64-only debug APK of 58,293,188 bytes (`00b3c2eb7c6143d65e970d030ca096a48830d770c1cde76adc530a396d054be8`) and a four-ABI debug AAB of 55,606,070 bytes (`29cab575b7d403a1876780806a397f5a73b69ec1ac11136e23a0da4bca8b414f`). The AAB contains `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`; the APK contains only `arm64-v8a`. Both audits pass the executable, duplicate runtime, private-evidence, manual/firmware and ITU/P.533 exclusions. The universal APK was not rebuilt because it is unnecessary for the protected tablet.

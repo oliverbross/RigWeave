@@ -23,3 +23,14 @@ The fix/tablet-acceptance-sweep-1 source closes the 41 owner-observed acceptance
 | Desktop shells | EXCLUDED | Windows/macOS/Linux shells are not part of this convergence |
 
 Mandatory build, watcher, package, scale, hosted exact-SHA, push and device results are recorded in `RIGWEAVE_FINAL_WHOLE_APP_CONVERGENCE.md`; a source-complete row alone is not release evidence.
+
+## Sweep 2 radio and rotator integration
+
+| Area | Verdict | Boundary |
+|---|---|---|
+| Stable radio profiles and one owner | SOURCE_COMPLETE | Native KX/Flex/QMX/RGO plus dynamic Hamlib profiles; restore is disconnected. |
+| QMX/QMX+ | SOURCE_COMPLETE; LIVE_ACCEPTANCE_PENDING | CAT/controller wired; exact UAC/IQ/audio and hardware evidence pending. |
+| RGO ONE | SOURCE_COMPLETE; LIVE_ACCEPTANCE_PENDING | V6 requires explicit profile plus ID 006; legacy/unknown is read-only. |
+| Hamlib radio and rotator | SOURCE_COMPLETE | One vendored 4.7.2 archive/JNI bridge; physical models pending. |
+| Rotator workspace and safety | SOURCE_COMPLETE; MOTION_PENDING | One owner, explicit motion review, session-only automation, immediate STOP. |
+| Protected tablet | DEVICE_ACCEPTANCE_PENDING | Backup, `adb install -r`, launch and persistence evidence required. |

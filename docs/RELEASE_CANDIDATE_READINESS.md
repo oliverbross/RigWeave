@@ -59,3 +59,11 @@ The deterministic host profile passed and deleted its temporary databases. Obser
 - Package audit: P.533 payload scan PASS for both archives.
 
 These are unsigned/debug host outputs and were not installed or distributed.
+
+## Sweep 2 delta
+
+Sweep 2 adds the integrated radio profile/platform and rotator runtime. The required release shape is an arm64-only tablet debug APK built with `-PrigweaveAbi=arm64-v8a` (ceiling 130 MB) and a four-ABI release AAB (ceiling 60 MB). Exact artifact sizes, hashes, hosted jobs and protected-tablet install evidence must be refreshed at the final integration SHA; older artifacts above are not evidence for Sweep 2.
+
+Physical QMX, RGO ONE and rotator behavior remains pending and must not be inferred from package or install success.
+
+Local Sweep 2 package evidence is now available: the arm64 tablet APK is 58,293,188 bytes (`00b3c2eb7c6143d65e970d030ca096a48830d770c1cde76adc530a396d054be8`) and the four-ABI debug AAB is 55,606,070 bytes (`29cab575b7d403a1876780806a397f5a73b69ec1ac11136e23a0da4bca8b414f`). Both are below their Sweep 2 ceilings and pass the prohibited-payload audit. Android passed 688 JVM tests, instrumentation-source/test-APK packaging, and lint with 0 errors. Rust passed 97 tests with one intentional ignore, Debug core CTest passed 2/2, and the unsigned iOS Simulator build passed. Hosted exact-SHA and protected-tablet gates remain pending until the semantic commits are pushed.

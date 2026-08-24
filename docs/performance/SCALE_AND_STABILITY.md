@@ -114,3 +114,12 @@ Only eligible global forecasts persist on 15-minute station/window/band slots. V
   maximum quota; SQLite stores metadata, never pixels.
 - Background, route loss, radio identity/frequency change and close clear TX.
   No lifecycle path restarts transmit.
+
+## Sweep 2 radio and rotator bounds
+
+- Radio selection is O(1) by stable profile ID; Hamlib search filters the compiled registry and renders at most 24 matches at once.
+- One radio backend and one rotator backend may be active; a shared physical-identity authority prevents duplicate ownership.
+- Android serial reads are capped at 64 KiB for radio bridges and 4 KiB for rotator protocol responses. Poll cadences are clamped by profile contracts.
+- QMX command draining is bounded per pass; RGO polling uses one scheduler and per-cadence overlap guards; Hamlib uses one coalescing queue and one polling job.
+- Rotator diagnostics retain at most 200 events, profiles at most 32, assignments at most 256, presets at most 20 and forbidden sectors at most 16.
+- Background and context change disarm rotator automation. Neither connection nor physical motion is automatically restored.

@@ -7,3 +7,5 @@ Wavelog behaviour was reviewed at 3.1.0 / `af3256140bd05403b7c4a421746c2ea653a4f
 ITU-R P.533 remains `LICENSE_BLOCKED`. No source, binary, numerical result, or implied calibrated forecast from the blocked component is present. Existing empirical outlooks retain their actual provider/provenance labels.
 
 The release audit checks manifests, schema constants, configuration fixtures and forbidden privacy markers. Legal attribution files must be included unchanged in packaged source distributions.
+
+Sweep 2 reuses the same byte-preserved Hamlib 4.7.2 archive for both radio and rotator APIs. It does not add a second Hamlib build, downloaded backend, proprietary ARCO source or copied firmware table. Native QMX behavior derives from the reviewed QMX branch and published CAT/USB behavior; RGO ONE is bounded to the reviewed V6 source and conservative unknown-generation behavior. microHAM ARCO is supported only through its published GS-232/EasyComm compatibility modes; no proprietary protocol claim is made.
