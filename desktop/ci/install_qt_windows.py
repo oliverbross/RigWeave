@@ -71,6 +71,8 @@ def main() -> None:
         package.findtext("Name", ""): package for package in root.findall("PackageUpdate")
     }
     args.output.mkdir(parents=True, exist_ok=True)
+    qt_root = args.output / "6.11.2" / "mingw_64"
+    qt_root.mkdir(parents=True, exist_ok=True)
     args.cache.mkdir(parents=True, exist_ok=True)
 
     downloads: list[tuple[str, str, Path]] = []
@@ -89,7 +91,7 @@ def main() -> None:
         archives = list(executor.map(download_one, downloads))
     for archive in archives:
         subprocess.run(
-            ["7z", "x", "-y", f"-o{args.output}", str(archive)],
+            ["7z", "x", "-y", f"-o{qt_root}", str(archive)],
             check=True,
             stdout=subprocess.DEVNULL,
         )
@@ -99,7 +101,6 @@ def main() -> None:
         args.output,
         None,
     )
-    qt_root = args.output / "6.11.2" / "mingw_64"
     required = ("bin/qmake.exe", "lib/cmake/Qt6/Qt6Config.cmake", "bin/Qt6Core.dll")
     missing = [path for path in required if not (qt_root / path).is_file()]
     if missing:

@@ -93,7 +93,8 @@ void SpotRepository::ingest(SpotObservation spot) {
 }
 
 void SpotRepository::clearExpired(qint64 maximumAgeSeconds) {
-    const qint64 cutoff = QDateTime::currentSecsSinceEpoch() - qBound<qint64>(1, maximumAgeSeconds, 604800);
+    const qint64 maximumAge = qBound(qint64{1}, maximumAgeSeconds, qint64{604800});
+    const qint64 cutoff = QDateTime::currentSecsSinceEpoch() - maximumAge;
     beginResetModel();
     m_spots.erase(std::remove_if(m_spots.begin(), m_spots.end(),
                                  [cutoff](const SpotObservation &spot) { return spot.receivedAt < cutoff; }),
