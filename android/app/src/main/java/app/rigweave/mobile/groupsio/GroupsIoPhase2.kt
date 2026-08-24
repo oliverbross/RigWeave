@@ -12,6 +12,7 @@ import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
@@ -23,6 +24,28 @@ import kotlin.math.min
 internal const val GROUPS_IO_API_BASE = "https://groups.io/api/v1"
 internal const val GROUPS_IO_ATTACHMENT_CEILING = 100L * 1024L * 1024L
 internal const val GROUPS_IO_API_REVISION = "2026-07-31"
+
+internal fun copyGroupsIoBinary(input: InputStream, destination: File, ceiling: Long): Long {
+    require(ceiling >= 0)
+    destination.parentFile?.mkdirs()
+    return try {
+        var total = 0L
+        BufferedInputStream(input).use { source -> FileOutputStream(destination).buffered().use { output ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = source.read(buffer)
+                if (read < 0) break
+                total += read
+                if (total > ceiling) throw GroupsIoApiException("storage", "Download exceeds the mobile safety ceiling")
+                output.write(buffer, 0, read)
+            }
+        } }
+        total
+    } catch (error: Throwable) {
+        destination.delete()
+        throw error
+    }
+}
 
 enum class GroupsIoDraftType(val wire: String) {
     NEW_TOPIC("new_topic"), REPLY("reply");
@@ -185,7 +208,10 @@ internal class GroupsIoHttpTransport : GroupsIoTransport {
         val target = request.absoluteHttpsUrl?.let(::URL) ?: URL("$GROUPS_IO_API_BASE${request.path}$query")
         return (target.openConnection() as HttpURLConnection).apply {
             requestMethod = request.method; connectTimeout = 15_000; readTimeout = 30_000
-            setRequestProperty("Accept", "application/json"); setRequestProperty("Authorization", "Bearer $key")
+            setRequestProperty("Accept", "application/json")
+            // Attachment URLs are supplied by the service and may be hosted on a CDN.
+            // Never forward the Groups.io bearer credential away from the API origin.
+            if (request.absoluteHttpsUrl == null) setRequestProperty("Authorization", "Bearer $key")
         }
     }
 
@@ -244,13 +270,7 @@ internal class GroupsIoHttpTransport : GroupsIoTransport {
             if (status !in 200..299) throw GroupsIoApiException.from(status, connection.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty())
             val length = connection.contentLengthLong
             if (length > ceiling) throw GroupsIoApiException("storage", "Download exceeds the 100 MiB mobile safety ceiling")
-            destination.parentFile?.mkdirs()
-            var total = 0L
-            BufferedInputStream(connection.inputStream).use { input -> FileOutputStream(destination).buffered().use { output ->
-                val buffer = ByteArray(64 * 1024)
-                while (true) { val read = input.read(buffer); if (read < 0) break; total += read; if (total > ceiling) throw GroupsIoApiException("storage", "Download exceeds the 100 MiB mobile safety ceiling"); output.write(buffer, 0, read) }
-            } }
-            return total
+            return copyGroupsIoBinary(connection.inputStream, destination, ceiling)
         } catch (error: Throwable) { destination.delete(); throw error }
         finally { connection.disconnect() }
     }

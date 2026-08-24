@@ -305,7 +305,7 @@ class SmartLinkBrokerClient(private val config: SmartLinkConfig) : AutoCloseable
     }
 
     fun request(radio: SmartLinkRadio): WanEndpoint? {
-        if (radio.tlsPort < 1) error("Radio requires SmartLink NAT hole-punching, which is not available in Phase 5A")
+        if (radio.tlsPort < 1) error("This radio requires SmartLink NAT hole-punching, which is not available in this build")
         send(protocol.connect(radio.serial) ?: return null)
         while (true) {
             val line = reader?.readLine() ?: return null
@@ -397,7 +397,8 @@ fun connectValidatedWan(endpoint: WanEndpoint, trustStore: SmartLinkTrustStore):
     val observed = certificateFingerprint(leaf)
     val expected = trustStore.load(endpoint)
     if (expected == null) {
-        trustStore.save(endpoint, observed)
+        socket.close()
+        throw SmartLinkCertificateChanged(endpoint, "", observed)
     } else if (expected != observed) {
         socket.close()
         throw SmartLinkCertificateChanged(endpoint, expected, observed)

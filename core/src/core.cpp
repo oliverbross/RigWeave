@@ -1,6 +1,7 @@
 #include "rigweave/core.h"
 
 #include <algorithm>
+#include <charconv>
 #include <array>
 #include <chrono>
 #include <cctype>
@@ -47,7 +48,10 @@ bool unsigned_payload(std::string_view frame, std::string_view prefix, int& outp
     if (frame.rfind(prefix, 0) != 0) return false;
     const auto payload = frame.substr(prefix.size());
     if (!all_digits(payload)) return false;
-    output = std::stoi(std::string(payload));
+    int parsed = 0;
+    const auto result = std::from_chars(payload.data(), payload.data() + payload.size(), parsed);
+    if (result.ec != std::errc{} || result.ptr != payload.data() + payload.size()) return false;
+    output = parsed;
     return true;
 }
 
@@ -56,7 +60,10 @@ bool spaced_unsigned_payload(std::string_view frame, std::string_view prefix, in
     auto payload = frame.substr(prefix.size());
     if (!payload.empty() && payload.front() == ' ') payload.remove_prefix(1);
     if (!all_digits(payload)) return false;
-    output = std::stoi(std::string(payload));
+    int parsed = 0;
+    const auto result = std::from_chars(payload.data(), payload.data() + payload.size(), parsed);
+    if (result.ec != std::errc{} || result.ptr != payload.data() + payload.size()) return false;
+    output = parsed;
     return true;
 }
 
@@ -316,7 +323,7 @@ int rw_adif_serialize(char *output, size_t output_size, const char *identity,
         adif_field("FREQ", mhz.str()) + adif_field("MODE", normalized(mode));
     if (rst_sent && *rst_sent) record += adif_field("RST_SENT", rst_sent);
     if (rst_received && *rst_received) record += adif_field("RST_RCVD", rst_received);
-    record += adif_field("APP_RIGWEAVE_UUID", identity) + "<EOR>\n";
+    record += adif_field("APP_KX3TOUCH_UUID", identity) + "<EOR>\n";
     if (record.size() + 1 > output_size) return 0;
     std::memcpy(output, record.c_str(), record.size() + 1);
     return static_cast<int>(record.size());

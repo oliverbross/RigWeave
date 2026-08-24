@@ -187,7 +187,9 @@ class FlexRadioController(
             disconnectSession()
             if (error is SmartLinkCertificateChanged) {
                 pendingCertificateChange = error
-                detail = "The selected radio presented a different TLS certificate. Review before connecting."
+                detail = if (error.expectedFingerprint.isBlank())
+                    "Review and explicitly trust the selected radio certificate before first connection."
+                else "The selected radio presented a different TLS certificate. Review before connecting."
                 connectionState = FlexConnectionState.CERTIFICATE_CHANGED
             } else {
                 detail = error.message ?: "SmartLink connection failed"
@@ -202,7 +204,8 @@ class FlexRadioController(
         pendingCertificateChange = null
         if (!accept) {
             connectionState = FlexConnectionState.LOST
-            detail = "SmartLink radio certificate change rejected"
+            detail = if (change.expectedFingerprint.isBlank()) "SmartLink radio certificate was not trusted"
+                else "SmartLink radio certificate change rejected"
             return
         }
         trustStore.save(change.endpoint, change.observedFingerprint)

@@ -67,6 +67,10 @@ int main() {
 
     std::string oversized(600, 'A');
     assert(rw_context_feed(context, oversized.data(), oversized.size()) == 0);
+    const char *overflowing_numbers = "SM999999999999999999999999999999;";
+    assert(rw_context_feed(context, overflowing_numbers, std::strlen(overflowing_numbers)) == 0);
+    state = rw_context_state(context);
+    assert(state.vfo_a_hz == 0 && state.effective_rx_hz == 0);
     assert(rw_startup_command_count() == 0);
     for (const char *query : {"K3;", "OM;", "ID;", "FA;", "MD;", "IF;", "TQ;", "ML;", "MG;", "KS;", "IS;"})
         assert(rw_classify_command(query) == RW_COMMAND_READ_ONLY);
@@ -85,7 +89,7 @@ int main() {
                                          14074000, "USB", "59", "57");
     assert(length > 0);
     assert(std::string(adif).find("<CALL:6>VK8ABC") != std::string::npos);
-    assert(std::string(adif).find("<APP_RIGWEAVE_UUID:19>rw-") != std::string::npos);
+    assert(std::string(adif).find("<APP_KX3TOUCH_UUID:19>rw-") != std::string::npos);
     assert(std::string(adif).find("<EOR>") != std::string::npos);
 
     assert(kx3::spot_band(70'200'000ULL) == "4m");

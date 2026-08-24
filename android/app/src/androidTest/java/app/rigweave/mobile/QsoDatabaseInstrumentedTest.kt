@@ -329,6 +329,10 @@ class QsoDatabaseInstrumentedTest {
         assertEquals(WavelogOperation.CREATE, store.pending(binding.id).single().operation)
         assertTrue(database.exportADIF().contains("<APP_VENDOR_PRIVATE:9>preserved"))
 
+        database.updateLocal(qso.copy(notes = "Edited without replacing the parent row"))
+        assertEquals(1, store.pending(binding.id).size)
+        assertEquals("preserved", database.qso(qso.id)?.extraAdifFields?.get("APP_VENDOR_PRIVATE"))
+
         database.close()
         database = QsoDatabase(context, databaseName)
         assertEquals("preserved", database.qso(qso.id)?.extraAdifFields?.get("APP_VENDOR_PRIVATE"))

@@ -144,6 +144,7 @@ class FlexTxController(
 ) {
     private val mutex = Mutex()
     private var watchdog: Job? = null
+    private var pendingTune = false
     var eligibility = FlexTxEligibility()
         private set
     var state = FlexTxState.DISABLED
@@ -173,24 +174,24 @@ class FlexTxController(
 
     suspend fun startMox(maxDurationMs: Long = 180_000): Boolean = mutex.withLock {
         if (state != FlexTxState.ARMED || !eligibility.ready) return@withLock false
+        pendingTune = false
         state = FlexTxState.KEYING
         if (!command(FlexCommands.mox(true))) {
             fail("MOX command failed")
             return@withLock false
         }
-        state = FlexTxState.TRANSMITTING
         startWatchdog(maxDurationMs)
         true
     }
 
     suspend fun startTune(maxDurationMs: Long = 15_000): Boolean = mutex.withLock {
         if (state != FlexTxState.ARMED || !eligibility.ready) return@withLock false
+        pendingTune = true
         state = FlexTxState.KEYING
         if (!command(FlexCommands.tune(true))) {
             fail("TUNE command failed")
             return@withLock false
         }
-        state = FlexTxState.TUNING
         startWatchdog(maxDurationMs.coerceAtMost(30_000))
         true
     }
@@ -198,12 +199,12 @@ class FlexTxController(
     suspend fun sendCwx(text: String, maxDurationMs: Long = 180_000): Boolean = mutex.withLock {
         val cwx = FlexCommands.cwx(text) ?: return@withLock false
         if (state != FlexTxState.ARMED || !eligibility.ready) return@withLock false
+        pendingTune = false
         state = FlexTxState.KEYING
         if (!command(cwx)) {
             fail("CWX command failed")
             return@withLock false
         }
-        state = FlexTxState.TRANSMITTING
         startWatchdog(maxDurationMs)
         true
     }
@@ -229,18 +230,20 @@ class FlexTxController(
         command(FlexCommands.cwxClear())
         command(FlexCommands.tune(false))
         val requestedRx = command(FlexCommands.mox(false))
-        rxUnconfirmed = wasActive && !requestedRx
-        state = if (eligibility.ready) FlexTxState.READY else FlexTxState.DISABLED
-        if (rxUnconfirmed) fault = "RX UNCONFIRMED ($reason)"
+        pendingTune = false
+        rxUnconfirmed = wasActive
+        if (!wasActive) state = if (eligibility.ready) FlexTxState.READY else FlexTxState.DISABLED
+        if (wasActive && !requestedRx) fault = "RX UNCONFIRMED ($reason)"
     }
 
     fun observedTransmit(transmitting: Boolean) {
-        if (transmitting && state == FlexTxState.KEYING) state = FlexTxState.TRANSMITTING
+        if (transmitting && state == FlexTxState.KEYING) state = if (pendingTune) FlexTxState.TUNING else FlexTxState.TRANSMITTING
         if (!transmitting && state in setOf(FlexTxState.TRANSMITTING, FlexTxState.TUNING, FlexTxState.STOPPING)) {
             watchdog?.cancel()
             watchdog = null
             state = if (eligibility.ready) FlexTxState.READY else FlexTxState.DISABLED
             rxUnconfirmed = false
+            pendingTune = false
         }
     }
 
@@ -248,6 +251,7 @@ class FlexTxController(
         watchdog?.cancel()
         watchdog = null
         releaseAudio()
+        pendingTune = false
         state = FlexTxState.DISABLED
     }
 
@@ -256,6 +260,7 @@ class FlexTxController(
         watchdog?.cancel()
         watchdog = null
         releaseAudio()
+        pendingTune = false
         rxUnconfirmed = wasArmedOrActive
         fault = if (wasArmedOrActive) "RX UNCONFIRMED (network lost)" else null
         state = FlexTxState.DISABLED
@@ -265,6 +270,7 @@ class FlexTxController(
         releaseAudio()
         command(FlexCommands.tune(false))
         command(FlexCommands.mox(false))
+        pendingTune = false
         fault = message
         rxUnconfirmed = true
         state = FlexTxState.FAULT

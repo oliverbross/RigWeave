@@ -190,11 +190,15 @@ class WavelogSyncStore(private val database: QsoDatabase) {
             WavelogOperation.CREATE else operation
         val id = existing?.id ?: UUID.randomUUID().toString()
         val key = existing?.operationKey ?: "$bindingId:$localQsoId:${effectiveOperation.name}:${UUID.randomUUID()}"
+        val preserveAmbiguousCreate = existing?.operation == WavelogOperation.CREATE &&
+            existing.state == WavelogOutboxState.BLOCKED && existing.errorClass == WavelogErrorClass.AMBIGUOUS_WRITE
         val values = ContentValues().apply {
             put("id", id); put("binding_id", bindingId); put("local_qso_id", localQsoId); put("operation", effectiveOperation.name)
             put("idempotency_key", key); put("payload_hash", canonical.hash); put("canonical_payload", canonical.encoded)
-            put("state", state.name); put("attempt_count", existing?.attemptCount ?: 0)
-            put("last_error", error.take(500)); put("error_class", errorClass.name)
+            put("state", if (preserveAmbiguousCreate) existing!!.state.name else state.name)
+            put("attempt_count", existing?.attemptCount ?: 0)
+            put("last_error", if (preserveAmbiguousCreate) existing!!.lastError else error.take(500))
+            put("error_class", if (preserveAmbiguousCreate) existing!!.errorClass.name else errorClass.name)
             put("created_at", existing?.createdAt ?: now); put("updated_at", now)
         }
         database.writableDatabase.insertWithOnConflict("wavelog_outbox", null, values, SQLiteDatabase.CONFLICT_REPLACE)
@@ -228,7 +232,7 @@ class WavelogSyncStore(private val database: QsoDatabase) {
     }
 
     fun cancelUnsentCreate(bindingId: String, localQsoId: String): Boolean = database.writableDatabase.delete(
-        "wavelog_outbox", "binding_id=? AND local_qso_id=? AND operation='CREATE' AND state<>'ACCEPTED'",
+        "wavelog_outbox", "binding_id=? AND local_qso_id=? AND operation='CREATE' AND attempt_count=0 AND state<>'ACCEPTED'",
         arrayOf(bindingId, localQsoId)) > 0
 
     fun cancelUnattemptedCreate(bindingId: String, localQsoId: String): Boolean = database.writableDatabase.delete(

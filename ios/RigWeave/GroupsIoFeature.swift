@@ -1332,7 +1332,9 @@ private final class GroupsIoPhase2API {
         guard let current = try await messageAttachments(key: key, groupId: groupId, messageNumber: messageNumber).first(where: { $0.id == attachmentId }),
               let url = current.transientURL, url.scheme?.lowercased() == "https" else { throw GroupsIoError.compatibility }
         if let size = current.size, size > GroupsIoAppleAttachmentStore.ceiling { throw GroupsIoError.storage("Attachment exceeds the 100 MiB mobile safety ceiling") }
-        var request = URLRequest(url: url, timeoutInterval: 120); request.httpMethod = "GET"; request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        var request = URLRequest(url: url, timeoutInterval: 120); request.httpMethod = "GET"
+        // The transient URL may point at a CDN. It is already authorized by the URL,
+        // so forwarding the Groups.io bearer token could disclose the credential.
         let (temporary, response) = try await URLSession.shared.download(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { try? FileManager.default.removeItem(at: temporary); throw GroupsIoError.server("Attachment download failed") }
         let attributes = try? FileManager.default.attributesOfItem(atPath: temporary.path)

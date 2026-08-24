@@ -40,8 +40,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.EventNote
 import androidx.compose.material.icons.outlined.Hiking
-import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Refresh
@@ -902,7 +902,7 @@ private fun OperationsHomeSummary(operations: OperationsController, open: () -> 
     Surface(color = HcPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth().clickable(onClick = open)) {
         Row(Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Icon(Icons.Outlined.EventNote, null, tint = HcAmber)
+            Icon(Icons.AutoMirrored.Outlined.EventNote, null, tint = HcAmber)
             Column(Modifier.weight(1f)) {
                 Text("OPERATIONS", color = HcAmber, fontWeight = FontWeight.Black, fontSize = 16.sp)
                 Text("$activeDx active DX · $activeContests active contests · ${operations.nextPlan?.title ?: "no upcoming plan"}", color = HcInk)

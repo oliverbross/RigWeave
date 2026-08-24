@@ -12,6 +12,8 @@ import app.rigweave.mobile.n1mm.*
 import java.time.Instant
 import java.util.Locale
 import java.util.UUID
+import org.json.JSONArray
+import org.json.JSONObject
 
 data class ContestReadOnlySnapshot(
     val activeSession: ContestSession? = null,
@@ -171,6 +173,8 @@ class ContestRuntime(
     private val canonicalReader = ContestCanonicalQsoReader(store, database)
     private val keyerAdapter = ContestKeyerAdapter(keyer, profiles, operatingContext)
     private val mutationAdapter = ContestQsoMutationAdapter(mutations, store, serials)
+    private val networkRepository = ContestRepository(CoordinatorContestQsoMutationPort(mutations), store, serials)
+    private val n1mmBridge = N1mmQsoBridge(networkRepository)
     private var closed = false
     private var foreground = true
     private var networkArmed = false
@@ -185,9 +189,12 @@ class ContestRuntime(
         interfaceName = if (prefs.getBoolean("n1mm_lan_opt_in", false)) "operator-selected" else "loopback",
         lanBroadcastOptIn = prefs.getBoolean("n1mm_lan_opt_in", false),
     )
-    val n1mm = N1mmNetworkController(n1mmConfig, onCommand = { _, decision ->
-        lastMessage = "N1MM ${decision.name}; no radio, keyer, Digi, or silent logging authority"
-    })
+    private var n1mmTrusts by mutableStateOf(loadTrusts())
+    var trustStation by mutableStateOf(""); private set
+    var trustOperator by mutableStateOf(""); private set
+    var trustSubnet by mutableStateOf("127.0.0.0/8"); private set
+    var trustPinnedAddress by mutableStateOf(""); private set
+    var n1mm by mutableStateOf(createN1mmController()); private set
 
     var activeSession by mutableStateOf(loadOrCreateSession()); private set
     var workspacePage by mutableStateOf(ContestWorkspacePage.SETUP); private set
@@ -247,6 +254,90 @@ class ContestRuntime(
         networkArmed = value && n1mmConfig.enabled && activeSession.state == ContestSessionState.RUNNING && foreground
         if (!networkArmed) n1mm.close() else reconcileNetwork()
         lastMessage = if (networkArmed) "N1MM explicitly armed under ${n1mmConfig.mode}" else "N1MM stopped"
+    }
+
+    fun reviewTrustedMode() {
+        lastMessage = when {
+            n1mmConfig.mode == N1mmMode.OFF -> "N1MM is OFF; no peer traffic is accepted"
+            !n1mmConfig.lanBroadcastOptIn -> "N1MM is loopback-only; trusted-LAN mode is not enabled"
+            else -> "Trusted-LAN review required: verify bind interface, subnet, contest, rule version, and every peer pin before arming"
+        }
+    }
+
+    fun updateTrustStation(value: String) { trustStation = value.uppercase(Locale.US).filter { it.isLetterOrDigit() || it in "-_" }.take(32) }
+    fun updateTrustOperator(value: String) { trustOperator = value.uppercase(Locale.US).filter { it.isLetterOrDigit() || it == '/' }.take(16) }
+    fun updateTrustSubnet(value: String) { trustSubnet = value.trim().take(64) }
+    fun updateTrustPinnedAddress(value: String) { trustPinnedAddress = value.trim().take(64) }
+
+    fun addTrust() {
+        val valid = runCatching {
+            require(trustStation.isNotBlank() && trustOperator.isNotBlank())
+            val parts = trustSubnet.split('/', limit = 2)
+            val address = java.net.InetAddress.getByName(parts[0])
+            val prefix = parts.getOrNull(1)?.toIntOrNull() ?: address.address.size * 8
+            require(prefix in 0..address.address.size * 8)
+            trustPinnedAddress.takeIf(String::isNotBlank)?.let(java.net.InetAddress::getByName)
+        }.isSuccess
+        if (!valid) { lastMessage = "Trusted peer rejected: station, callsign, subnet or pinned address is invalid"; return }
+        val trust = N1mmPeerTrust(trustStation, trustOperator, n1mmConfig.interfaceName, trustSubnet,
+            trustPinnedAddress.ifBlank { null }, n1mmConfig.contestName, n1mmConfig.ruleVersion)
+        n1mmTrusts = (n1mmTrusts.filterNot { it.station == trust.station } + trust).sortedBy(N1mmPeerTrust::station)
+        persistTrusts(); rebuildN1mm()
+        trustStation = ""; trustOperator = ""; trustPinnedAddress = ""
+        lastMessage = "Trusted peer saved; N1MM stopped for explicit re-arm"
+    }
+
+    fun removeTrust(station: String) {
+        n1mmTrusts = n1mmTrusts.filterNot { it.station == station }
+        persistTrusts(); rebuildN1mm()
+        lastMessage = "Trusted peer removed; N1MM stopped for explicit re-arm"
+    }
+
+    private fun createN1mmController() = N1mmNetworkController(n1mmConfig, trusts = n1mmTrusts,
+        onCommand = { station, command, policy, decision ->
+            val result = when (command.command) {
+                N1mmCommand.QSO, N1mmCommand.RESYNCQSO ->
+                    n1mmBridge.receiveAdd(command, station, policy, activeSession, definition, "n1mm:$station")
+                N1mmCommand.REEDITQSO, N1mmCommand.QSODELETE, N1mmCommand.DELETEQS -> n1mmBridge.receiveEditOrDelete(command)
+                else -> null
+            }
+            lastMessage = result?.let { "N1MM ${it.state.name}: ${it.reason}" }
+                ?: "N1MM ${command.command.name} ${decision.name}; no radio, keyer, Digi, time, file, or arbitrary payload authority"
+        })
+
+    private fun rebuildN1mm() {
+        networkArmed = false
+        n1mm.close()
+        n1mm = createN1mmController()
+    }
+
+    private fun loadTrusts(): List<N1mmPeerTrust> = runCatching {
+        val rows = JSONArray(prefs.getString("n1mm_trusts_v1", "[]"))
+        List(rows.length()) { index -> rows.getJSONObject(index) }.map { row ->
+            N1mmPeerTrust(row.getString("station"), row.getString("operator"), row.getString("interface"),
+                row.getString("subnet"), row.optString("pinned").ifBlank { null }, row.getString("contest"), row.getString("rule"))
+        }
+    }.getOrDefault(emptyList())
+
+    private fun persistTrusts() {
+        val rows = JSONArray()
+        n1mmTrusts.forEach { trust -> rows.put(JSONObject().apply {
+            put("station", trust.station); put("operator", trust.expectedOperatorCall); put("interface", trust.interfaceName)
+            put("subnet", trust.subnet); put("pinned", trust.pinnedAddress.orEmpty())
+            put("contest", trust.contestName); put("rule", trust.ruleVersion)
+        }) }
+        prefs.edit().putString("n1mm_trusts_v1", rows.toString()).apply()
+    }
+
+    fun validateExport(format: String) {
+        val qsos = priorDrafts()
+        lastMessage = if (format.equals("CABRILLO", true)) {
+            val result = ContestExport.cabrillo(activeSession, definition, activeSession.score, qsos.asSequence())
+            "Cabrillo ${result.state.name.replace('_', ' ')} · ${qsos.size} QSO(s) · ${result.issues.size} issue(s)"
+        } else {
+            val records = ContestExport.adif(activeSession, definition, qsos.asSequence()).count().coerceAtLeast(1) - 1
+            "ADIF validation complete · $records QSO record(s) ready for an explicit file export"
+        }
     }
 
     private fun reconcileNetwork() {
@@ -326,7 +417,8 @@ class ContestRuntime(
 
     fun workspaceState() = ContestWorkspaceState(activeSession, definition, workspacePage, callsign, exchangeText,
         score = activeSession.score, networkMode = if (n1mm.active) n1mmConfig.mode.name else "OFF",
-        peers = n1mm.peerSnapshots().map { it.station })
+        peers = n1mm.peerSnapshots().map { it.station }, networkTrusts = n1mmTrusts,
+        trustStation = trustStation, trustOperator = trustOperator, trustSubnet = trustSubnet, trustPinnedAddress = trustPinnedAddress)
 
     override fun snapshot() = ContestReadOnlySnapshot(activeSession, claims = emptyList(),
         n1mmEnabled = n1mmConfig.enabled, n1mmArmed = networkArmed, n1mmPeers = n1mm.peerSnapshots().size,

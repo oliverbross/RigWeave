@@ -13,7 +13,7 @@ import androidx.compose.ui.unit.dp
         Text("Edits and deletes are integration callbacks to the canonical mutation coordinator.")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button({ callbacks.onExport("CABRILLO") }) { Text("VALIDATE CABRILLO") }
-            OutlinedButton({ callbacks.onExport("ADIF") }) { Text("EXPORT ADIF") }
+            OutlinedButton({ callbacks.onExport("ADIF") }) { Text("VALIDATE ADIF") }
         }
     }
 }

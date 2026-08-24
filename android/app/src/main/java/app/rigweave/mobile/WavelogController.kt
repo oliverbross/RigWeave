@@ -84,7 +84,7 @@ class WavelogController(private val context: Context, private val database: QsoD
     var stations by mutableStateOf(decodeWavelogStations(prefs.getString("stations_json", null))); private set
     var status by mutableStateOf(if (stations.isEmpty()) "Wavelog not configured" else "${stations.size} saved Wavelog stations restored"); private set
     var timeStatus by mutableStateOf(if (lastNtpSuccessMillis > 0L) "Automatic NTP active · hourly when online" else "Automatic NTP pending · hourly when online"); private set
-    var pendingCount by mutableStateOf(loadQueue().length()); private set
+    var pendingCount by mutableStateOf(loadQueue()?.length() ?: 0); private set
     var syncPages by mutableStateOf(0); private set
 
     val selectedStation get() = stations.firstOrNull { it.id == stationId }
@@ -134,9 +134,12 @@ class WavelogController(private val context: Context, private val database: QsoD
             return
         }
         synchronized(queueLock) {
-            val queue = loadQueue()
+            val queue = loadQueue() ?: run {
+                status = "Legacy Wavelog queue is unreadable and was preserved for recovery"
+                return
+            }
             if ((0 until queue.length()).any { queue.getJSONObject(it).optString("id") == id }) return
-            queue.put(JSONObject().put("id", id).put("adif", adif)); writeJson(queueFile, queue)
+            queue.put(JSONObject().put("id", id).put("adif", adif).put("state", "pending").put("attempts", 0)); writeJson(queueFile, queue)
             pendingCount = queue.length()
         }
         if (logMode == LogMode.WAVELOG) syncTwoWay()
@@ -185,18 +188,37 @@ class WavelogController(private val context: Context, private val database: QsoD
             lastNtpAttemptMillis = now
         }
         try {
-            val host = ntpServer.ifBlank { "time.google.com" }; val data = ByteArray(48); data[0] = 0x1B
+            val host = ntpServer.ifBlank { "time.google.com" }; val request = ByteArray(48); request[0] = 0x1B
             val address = InetAddress.getByName(host); val sentAt = System.currentTimeMillis()
+            val ntpSentSeconds = sentAt / 1_000L + 2_208_988_800L
+            val ntpSentFraction = ((sentAt % 1_000L) * 0x1_0000_0000L / 1_000L)
+            for (index in 0..3) {
+                request[40 + index] = (ntpSentSeconds ushr (24 - index * 8)).toByte()
+                request[44 + index] = (ntpSentFraction ushr (24 - index * 8)).toByte()
+            }
+            val response = ByteArray(48)
             val socket = DatagramSocket().apply { soTimeout = 8_000 }
             socket.use {
-                it.send(DatagramPacket(data, data.size, address, 123)); it.receive(DatagramPacket(data, data.size))
+                it.connect(address, 123)
+                it.send(DatagramPacket(request, request.size))
+                val packet = DatagramPacket(response, response.size)
+                it.receive(packet)
+                require(packet.length == 48) { "NTP response length is invalid" }
             }
             val receivedAt = System.currentTimeMillis()
-            fun unsigned(offset: Int) = data[offset].toLong() and 0xff
+            val leap = (response[0].toInt() ushr 6) and 0x03
+            val version = (response[0].toInt() ushr 3) and 0x07
+            val mode = response[0].toInt() and 0x07
+            val stratum = response[1].toInt() and 0xff
+            require(leap != 3 && version >= 3 && mode in setOf(4, 5) && stratum in 1..15) { "NTP response header is invalid" }
+            require(response.copyOfRange(24, 32).contentEquals(request.copyOfRange(40, 48))) { "NTP response did not match this request" }
+            fun unsigned(offset: Int) = response[offset].toLong() and 0xff
             val seconds = (unsigned(40) shl 24) or (unsigned(41) shl 16) or (unsigned(42) shl 8) or unsigned(43)
             val fraction = (unsigned(44) shl 24) or (unsigned(45) shl 16) or (unsigned(46) shl 8) or unsigned(47)
+            require(seconds > 2_208_988_800L) { "NTP transmit timestamp is invalid" }
             val serverMillis = (seconds - 2_208_988_800L) * 1_000L + (fraction * 1_000L / 0x1_0000_0000L)
             val drift = serverMillis - ((sentAt + receivedAt) / 2L); val absolute = kotlin.math.abs(drift)
+            require(absolute <= 86_400_000L) { "NTP offset exceeds the 24-hour safety bound" }
             ntpOffsetMillis = drift
             lastNtpSuccessMillis = System.currentTimeMillis()
             prefs.edit().putLong("ntp_offset_ms", drift).putLong("ntp_last_success_ms", lastNtpSuccessMillis).apply()
@@ -217,20 +239,43 @@ class WavelogController(private val context: Context, private val database: QsoD
 
     private suspend fun syncQueueInternal() {
         if (!configured) { publish("Wavelog not configured; local QSOs remain safely queued"); return }
-        val queue = synchronized(queueLock) { loadQueue() }; val uploaded = mutableSetOf<String>()
+        val queue = synchronized(queueLock) { loadQueue() } ?: run {
+            publish("Legacy Wavelog queue is unreadable and was preserved for recovery"); return
+        }
+        val uploaded = mutableSetOf<String>()
         for (index in 0 until queue.length()) {
             val item = queue.getJSONObject(index)
+            if (item.optString("state", "pending") != "pending") continue
+            val markedSending = synchronized(queueLock) {
+                val current = loadQueue() ?: return@synchronized false
+                val currentItem = (0 until current.length()).map { current.getJSONObject(it) }
+                    .firstOrNull { it.optString("id") == item.optString("id") }
+                    ?: return@synchronized false
+                currentItem.put("state", "sending").put("attempts", item.optInt("attempts") + 1)
+                writeJson(queueFile, current)
+                true
+            }
+            if (!markedSending) { publish("Legacy Wavelog queue changed unexpectedly; sync stopped safely"); return }
             try {
                 val payload = JSONObject().put("key", apiKey).put("station_profile_id", stationId.toLong())
                     .put("type", "adif").put("string", item.getString("adif"))
                 request("qso", "POST", payload); database.markSynced(item.getString("id")); uploaded += item.getString("id")
-            } catch (_: Exception) { }
+            } catch (error: Exception) {
+                synchronized(queueLock) {
+                    val current = loadQueue() ?: return@synchronized
+                    (0 until current.length()).map { current.getJSONObject(it) }
+                        .firstOrNull { it.optString("id") == item.optString("id") }
+                        ?.put("state", "inspect")?.put("last_error", (error.message ?: error.javaClass.simpleName).take(160))
+                    writeJson(queueFile, current)
+                }
+            }
         }
         val remaining = synchronized(queueLock) {
-            val current = loadQueue(); val kept = JSONArray()
+            val current = loadQueue() ?: return@synchronized null
+            val kept = JSONArray()
             for (index in 0 until current.length()) current.getJSONObject(index).let { if (it.optString("id") !in uploaded) kept.put(it) }
             writeJson(queueFile, kept); kept
-        }
+        } ?: run { publish("Legacy Wavelog queue became unreadable; sync stopped without overwriting it"); return }
         withContext(Dispatchers.Main) {
             pendingCount = remaining.length()
             status = if (pendingCount == 0) "Wavelog uploads synchronized · checking remote changes" else "$pendingCount QSOs remain safely queued"
@@ -316,7 +361,12 @@ class WavelogController(private val context: Context, private val database: QsoD
 
     private suspend fun publish(value: String) = withContext(Dispatchers.Main) { status = value }
     private suspend fun publishTime(value: String) = withContext(Dispatchers.Main) { timeStatus = value }
-    private fun loadQueue() = runCatching { JSONArray(queueFile.readText()) }.getOrElse { JSONArray() }
+    private fun loadQueue(): JSONArray? {
+        if (!queueFile.exists()) return JSONArray()
+        return runCatching {
+            AtomicFile(queueFile).openRead().bufferedReader(Charsets.UTF_8).use { JSONArray(it.readText()) }
+        }.getOrNull()
+    }
     private fun writeJson(file: File, value: Any) {
         val atomic = AtomicFile(file)
         val stream = atomic.startWrite()

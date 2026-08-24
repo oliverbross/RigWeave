@@ -28,6 +28,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
@@ -261,7 +263,9 @@ internal class GroupsIoDatabase(private val appContext: Context, private val dat
                 topic.latestMessageNumber?.let { put("latest_message_number", it) }
                 put("last_successful_sync", syncedAt)
             }
-            insertWithOnConflict("topics", null, row, SQLiteDatabase.CONFLICT_REPLACE)
+            if (insertWithOnConflict("topics", null, row, SQLiteDatabase.CONFLICT_IGNORE) == -1L) {
+                update("topics", row, "topic_id=?", arrayOf(topic.id.toString()))
+            }
             refreshSearchForTopic(this, topic.id)
         }
         recordSuccess(this, "topics", groupId.toString(), syncedAt, hasMore, next)
@@ -373,7 +377,9 @@ internal class GroupsIoDatabase(private val appContext: Context, private val dat
             draft.lastErrorCategory?.let { put("last_error_category", it) } ?: putNull("last_error_category")
             draft.lastErrorText?.let { put("last_error_text", it.take(160)) } ?: putNull("last_error_text")
         }
-        insertWithOnConflict("local_drafts", null, row, SQLiteDatabase.CONFLICT_REPLACE)
+        if (insertWithOnConflict("local_drafts", null, row, SQLiteDatabase.CONFLICT_IGNORE) == -1L) {
+            update("local_drafts", row, "local_id=?", arrayOf(draft.localId))
+        }
     }
 
     fun drafts(limit: Int = 100): List<GroupsIoLocalDraft> = readableDatabase.rawQuery(
@@ -635,6 +641,7 @@ class GroupsIoController(context: Context) {
     private val phase2Api = GroupsIoPhase2Api()
     private val attachmentStore = GroupsIoAttachmentStore(appContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val outboxMutex = Mutex()
     private var database: GroupsIoDatabase? = null
     private var operation: Job? = null
     var enabled by mutableStateOf(settings.getBoolean("enabled", false)); private set
@@ -849,18 +856,23 @@ class GroupsIoController(context: Context) {
     fun processQueuedExplicitly() { scope.launch { db().drafts().filter { it.state in setOf(GroupsIoOutboxState.QUEUED, GroupsIoOutboxState.FAILED_RETRYABLE) }.forEach { processDraft(it) } } }
 
     private suspend fun processDraft(draft: GroupsIoLocalDraft) {
-        val persistence = object : GroupsIoOutboxPersistence {
-            override fun save(draft: GroupsIoLocalDraft) { db().saveDraft(draft) }
-            override fun attachments(localId: String) = db().draftAttachments(localId)
-            override fun markAttachmentUploaded(localId: String, remoteId: Long) = db().markDraftAttachmentUploaded(localId, remoteId)
+        outboxMutex.withLock {
+            val current = db().drafts().firstOrNull { it.localId == draft.localId } ?: return@withLock
+            if (current.state !in setOf(GroupsIoOutboxState.QUEUED, GroupsIoOutboxState.FAILED_RETRYABLE)) return@withLock
+            val persistence = object : GroupsIoOutboxPersistence {
+                override fun save(draft: GroupsIoLocalDraft) { db().saveDraft(draft) }
+                override fun attachments(localId: String) = db().draftAttachments(localId)
+                override fun markAttachmentUploaded(localId: String, remoteId: Long) = db().markDraftAttachmentUploaded(localId, remoteId)
+            }
+            val result = GroupsIoOutbox(phase2Api, persistence, attachmentStore.filesRoot)
+                .process(current, credentials.load(), connected, enabled)
+            withContext(Dispatchers.Main) { localDrafts = db().drafts(); status = when (result.state) {
+                GroupsIoOutboxState.POSTED -> "Message posted"
+                GroupsIoOutboxState.PENDING_MODERATION -> "Submitted successfully and awaiting moderator approval"
+                GroupsIoOutboxState.DELIVERY_UNKNOWN -> "Delivery could not be confirmed · review before retrying"
+                else -> result.lastErrorText ?: "Outbox item needs attention"
+            } }
         }
-        val result = GroupsIoOutbox(phase2Api, persistence, attachmentStore.filesRoot).process(draft, credentials.load(), connected, enabled)
-        withContext(Dispatchers.Main) { localDrafts = db().drafts(); status = when (result.state) {
-            GroupsIoOutboxState.POSTED -> "Message posted"
-            GroupsIoOutboxState.PENDING_MODERATION -> "Submitted successfully and awaiting moderator approval"
-            GroupsIoOutboxState.DELIVERY_UNKNOWN -> "Delivery could not be confirmed · review before retrying"
-            else -> result.lastErrorText ?: "Outbox item needs attention"
-        } }
     }
 
     fun refreshServerDrafts() = replaceOperation {

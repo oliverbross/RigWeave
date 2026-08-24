@@ -48,6 +48,14 @@ fun IntegratedContestWorkspace(
             onKeyerIntent = { runtime.dispatchKeyer(it) },
             onNetworkStart = { runtime.setNetworkArmed(true) },
             onNetworkStop = { runtime.setNetworkArmed(false) },
+            onTrustedModeReview = runtime::reviewTrustedMode,
+            onTrustStation = runtime::updateTrustStation,
+            onTrustOperator = runtime::updateTrustOperator,
+            onTrustSubnet = runtime::updateTrustSubnet,
+            onTrustPinnedAddress = runtime::updateTrustPinnedAddress,
+            onTrustAdd = runtime::addTrust,
+            onTrustRemove = runtime::removeTrust,
+            onExport = runtime::validateExport,
         ), Modifier.weight(1f))
     }
 }

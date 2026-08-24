@@ -8,6 +8,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import app.rigweave.mobile.n1mm.N1mmPeerTrust
 
 enum class ContestWorkspacePage { SETUP, LOGGING, REVIEW, NETWORK }
 data class ContestWorkspaceState(
@@ -21,6 +22,11 @@ data class ContestWorkspaceState(
     val score: ContestScoreSnapshot = ContestScoreSnapshot(),
     val networkMode: String = "OFF",
     val peers: List<String> = emptyList(),
+    val networkTrusts: List<N1mmPeerTrust> = emptyList(),
+    val trustStation: String = "",
+    val trustOperator: String = "",
+    val trustSubnet: String = "127.0.0.0/8",
+    val trustPinnedAddress: String = "",
     val validation: List<ContestValidationIssue> = emptyList(),
 )
 data class ContestWorkspaceCallbacks(
@@ -35,13 +41,19 @@ data class ContestWorkspaceCallbacks(
     val onNetworkStart: () -> Unit = {},
     val onNetworkStop: () -> Unit = {},
     val onTrustedModeReview: () -> Unit = {},
+    val onTrustStation: (String) -> Unit = {},
+    val onTrustOperator: (String) -> Unit = {},
+    val onTrustSubnet: (String) -> Unit = {},
+    val onTrustPinnedAddress: (String) -> Unit = {},
+    val onTrustAdd: () -> Unit = {},
+    val onTrustRemove: (String) -> Unit = {},
     val onExport: (String) -> Unit = {},
 )
 
 @Composable fun ContestWorkspace(state: ContestWorkspaceState, callbacks: ContestWorkspaceCallbacks, modifier: Modifier = Modifier) {
     val wide = LocalConfiguration.current.screenWidthDp >= 900
     Column(modifier.fillMaxSize().semantics { contentDescription = "Contest workspace" }) {
-        ScrollableTabRow(ContestWorkspacePage.entries.indexOf(state.page)) {
+        PrimaryScrollableTabRow(ContestWorkspacePage.entries.indexOf(state.page)) {
             ContestWorkspacePage.entries.forEach { page -> Tab(state.page == page, { callbacks.onPage(page) }, text = { Text(page.name) }) }
         }
         when (state.page) {
