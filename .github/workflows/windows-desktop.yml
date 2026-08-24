@@ -64,6 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           tool_bin="$(cygpath -u "$RIGWEAVE_MINGW_BIN")"
+          source_root="$(cygpath -u "$GITHUB_WORKSPACE")"
           install_root="$(cygpath -u "$RUNNER_TEMP")/hamlib"
           build_root="$(cygpath -u "$RUNNER_TEMP")/hamlib-build"
           mkdir -p "$build_root" "$install_root/include/hamlib" "$install_root/lib"
@@ -71,15 +72,15 @@ jobs:
           PATH="$tool_bin:$PATH" \
           CC="$tool_bin/gcc.exe" CXX="$tool_bin/g++.exe" AR="$tool_bin/ar.exe" \
           RANLIB="$tool_bin/ranlib.exe" NM="$tool_bin/nm.exe" STRIP="$tool_bin/strip.exe" \
-          "$GITHUB_WORKSPACE/core/third_party/hamlib/configure" \
+          "$source_root/core/third_party/hamlib/configure" \
             --host=x86_64-w64-mingw32 --disable-shared --enable-static --with-pic \
             --without-libusb --without-indi --without-readline --without-cxx-binding \
             --disable-parallel --disable-html-matrix --disable-pytest --disable-dependency-tracking
           PATH="$tool_bin:$PATH" make -C src -j2 libhamlib.la ACLOCAL=: AUTOCONF=: AUTOHEADER=: AUTOMAKE=:
           cp src/.libs/libhamlib.a "$install_root/lib/libhamlib.a"
           cp include/hamlib/config.h "$install_root/include/hamlib/config.h"
-          cp -R "$GITHUB_WORKSPACE/core/third_party/hamlib/include/hamlib/." "$install_root/include/hamlib/"
-          python3 "$GITHUB_WORKSPACE/scripts/check_hamlib_upstream.py"
+          cp -R "$source_root/core/third_party/hamlib/include/hamlib/." "$install_root/include/hamlib/"
+          python3 "$source_root/scripts/check_hamlib_upstream.py"
       - name: Configure Release
         shell: pwsh
         run: cmake -S desktop -B build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DRIGWEAVE_BUILD_TESTS=ON -DRIGWEAVE_REQUIRE_HAMLIB=ON "-DRIGWEAVE_HAMLIB_ROOT=$env:RUNNER_TEMP/hamlib"

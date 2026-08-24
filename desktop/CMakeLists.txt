@@ -59,6 +59,11 @@ target_compile_definitions(rigweave_desktop_services PRIVATE
 qt_add_executable(RigWeaveDesktop WIN32 MACOSX_BUNDLE src/app/main.cpp)
 target_link_libraries(RigWeaveDesktop PRIVATE rigweave_desktop_services)
 rigweave_target_warnings(RigWeaveDesktop)
+if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # Qt 6.11's generated QML cache loader uses an intentionally empty
+    # variadic macro invocation; keep warnings-as-errors for owned sources.
+    target_compile_options(RigWeaveDesktop PRIVATE -Wno-variadic-macro-arguments-omitted)
+endif()
 
 file(GLOB_RECURSE RIGWEAVE_QML_FILES CONFIGURE_DEPENDS "qml/*.qml")
 foreach(qml_file IN LISTS RIGWEAVE_QML_FILES)
