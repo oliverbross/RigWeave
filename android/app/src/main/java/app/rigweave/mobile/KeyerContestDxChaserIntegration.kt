@@ -249,6 +249,25 @@ class ContestRuntime(
         lastMessage = if (networkArmed) "N1MM explicitly armed under ${n1mmConfig.mode}" else "N1MM stopped"
     }
 
+    fun reviewTrustedMode() {
+        lastMessage = when {
+            n1mmConfig.mode == N1mmMode.OFF -> "N1MM is OFF; no peer traffic is accepted"
+            !n1mmConfig.lanBroadcastOptIn -> "N1MM is loopback-only; trusted-LAN mode is not enabled"
+            else -> "Trusted-LAN review required: verify bind interface, subnet, contest, rule version, and every peer pin before arming"
+        }
+    }
+
+    fun validateExport(format: String) {
+        val qsos = priorDrafts()
+        lastMessage = if (format.equals("CABRILLO", true)) {
+            val result = ContestExport.cabrillo(activeSession, definition, activeSession.score, qsos.asSequence())
+            "Cabrillo ${result.state.name.replace('_', ' ')} · ${qsos.size} QSO(s) · ${result.issues.size} issue(s)"
+        } else {
+            val records = ContestExport.adif(activeSession, definition, qsos.asSequence()).count().coerceAtLeast(1) - 1
+            "ADIF validation complete · $records QSO record(s) ready for an explicit file export"
+        }
+    }
+
     private fun reconcileNetwork() {
         if (networkArmed && foreground && activeSession.state == ContestSessionState.RUNNING && !n1mm.active)
             runCatching { n1mm.start() }.onFailure { lastMessage = "N1MM start rejected: ${it.message}" }

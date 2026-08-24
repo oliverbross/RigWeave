@@ -244,7 +244,7 @@ internal val hamClockMapLayerRegistry = listOf(
         false, availability = HamClockMapLayerAvailability.UNAVAILABLE, unavailableReason = "No lawful configured radar tiles",
         sourceLabel = "Not connected", renderKinds = emptySet(), lowDataRepresentation = "Unavailable", maximumObjectCount = 0),
     HamClockMapLayerSpec(HamClockMapLayerId.WWBOTA, "wwbota", "WWBOTA", HamClockMapLayerCategory.FUTURE,
-        false, availability = HamClockMapLayerAvailability.UNAVAILABLE, unavailableReason = "Task 2B provider work",
+            false, availability = HamClockMapLayerAvailability.UNAVAILABLE, unavailableReason = "Provider integration is not available in this build",
         sourceLabel = "Not connected", renderKinds = emptySet(), lowDataRepresentation = "Unavailable", maximumObjectCount = 0),
 )
 

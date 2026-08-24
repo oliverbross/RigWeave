@@ -610,6 +610,10 @@ final class FeatureModel: ObservableObject {
             clusterStatus = "Enter your operator callsign before connecting"
             return
         }
+        guard operatorCallsign.range(of: "^[A-Z0-9/]{3,20}$", options: .regularExpression) != nil else {
+            clusterStatus = "Enter a valid operator callsign"
+            return
+        }
         var endpoints = [DXClusterConnection.Endpoint(host: clusterHost, port: port)]
         for (host, value) in [(clusterFallbackHost, clusterFallbackPort),
                               (clusterFallback2Host, clusterFallback2Port)] {

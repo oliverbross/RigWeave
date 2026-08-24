@@ -77,6 +77,7 @@ final class WavelogSync: ObservableObject {
     private let queueURL: URL
     private let contactsURL: URL
     private var syncing = false
+    private var queuePersistenceFailed = false
 
     init() {
         baseURL = defaults.string(forKey: "wavelogBaseURL") ?? ""
@@ -86,8 +87,14 @@ final class WavelogSync: ObservableObject {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         queueURL = directory.appendingPathComponent("wavelog-sync-queue.json")
         contactsURL = directory.appendingPathComponent("wavelog-contacts.json")
-        if let data = try? Data(contentsOf: queueURL), let decoded = try? JSONDecoder().decode([WavelogQueueItem].self, from: data) {
-            queue = decoded; pendingCount = decoded.filter { $0.state == "pending" || $0.state == "retry" }.count
+        if FileManager.default.fileExists(atPath: queueURL.path) {
+            do {
+                let data = try Data(contentsOf: queueURL)
+                let decoded = try JSONDecoder().decode([WavelogQueueItem].self, from: data)
+                queue = decoded; pendingCount = decoded.filter { $0.state == "pending" || $0.state == "retry" }.count
+            } catch {
+                status = "Wavelog queue is unreadable and was preserved for recovery"
+            }
         }
         if let data = try? Data(contentsOf: contactsURL),
            let decoded = try? JSONDecoder().decode([WavelogContact].self, from: data) { contacts = decoded }
@@ -130,6 +137,7 @@ final class WavelogSync: ObservableObject {
 
     func syncNow() async {
         guard !syncing else { return }
+        guard !queuePersistenceFailed else { status = "Wavelog sync paused because its queue could not be saved"; return }
         guard let core, !baseURL.isEmpty, !stationProfile.isEmpty, !apiKey.isEmpty else {
             status = queue.isEmpty ? "Wavelog not configured" : "Wavelog credentials required; QSOs remain queued"
             return
@@ -145,10 +153,10 @@ final class WavelogSync: ObservableObject {
             queue[index].attempts += 1
             do {
                 let (_, http) = try await perform(endpoints: endpoints, method: "POST", body: payload)
-                apply(action: core.syncAction(status: http.statusCode, networkError: false, ambiguous: false), index: index,
+                apply(action: core.syncAction(status: http.statusCode, networkError: false, ambiguous: http.statusCode >= 500), index: index,
                       retryAfter: http.value(forHTTPHeaderField: "Retry-After").flatMap(UInt32.init), core: core)
             } catch {
-                apply(action: core.syncAction(status: 0, networkError: true, ambiguous: false), index: index, retryAfter: nil, core: core)
+                apply(action: core.syncAction(status: 0, networkError: true, ambiguous: true), index: index, retryAfter: nil, core: core)
                 queue[index].lastError = error.localizedDescription
             }
         }
@@ -311,7 +319,7 @@ final class WavelogSync: ObservableObject {
                 } catch WavelogV2ClientError.network(let message) {
                     queue[index].state = "inspect"; queue[index].lastError = "Ambiguous write: \(message)"
                 } catch WavelogV2ClientError.response(let http, let message, let retryAfter) {
-                    apply(action: core.syncAction(status: http, networkError: false, ambiguous: false), index: index,
+                    apply(action: core.syncAction(status: http, networkError: false, ambiguous: http >= 500), index: index,
                           retryAfter: retryAfter, core: core); queue[index].lastError = message
                 } catch {
                     queue[index].state = "quarantined"; queue[index].lastError = error.localizedDescription
@@ -474,6 +482,13 @@ final class WavelogSync: ObservableObject {
 
     private func persist() {
         pendingCount = queue.filter { $0.state == "pending" || $0.state == "retry" }.count
-        if let data = try? JSONEncoder().encode(queue) { try? data.write(to: queueURL, options: .atomic) }
+        do {
+            let data = try JSONEncoder().encode(queue)
+            try data.write(to: queueURL, options: .atomic)
+            queuePersistenceFailed = false
+        } catch {
+            queuePersistenceFailed = true
+            status = "Wavelog queue could not be saved; sync is paused to protect pending QSOs"
+        }
     }
 }

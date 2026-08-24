@@ -27,22 +27,29 @@ class N1mmNetworkController(
     fun start() {
         require(config.enabled && config.mode != N1mmMode.OFF) { "N1MM networking requires explicit enable" }
         if(!running.compareAndSet(false,true)) return
-        val bind=InetAddress.getByName(config.bindAddress)
-        require(config.lanBroadcastOptIn || bind.isLoopbackAddress) { "LAN binding requires explicit opt-in" }
-        server=ServerSocket().apply { reuseAddress=true; bind(InetSocketAddress(bind,config.tcpPort)); soTimeout=500 }
-        discovery=N1mmDiscoveryService(bind,config.discoveryPort,{ value,source ->
-            val trusted=trusts.any { trust ->
-                trust.station==value.station &&
-                    trust.expectedOperatorCall.equals(value.operatorCall,true) &&
-                    trust.interfaceName==config.interfaceName &&
-                    trust.contestName==config.contestName &&
-                    trust.ruleVersion==config.ruleVersion &&
-                    addressInSubnet(source,trust.subnet) &&
-                    (trust.pinnedAddress==null||trust.pinnedAddress==source.hostAddress)
-            }
-            val peer=peers.observe(value,source.hostAddress.orEmpty(),clock(),trusted); diagnostics.record("DISCOVERY","ACCEPTED",if(value.advertisedIp==source.hostAddress)"address matched" else "advertised address differed; packet source retained",peer.station)
-        },{ diagnostics.record("DISCOVERY","ERROR",it) }).also { it.start() }
-        Thread({ while(running.get()) try { val socket=server?.accept() ?: break; if(links.size>=config.maximumLinks) socket.close() else addLink(socket) } catch(_:SocketTimeoutException){} catch(error:Exception){if(running.get())diagnostics.record("TCP","ERROR",error.javaClass.simpleName)} },"RigWeave-N1MM-Accept").apply{isDaemon=true;start()}
+        try {
+            val bind=InetAddress.getByName(config.bindAddress)
+            require(config.lanBroadcastOptIn || bind.isLoopbackAddress) { "LAN binding requires explicit opt-in" }
+            server=ServerSocket().apply { reuseAddress=true; bind(InetSocketAddress(bind,config.tcpPort)); soTimeout=500 }
+            discovery=N1mmDiscoveryService(bind,config.discoveryPort,{ value,source ->
+                val trusted=trusts.any { trust ->
+                    trust.station==value.station &&
+                        trust.expectedOperatorCall.equals(value.operatorCall,true) &&
+                        trust.interfaceName==config.interfaceName &&
+                        trust.contestName==config.contestName &&
+                        trust.ruleVersion==config.ruleVersion &&
+                        addressInSubnet(source,trust.subnet) &&
+                        (trust.pinnedAddress==null||trust.pinnedAddress==source.hostAddress)
+                }
+                val peer=peers.observe(value,source.hostAddress.orEmpty(),clock(),trusted); diagnostics.record("DISCOVERY","ACCEPTED",if(value.advertisedIp==source.hostAddress)"address matched" else "advertised address differed; packet source retained",peer.station)
+            },{ diagnostics.record("DISCOVERY","ERROR",it) }).also { it.start() }
+            Thread({ while(running.get()) try { val socket=server?.accept() ?: break; if(links.size>=config.maximumLinks) socket.close() else addLink(socket) } catch(_:SocketTimeoutException){} catch(error:Exception){if(running.get())diagnostics.record("TCP","ERROR",error.javaClass.simpleName)} },"RigWeave-N1MM-Accept").apply{isDaemon=true;start()}
+        } catch (error: Throwable) {
+            discovery?.close(); discovery = null
+            runCatching { server?.close() }; server = null
+            running.set(false)
+            throw error
+        }
     }
 
     fun advertise(targetAddress:String="127.0.0.1",targetPort:Int=config.discoveryPort){

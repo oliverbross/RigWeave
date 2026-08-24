@@ -23,6 +23,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +46,8 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 import kotlin.math.roundToInt
+
+private const val MAX_REFERENCE_WAV_BYTES = 128 * 1024 * 1024
 
 enum class DigiMode(
     val label: String,
@@ -147,6 +150,7 @@ class DigiController(
     private val prefs = context.getSharedPreferences("rigweave-digi", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val receiving = AtomicBoolean(false)
+    private val txStarting = AtomicBoolean(false)
     private var rxJob: Job? = null
     private var txJob: Job? = null
     private var slotDecodeJob: Job? = null
@@ -289,12 +293,16 @@ class DigiController(
     }
 
     fun arm() {
-        if (txActive) return
+        if (txActive || txStarting.get() || txPhase == DigiTxPhase.RX_UNCONFIRMED) return
         txArmed = !txArmed
         status = if (txArmed) "TX armed for one ${mode.label} transmission · tap SEND to transmit" else "TX disarmed"
     }
 
     fun updateTxEnabled(value: Boolean) {
+        if (value && txPhase == DigiTxPhase.RX_UNCONFIRMED) {
+            status = "Confirm receive state before re-enabling digital TX"
+            return
+        }
         if (value && settings.companionMode) {
             status = "Companion mode owns decode interoperability; local TX remains disabled"
             return
@@ -1233,8 +1241,19 @@ class DigiController(
             status = "Reading ${mode.label} reference recording"
             val recording = withContext(Dispatchers.IO) {
                 runCatching {
-                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                        ?: error("Recording could not be opened")
+                    val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+                        val output = ByteArrayOutputStream()
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            require(output.size() + count <= MAX_REFERENCE_WAV_BYTES) {
+                                "Recording exceeds the 128 MiB safety ceiling"
+                            }
+                            output.write(buffer, 0, count)
+                        }
+                        output.toByteArray()
+                    } ?: error("Recording could not be opened")
                     decodePcmWav(bytes)
                 }
             }
@@ -1343,7 +1362,7 @@ class DigiController(
             val id = bytes.copyOfRange(at, at + 4).decodeToString()
             val size = input.getInt(at + 4).coerceAtLeast(0)
             val body = at + 8
-            if (body + size > bytes.size) break
+            if (size > bytes.size - body) break
             if (id == "fmt " && size >= 16) {
                 format = input.getShort(body).toInt() and 0xffff
                 channels = input.getShort(body + 2).toInt() and 0xffff
@@ -1353,7 +1372,9 @@ class DigiController(
                 dataAt = body
                 dataSize = size
             }
-            at = body + size + (size and 1)
+            val padding = size and 1
+            if (size > Int.MAX_VALUE - body - padding) break
+            at = body + size + padding
         }
         require(channels in 1..8 && rate in 8_000..192_000 && dataAt >= 0) { "WAV format or audio data is missing" }
         require((format == 1 && bits == 16) || (format == 3 && bits == 32)) { "Use PCM16 or Float32 WAV audio" }
@@ -1371,6 +1392,7 @@ class DigiController(
         return rate to mono
     }
 
+    @Synchronized
     fun stopRx(reason: String = "RX stopped") {
         receiving.set(false)
         flex.setDigitalRxSink(null)
@@ -1401,7 +1423,7 @@ class DigiController(
     }
 
     fun send() {
-        if (!txEnabled || !txArmed || txActive || settings.companionMode) {
+        if (!txEnabled || !txArmed || txActive || txStarting.get() || settings.companionMode) {
             status = "Enable TX and arm one explicit transmission first"
             return
         }
@@ -1421,13 +1443,19 @@ class DigiController(
             disarm()
             return
         }
+        if (!txStarting.compareAndSet(false, true)) {
+            status = "A digital transmission is already being prepared"
+            return
+        }
         txArmed = false
         lastTxText = if (mode == DigiMode.SSTV) "${sstvChoice.label} image" else text
-        txJob = scope.launch { transmit(text) }
+        txJob = scope.launch {
+            try { transmit(text) }
+            finally { txStarting.set(false) }
+        }
     }
 
     fun haltTx() {
-        val recoveryLatched = txPhase == DigiTxPhase.RX_UNCONFIRMED
         disarm()
         txEnabled = false
         cancelFtAutomation("Stopped by operator")
@@ -1435,12 +1463,23 @@ class DigiController(
         txJob = null
         txSlotCountdownMillis = 0L
         txActive = false
-        if (!recoveryLatched) txPhase = DigiTxPhase.SAFE
-        status = if (recoveryLatched) "RX UNCONFIRMED · use REQUEST RX & RECHECK" else "Digital transmission stopped by operator · RX requested"
+        txPhase = DigiTxPhase.RX_UNCONFIRMED
+        status = "Digital transmission stopped · requesting and verifying RX"
         scope.launch {
-            flex.stopTransmit("operator stopped digital transmission")
-            transport.send("RX;")
+            val confirmed = if (radioFamily() == RadioFamily.FLEXRADIO) {
+                runCatching { flex.stopTransmit("operator stopped digital transmission") }.isSuccess && waitForFlexReceive(2_000L)
+            } else {
+                transport.send("RX;") is UsbResult.Connected &&
+                    runCatching { transport.confirmTq(false).transmitting == false }.getOrDefault(false)
+            }
             routes.releaseAudio(AudioOwners.DIGI_TX)
+            if (confirmed) {
+                txPhase = DigiTxPhase.SAFE
+                status = "Digital transmission stopped · RX confirmed"
+            } else {
+                latchRxUnconfirmed("RX UNCONFIRMED · verify the radio, then use REQUEST RX & RECHECK")
+            }
+            publishInteropStatus()
         }
         publishInteropStatus()
     }
@@ -1644,7 +1683,8 @@ class DigiController(
         }
         try {
             val confirmDeadline = android.os.SystemClock.elapsedRealtime() + 2_000L
-            while (flex.tx.state == FlexTxState.KEYING && android.os.SystemClock.elapsedRealtime() < confirmDeadline) delay(50)
+            while (flex.tx.state in setOf(FlexTxState.ARMED, FlexTxState.KEYING) &&
+                android.os.SystemClock.elapsedRealtime() < confirmDeadline) delay(50)
             if (flex.tx.state != FlexTxState.TRANSMITTING) {
                 flex.stopTransmit("digital PTT confirmation failed")
                 val rxConfirmed = waitForFlexReceive(2_000L)

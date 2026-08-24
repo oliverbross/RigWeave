@@ -185,7 +185,10 @@ internal class GroupsIoHttpTransport : GroupsIoTransport {
         val target = request.absoluteHttpsUrl?.let(::URL) ?: URL("$GROUPS_IO_API_BASE${request.path}$query")
         return (target.openConnection() as HttpURLConnection).apply {
             requestMethod = request.method; connectTimeout = 15_000; readTimeout = 30_000
-            setRequestProperty("Accept", "application/json"); setRequestProperty("Authorization", "Bearer $key")
+            setRequestProperty("Accept", "application/json")
+            // Attachment URLs are supplied by the service and may be hosted on a CDN.
+            // Never forward the Groups.io bearer credential away from the API origin.
+            if (request.absoluteHttpsUrl == null) setRequestProperty("Authorization", "Bearer $key")
         }
     }
 
