@@ -11,6 +11,12 @@ class RotatorProfileStore(initial: RotatorSettingsDocument = RotatorSettingsDocu
         val profiles = document.profiles.filterNot { it.id == profile.id } + profile
         document = document.copy(profiles = profiles)
     }
+    @Synchronized fun delete(profileId: String) {
+        document = document.copy(
+            profiles = document.profiles.filterNot { it.id == profileId },
+            bandAssignments = document.bandAssignments.filterNot { it.rotatorProfileId == profileId },
+        )
+    }
 }
 
 fun interface RotatorDriverFactory { suspend fun create(profile: RotatorDeviceProfile): RotatorDriver }

@@ -104,32 +104,7 @@ internal fun BandMapScreen(
     app: AppController,
     onAction: (WorkspaceAction) -> Unit,
 ) {
-    val databaseRevision = database.changeToken()
-    val needs by produceState(BandMapNeedsSnapshot(), operatingContext.stationProfileId.value,
-        operatingContext.stationCallsign.value, databaseRevision) {
-        value = withContext(Dispatchers.IO) { database.bandMapNeedsSnapshot(operatingContext.stationProfileId.value, operatingContext.stationCallsign.value) }
-    }
-    val observations = remember(features.liveSpots, features.rbnObservations, neuralDx.mySignal.reports,
-        neuralDx.wsprPersonal.reports, portable.pota.spots, portable.sotaSpots, portable.wwffSpots) {
-        BandMapSourceAdapters.cluster(features.liveSpots) + BandMapSourceAdapters.rbn(features.rbnObservations) +
-            BandMapSourceAdapters.signal(neuralDx.mySignal.reports, false) + BandMapSourceAdapters.signal(neuralDx.wsprPersonal.reports, true) +
-            BandMapSourceAdapters.portable(portable.pota.spots.map { it.toPortable() } + portable.sotaSpots + portable.wwffSpots)
-    }
     val contestSnapshot = contest.snapshot()
-    val chaserSnapshot = chaser.snapshot
-    LaunchedEffect(observations, needs, operatingContext.generation, contestSnapshot, chaserSnapshot, keyer) {
-        controller.submit(BandMapInputs(observations, operatingContext, needs, contestSnapshot, contest::opportunity,
-            chaserSnapshot, keyer, cty::lookup,
-            providerHealth = mapOf(
-                BandMapSource.DX_CLUSTER to (features.clusterConnection.state.name == "CONNECTED"),
-                BandMapSource.RBN to (features.rbnSourceSnapshot.state.name == "CURRENT"),
-                BandMapSource.PSK_REPORTER to neuralDx.mySignal.available,
-                BandMapSource.PERSONAL_WSPR to neuralDx.wsprPersonal.reports.isNotEmpty(),
-                BandMapSource.POTA to portable.pota.spots.isNotEmpty(),
-                BandMapSource.SOTA to portable.sotaSpots.isNotEmpty(),
-                BandMapSource.WWFF to portable.wwffSpots.isNotEmpty(),
-            )))
-    }
     val snapshot = controller.snapshot
     val statuses by produceState<Map<String, SpotLogStatus>>(emptyMap(), snapshot.generation,
         operatingContext.stationProfileId.value, cty.dataRevision) {
@@ -192,7 +167,7 @@ internal fun BandMapScreen(
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         Column {
             Text("INTELLIGENT BAND MAPS", color = MapText, fontWeight = FontWeight.Black, fontSize = 20.sp)
-            Text("${snapshot.rankedSpots.size} visible · ${snapshot.diagnostic.sourceObservations} observations · ${snapshot.diagnostic.rebuildMillis} ms",
+            Text("gen ${snapshot.generation} · ${snapshot.diagnostic.sourceObservations} received · ${snapshot.diagnostic.canonicalSpots} repository · ${snapshot.diagnostic.afterSourceFilter} source · ${snapshot.diagnostic.afterBandModeFilter} band/mode · ${snapshot.diagnostic.afterIntelligenceFilter} intelligence · ${snapshot.rankedSpots.size} displayed · ${snapshot.diagnostic.rebuildMillis} ms",
                 color = MapMuted, fontSize = 11.sp)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -673,7 +648,14 @@ private fun segmentColor(kind: BandMapOperatingSegmentKind): Color = when (kind)
             presets = current.presets.map { if (it.id == preset.id) it.copy(filter = draft) else it },
         ) }; dismiss()
     }) { Text("APPLY") } },
-        dismissButton = { TextButton(dismiss) { Text("CANCEL") } })
+        dismissButton = { Row {
+            TextButton({
+                draft = BandMapFilter()
+                callStatuses = emptySet()
+                dxccStatuses = emptySet()
+            }) { Text("RESET FILTERS") }
+            TextButton(dismiss) { Text("CANCEL") }
+        } })
 }
 
 @Composable private fun ChipFlow(content: @Composable RowScope.() -> Unit) = Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -684,6 +666,16 @@ internal fun BandMapSettingsPanel(controller: BandMapController) {
     val value = controller.settings
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("INTELLIGENT BAND MAPS", fontWeight = FontWeight.Black)
+        when (controller.saveTruth.status) {
+            BandMapSaveStatus.SAVING -> Text("Saving…", style = MaterialTheme.typography.labelMedium)
+            BandMapSaveStatus.SAVED -> Text(if (controller.saveTruth.savedEpoch == 0L) "Saved automatically"
+                else "Saved automatically · ${java.time.Instant.ofEpochSecond(controller.saveTruth.savedEpoch).atZone(java.time.ZoneId.systemDefault()).toLocalTime().withNano(0)}",
+                style = MaterialTheme.typography.labelMedium)
+            BandMapSaveStatus.FAILED -> Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Save failed", color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+                TextButton(controller::retrySave) { Text("RETRY") }
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             FilterChip(value.enabled, { controller.updateSettings { it.copy(enabled = !it.enabled) } }, { Text(if (value.enabled) "ENABLED" else "DISABLED") })
             FilterChip(value.navigationVisible, { controller.updateSettings { it.copy(navigationVisible = !it.navigationVisible) } }, { Text("SHOW IN NAV") })

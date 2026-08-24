@@ -92,6 +92,20 @@ data class ClusterConnectionTruth(
     val error: String = "",
 )
 
+data class ClusterDiagnostics(
+    val receivedLines: Long = 0,
+    val parsedSpotLines: Long = 0,
+    val rejectedLines: Long = 0,
+    val rejectedByReason: Map<String, Long> = emptyMap(),
+    val acceptedSpots: Long = 0,
+    val lastLineEpoch: Long = 0,
+    val historyPending: Boolean = false,
+    val historyCount: Int = 50,
+    val historyRequestedEpoch: Long = 0,
+    val historyAcceptedLines: Int = 0,
+    val historyStatus: String = "No history request",
+)
+
 internal fun shouldRunRbnMaintenance(
     foreground: Boolean,
     rbnEnabled: Boolean,
@@ -184,6 +198,7 @@ class FeatureController internal constructor(private val context: Context, priva
     private var workedFingerprint: WorkedFingerprint? = null
     private var clusterSocket: Socket? = null
     private var clusterGeneration = 0
+    private var historyResponseJob: Job? = null
     private val prefs = context.getSharedPreferences("dx_cluster", Context.MODE_PRIVATE)
     private val rbnBuffer = ArrayDeque<HamClockRbnObservation>()
     private var rbnPreference = HamClockRbnPreference(enabled = false)
@@ -207,6 +222,7 @@ class FeatureController internal constructor(private val context: Context, priva
 
     var clusterStatus by mutableStateOf("DX cluster disconnected"); private set
     var clusterConnection by mutableStateOf(ClusterConnectionTruth()); private set
+    var clusterDiagnostics by mutableStateOf(ClusterDiagnostics()); private set
     var spots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
     var liveSpots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
     var watchSpots by mutableStateOf(emptyList<AndroidDXSpot>()); private set
@@ -296,6 +312,8 @@ class FeatureController internal constructor(private val context: Context, priva
     fun connectCluster(host: String, port: Int, callsign: String,
         fallbackHost: String = "", fallbackPort: Int = 7300,
         fallback2Host: String = "", fallback2Port: Int = 7300) {
+        if (clusterConnection.state in setOf(ClusterConnectionState.CONNECTING, ClusterConnectionState.RETRYING,
+                ClusterConnectionState.CONNECTED)) return
         saveClusterConfiguration(host, port, callsign, fallbackHost, fallbackPort, fallback2Host, fallback2Port)
         disconnectCluster(); val generation = ++clusterGeneration
         val endpoints = listOf(clusterHost to clusterPort, this.fallbackHost to this.fallbackPort,
@@ -312,9 +330,6 @@ class FeatureController internal constructor(private val context: Context, priva
                     val output = socket.getOutputStream()
                     if (clusterCallsign.isNotBlank()) {
                         output.write((clusterCallsign + "\r\n").toByteArray()); output.flush()
-                        delay(1_500)
-                        if (generation != clusterGeneration) return@launch
-                        output.write("sh/dx 50\r\n".toByteArray()); output.flush()
                     }
                     reconnectAttempt = 0
                     publishCluster("Connected to $endpointHost:$endpointPort", ClusterConnectionState.CONNECTED,
@@ -322,6 +337,7 @@ class FeatureController internal constructor(private val context: Context, priva
                     BufferedReader(InputStreamReader(socket.getInputStream())).useLines { lines ->
                         lines.forEach { line ->
                             if (generation != clusterGeneration) return@useLines
+                            val lineEpoch = Instant.now().epochSecond
                             val rbn = parseRbnClusterLine(line)
                             rbn?.let {
                                 lastRbnObservedEpoch = maxOf(lastRbnObservedEpoch, it.observedEpoch)
@@ -333,9 +349,26 @@ class FeatureController internal constructor(private val context: Context, priva
                             }
                             // An RBN line is already represented by the typed RBN observation path.
                             // Do not also ingest it as a generic DX-cluster spot.
-                            if (rbn == null && synchronized(nativeLock) {
-                                NativeCore.featureClusterLine(handle, line, Instant.now().epochSecond)
-                            }) refreshDX()
+                            val accepted = rbn == null && synchronized(nativeLock) {
+                                NativeCore.featureClusterLine(handle, line, lineEpoch)
+                            }
+                            withContext(Dispatchers.Main) {
+                                val previous = clusterDiagnostics
+                                clusterDiagnostics = previous.copy(
+                                    receivedLines = previous.receivedLines + 1,
+                                    parsedSpotLines = previous.parsedSpotLines + if (accepted || rbn != null) 1 else 0,
+                                    rejectedLines = previous.rejectedLines + if (!accepted && rbn == null) 1 else 0,
+                                    rejectedByReason = if (!accepted && rbn == null) previous.rejectedByReason +
+                                        ("unrecognised" to (previous.rejectedByReason["unrecognised"] ?: 0L) + 1) else previous.rejectedByReason,
+                                    acceptedSpots = previous.acceptedSpots + if (accepted) 1 else 0,
+                                    lastLineEpoch = lineEpoch,
+                                    historyAcceptedLines = previous.historyAcceptedLines + if (previous.historyPending && accepted) 1 else 0,
+                                )
+                            }
+                            if (accepted) {
+                                refreshDX()
+                                if (clusterDiagnostics.historyPending) completeHistoryAfterIdle()
+                            }
                         }
                     }
                 } catch (error: Exception) {
@@ -355,12 +388,54 @@ class FeatureController internal constructor(private val context: Context, priva
     }
 
     fun disconnectCluster(disabled: Boolean = false) {
-        clusterGeneration++; clusterSocket?.close(); clusterSocket = null
+        clusterGeneration++; historyResponseJob?.cancel(); clusterSocket?.close(); clusterSocket = null
         clusterStatus = if (disabled) "DX cluster disabled" else "DX cluster disconnected"
         clusterConnection = ClusterConnectionTruth(if (disabled) ClusterConnectionState.DISABLED else ClusterConnectionState.DISCONNECTED,
             stateChangedEpoch = Instant.now().epochSecond, latestSpotEpoch = newestSpotEpoch)
+        clusterDiagnostics = clusterDiagnostics.copy(historyPending = false,
+            historyStatus = if (disabled) "Cluster disabled" else "No history request")
         scheduleRbnPublish(immediate = true)
         updateRbnMaintenance()
+    }
+
+    fun requestClusterHistory(count: Int) {
+        val bounded = count.coerceIn(1, 500)
+        if (clusterConnection.state != ClusterConnectionState.CONNECTED || clusterDiagnostics.historyPending) return
+        scope.launch {
+            val socket = clusterSocket
+            if (socket == null || socket.isClosed) return@launch
+            runCatching {
+                socket.getOutputStream().apply { write("SH/DX $bounded\r\n".toByteArray()); flush() }
+                withContext(Dispatchers.Main) {
+                    clusterDiagnostics = clusterDiagnostics.copy(historyPending = true, historyCount = bounded,
+                        historyRequestedEpoch = Instant.now().epochSecond, historyAcceptedLines = 0,
+                        historyStatus = "Waiting for SH/DX $bounded response…")
+                }
+                historyResponseJob?.cancel()
+                historyResponseJob = scope.launch {
+                    delay(12_000)
+                    withContext(Dispatchers.Main) {
+                        if (clusterDiagnostics.historyPending) clusterDiagnostics = clusterDiagnostics.copy(
+                            historyPending = false, historyStatus = "SH/DX response timed out")
+                    }
+                }
+            }.onFailure { error -> withContext(Dispatchers.Main) {
+                clusterDiagnostics = clusterDiagnostics.copy(historyPending = false,
+                    historyStatus = "SH/DX failed · ${safeFeatureError(error)}")
+            } }
+        }
+    }
+
+    private fun completeHistoryAfterIdle() {
+        historyResponseJob?.cancel()
+        historyResponseJob = scope.launch {
+            delay(1_500)
+            withContext(Dispatchers.Main) {
+                if (clusterDiagnostics.historyPending) clusterDiagnostics = clusterDiagnostics.copy(
+                    historyPending = false,
+                    historyStatus = "SH/DX complete · ${clusterDiagnostics.historyAcceptedLines} accepted")
+            }
+        }
     }
 
     fun postSpot(callsign: String, frequencyKHz: Double, comment: String) {

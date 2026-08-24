@@ -115,6 +115,22 @@ class AndroidRotatorRuntime(
     val automation: RotatorAutomationSession get() = controller.automationSession()
     val profiles: List<RotatorDeviceProfile> get() = store.snapshot().profiles
 
+    fun upsertProfile(profile: RotatorDeviceProfile) {
+        store.upsert(profile)
+        persist()
+    }
+
+    suspend fun deleteProfile(profileId: String): Boolean {
+        if (state?.profileId == profileId && state?.connected == true) disconnect()
+        store.delete(profileId)
+        persist()
+        return true
+    }
+
+    private fun persist() {
+        preferences.edit().putString("document", RotatorSettingsCodec.encode(store.snapshot(), includeLanEndpoints = true)).apply()
+    }
+
     suspend fun connect(profileId: String, readOnlyProbe: Boolean = false): Boolean = runCatching {
         val profile = requireNotNull(profiles.firstOrNull { it.id == profileId })
         capabilities = if (profile.backend == RotatorBackend.EMBEDDED_HAMLIB) {

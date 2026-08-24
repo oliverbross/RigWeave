@@ -237,6 +237,7 @@ internal class PortableController(context: Context, private val qsoDatabase: Qso
     }
 
     private suspend fun refreshWwffNow(now: Long = Instant.now().epochSecond) = wwffMutex.withLock {
+        if (wwffStatus.fetchedAt > 0 && now - wwffStatus.fetchedAt < 30) return@withLock
         if (wwffSpots.isEmpty()) wwffStatus = ProviderStatus(PortableFeedKind.LOADING)
         val result = withContext(Dispatchers.IO) {
             capturePortableProviderPair(

@@ -3,6 +3,7 @@ package app.rigweave.mobile
 import app.rigweave.mobile.groupsio.GroupsIoController
 import app.rigweave.mobile.groupsio.GroupsIoScreen
 import app.rigweave.mobile.groupsio.GroupsIoSettingsPanel
+import app.rigweave.mobile.groupsio.GroupsIoNewMessageAlert
 import app.rigweave.mobile.groupsio.groupsIoDestinationVisible
 import app.rigweave.mobile.keyer.*
 import app.rigweave.mobile.dxchaser.DxChaserActionType
@@ -98,6 +99,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -260,6 +262,16 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     var networkAvailable by remember { mutableStateOf(connectivity.activeNetwork != null) }
     var foreground by remember { mutableStateOf(true) }
     var foregroundGeneration by remember { mutableLongStateOf(1L) }
+    LaunchedEffect(groupsIo.enabled, groupsIo.connected, groupsIo.syncSettings.refreshOnOpen,
+        groupsIo.syncSettings.foregroundRefreshMinutes, foreground) {
+        groupsIo.loadCachedGroups()
+        if (!foreground || !groupsIo.enabled) return@LaunchedEffect
+        if (groupsIo.syncSettings.refreshOnOpen) groupsIo.maybeForegroundRefresh(force = true)
+        while (isActive && foreground) {
+            delay(groupsIo.syncSettings.foregroundRefreshMinutes * 60_000L)
+            groupsIo.maybeForegroundRefresh()
+        }
+    }
     val voiceTx = remember { VoiceMacroTransmitController(context, transport, audio, voiceStore, app,
         radioState = { radio }, foreground = { foreground }, audioOperationIdle = { voiceAudio.state is VoiceAudioState.Idle }, onFrames = { frames ->
             NativeCore.feed(core, frames)
@@ -784,6 +796,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.DIGI, source = "Navigation", reason = "Open Digi")) },
                 { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.GROUPS_IO, source = "Home", reason = "Open Groups.io exact destination")) },
                 { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.OPERATIONS, source = "Navigation", reason = "Open Operations")) },
+                { app.updateRotatorEnabled(true); destination = Destination.ROTATOR },
                 { row -> pendingPortableDraft = operations.satellites.normalLoggerDraft(row);
                     dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.RADIO, noradId = row.satellite.noradId,
                         source = "Satellite Operations", reason = "Prepare exact logger context")) },
@@ -823,6 +836,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.DIGI, source = "Navigation", reason = "Open Digi")) },
                 { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.GROUPS_IO, source = "Home", reason = "Open Groups.io exact destination")) },
                 { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.OPERATIONS, source = "Navigation", reason = "Open Operations")) },
+                { app.updateRotatorEnabled(true); destination = Destination.ROTATOR },
                 { row -> pendingPortableDraft = operations.satellites.normalLoggerDraft(row);
                     dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.RADIO, noradId = row.satellite.noradId,
                         source = "Satellite Operations", reason = "Prepare exact logger context")) },
@@ -832,6 +846,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 { id -> dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.LOGBOOK, qsoId = id,
                     source = "Home QSO marker", reason = "Open exact QSO")) })
         } }
+        GroupsIoNewMessageAlert(groupsIo, onOpen = { destination = Destination.GROUPS_IO },
+            modifier = Modifier.align(Alignment.TopEnd).padding(top = keyerStripInset))
     }
     InAppBrowserDialog(inAppBrowser)
     }
@@ -878,7 +894,7 @@ private fun navIcon(item: Destination) = when (item) {
     connect: () -> Unit, send: (String) -> Unit, direct: (String) -> Unit, requestVoice: (Int) -> Unit, clearCwDecode: () -> Unit,
     tunePortable: (PortableSpot) -> Unit, tuneLogPortable: (PortableSpot) -> Unit, openDx: () -> Unit, openPortable: () -> Unit,
     openActivation: () -> Unit, openLogbook: () -> Unit, openSync: () -> Unit, openProgress: () -> Unit, openDigi: () -> Unit,
-    openGroupsIo: () -> Unit, openOperations: () -> Unit, prepareSatelliteLogger: (SatellitePassRow) -> Unit,
+    openGroupsIo: () -> Unit, openOperations: () -> Unit, openRotator: () -> Unit, prepareSatelliteLogger: (SatellitePassRow) -> Unit,
     requestHomeReceiveTune: (Long, String?, String, String) -> Unit,
     homeQsoId: String?, consumeHomeQso: () -> Unit, openHomeQso: (String) -> Unit) {
     val integratedRadioSelected = selectedProfile.id == RadioProfileCatalog.UNKNOWN.id || selectedProfile.backendKind in setOf(
@@ -887,6 +903,37 @@ private fun navIcon(item: Destination) = when (item) {
     )
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     val intelligencePortableSpots = portable.pota.spots.map(PotaSpot::toPortable) + portable.sotaSpots + portable.wwffSpots
+    // BandMapController is an application-scoped authority. Feed it here so Radio and
+    // Contest remain live even when the dedicated Band Maps destination has never opened.
+    val bandMapDatabaseRevision = database.changeToken()
+    val bandMapNeeds by produceState(BandMapNeedsSnapshot(), operatingContext.stationProfileId.value,
+        operatingContext.stationCallsign.value, bandMapDatabaseRevision) {
+        value = withContext(Dispatchers.IO) {
+            database.bandMapNeedsSnapshot(operatingContext.stationProfileId.value, operatingContext.stationCallsign.value)
+        }
+    }
+    val bandMapObservations = remember(features.liveSpots, features.rbnObservations, neuralDx.mySignal.reports,
+        neuralDx.wsprPersonal.reports, portable.pota.spots, portable.sotaSpots, portable.wwffSpots) {
+        BandMapSourceAdapters.cluster(features.liveSpots) + BandMapSourceAdapters.rbn(features.rbnObservations) +
+            BandMapSourceAdapters.signal(neuralDx.mySignal.reports, false) +
+            BandMapSourceAdapters.signal(neuralDx.wsprPersonal.reports, true) +
+            BandMapSourceAdapters.portable(intelligencePortableSpots)
+    }
+    val bandMapContest = contest.snapshot()
+    val bandMapChaser = chaser.snapshot
+    LaunchedEffect(bandMapObservations, bandMapNeeds, operatingContext.generation, bandMapContest, bandMapChaser, bandMapKeyer) {
+        bandMaps.submit(BandMapInputs(bandMapObservations, operatingContext, bandMapNeeds, bandMapContest,
+            contest::opportunity, bandMapChaser, bandMapKeyer, cty::lookup,
+            providerHealth = mapOf(
+                BandMapSource.DX_CLUSTER to (features.clusterConnection.state == ClusterConnectionState.CONNECTED),
+                BandMapSource.RBN to (features.rbnSourceSnapshot.state.name == "CURRENT"),
+                BandMapSource.PSK_REPORTER to neuralDx.mySignal.available,
+                BandMapSource.PERSONAL_WSPR to neuralDx.wsprPersonal.reports.isNotEmpty(),
+                BandMapSource.POTA to portable.pota.spots.isNotEmpty(),
+                BandMapSource.SOTA to portable.sotaSpots.isNotEmpty(),
+                BandMapSource.WWFF to portable.wwffSpots.isNotEmpty(),
+            )))
+    }
     val deliveredStates = setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED)
     val intelligenceAttention = syncHub.records.count { it.state !in deliveredStates }
     val intelligenceLogAuthority = "${wavelog.logMode.name}|${wavelog.stationId}|${wavelog.selectedStation?.callsign.orEmpty()}"
@@ -1089,7 +1136,8 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.SETTINGS -> Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f)) { SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, syncHub, callbook, cty, audio, panadapter, app,
                 transport, flex, digi, voiceStore, voiceAudio, voiceTx, groupsIo, operatingContext, keyerProfiles, keyer, repeatCq,
-                bandMaps, contest, chaser, hamlibModels, rotator, openEq, openContest, openSync, openDigi, openGroupsIo, connect, direct) }
+                bandMaps, contest, chaser, hamlibModels, rotator, openEq, openContest, openSync, openDigi, openGroupsIo, openRotator,
+                disconnectPlatform, connect, direct) }
         }
     }
 }
@@ -4343,13 +4391,19 @@ private fun statusColourForeground(argb: Int): Color {
     bandMaps: BandMapController, contestRuntime: ContestRuntime, chaserRuntime: DxChaserRuntime,
     hamlibModels: List<HamlibModelDescriptor>, rotator: AndroidRotatorRuntime,
     openEq: () -> Unit, openContest: () -> Unit, openSync: () -> Unit, openDigi: () -> Unit, openGroupsIo: () -> Unit,
+    openRotator: () -> Unit, disconnectRadio: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
+    val inAppBrowser = LocalInAppBrowserState.current
     var section by remember { mutableStateOf(SettingsSection.RADIO) }
     var hamlibSearch by remember { mutableStateOf("") }
+    var showRadioWizard by remember { mutableStateOf(false) }
+    var showRotatorWizard by remember { mutableStateOf(false) }
+    var showAlertProfileHelp by remember { mutableStateOf(false) }
     var host by remember { mutableStateOf(features.clusterHost) }; var port by remember { mutableStateOf(features.clusterPort.toString()) }
     var fallbackHost by remember { mutableStateOf(features.fallbackHost) }; var fallbackPort by remember { mutableStateOf(features.fallbackPort.toString()) }
     var fallback2Host by remember { mutableStateOf(features.fallback2Host) }; var fallback2Port by remember { mutableStateOf(features.fallback2Port.toString()) }
     var callsign by remember { mutableStateOf(features.clusterCallsign) }; var watch by remember { mutableStateOf(features.watchlistText) }; var raw by remember { mutableStateOf("") }
+    var historyCount by remember { mutableIntStateOf(features.clusterDiagnostics.historyCount) }
     var stationCall by remember { mutableStateOf(app.stationCallsign) }; var stationName by remember { mutableStateOf(app.stationName) }
     var stationGrid by remember { mutableStateOf(app.stationGrid) }; var repeatSeconds by remember { mutableIntStateOf(app.cqRepeatSeconds) }
     var qrzEnabled by remember { mutableStateOf(callbook.qrzEnabled) }; var qrzUser by remember { mutableStateOf(callbook.qrzUsername) }
@@ -4392,6 +4446,10 @@ private fun statusColourForeground(argb: Int): Color {
     var quiet by remember { mutableStateOf(app.quietAlerts) }; var program by remember { mutableStateOf(app.activationProgram) }
     var activation by remember { mutableStateOf(app.activationReference) }
     var manualFlexIp by remember { mutableStateOf(app.manualFlexIp) }
+    LaunchedEffect(profile, brightness, autoDim, tones, quiet, program, activation) {
+        delay(300)
+        app.saveFieldSettings(profile, brightness.toInt(), autoDim, tones, quiet, program, activation)
+    }
     LaunchedEffect(transport.selected?.sessionKey, transport.candidates) {
         if (!catSelectionDirty) pendingCatKey = transport.selected?.sessionKey
     }
@@ -4469,13 +4527,99 @@ private fun statusColourForeground(argb: Int): Color {
         }) { Text("REBUILD") } },
         dismissButton = { TextButton({ confirmProjectionRebuild = false }) { Text("CANCEL") } },
     )
+    if (showRadioWizard) AlertDialog(
+        onDismissRequest = { showRadioWizard = false },
+        title = { Text("Add radio · choose backend") },
+        text = { LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(RadioProfileCatalog.nativeProfiles, key = { it.id.value }) { candidate ->
+                OutlinedButton({ app.selectRadioProfile(candidate); showRadioWizard = false },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text(candidate.name, fontWeight = FontWeight.Bold)
+                        Text("Native recommended · ${candidate.transport.name.replace('_', ' ')} · selection stays disconnected",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            item {
+                OutlinedButton({
+                    hamlibModels.firstOrNull()?.let { app.selectHamlibModel(it.id, it.manufacturer, it.model) }
+                    hamlibSearch = ""
+                    showRadioWizard = false
+                }, enabled = hamlibModels.isNotEmpty(), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text("Hamlib radio", fontWeight = FontWeight.Bold)
+                        Text("Generic compatibility · searchable ${hamlibModels.size}-model registry · selection stays disconnected",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        } },
+        confirmButton = {},
+        dismissButton = { TextButton({ showRadioWizard = false }) { Text("CANCEL") } },
+    )
+    if (showRotatorWizard) AlertDialog(
+        onDismissRequest = { showRotatorWizard = false },
+        title = { Text("Add rotator") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Text("Profile creation never connects, moves, parks, or arms automation.")
+            Button({
+                rotator.upsertProfile(RotatorDeviceProfile(
+                    name = "rotctld (review endpoint)", backend = RotatorBackend.REMOTE_ROTCTLD,
+                    protocol = RotatorProtocolKind.ROTCTLD, transport = RotatorTransportKind.ROTCTLD,
+                    tcp = TcpSettings("127.0.0.1", 4533, lanOptIn = false),
+                ))
+                showRotatorWizard = false
+            }, modifier = Modifier.fillMaxWidth()) { Text("ADD ROTCTLD PROFILE") }
+            listOf("NATIVE · GS-232 / EASYCOMM / SPID", "EMBEDDED HAMLIB ROTATOR", "ARCO · PUBLISHED COMPATIBILITY MODE").forEach { family ->
+                OutlinedButton({ systemMessage = "$family selected · open the Rotator workspace to choose the required model and stable transport identity"; showRotatorWizard = false },
+                    modifier = Modifier.fillMaxWidth()) { Text(family) }
+            }
+            Text("Native GS-232/EasyComm/SPID and ARCO compatibility require selecting a stable attached serial identity. Embedded Hamlib requires an explicit model/transport. Complete those reviewed parameters in the Rotator workspace.",
+                color = Muted)
+        } },
+        confirmButton = {},
+        dismissButton = { TextButton({ showRotatorWizard = false }) { Text("CANCEL") } },
+    )
+    if (showAlertProfileHelp) AlertDialog(
+        onDismissRequest = { showAlertProfileHelp = false },
+        title = { Text("Day, Night and Field profiles") },
+        text = { Text("Profiles apply brightness, auto dimming, audible tones and quieting of non-critical alerts immediately. They never change radio, Digi, cluster, provider, Contest, transmit or rotator state. Restore remains disconnected and disarmed.") },
+        confirmButton = { TextButton({ showAlertProfileHelp = false }) { Text("CLOSE") } },
+    )
     SettingsPage {
         Header("Complete station settings", state)
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             SettingsSection.entries.forEach { item -> FilterChip(section == item, { section = item }, { Text(item.label) }) }
         }
-        if (section == SettingsSection.RADIO) SettingsCard("RADIO PROFILE") {
+        if (section == SettingsSection.RADIO) SettingsCard("RADIO PROFILES") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button({ showRadioWizard = true }) { Text("ADD RADIO") }
+                OutlinedButton({ showRadioWizard = true }) { Text("CHOOSE ACTIVE PROFILE") }
+            }
             Text("Select the single active radio backend. Switching closes the previous connection before the next backend starts.", color = Muted)
+            RadioProfileCatalog.nativeProfiles.forEach { candidate ->
+                val active = app.selectedRadioProfileId == candidate.id
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = if (active) Healthy.copy(alpha = .12f) else Panel)) {
+                    Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(candidate.name, fontWeight = FontWeight.Bold)
+                            Text(if (active && state.connected) "CONNECTED" else if (active) "ACTIVE · DISCONNECTED" else "DISCONNECTED",
+                                color = if (active && state.connected) Healthy else Muted)
+                        }
+                        Text("${candidate.backendKind} · ${candidate.model} · ${candidate.transport} · ${if (candidate.readOnly) "READ ONLY" else "operator controlled"}${if (active) " · DEFAULT" else ""}", color = Muted)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            TextButton({ app.selectRadioProfile(candidate) }) { Text(if (active) "ACTIVE" else "CHOOSE") }
+                            TextButton({ systemMessage = "Edit ${candidate.name} · select transport parameters in the profile wizard" }) { Text("EDIT") }
+                            if (active && state.connected) TextButton({ settingsScope.launch {
+                                disconnectRadio(); transport.disconnect(); flex.disconnect()
+                            } }) { Text("DISCONNECT") }
+                            else TextButton(reconnect, enabled = active) { Text("CONNECT") }
+                            TextButton({}, enabled = false) { Text("DELETE") }
+                        }
+                    }
+                }
+            }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 RadioProfileCatalog.nativeProfiles.forEach { profile ->
                     FilterChip(app.selectedRadioProfileId == profile.id, { app.selectRadioProfile(profile) }, { Text(profile.name) })
@@ -4563,6 +4707,37 @@ private fun statusColourForeground(argb: Int): Color {
                     Text("N1MM remains default-off and unarmed; hiding Contest stops the active runtime without deleting data.", color = Muted)
                 }
             }
+            val contestPrefs = app.contestGlobalPreferences
+            Text("GLOBAL CONTEST PREFERENCES", color = Amber, fontWeight = FontWeight.Bold)
+            Text("Session definition, edition, name, dates, station/operator, exchange, serial and live role remain in the Contest setup.", color = Muted)
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                listOf("RUN", "SEARCH_AND_POUNCE").forEach { role -> FilterChip(contestPrefs.defaultRole == role,
+                    { app.updateContestGlobalPreferences(contestPrefs.copy(defaultRole = role)) }, { Text(if (role == "RUN") "DEFAULT RUN" else "DEFAULT S&P") }) }
+                FilterChip(contestPrefs.esmEnabled, { app.updateContestGlobalPreferences(contestPrefs.copy(esmEnabled = !contestPrefs.esmEnabled)) }, { Text("ESM") })
+                FilterChip(contestPrefs.dupeWarnings, { app.updateContestGlobalPreferences(contestPrefs.copy(dupeWarnings = !contestPrefs.dupeWarnings)) }, { Text("DUPE WARNINGS") })
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                listOf("MANUAL", "WEEKLY", "MONTHLY").forEach { policy -> FilterChip(contestPrefs.scpUpdatePolicy == policy,
+                    { app.updateContestGlobalPreferences(contestPrefs.copy(scpUpdatePolicy = policy)) }, { Text("SCP $policy") }) }
+                listOf(5, 8, 12).forEach { count -> FilterChip(contestPrefs.suggestionCount == count,
+                    { app.updateContestGlobalPreferences(contestPrefs.copy(suggestionCount = count)) }, { Text("$count SUGGESTIONS") }) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                listOf("REVIEW", "AUTO_SAFE", "KEEP_TEMPORARY").forEach { policy -> FilterChip(contestPrefs.mergePolicy == policy,
+                    { app.updateContestGlobalPreferences(contestPrefs.copy(mergePolicy = policy)) }, { Text("MERGE ${policy.replace('_', ' ')}") }) }
+                listOf("DENSE", "STANDARD", "WIDE").forEach { preset -> FilterChip(contestPrefs.panelPreset == preset,
+                    { app.updateContestGlobalPreferences(contestPrefs.copy(panelPreset = preset)) }, { Text(preset) }) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(contestPrefs.defaultCategory, { app.updateContestGlobalPreferences(contestPrefs.copy(defaultCategory = it.take(40))) }, label = { Text("Default category/operator") }, modifier = Modifier.weight(1f))
+                OutlinedTextField(contestPrefs.temporaryLogRetentionDays.toString(), { app.updateContestGlobalPreferences(contestPrefs.copy(temporaryLogRetentionDays = it.toIntOrNull() ?: contestPrefs.temporaryLogRetentionDays)) }, label = { Text("Temporary log days") }, modifier = Modifier.weight(.7f))
+                OutlinedTextField(contestPrefs.keyerProfileDefault, { app.updateContestGlobalPreferences(contestPrefs.copy(keyerProfileDefault = it.take(40))) }, label = { Text("Default keyer profile") }, modifier = Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(contestPrefs.cabrilloOperator, { app.updateContestGlobalPreferences(contestPrefs.copy(cabrilloOperator = it)) }, label = { Text("Cabrillo operator") }, modifier = Modifier.weight(1f))
+                OutlinedTextField(contestPrefs.cabrilloAddress, { app.updateContestGlobalPreferences(contestPrefs.copy(cabrilloAddress = it)) }, label = { Text("Cabrillo address") }, modifier = Modifier.weight(2f))
+            }
+            Text("N1MM default · DISABLED · loopback-only unless trusted-LAN is separately reviewed · current ${contestPrefs.n1mmPolicy}", color = Hold)
             Text("Session ${contestRuntime.activeSession.state} · N1MM ${if (contestRuntime.snapshot().n1mmEnabled) "configured" else "disabled"} · " +
                 if (contestRuntime.snapshot().n1mmArmed) "ARMED" else "SAFE", color = Hold)
             Button(openContest, enabled = app.contestEnabled, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
@@ -4576,7 +4751,7 @@ private fun statusColourForeground(argb: Int): Color {
             Button(onClick = openDigi) { Text("OPEN DIGI SETUP") }
             Text("Opening setup never enables or arms transmit. Digi TX remains a separate session switch plus one-shot arm.", color = Muted)
         }
-        if (section == SettingsSection.ROTATOR) SettingsCard("ROTATOR PLATFORM") {
+        if (section == SettingsSection.ROTATOR) SettingsCard("ROTATOR PROFILES") {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("ROTATOR WORKSPACE", color = Amber, fontWeight = FontWeight.Bold)
@@ -4584,9 +4759,30 @@ private fun statusColourForeground(argb: Int): Color {
                 }
                 Switch(app.rotatorEnabled, app::updateRotatorEnabled)
             }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button({ showRotatorWizard = true }) { Text("ADD ROTATOR") }
+                OutlinedButton(openRotator) { Text("OPEN ROTATOR WORKSPACE") }
+                OutlinedButton({ systemMessage = "Band assignments are managed per profile; creation never moves hardware" },
+                    enabled = rotator.profiles.isNotEmpty()) { Text("MANAGE BAND ASSIGNMENTS") }
+            }
             Text("Configured profiles · ${rotator.profiles.size}", color = if (rotator.profiles.isNotEmpty()) Healthy else Muted)
+            if (rotator.profiles.isEmpty()) Text("No rotator is configured. Add a reviewed native, rotctld, embedded-Hamlib, or ARCO compatibility profile. Creating it remains disconnected and disarmed.", color = Muted)
             rotator.profiles.forEach { profile ->
-                Text("${profile.name} · ${profile.backend} · ${profile.protocol} · ${profile.transport}", color = Muted)
+                val connected = rotator.state?.profileId == profile.id && rotator.state?.connected == true
+                Card(Modifier.fillMaxWidth()) { Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(profile.name, fontWeight = FontWeight.Bold)
+                        Text(if (connected) "CONNECTED" else "DISCONNECTED", color = if (connected) Healthy else Muted)
+                    }
+                    Text("${profile.backend} · ${profile.protocol} · ${profile.transport} · position ${rotator.state?.azimuthDeg?.let { "%.1f°".format(it) } ?: "unknown"}", color = Muted)
+                    Text("${rotator.store.snapshot().bandAssignments.count { it.rotatorProfileId == profile.id }} band assignments · automation OFF until explicitly armed", color = Muted)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TextButton({ systemMessage = "Edit ${profile.name} in the Rotator workspace" }) { Text("EDIT") }
+                        if (connected) TextButton({ settingsScope.launch { rotator.disconnect() } }) { Text("DISCONNECT") }
+                        else TextButton({ settingsScope.launch { rotator.connect(profile.id) } }) { Text("CONNECT") }
+                        TextButton({ settingsScope.launch { rotator.deleteProfile(profile.id) } }) { Text("DELETE") }
+                    }
+                } }
             }
             Text("Serial identities are stored as hashes. LAN endpoints are excluded from ordinary recovery exports. Automation arm and satellite tracking are session-only.", color = Hold)
         }
@@ -4705,17 +4901,31 @@ private fun statusColourForeground(argb: Int): Color {
             }
         }
         if (section == SettingsSection.ALERTS) SettingsCard("FIELD / DISPLAY / ALERTS") {
-            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) { FieldProfile.entries.forEach { value -> FilterChip(profile == value, { profile = value }, { Text(value.name) }) } }
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) { FieldProfile.entries.forEach { value -> FilterChip(profile == value, {
+                app.setProfile(value); profile = value
+                val selected = app.alertDisplayProfile(value)
+                brightness = selected.brightness.toFloat(); autoDim = selected.autoDim
+                tones = selected.audibleTones; quiet = selected.quietNonCritical
+            }, { Text(value.name) }) }; TextButton({ showAlertProfileHelp = true }) { Text("HELP") } }
+            Text("${profile.name} · ${brightness.toInt()}% · auto dim ${if (autoDim) "on" else "off"} · tones ${if (tones) "on" else "off"} · quiet ${if (quiet) "on" else "off"}", color = Muted)
             Row(verticalAlignment = Alignment.CenterVertically) { Text("Brightness", modifier = Modifier.width(90.dp)); Slider(brightness, { brightness = it }, valueRange = 10f..100f, modifier = Modifier.weight(1f)); Text("${brightness.toInt()}%") }
-            Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) { Switch(autoDim, { autoDim = it }); Text("Auto-dim") }
-                Row(verticalAlignment = Alignment.CenterVertically) { Switch(tones, { tones = it }); Text("Audible tones") }
-                Row(verticalAlignment = Alignment.CenterVertically) { Switch(quiet, { quiet = it }); Text("Quiet non-critical") }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                listOf(
+                    Triple("Auto dim", "Reduce display brightness using the active display policy", autoDim),
+                    Triple("Audible tones", "Allow supported non-transmit alert tones", tones),
+                    Triple("Quiet non-critical alerts", "Suppress non-critical alert presentation", quiet),
+                ).forEachIndexed { index, item ->
+                    Card(Modifier.weight(1f)) { Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                        Text(item.first, fontWeight = FontWeight.Bold)
+                        Text(item.second, color = Muted, style = MaterialTheme.typography.bodySmall)
+                        Switch(item.third, { enabled -> when (index) { 0 -> autoDim = enabled; 1 -> tones = enabled; else -> quiet = enabled } })
+                    } }
+                }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) { listOf("NONE", "POTA", "SOTA", "WWFF").forEach { value -> FilterChip(program == value, { program = value }, { Text(value) }) } }
             if (program != "NONE") OutlinedTextField(activation, { activation = it.uppercase() }, label = { Text("Activation reference") }, modifier = Modifier.fillMaxWidth())
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button({ app.saveFieldSettings(profile, brightness.toInt(), autoDim, tones, quiet, program, activation) }) { Text("SAVE FIELD SETTINGS") }
+                Text("Saved automatically", color = Healthy, modifier = Modifier.align(Alignment.CenterVertically))
                 OutlinedButton({ systemMessage = "Non-critical alerts snoozed for 15 minutes" }) { Text("SNOOZE 15") }
                 OutlinedButton({ systemMessage = "Non-critical alerts snoozed for 60 minutes" }) { Text("SNOOZE 60") }
             }
@@ -4853,12 +5063,41 @@ private fun statusColourForeground(argb: Int): Color {
             }
             OutlinedTextField(watch, { watch = it.uppercase() }, label = { Text("Priority calls · up to 32") }, modifier = Modifier.fillMaxWidth())
             Text("This list only highlights and alerts matching calls; it never limits incoming cluster spots. The Radio spots window shows 50 spots per page.", color = Muted)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button({ features.setWatchlist(watch); features.connectCluster(host, port.toIntOrNull() ?: 7300, callsign,
-                    fallbackHost, fallbackPort.toIntOrNull() ?: 7300, fallback2Host, fallback2Port.toIntOrNull() ?: 7300) }, enabled = callsign.isNotBlank()) { Text("Connect") }
-                OutlinedButton(features::disconnectCluster) { Text("Disconnect") }; OutlinedButton(features::refreshSolar) { Text("Refresh NOAA") }
+            val clusterState = features.clusterConnection.state
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                when (clusterState) {
+                    ClusterConnectionState.CONNECTING, ClusterConnectionState.RETRYING -> {
+                        Button({}, enabled = false) { Text("Connecting…") }
+                        OutlinedButton(features::disconnectCluster) { Text("Cancel") }
+                    }
+                    ClusterConnectionState.CONNECTED -> {
+                        Text("CONNECTED", color = Color(0xFF52CB82), fontWeight = FontWeight.Black)
+                        OutlinedButton(features::disconnectCluster, colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFE45B5B))) {
+                            Text("Disconnect")
+                        }
+                    }
+                    else -> Button({ features.setWatchlist(watch); features.connectCluster(host, port.toIntOrNull() ?: 7300, callsign,
+                        fallbackHost, fallbackPort.toIntOrNull() ?: 7300, fallback2Host, fallback2Port.toIntOrNull() ?: 7300) },
+                        enabled = callsign.isNotBlank()) { Text("Connect") }
+                }
+                OutlinedButton(features::refreshSolar) { Text("Refresh NOAA") }
             }
-            Text(features.clusterStatus, color = Muted)
+            if (clusterState == ClusterConnectionState.CONNECTED) {
+                val nowEpoch = Instant.now().epochSecond
+                Text("${features.clusterConnection.activeEndpoint} · connected ${clusterAge((nowEpoch - features.clusterConnection.connectedSinceEpoch).coerceAtLeast(0))} · last line ${features.clusterDiagnostics.lastLineEpoch.takeIf { it > 0 }?.let { clusterAge(nowEpoch - it) } ?: "never"} ago",
+                    color = Muted)
+                Text("${features.clusterDiagnostics.acceptedSpots} accepted spots · ${features.clusterDiagnostics.receivedLines} lines · ${features.clusterDiagnostics.rejectedLines} unrecognised",
+                    color = Muted)
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+                    listOf(10, 20, 50, 100, 200).forEach { count ->
+                        FilterChip(historyCount == count, { historyCount = count }, { Text(count.toString()) })
+                    }
+                    Button({ features.requestClusterHistory(historyCount) }, enabled = !features.clusterDiagnostics.historyPending) { Text("SH/DX") }
+                }
+                Text(features.clusterDiagnostics.historyStatus, color = Muted)
+            }
+            Text(features.clusterStatus, color = if (clusterState == ClusterConnectionState.ERROR) MaterialTheme.colorScheme.error else Muted)
+            features.clusterConnection.error.takeIf(String::isNotBlank)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Text("Cluster fields are saved automatically; Connect only controls the live connection.", color = Muted)
         }
         if (section == SettingsSection.LOG) SettingsCard("LOCAL LOG & WAVELOG") {
@@ -5017,8 +5256,8 @@ private fun statusColourForeground(argb: Int): Color {
                 HealthTile("UI", "RUNNING", true, Modifier.weight(1f)); HealthTile("CAT / USB", if (state.connected) "LIVE" else "OFFLINE", state.connected, Modifier.weight(1f))
                 HealthTile("NETWORK / DX", features.clusterStatus, features.liveSpots.isNotEmpty(), Modifier.weight(1f)); HealthTile("WAVELOG", wavelog.status, wavelog.pendingCount == 0, Modifier.weight(1f))
             }
-            health.cards.forEach { card ->
-                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Raised)) {
+            @Composable fun HealthCard(card: SystemHealthCard, modifier: Modifier) {
+                Card(modifier, colors = CardDefaults.cardColors(containerColor = Raised)) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text("${card.title.uppercase()} · ${card.state}", color = if (card.state == HealthState.HEALTHY) Healthy else Hold, fontWeight = FontWeight.Bold)
                         Text(card.summary, color = Muted)
@@ -5026,6 +5265,26 @@ private fun statusColourForeground(argb: Int): Color {
                         Text(card.safeActions.joinToString(" · "), color = Amber)
                     }
                 }
+            }
+            BoxWithConstraints(Modifier.fillMaxWidth().testTag("settings-health-grid")) {
+                if (maxWidth >= 700.dp) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    health.cards.chunked(2).forEach { pair -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        pair.forEach { card -> HealthCard(card, Modifier.weight(1f)) }
+                        if (pair.size == 1) Spacer(Modifier.weight(1f))
+                    } }
+                } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    health.cards.forEach { card -> HealthCard(card, Modifier.fillMaxWidth()) }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Card(Modifier.weight(1f)) { Column(Modifier.padding(10.dp)) {
+                    Text("RADIO PLATFORM · ${app.selectedRadioProfile.name}", color = if (state.connected) Healthy else Hold, fontWeight = FontWeight.Bold)
+                    Text("${app.selectedRadioProfile.backendKind} · ${if (state.connected) "connected" else "disconnected"} · profile selection never connects", color = Muted)
+                } }
+                Card(Modifier.weight(1f)) { Column(Modifier.padding(10.dp)) {
+                    Text("ROTATOR PLATFORM · ${if (rotator.state?.connected == true) "CONNECTED" else "DISCONNECTED"}", color = if (rotator.state?.connected == true) Healthy else Hold, fontWeight = FontWeight.Bold)
+                    Text("${rotator.profiles.size} profiles · automation ${if (rotator.automation.armed) "ARMED" else "DISARMED"} · no movement from Settings", color = Muted)
+                } }
             }
             Text("CAT · $detail", color = Muted); Text("AUDIO IN · ${audio.inputName}", color = Muted); Text("AUDIO OUT · ${audio.outputName}", color = Muted)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -5088,6 +5347,7 @@ private fun statusColourForeground(argb: Int): Color {
                 OutlinedButton({ callbook.configureQrz(qrzEnabled, qrzUser, qrzPassword)
                     callbook.configureHamQth(hamQthEnabled, hamQthUser, hamQthPassword); callbook.test() }) { Text("TEST QRZ / HAMQTH") }
                 OutlinedButton(wavelog::loadStations) { Text("LOAD STATIONS") }
+                if (BuildConfig.DEBUG) OutlinedButton(groupsIo::injectNewMessageAlertForDebug) { Text("INJECT GROUPS.IO ALERT") }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(wavelog.ntpServer, wavelog::updateNtpServer, label = { Text("NTP server") }, singleLine = true, modifier = Modifier.weight(1f))
@@ -5120,10 +5380,25 @@ private fun statusColourForeground(argb: Int): Color {
             StatusColourSettingsGroup(app, SPOT_STATUS_DS, spotDxccStatusOptions)
         }
         if (section == SettingsSection.ABOUT) SettingsCard("ABOUT RIGWEAVE") {
-            Text("Radio. Spectrum. Spots. Logs.", color = Amber)
-            Text("Local-first tablet control and logging. Wavelog, callbook, CTY.DAT and DX-cluster integrations are optional.", color = Muted)
-            Text("WSJT-X is intentionally not exposed in Settings yet.", color = Muted)
-            Text("Home is inspired by the MIT-licensed OpenHamClock; the native RigWeave implementation remains GPL-3.0-only and shares RigWeave station and provider settings.", color = Muted)
+            Text("RIGWEAVE", color = Amber, fontWeight = FontWeight.Black)
+            Text("RigWeave is an original, GPL-3.0-only integrated application combining radio control, logging, intelligence, Digi, contesting, portable operations, maps, rotators and connected services into one coherent shack application. Compatible open-source components are incorporated only where recorded below; behavioural references contributed ideas, not copied source or artwork.", color = Muted)
+            ProvenanceClass.entries.forEach { classification ->
+                Text(when (classification) {
+                    ProvenanceClass.INCORPORATED -> "INCORPORATED / ADAPTED SOFTWARE"
+                    ProvenanceClass.BEHAVIOURAL_REFERENCE -> "BEHAVIOURAL INSPIRATION · NO COPIED SOURCE"
+                    ProvenanceClass.DATA_SERVICE -> "DATA AND SERVICE PROVIDERS"
+                }, color = Amber, fontWeight = FontWeight.Bold)
+                rigWeaveProvenance.filter { it.classification == classification }.forEach { entry ->
+                    Card(Modifier.fillMaxWidth()) { Column(Modifier.fillMaxWidth().padding(9.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(entry.name, fontWeight = FontWeight.Bold)
+                        Text("${entry.maintainers} · ${entry.purpose}", color = Muted)
+                        Text("${entry.licence} · ${entry.pin}", color = Muted, fontFamily = FontFamily.Monospace)
+                        TextButton({ inAppBrowser?.open(entry.sourceUrl) }) { Text("SOURCE / LICENCE") }
+                    } }
+                }
+            }
+            Text("THANKS", color = Amber, fontWeight = FontWeight.Bold)
+            Text("Thank you to the authors, maintainers, radio amateurs, testers, standards communities and data providers whose careful work makes interoperable amateur-radio software possible.", color = Muted)
             val buildSummary = "Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\n" +
                 "Build SHA ${BuildConfig.BUILD_SHA}\nBuild channel ${BuildConfig.BUILD_CHANNEL}\n" +
                 "QSO schema 16 · projection contract 5\n" +
@@ -5196,6 +5471,12 @@ private fun statusColourForeground(argb: Int): Color {
         text = { Text("Delete ${voiceStore.slots.getOrNull(slot)?.label ?: "M${slot + 1}"} from private tablet storage? This cannot be undone.") },
         confirmButton = { Button({ voiceAudio.delete(slot); pendingDeleteSlot = null }, colors = ButtonDefaults.buttonColors(containerColor = Danger)) { Text("DELETE") } },
         dismissButton = { TextButton({ pendingDeleteSlot = null }) { Text("CANCEL") } }) }
+}
+
+private fun clusterAge(seconds: Long): String = when {
+    seconds < 60 -> "${seconds}s"
+    seconds < 3_600 -> "${seconds / 60}m"
+    else -> "${seconds / 3_600}h ${seconds % 3_600 / 60}m"
 }
 
 private fun InputStream.readBoundedVoiceWave(maximumBytes: Int = 32 * 1024 * 1024): ByteArray {

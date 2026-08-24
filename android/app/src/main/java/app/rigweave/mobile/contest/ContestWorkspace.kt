@@ -48,6 +48,13 @@ data class ContestBandMapRow(
     val frequencyHz: Long,
     val band: String,
     val status: String,
+    val observedEpoch: Long = 0,
+    val mode: String = "",
+    val country: String = "",
+    val cqZone: Int = 0,
+    val spotter: String = "",
+    val comment: String = "",
+    val source: String = "",
 )
 
 data class ContestNetworkPeer(

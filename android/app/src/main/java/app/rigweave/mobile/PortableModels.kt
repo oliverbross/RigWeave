@@ -16,6 +16,7 @@ internal const val SOTA_CLUSTER_PORT = 7300
 internal const val SOTA_SUMMITS_URL = "https://www.sotadata.org.uk/summitslist.csv"
 internal const val WWFF_SPOTS_URL = "https://spots.wwff.co/static/spots.json"
 internal const val WWFF_AGENDAS_URL = "https://spots.wwff.co/static/agendas_active.json"
+internal const val WWFF_ALL_AGENDAS_URL = "https://spots.wwff.co/static/agendas.json"
 internal const val PORTABLE_USER_AGENT = "RigWeave/0.1 (Android Portable Chase; https://github.com/oliverbross/RigWeave)"
 
 internal enum class PortableProgram(val label: String) { POTA("POTA"), SOTA("SOTA"), WWFF("WWFF") }

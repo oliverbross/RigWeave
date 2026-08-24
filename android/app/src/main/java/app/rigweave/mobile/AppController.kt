@@ -9,6 +9,29 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 enum class FieldProfile { DAY, NIGHT, FIELD }
+data class AlertDisplayProfile(
+    val version: Int = 1,
+    val brightness: Int,
+    val autoDim: Boolean,
+    val audibleTones: Boolean,
+    val quietNonCritical: Boolean,
+)
+data class ContestGlobalPreferences(
+    val version: Int = 1,
+    val defaultCategory: String = "SINGLE-OP",
+    val defaultRole: String = "SEARCH_AND_POUNCE",
+    val esmEnabled: Boolean = false,
+    val dupeWarnings: Boolean = true,
+    val scpUpdatePolicy: String = "MANUAL",
+    val suggestionCount: Int = 8,
+    val temporaryLogRetentionDays: Int = 30,
+    val mergePolicy: String = "REVIEW",
+    val panelPreset: String = "STANDARD",
+    val keyerProfileDefault: String = "DEFAULT",
+    val n1mmPolicy: String = "DISABLED_LOOPBACK",
+    val cabrilloOperator: String = "",
+    val cabrilloAddress: String = "",
+)
 enum class RadioFamily { ELECRAFT_KX3, ELECRAFT_KX2, FLEXRADIO }
 enum class EqVisibilityPolicy { AUTO, SHOW, HIDE }
 
@@ -86,6 +109,7 @@ class AppController(private val context: Context) {
         EqVisibilityPolicy.valueOf(prefs.getString("eq_visibility_policy", EqVisibilityPolicy.AUTO.name).orEmpty())
     }.getOrDefault(EqVisibilityPolicy.AUTO)); private set
     var contestEnabled by mutableStateOf(prefs.getBoolean("contest_destination_enabled", true)); private set
+    var contestGlobalPreferences by mutableStateOf(loadContestGlobalPreferences()); private set
     var rotatorEnabled by mutableStateOf(prefs.getBoolean("rotator_destination_enabled", false)); private set
     var transmitArmed by mutableStateOf(false); private set
     var cwMacrosArmed by mutableStateOf(false); private set
@@ -100,6 +124,7 @@ class AppController(private val context: Context) {
     var alertTones by mutableStateOf(prefs.getBoolean("alert_tones", false)); private set
     var quietAlerts by mutableStateOf(prefs.getBoolean("quiet_alerts", false)); private set
     var brightness by mutableStateOf(prefs.getInt("brightness", 82)); private set
+    var alertDisplayProfiles by mutableStateOf(loadAlertDisplayProfiles()); private set
     var cqRepeatSeconds by mutableStateOf(prefs.getInt("cq_repeat", 3).coerceIn(CQ_REPEAT_MIN_SECONDS, CQ_REPEAT_MAX_SECONDS)); private set
     var favoriteBands by mutableStateOf(prefs.getString("favorites", "7.020,7.030,7.100,7.200,14.060,21.060")!!.split(",")); private set
     var spotStatusColours by mutableStateOf(loadSpotStatusColours()); private set
@@ -129,6 +154,7 @@ class AppController(private val context: Context) {
         if (!prefs.contains("station_name")) defaults.putString("station_name", stationName)
         if (!prefs.contains("station_grid")) defaults.putString("station_grid", stationGrid)
         defaults.apply()
+        persistAlertDisplayProfiles()
         if (needsDxccCountryColumnMigration) prefs.edit()
             .putString("logbook_columns", encodeLogbookColumns(visibleLogbookColumns))
             .putBoolean("logbook_dxcc_country_v1", true)
@@ -136,7 +162,13 @@ class AppController(private val context: Context) {
     }
 
     fun setProfile(value: FieldProfile) {
-        fieldProfile = value; prefs.edit().putString("profile", value.name).apply()
+        fieldProfile = value
+        val selected = alertDisplayProfiles.getValue(value)
+        brightness = selected.brightness; autoDim = selected.autoDim
+        alertTones = selected.audibleTones; quietAlerts = selected.quietNonCritical
+        prefs.edit().putString("profile", value.name).putInt("brightness", brightness)
+            .putBoolean("auto_dim", autoDim).putBoolean("alert_tones", alertTones)
+            .putBoolean("quiet_alerts", quietAlerts).apply()
     }
 
     fun selectRadioFamily(value: RadioFamily) {
@@ -258,13 +290,78 @@ class AppController(private val context: Context) {
 
     fun saveFieldSettings(profile: FieldProfile, brightnessPercent: Int, dim: Boolean,
         tones: Boolean, quiet: Boolean, program: String, reference: String) {
-        setProfile(profile); brightness = brightnessPercent.coerceIn(10, 100); autoDim = dim
+        fieldProfile = profile; brightness = brightnessPercent.coerceIn(10, 100); autoDim = dim
         alertTones = tones; quietAlerts = quiet
+        alertDisplayProfiles = alertDisplayProfiles + (profile to AlertDisplayProfile(
+            brightness = brightness, autoDim = autoDim, audibleTones = alertTones, quietNonCritical = quietAlerts))
         activationProgram = program.uppercase().let { if (it in listOf("NONE", "POTA", "SOTA", "WWFF")) it else "NONE" }
         activationReference = if (activationProgram == "NONE") "" else reference.uppercase()
-        prefs.edit().putInt("brightness", brightness).putBoolean("auto_dim", autoDim)
+        persistAlertDisplayProfiles()
+        prefs.edit().putString("profile", profile.name).putInt("brightness", brightness).putBoolean("auto_dim", autoDim)
             .putBoolean("alert_tones", alertTones).putBoolean("quiet_alerts", quietAlerts)
             .putString("activation_program", activationProgram).putString("activation_reference", activationReference).apply()
+    }
+
+    fun alertDisplayProfile(value: FieldProfile): AlertDisplayProfile = alertDisplayProfiles.getValue(value)
+
+    fun updateContestGlobalPreferences(value: ContestGlobalPreferences) {
+        contestGlobalPreferences = value.copy(
+            suggestionCount = value.suggestionCount.coerceIn(1, 20),
+            temporaryLogRetentionDays = value.temporaryLogRetentionDays.coerceIn(1, 365),
+            cabrilloOperator = value.cabrilloOperator.take(80), cabrilloAddress = value.cabrilloAddress.take(240),
+        )
+        prefs.edit().putString("contest_global_preferences_v1", JSONObject()
+            .put("version", 1).put("defaultCategory", contestGlobalPreferences.defaultCategory)
+            .put("defaultRole", contestGlobalPreferences.defaultRole).put("esmEnabled", contestGlobalPreferences.esmEnabled)
+            .put("dupeWarnings", contestGlobalPreferences.dupeWarnings).put("scpUpdatePolicy", contestGlobalPreferences.scpUpdatePolicy)
+            .put("suggestionCount", contestGlobalPreferences.suggestionCount).put("temporaryLogRetentionDays", contestGlobalPreferences.temporaryLogRetentionDays)
+            .put("mergePolicy", contestGlobalPreferences.mergePolicy).put("panelPreset", contestGlobalPreferences.panelPreset)
+            .put("keyerProfileDefault", contestGlobalPreferences.keyerProfileDefault).put("n1mmPolicy", contestGlobalPreferences.n1mmPolicy)
+            .put("cabrilloOperator", contestGlobalPreferences.cabrilloOperator).put("cabrilloAddress", contestGlobalPreferences.cabrilloAddress).toString()).apply()
+    }
+
+    private fun loadContestGlobalPreferences(): ContestGlobalPreferences = runCatching {
+        val root = JSONObject(prefs.getString("contest_global_preferences_v1", "{}").orEmpty())
+        if (root.optInt("version") != 1) return@runCatching ContestGlobalPreferences()
+        ContestGlobalPreferences(defaultCategory = root.optString("defaultCategory", "SINGLE-OP"),
+            defaultRole = root.optString("defaultRole", "SEARCH_AND_POUNCE"), esmEnabled = root.optBoolean("esmEnabled"),
+            dupeWarnings = root.optBoolean("dupeWarnings", true), scpUpdatePolicy = root.optString("scpUpdatePolicy", "MANUAL"),
+            suggestionCount = root.optInt("suggestionCount", 8), temporaryLogRetentionDays = root.optInt("temporaryLogRetentionDays", 30),
+            mergePolicy = root.optString("mergePolicy", "REVIEW"), panelPreset = root.optString("panelPreset", "STANDARD"),
+            keyerProfileDefault = root.optString("keyerProfileDefault", "DEFAULT"), n1mmPolicy = root.optString("n1mmPolicy", "DISABLED_LOOPBACK"),
+            cabrilloOperator = root.optString("cabrilloOperator"), cabrilloAddress = root.optString("cabrilloAddress"))
+    }.getOrDefault(ContestGlobalPreferences())
+
+    private fun loadAlertDisplayProfiles(): Map<FieldProfile, AlertDisplayProfile> {
+        val defaults = mapOf(
+            FieldProfile.DAY to AlertDisplayProfile(brightness = 82, autoDim = true, audibleTones = false, quietNonCritical = false),
+            FieldProfile.NIGHT to AlertDisplayProfile(brightness = 32, autoDim = true, audibleTones = false, quietNonCritical = true),
+            FieldProfile.FIELD to AlertDisplayProfile(brightness = 70, autoDim = false, audibleTones = true, quietNonCritical = false),
+        ).toMutableMap()
+        val raw = prefs.getString("alert_display_profiles_v1", null)
+        if (raw == null) {
+            defaults[fieldProfile] = AlertDisplayProfile(brightness = brightness, autoDim = autoDim,
+                audibleTones = alertTones, quietNonCritical = quietAlerts)
+            return defaults
+        }
+        return runCatching {
+            val root = JSONObject(raw)
+            require(root.optInt("version") == 1)
+            FieldProfile.entries.associateWith { profile ->
+                val row = root.getJSONObject(profile.name)
+                AlertDisplayProfile(brightness = row.getInt("brightness").coerceIn(10, 100),
+                    autoDim = row.getBoolean("autoDim"), audibleTones = row.getBoolean("audibleTones"),
+                    quietNonCritical = row.getBoolean("quietNonCritical"))
+            }
+        }.getOrDefault(defaults)
+    }
+
+    private fun persistAlertDisplayProfiles() {
+        val root = JSONObject().put("version", 1)
+        alertDisplayProfiles.forEach { (profile, value) -> root.put(profile.name, JSONObject()
+            .put("brightness", value.brightness).put("autoDim", value.autoDim)
+            .put("audibleTones", value.audibleTones).put("quietNonCritical", value.quietNonCritical)) }
+        prefs.edit().putString("alert_display_profiles_v1", root.toString()).apply()
     }
 
     fun savePreset(slot: Int, state: RadioState, name: String) {

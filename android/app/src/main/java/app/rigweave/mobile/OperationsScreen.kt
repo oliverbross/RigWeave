@@ -70,6 +70,7 @@ private val OpsMuted = Color(0xFFA5ADB2)
 private val OpsHealthy = Color(0xFF42C77B)
 private val OpsDanger = Color(0xFFE47D72)
 private val OpsBlue = Color(0xFF65A6C7)
+private enum class PlanningScope { AROUND_STATION, AROUND_GPS, SELECTED_POINT, MAP_CENTRE, VISIBLE_BOUNDS, GRID_SEARCH }
 
 @Composable
 internal fun OperationsScreen(
@@ -279,6 +280,8 @@ private fun operationStatusColor(status: String): Color = when (status) {
     var grid by rememberSaveable { mutableStateOf(app.stationGrid.ifBlank { "JN88TQ" }) }
     var point by remember { mutableStateOf(maidenheadCenter(grid) ?: GeoPoint(48.6875, 16.625)) }
     var radius by rememberSaveable { mutableStateOf(100.0) }
+    var planningScope by rememberSaveable { mutableStateOf(PlanningScope.AROUND_STATION) }
+    var cameraReset by remember { mutableIntStateOf(0) }
     var program by rememberSaveable { mutableStateOf("ALL") }
     var editing by remember { mutableStateOf<ActivationPlan?>(null) }
     var delete by remember { mutableStateOf<ActivationPlan?>(null) }
@@ -293,7 +296,7 @@ private fun operationStatusColor(status: String): Color = when (status) {
     val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) lastKnownPoint(context)?.let { selected -> point = selected; grid = maidenheadGrid(selected.latitude, selected.longitude) }
     }
-    LaunchedEffect(grid, radius, portable.pota.parkMetadata, portable.sotaCatalogue.metadata) {
+    LaunchedEffect(grid, radius, portable.pota.parkMetadata, portable.sotaCatalogue.metadata, portable.wwffSpots) {
         val origin = maidenheadCenter(grid) ?: return@LaunchedEffect
         point = origin
         catalogueBusy = true
@@ -310,7 +313,12 @@ private fun operationStatusColor(status: String): Color = when (status) {
                     if (row.latitude == null || row.longitude == null) null else ActivationCatalogReference("POTA", row.reference, row.name, row.grid, GeoPoint(row.latitude, row.longitude), row.active, POTA_PARK_URL)
                 } + sotaResult.rows.mapNotNull { row ->
                     if (row.latitude == null || row.longitude == null) null else ActivationCatalogReference("SOTA", row.code, row.name, row.grid, GeoPoint(row.latitude, row.longitude), row.active, SOTA_SUMMITS_URL)
-                }
+                } + portable.wwffSpots.flatMap { spot -> spot.references.filter { it.program == PortableProgram.WWFF }.mapNotNull { reference ->
+                    val latitude = reference.latitude ?: spot.latitude ?: return@mapNotNull null
+                    val longitude = reference.longitude ?: spot.longitude ?: return@mapNotNull null
+                    ActivationCatalogReference("WWFF", reference.code, reference.name.ifBlank { "Live-discovered reference" }, "",
+                        GeoPoint(latitude, longitude), spot.activeAt(Instant.now().epochSecond), WWFF_SPOTS_URL)
+                } }.distinctBy { it.reference }
             }
         } finally { catalogueBusy = false }
     }
@@ -328,12 +336,26 @@ private fun operationStatusColor(status: String): Color = when (status) {
             OutlinedTextField(grid, { grid = it.uppercase(Locale.US).take(8) }, label = { Text("Grid") }, modifier = Modifier.weight(1f))
             OutlinedButton({
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED)
-                    lastKnownPoint(context)?.let { point = it; grid = maidenheadGrid(it.latitude, it.longitude) }
+                    lastKnownPoint(context)?.let { point = it; grid = maidenheadGrid(it.latitude, it.longitude); planningScope = PlanningScope.AROUND_GPS; cameraReset++ }
                 else locationPermission.launch(Manifest.permission.ACCESS_FINE_LOCATION)
             }, modifier = Modifier.heightIn(min = 56.dp)) { Icon(Icons.Outlined.MyLocation, null); Text(" USE LOCATION") }
         } }
-        item { ActivationPlanningMap(point, grid, radius, mapReferences) { selected -> point = selected; grid = maidenheadGrid(selected.latitude, selected.longitude) } }
+        item { ActivationPlanningMap(point, grid, radius, mapReferences, cameraReset,
+            select = { selected -> planningScope = PlanningScope.SELECTED_POINT; point = selected; grid = maidenheadGrid(selected.latitude, selected.longitude) },
+            viewport = { centre, visibleRadius ->
+                if (planningScope in setOf(PlanningScope.MAP_CENTRE, PlanningScope.VISIBLE_BOUNDS)) {
+                    point = centre; grid = maidenheadGrid(centre.latitude, centre.longitude)
+                    if (planningScope == PlanningScope.VISIBLE_BOUNDS) radius = visibleRadius.coerceIn(1.0, 5_000.0)
+                }
+            }) }
         item { Text("${"%.5f".format(point.latitude)}, ${"%.5f".format(point.longitude)} · ${distanceBearing(app.stationGrid, point)}", color = OpsInk) }
+        item { Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            PlanningScope.entries.forEach { value -> FilterChip(planningScope == value, { planningScope = value }, { Text(value.name.replace('_', ' ')) }) }
+            OutlinedButton({
+                planningScope = PlanningScope.AROUND_STATION
+                maidenheadCenter(app.stationGrid)?.let { point = it; grid = app.stationGrid; cameraReset++ }
+            }) { Text("RETURN TO STATION") }
+        } }
         item { Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             listOf("ALL", "POTA", "SOTA", "WWFF").forEach { value -> FilterChip(program == value, { program = value }, { Text(value) }) }
             listOf(25.0, 50.0, 100.0, 250.0).forEach { value -> FilterChip(radius == value, { radius = value }, { Text("${value.toInt()} km") }) }
@@ -343,14 +365,23 @@ private fun operationStatusColor(status: String): Color = when (status) {
             ActivationCatalogSort.entries.forEach { value -> FilterChip(catalogueSort == value, { catalogueSort = value }, { Text(value.label) }) }
         } }
         item { Text("OVERLAYS", color = OpsAmber, fontWeight = FontWeight.Black); Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            FilterChip(cq, { cq = !cq }, { Text("CQ ZONES") }); FilterChip(itu, { itu = !itu }, { Text("ITU ZONES") }); FilterChip(states, { states = !states }, { Text("STATES") })
+            FilterChip(false, {}, { Text("CQ ZONES · UNAVAILABLE_DATA") }, enabled = false)
+            FilterChip(false, {}, { Text("ITU ZONES · UNAVAILABLE_DATA") }, enabled = false)
+            FilterChip(false, {}, { Text("STATES · UNAVAILABLE_DATA") }, enabled = false)
             FilterChip(pota, { pota = !pota }, { Text("POTA") }); FilterChip(sota, { sota = !sota }, { Text("SOTA") }); FilterChip(wwff, { wwff = !wwff }, { Text("WWFF") })
-        }; if (cq || itu || states) Text("CQ/ITU/state boundary polygons are not packaged in this Android build; toggles are retained but no boundary is fabricated.", color = OpsMuted) }
+        }; Text("No legally reviewed pinned CQ/ITU/state polygon bundle is packaged. Controls report UNAVAILABLE_DATA and no boundary is fabricated.", color = OpsMuted) }
         item { Surface(color = OpsPanel, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("CATALOGUE AUTHORITIES", color = OpsAmber, fontWeight = FontWeight.Black)
             Text("POTA · ${if (portable.pota.parkMetadata.ready) if (portable.pota.parkMetadata.stale) "OFFLINE CACHE / STALE" else "READY" else "NOT DOWNLOADED"} · ${portable.pota.parkMetadata.rowCount} references · ${nearbyRows.count { it.program == "POTA" }} nearby · $invalidPotaCoordinates without coordinates\nSource: $POTA_PARK_URL · imported ${catalogueTime(portable.pota.parkMetadata.importedAt)}", color = OpsMuted)
             Text("SOTA · ${if (portable.sotaCatalogue.metadata.ready) if (portable.sotaCatalogue.metadata.stale) "OFFLINE CACHE / STALE" else "READY" else "NOT DOWNLOADED"} · ${portable.sotaCatalogue.metadata.rowCount} summits · ${nearbyRows.count { it.program == "SOTA" }} nearby · $invalidSotaCoordinates without coordinates\nSource: $SOTA_SUMMITS_URL · imported ${catalogueTime(portable.sotaCatalogue.metadata.importedAt)}", color = OpsMuted)
-            Text("WWFF · PROVIDER UNAVAILABLE · 0 catalogue references · 0 nearby\nNo stable, licensed structured full-directory contract has been verified. Live Spotline/agendas are not substituted for a catalogue.", color = OpsDanger)
+            val wwffLive = when (portable.wwffStatus.kind) {
+                PortableFeedKind.LIVE -> "AVAILABLE"
+                PortableFeedKind.STALE -> "STALE"
+                PortableFeedKind.CACHED, PortableFeedKind.OFFLINE -> "OFFLINE_CACHE"
+                PortableFeedKind.EMPTY -> "EMPTY"
+                else -> "ERROR"
+            }
+            Text("WWFF LIVE SPOTS · $wwffLive · ${portable.wwffStatus.count} active · ${nearbyRows.count { it.program == "WWFF" }} viewport references\nWWFF DIRECTORY · NEEDS API KEY OR AUTHORISED IMPORT · live-discovered references remain a partial cache", color = if (wwffLive == "AVAILABLE") OpsHealthy else OpsDanger)
             if (catalogueBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
         } } }
         item { Text("NEARBY REFERENCES · ${nearbyRows.size}", color = OpsAmber, fontWeight = FontWeight.Black) }
@@ -378,13 +409,18 @@ private fun operationStatusColor(status: String): Color = when (status) {
 
 private data class PlanningMapReference(val program:String,val code:String,val name:String,val point:GeoPoint)
 
-@Composable private fun ActivationPlanningMap(point:GeoPoint,grid:String,radius:Double,references:List<PlanningMapReference>,select:(GeoPoint)->Unit) {
+@Composable private fun ActivationPlanningMap(point:GeoPoint,grid:String,radius:Double,references:List<PlanningMapReference>,resetKey:Int,
+    select:(GeoPoint)->Unit, viewport:(GeoPoint,Double)->Unit) {
     val context=LocalContext.current
     val lifecycle=LocalLifecycleOwner.current.lifecycle
     val currentSelect by rememberUpdatedState(select)
     val mapView=remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null) } }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var styled by remember { mutableStateOf(false) }
+    var userMoved by remember { mutableStateOf(false) }
+    var cameraFitted by remember { mutableStateOf(false) }
+    val currentViewport by rememberUpdatedState(viewport)
+    LaunchedEffect(resetKey) { userMoved = false; cameraFitted = false }
     DisposableEffect(mapView,lifecycle) {
         val observer=LifecycleEventObserver { _,event -> when(event) {
             Lifecycle.Event.ON_START -> mapView.onStart()
@@ -399,12 +435,21 @@ private data class PlanningMapReference(val program:String,val code:String,val n
             ready.uiSettings.isAttributionEnabled=true
             ready.uiSettings.isLogoEnabled=true
             ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) { styled=true }
+            ready.addOnCameraMoveStartedListener { reason -> if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }
+            ready.addOnCameraIdleListener {
+                if (userMoved) {
+                    val centre = ready.cameraPosition.target ?: return@addOnCameraIdleListener
+                    val bounds = ready.projection.visibleRegion.latLngBounds
+                    val radiusKm = distanceKm(GeoPoint(centre.latitude, centre.longitude), GeoPoint(bounds.latitudeNorth, bounds.longitudeEast))
+                    currentViewport(GeoPoint(centre.latitude, centre.longitude), radiusKm)
+                }
+            }
             ready.addOnMapClickListener { location -> currentSelect(GeoPoint(location.latitude,location.longitude)); true }
         }
         onDispose { lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map=null }
     }
     val referenceHash=references.joinToString { "${it.program}:${it.code}:${it.point.latitude}:${it.point.longitude}" }
-    LaunchedEffect(map,styled,point,grid,radius,referenceHash) {
+    LaunchedEffect(map,styled,point,grid,radius,referenceHash,resetKey) {
         val ready=map ?: return@LaunchedEffect
         if(!styled)return@LaunchedEffect
         ready.clear()
@@ -415,9 +460,12 @@ private data class PlanningMapReference(val program:String,val code:String,val n
             ready.addMarker(MarkerOptions().position(LatLng(row.point.latitude,row.point.longitude)).title("${row.program} ${row.code}").snippet(row.name)
                 .icon(planningMarker(context,color)))
         }
-        val positions=listOf(LatLng(point.latitude,point.longitude))+references.take(200).map { LatLng(it.point.latitude,it.point.longitude) }
-        if(positions.size>1) runCatching { ready.animateCamera(CameraUpdateFactory.newLatLngBounds(LatLngBounds.Builder().includes(positions).build(),70),450) }
-        else ready.cameraPosition=CameraPosition.Builder().target(positions.first()).zoom(when { radius<=25 -> 9.5; radius<=50 -> 8.5; radius<=100 -> 7.5; else -> 6.5 }).build()
+        if (!cameraFitted) {
+            val positions=listOf(LatLng(point.latitude,point.longitude))+references.take(200).map { LatLng(it.point.latitude,it.point.longitude) }
+            if(positions.size>1) runCatching { ready.animateCamera(CameraUpdateFactory.newLatLngBounds(LatLngBounds.Builder().includes(positions).build(),70),450) }
+            else ready.cameraPosition=CameraPosition.Builder().target(positions.first()).zoom(when { radius<=25 -> 9.5; radius<=50 -> 8.5; radius<=100 -> 7.5; else -> 6.5 }).build()
+            cameraFitted = true
+        }
     }
     Box(Modifier.fillMaxWidth().height(330.dp).background(Color(0xFF15262B),RoundedCornerShape(8.dp)).border(1.dp,OpsAmber.copy(.45f),RoundedCornerShape(8.dp))) {
         AndroidView({ mapView },Modifier.fillMaxSize())

@@ -1017,6 +1017,8 @@ private fun shortChartLabel(value:String)=when{
     var savedLatitude by rememberSaveable { mutableStateOf(0.0) }
     var savedLongitude by rememberSaveable { mutableStateOf(0.0) }
     var savedZoom by rememberSaveable { mutableStateOf(1.0) }
+    var labelMode by rememberSaveable { mutableStateOf(ProgressContactLabelMode.PREFIX) }
+    val currentLabelMode by rememberUpdatedState(labelMode)
     DisposableEffect(mapView, lifecycle) {
         var started = false
         var resumed = false
@@ -1056,16 +1058,18 @@ private fun shortChartLabel(value:String)=when{
                 val target = position.target ?: return@addOnCameraIdleListener
                 savedLatitude = target.latitude; savedLongitude = target.longitude; savedZoom = position.zoom
                 cameraInitialized = true
+                value.style?.getSourceAs<GeoJsonSource>(PROGRESS_CONTACT_SOURCE)?.setGeoJson(
+                    progressContactFeatures(currentRows, currentLabelMode, GeoPoint(target.latitude, target.longitude)))
             }
         }
         onDispose { disposed = true; lifecycle.removeObserver(observer); map = null; ready = false; destroy() }
     }
-    LaunchedEffect(map, ready, rows) {
+    LaunchedEffect(map, ready, rows, labelMode) {
         val value = map ?: return@LaunchedEffect
         if (!ready) return@LaunchedEffect
         value.style?.let { style ->
             installProgressContactLayers(style)
-            style.getSourceAs<GeoJsonSource>(PROGRESS_CONTACT_SOURCE)?.setGeoJson(progressContactFeatures(currentRows))
+            style.getSourceAs<GeoJsonSource>(PROGRESS_CONTACT_SOURCE)?.setGeoJson(progressContactFeatures(currentRows, labelMode))
         }
         if (!cameraInitialized && rows.size == 1) value.cameraPosition = CameraPosition.Builder().target(LatLng(rows[0].latitude,rows[0].longitude)).zoom(5.0).build()
         else if (!cameraInitialized) runCatching {
@@ -1075,6 +1079,9 @@ private fun shortChartLabel(value:String)=when{
     }
     Box(modifier.background(ProgressBackground).border(1.dp,ProgressRaised,RoundedCornerShape(8.dp))) {
         AndroidView({ mapView }, Modifier.fillMaxSize())
+        Row(Modifier.align(Alignment.TopStart).padding(8.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            ProgressContactLabelMode.entries.forEach { mode -> FilterChip(labelMode == mode, { labelMode = mode }, { Text(mode.label, fontSize = 10.sp) }) }
+        }
         if (allowFullScreen) OutlinedButton({ fullScreen = true }, Modifier.align(Alignment.TopEnd).padding(8.dp)) { Text("FULL SCREEN") }
         Text("OpenFreeMap © OpenMapTiles · OpenStreetMap", color = ProgressMuted, fontSize = 9.sp,
             modifier = Modifier.align(Alignment.BottomEnd).background(ProgressPanel.copy(alpha=.85f)).padding(4.dp))
@@ -1116,16 +1123,28 @@ private fun installProgressContactLayers(style: Style) {
     }
 }
 
-private fun progressContactFeatures(rows: List<ProgressContactPoint>): FeatureCollection = FeatureCollection.fromFeatures(rows.map { row ->
-    val entity = row.dxcc.split(',').map(String::trim).filter(String::isNotBlank).distinct()
-    val countries = row.country.split(',').map(String::trim).filter(String::isNotBlank).distinct()
-    val label = when {
-        entity.isNotEmpty() -> "DXCC ${entity.take(3).joinToString("/")}${if (entity.size > 3) " +${entity.size - 3}" else ""}${countries.firstOrNull()?.let { " · $it" }.orEmpty()}"
-        countries.isNotEmpty() -> countries.first()
-        else -> "DXCC unavailable · ${row.grid}"
+private enum class ProgressContactLabelMode(val label: String) { PREFIX("PREFIX"), COUNTRY("COUNTRY NAME"), CALLSIGN("CALLSIGN UNAVAILABLE"), GRID("GRID"), NONE("NONE") }
+
+internal fun deduplicatedProgressLabelRows(rows: List<ProgressContactPoint>, viewportCentre: GeoPoint? = null): Set<ProgressContactPoint> =
+    rows.groupBy { it.dxcc.ifBlank { it.country }.trim().uppercase(Locale.US).ifBlank { "UNKNOWN:${it.grid}" } }.values.mapNotNull { group ->
+        val centre = viewportCentre ?: GeoPoint(group.map { it.latitude }.average(), group.map { it.longitude }.average())
+        group.minByOrNull { distanceKm(centre, GeoPoint(it.latitude, it.longitude)) }
+    }.toSet()
+
+private fun progressContactFeatures(rows: List<ProgressContactPoint>, mode: ProgressContactLabelMode,
+    viewportCentre: GeoPoint? = null): FeatureCollection {
+    val representatives = if (mode in setOf(ProgressContactLabelMode.PREFIX, ProgressContactLabelMode.COUNTRY))
+        deduplicatedProgressLabelRows(rows, viewportCentre) else rows.toSet()
+    return FeatureCollection.fromFeatures(rows.map { row ->
+    val label = if (row !in representatives) "" else when (mode) {
+        ProgressContactLabelMode.PREFIX -> row.dxcc.split(',').firstOrNull()?.trim().orEmpty().ifBlank { row.country.take(8).uppercase(Locale.US) }
+        ProgressContactLabelMode.COUNTRY -> row.country.split(',').firstOrNull()?.trim().orEmpty()
+        ProgressContactLabelMode.GRID -> row.grid
+        ProgressContactLabelMode.CALLSIGN, ProgressContactLabelMode.NONE -> ""
     }
     Feature.fromGeometry(Point.fromLngLat(row.longitude, row.latitude)).apply {
         addStringProperty("label", label)
         addStringProperty("grid", row.grid)
     }
-})
+    })
+}

@@ -1,5 +1,7 @@
 package app.rigweave.mobile.groupsio
 
+import app.rigweave.mobile.BuildConfig
+
 import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
@@ -721,6 +723,9 @@ class GroupsIoController(context: Context) {
     var syncSettings by mutableStateOf(loadSyncSettings()); private set
     var groupOverrides by mutableStateOf(loadGroupOverrides()); private set
     var newMessagePreview by mutableStateOf<GroupsIoMessage?>(null); private set
+    private val newMessageQueue = ArrayDeque<GroupsIoMessage>()
+    private val alertedMessageKeys = LinkedHashSet<String>()
+    private var mutedAlertGroups: Set<Long> = settings.getStringSet("muted_alert_groups", emptySet()).orEmpty().mapNotNull(String::toLongOrNull).toSet()
     var showAttachments by mutableStateOf(false); private set
     private var homeRecent by mutableStateOf<List<GroupsIoSearchResult>>(emptyList())
     val homeSummary: GroupsIoHomeSummary get() = GroupsIoHomeSummary(
@@ -774,7 +779,7 @@ class GroupsIoController(context: Context) {
         if (!enabled || !connected || busy || (!force && now - lastSyncMillis < syncSettings.foregroundRefreshMinutes * 60_000L)) return
         replaceOperation {
             val key = credentials.load().takeIf(String::isNotBlank) ?: return@replaceOperation
-            var newest: GroupsIoMessage? = null
+            val discovered = mutableListOf<GroupsIoMessage>()
             val activeGroups = db().groups().filter { groupOverrides[it.id]?.enabled != false }.take(50)
             activeGroups.forEach { group ->
                 ensureActive()
@@ -790,23 +795,47 @@ class GroupsIoController(context: Context) {
                     val before = db().messages(topic.id, limit = 1_000).maxOfOrNull(GroupsIoMessage::number) ?: 0L
                     val page = api.messages(key, group.id, topic.id)
                     db().applyMessages(group.id, topic.id, page.values.take(maximum), page.nextPageToken, page.hasMore, syncAt)
-                    page.values.filter { it.number > before }.maxByOrNull(GroupsIoMessage::createdMillis)?.let { candidate ->
-                        if (newest == null || candidate.createdMillis > newest!!.createdMillis) newest = candidate
-                    }
+                    if (before > 0) discovered += page.values.filter { it.number > before }
                 }
             }
             settings.edit().putLong("last_sync", now).apply()
             val savedGroups = db().groups(); val stats = db().cacheStats(); val size = db().sizeBytes(); val recent = db().recentMessages()
             withContext(Dispatchers.Main) {
                 groups = savedGroups; cacheStats = stats; storageBytes = size; homeRecent = recent; lastSyncMillis = now
-                if (syncSettings.showNewMessagePreview && newest != null) newMessagePreview = newest
+                if (syncSettings.showNewMessagePreview) discovered.sortedBy(GroupsIoMessage::createdMillis).forEach(::enqueueNewMessage)
                 status = "Foreground sync complete · ${activeGroups.size} groups · no background polling"
             }
         }
     }
 
-    fun dismissNewMessagePreview() { newMessagePreview = null }
-    fun openNewMessagePreview() { newMessagePreview?.let { message -> newMessagePreview = null; selectGroup(message.groupId); selectTopic(message.topicId); selectedMessage = message } }
+    private fun enqueueNewMessage(message: GroupsIoMessage) {
+        val key = "${message.groupId}:${message.apiId ?: message.number}"
+        if (message.groupId in mutedAlertGroups || selectedTopicId == message.topicId || !alertedMessageKeys.add(key)) return
+        while (alertedMessageKeys.size > 512) alertedMessageKeys.remove(alertedMessageKeys.first())
+        if (newMessagePreview == null) newMessagePreview = message
+        else {
+            if (newMessageQueue.size >= 20) newMessageQueue.removeFirst()
+            newMessageQueue.addLast(message)
+        }
+    }
+
+    private fun advanceNewMessagePreview() { newMessagePreview = newMessageQueue.removeFirstOrNull() }
+    fun dismissNewMessagePreview() = advanceNewMessagePreview()
+    fun openNewMessagePreview() { newMessagePreview?.let { message ->
+        advanceNewMessagePreview(); selectGroup(message.groupId); selectTopic(message.topicId); selectedMessage = message
+    } }
+    fun muteNewMessageGroup() { newMessagePreview?.let { message ->
+        mutedAlertGroups = mutedAlertGroups + message.groupId
+        settings.edit().putStringSet("muted_alert_groups", mutedAlertGroups.map(Long::toString).toSet()).apply()
+        newMessageQueue.removeAll { it.groupId == message.groupId }
+        advanceNewMessagePreview()
+    } }
+
+    internal fun injectNewMessageAlertForDebug() {
+        if (!BuildConfig.DEBUG) return
+        enqueueNewMessage(GroupsIoMessage(null, selectedGroupId ?: -1, selectedTopicId ?: -1, System.currentTimeMillis(), null,
+            "Debug new-message alert", "RigWeave diagnostics", System.currentTimeMillis(), "Synthetic debug-only preview; not written to the database.", false, false, false))
+    }
 
     fun loadCachedGroups() {
         if (!enabled) return
@@ -1176,14 +1205,6 @@ fun GroupsIoScreen(controller: GroupsIoController, compact: Boolean) {
     var query by remember { mutableStateOf("") }
     var showOffline by remember { mutableStateOf(false) }
     var onlineSearch by remember { mutableStateOf(false) }
-    LaunchedEffect(controller.enabled, controller.connected, controller.syncSettings.refreshOnOpen, controller.syncSettings.foregroundRefreshMinutes) {
-        controller.loadCachedGroups()
-        if (controller.syncSettings.refreshOnOpen) controller.maybeForegroundRefresh(force = true)
-        while (isActive) {
-            delay(controller.syncSettings.foregroundRefreshMinutes * 60_000L)
-            controller.maybeForegroundRefresh()
-        }
-    }
     Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -1228,17 +1249,28 @@ fun GroupsIoScreen(controller: GroupsIoController, compact: Boolean) {
     }
     GroupsIoPhase2Overlays(controller)
     if (showOffline) GroupsIoOfflineDialog(controller) { showOffline = false }
+    }
+}
+
+@Composable
+fun GroupsIoNewMessageAlert(controller: GroupsIoController, onOpen: () -> Unit, modifier: Modifier = Modifier) {
     controller.newMessagePreview?.let { message ->
-        Card(Modifier.align(Alignment.TopEnd).fillMaxWidth(.22f).heightIn(max = 220.dp).padding(12.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF25323A))) {
+        val group = controller.groups.firstOrNull { it.id == message.groupId }
+        Card(modifier.fillMaxWidth(.34f).widthIn(min = 300.dp, max = 520.dp).heightIn(max = 280.dp).padding(12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF25323A))) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("NEW GROUPS.IO MESSAGE", color = Color(0xFFE9A72B), fontWeight = FontWeight.Black)
+                Text(group?.title ?: "Group ${message.groupId}", style = MaterialTheme.typography.labelMedium)
                 Text(message.subject.ifBlank { "Message #${message.number}" }, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text("${message.author} · ${groupsIoTimestampText(message.createdMillis).row}", style = MaterialTheme.typography.labelSmall)
                 Text(normaliseBody(message.body).take(240), maxLines = 4, overflow = TextOverflow.Ellipsis)
-                Row { TextButton(controller::openNewMessagePreview) { Text("OPEN") }; TextButton(controller::dismissNewMessagePreview) { Text("DISMISS") } }
+                Row {
+                    TextButton({ controller.openNewMessagePreview(); onOpen() }) { Text("OPEN") }
+                    TextButton(controller::dismissNewMessagePreview) { Text("DISMISS") }
+                    TextButton(controller::muteNewMessageGroup) { Text("MUTE THIS GROUP") }
+                }
             }
         }
-    }
     }
 }
 
@@ -1356,6 +1388,7 @@ fun GroupsIoSettingsPanel(controller: GroupsIoController, openGroupsIo: () -> Un
         HorizontalDivider()
         Text("SYNC & STORAGE DEFAULTS", fontWeight = FontWeight.Black)
         Text("Automatic work runs only while RigWeave is foregrounded. No permanent background polling.", style = MaterialTheme.typography.bodySmall)
+        Text("New-message alerts are shown when RigWeave refreshes Groups.io while active.", style = MaterialTheme.typography.bodySmall)
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             listOf(7, 30, 90, 365).forEach { days -> FilterChip(controller.syncSettings.defaultLookbackDays == days,
                 { controller.updateSyncSettings(controller.syncSettings.copy(defaultLookbackDays = days)) }, { Text("$days day lookback") }) }
@@ -1385,9 +1418,12 @@ fun GroupsIoSettingsPanel(controller: GroupsIoController, openGroupsIo: () -> Un
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(controller::applyGlobalToAll, enabled = controller.groups.isNotEmpty()) { Text("APPLY GLOBAL TO ALL") }
             OutlinedButton({ controller.applyGlobalToGroups(selectedGroups); selectedGroups = emptySet() }, enabled = selectedGroups.isNotEmpty()) { Text("APPLY TO SELECTED") }
+            OutlinedButton({ selectedGroups.forEach(controller::resetGroupOverride); selectedGroups = emptySet() }, enabled = selectedGroups.isNotEmpty()) { Text("RESET SELECTED OVERRIDES") }
             OutlinedButton({ controller.maybeForegroundRefresh(force = true) }, enabled = controller.connected && !controller.busy) { Text("REFRESH ALL ENABLED") }
         }
         Text("PER-GROUP OVERRIDES", fontWeight = FontWeight.Black)
+        Text("Group | Enabled | Inherit | Lookback | Max messages | Attachments | Retention | Reset",
+            style = MaterialTheme.typography.labelSmall)
         controller.groups.forEach { group ->
             val override = controller.groupOverrides[group.id] ?: GroupsIoGroupOverride()
             Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -1398,15 +1434,16 @@ fun GroupsIoSettingsPanel(controller: GroupsIoController, openGroupsIo: () -> Un
                     }
                     Switch(override.enabled, { controller.updateGroupOverride(group.id, override.copy(enabled = it)) })
                 }
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FilterChip(override.inheritGlobal, { controller.updateGroupOverride(group.id, override.copy(inheritGlobal = !override.inheritGlobal)) }, { Text("INHERIT GLOBAL") })
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column { Text("INHERIT", style = MaterialTheme.typography.labelSmall); Switch(override.inheritGlobal, { controller.updateGroupOverride(group.id, override.copy(inheritGlobal = it)) }) }
                     if (!override.inheritGlobal) {
-                        listOf(7, 30, 90).forEach { days -> FilterChip(override.lookbackDays == days, { controller.updateGroupOverride(group.id, override.copy(lookbackDays = days)) }, { Text("$days days") }) }
-                        listOf(250, 500, 1_000).forEach { count -> FilterChip(override.maximumMessages == count, { controller.updateGroupOverride(group.id, override.copy(maximumMessages = count)) }, { Text("$count max") }) }
-                        FilterChip(override.attachments, { controller.updateGroupOverride(group.id, override.copy(attachments = !override.attachments)) }, { Text("ATTACHMENTS") })
-                        listOf(30, 180, 365).forEach { days -> FilterChip(override.retentionDays == days, { controller.updateGroupOverride(group.id, override.copy(retentionDays = days)) }, { Text("$days retention") }) }
+                        OutlinedTextField(override.lookbackDays.toString(), { controller.updateGroupOverride(group.id, override.copy(lookbackDays = it.toIntOrNull() ?: override.lookbackDays)) }, label = { Text("Lookback days") }, modifier = Modifier.width(130.dp), singleLine = true)
+                        OutlinedTextField(override.maximumMessages.toString(), { controller.updateGroupOverride(group.id, override.copy(maximumMessages = it.toIntOrNull() ?: override.maximumMessages)) }, label = { Text("Max messages") }, modifier = Modifier.width(140.dp), singleLine = true)
+                        Column { Text("ATTACHMENTS", style = MaterialTheme.typography.labelSmall); Switch(override.attachments, { controller.updateGroupOverride(group.id, override.copy(attachments = it)) }) }
+                        OutlinedTextField(override.retentionDays.toString(), { controller.updateGroupOverride(group.id, override.copy(retentionDays = it.toIntOrNull() ?: override.retentionDays)) }, label = { Text("Retention days") }, modifier = Modifier.width(130.dp), singleLine = true)
                     }
-                    TextButton({ controller.resetGroupOverride(group.id) }) { Text("RESET") }
+                    OutlinedButton({ controller.resetGroupOverride(group.id) }) { Text("RESET") }
+                    TextButton({ controller.selectGroup(group.id) }) { Text("EDIT DETAILS") }
                 }
                 Text("Archive ${if (group.downloadArchives) "available" else "not downloaded"} · last sync ${groupsIoTimestampText(group.lastSyncMillis).row}", style = MaterialTheme.typography.bodySmall)
             } }

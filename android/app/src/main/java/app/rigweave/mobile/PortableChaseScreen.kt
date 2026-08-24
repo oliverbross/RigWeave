@@ -158,7 +158,11 @@ internal fun PortableChaseScreen(
                 { mode = it }, newOnly, { newOnly = it }, sort, { sort = it })
         }
         when (page) {
-            PortablePage.MAP -> PortableMap(filtered, selectedId, { selectedId = it; page = PortablePage.ON_AIR }, Modifier.weight(1f))
+            PortablePage.MAP -> Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                PortableMap(filtered, selectedId, { selectedId = it }, Modifier.weight(1f))
+                selected?.let { PortableDetail(it, radio, { pendingTune = it.spot to false }, { pendingTune = it.spot to true },
+                    potaActivationActive, onP2p, intelligenceNeeds, Modifier.heightIn(min = 170.dp, max = 280.dp)) }
+            }
             PortablePage.PLACES -> PortablePlaces(controller, stationGrid, program, Modifier.weight(1f))
             PortablePage.ON_AIR -> BoxWithConstraints(Modifier.weight(1f)) {
                 if (!compact && maxWidth >= 900.dp) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -450,7 +454,6 @@ internal fun PortableChaseScreen(
             ready.addOnCameraMoveStartedListener { reason -> if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) userMoved = true }
             ready.setOnMarkerClickListener { marker ->
                 markerSelections[marker.id]?.let(currentSelect)
-                marker.showInfoWindow(ready, mapView)
                 true
             }
             ready.addOnMapClickListener { point -> val feature = ready.queryRenderedFeatures(ready.projection.toScreenLocation(point), PORTABLE_SELECTED_LABEL_LAYER, PORTABLE_LABEL_LAYER).firstOrNull(); feature?.getStringProperty("spot_id")?.let(currentSelect); feature != null }
@@ -489,7 +492,6 @@ internal fun PortableChaseScreen(
                     .icon(portableMarker(context, color, group.size > 1)),
             )
             markerSelections[marker.id] = chosen.spot.id
-            if (isSelected) marker.showInfoWindow(ready, mapView)
         }
     }
     LaunchedEffect(map, styleReady, selectedId) {

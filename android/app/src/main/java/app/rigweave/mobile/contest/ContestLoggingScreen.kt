@@ -8,6 +8,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -15,6 +16,10 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import java.time.Instant
 import java.time.ZoneOffset
@@ -39,13 +44,13 @@ import java.time.format.DateTimeFormatter
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    "${state.definition.humanName} · ${state.session.state} · ${state.session.role.name.replace('_', ' ')}",
+                    "${state.definition.humanName} · ${state.session.role.name.replace('_', ' ')} · ${state.session.state} · " +
+                        "${state.operatingBand} ${state.operatingMode} ${if (state.operatingFrequencyHz > 0) "%.3f MHz".format(state.operatingFrequencyHz / 1_000_000.0) else "frequency unavailable"} · " +
+                        "${state.reviewRows.size} temporary · network ${if (state.network.active) state.network.mode else "OFF"}",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
-                Text("${state.operatingBand} · ${state.operatingMode} · " +
-                    if (state.operatingFrequencyHz > 0) "%.3f MHz".format(state.operatingFrequencyHz / 1_000_000.0) else "FREQUENCY UNAVAILABLE",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (state.network.lastError.isNotBlank()) Text(state.network.lastError, color = MaterialTheme.colorScheme.error)
             }
             ContestOperatingRole.entries.forEach { role ->
                 FilterChip(state.session.role == role, { callbacks.onRole(role) }, { Text(if (role == ContestOperatingRole.RUN) "RUN" else "S&P") })
@@ -136,10 +141,14 @@ import java.time.format.DateTimeFormatter
                 OutlinedTextField(state.receivedExchange[field].orEmpty(), { callbacks.onExchangeField(field, it) }, Modifier.fillMaxWidth(), label = { Text(field.name.replace('_', ' ')) }, singleLine = true)
             }
         }
-        Text("${state.operatingBand} · ${state.operatingMode} · ${if (state.operatingFrequencyHz > 0) state.operatingFrequencyHz else "frequency unavailable"} · Dupe ${state.dupe.name}",
+        Text("Dupe ${state.dupe.name} · ${state.newMultipliers.joinToString { it.name }.ifBlank { "no new multiplier" }}",
             color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (state.scpSuggestions.isNotEmpty()) Text(state.scpSuggestions.take(8).joinToString(" · ") { "${it.callsign} ${it.state.name.replace('_', ' ')}" },
-            color = MaterialTheme.colorScheme.tertiary)
+        if (state.scpSuggestions.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            state.scpSuggestions.take(8).forEach { suggestion ->
+                Text(highlightScpCallsign(suggestion.callsign, state.callsign, MaterialTheme.colorScheme.tertiary))
+            }
+        }
         if (state.definition.receivedExchange.isEmpty()) {
             OutlinedTextField(state.exchange, callbacks.onExchange, Modifier.fillMaxWidth(), label = { Text("RECEIVED EXCHANGE") }, singleLine = true)
         }
@@ -159,15 +168,31 @@ import java.time.format.DateTimeFormatter
 @Composable private fun ContestRowsPanel(title: String, rows: List<ContestBandMapRow>, empty: String) {
     ContestPanelCard(title) {
         if (rows.isEmpty()) Text(empty, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        rows.take(8).forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(row.callsign, style = MaterialTheme.typography.titleSmall, modifier = Modifier.width(92.dp))
-                Text("${row.band} · ${"%.3f".format(row.frequencyHz / 1_000_000.0)}", modifier = Modifier.width(128.dp))
-                Text(row.status, modifier = Modifier.weight(1f), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (rows.isNotEmpty()) Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                listOf("DATE", "UTC", "BAND", "FREQUENCY", "CALLSIGN", "MODE", "COUNTRY", "CQ", "DX DE", "COMMENT", "AGE").forEach { label ->
+                    Text(label, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(if (label == "COMMENT") 180.dp else 86.dp))
+                }
+            }
+            rows.take(24).forEach { row ->
+                val instant = Instant.ofEpochSecond(row.observedEpoch.coerceAtLeast(0))
+                val age = (Instant.now().epochSecond - row.observedEpoch).coerceAtLeast(0)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(if (row.observedEpoch > 0) DateTimeFormatter.ISO_LOCAL_DATE.withZone(ZoneOffset.UTC).format(instant) else "—", modifier = Modifier.width(86.dp))
+                    Text(if (row.observedEpoch > 0) utcTime(row.observedEpoch) else "—", modifier = Modifier.width(86.dp))
+                    Text(row.band, modifier = Modifier.width(86.dp))
+                    Text("%.3f".format(row.frequencyHz / 1_000_000.0), modifier = Modifier.width(86.dp))
+                    Text(row.callsign, style = MaterialTheme.typography.titleSmall, modifier = Modifier.width(86.dp))
+                    Text(row.mode.ifBlank { "—" }, modifier = Modifier.width(86.dp))
+                    Text(row.country.ifBlank { "—" }, modifier = Modifier.width(86.dp), maxLines = 1)
+                    Text(row.cqZone.takeIf { it > 0 }?.toString() ?: "—", modifier = Modifier.width(86.dp))
+                    Text(row.spotter.ifBlank { "—" }, modifier = Modifier.width(86.dp))
+                    Text(row.comment.ifBlank { row.status }, modifier = Modifier.width(180.dp), maxLines = 1)
+                    Text(if (row.observedEpoch > 0) "${age}s" else "—", modifier = Modifier.width(86.dp))
+                }
             }
         }
-        if (rows.size > 8) Text("+${rows.size - 8} more in the bounded snapshot", color = MaterialTheme.colorScheme.tertiary)
+        if (rows.size > 24) Text("+${rows.size - 24} more in the bounded shared snapshot", color = MaterialTheme.colorScheme.tertiary)
     }
 }
 
@@ -205,3 +230,20 @@ import java.time.format.DateTimeFormatter
 }
 
 private fun utcTime(epoch: Long): String = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneOffset.UTC).format(Instant.ofEpochSecond(epoch))
+
+internal fun highlightScpCallsign(callsign: String, query: String, highlight: Color): AnnotatedString {
+    val wanted = query.trim().uppercase()
+    if (wanted.isBlank()) return AnnotatedString(callsign)
+    val upper = callsign.uppercase()
+    val matched = mutableSetOf<Int>()
+    var cursor = 0
+    wanted.forEach { character ->
+        val index = upper.indexOf(character, cursor)
+        if (index >= 0) { matched += index; cursor = index + 1 }
+    }
+    return buildAnnotatedString {
+        callsign.forEachIndexed { index, character ->
+            if (index in matched) withStyle(SpanStyle(color = highlight)) { append(character) } else append(character)
+        }
+    }
+}

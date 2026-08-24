@@ -69,8 +69,16 @@ internal data class BandMapInputs(
 
 internal data class BandMapDiagnostic(
     val generation: Long = 0, val sourceObservations: Int = 0, val canonicalSpots: Int = 0,
+    val afterSourceFilter: Int = 0, val afterBandModeFilter: Int = 0, val afterIntelligenceFilter: Int = 0,
     val visibleSpots: Int = 0, val rebuildMillis: Long = 0, val cancelledGenerations: Long = 0,
     val providerStates: Map<String, String> = emptyMap(),
+)
+
+internal enum class BandMapSaveStatus { SAVING, SAVED, FAILED }
+internal data class BandMapSaveTruth(
+    val status: BandMapSaveStatus = BandMapSaveStatus.SAVED,
+    val savedEpoch: Long = 0,
+    val error: String = "",
 )
 
 internal data class BandMapUiSnapshot(
@@ -176,12 +184,15 @@ internal class BandMapController(
     private val issuedGeneration = AtomicLong()
     private val index = BandMapSpotIndex()
     private var rebuildJob: Job? = null
+    private var saveJob: Job? = null
     private var cancelledGenerations = 0L
     private var closed = false
     private var latestInputs: BandMapInputs? = null
     var settings by mutableStateOf(initialSettings)
         private set
     var snapshot by mutableStateOf(BandMapUiSnapshot(layout = initialSettings.selectedLayout, selectedBands = initialSettings.selectedBands))
+        private set
+    var saveTruth by mutableStateOf(BandMapSaveTruth())
         private set
 
     fun submit(inputs: BandMapInputs) {
@@ -215,14 +226,37 @@ internal class BandMapController(
                 spot.copy(need = BandMapNeedsAdapter.state(spot, inputs.needs, cty), contest = contest,
                     chaser = BandMapChaserAdapter.state(spot, inputs.chaser, now), evidence = evidence)
             }
-            val visible = BandMapFilterEngine.visible(enriched, preset.filter.copy(bands = settings.selectedBands.toSet()), now)
+            val finalFilter = preset.filter.copy(bands = settings.selectedBands.toSet())
+            val sourceFilter = BandMapFilter(
+                bands = bandMapVisibleBands.toSet(), segments = bandMapVisibleBands.map { BandMapSegment(it) },
+                sources = finalFilter.sources, maximumAgeSeconds = finalFilter.maximumAgeSeconds,
+                minimumSpotters = finalFilter.minimumSpotters, minimumSourceDiversity = finalFilter.minimumSourceDiversity,
+                spotterContinents = finalFilter.spotterContinents, targetContinents = finalFilter.targetContinents,
+                search = finalFilter.search, showStale = finalFilter.showStale,
+            )
+            val afterSource = BandMapFilterEngine.visible(enriched, sourceFilter, now)
+            val afterBandMode = BandMapFilterEngine.visible(afterSource,
+                sourceFilter.copy(bands = finalFilter.bands, segments = finalFilter.segments, modes = finalFilter.modes), now)
+            val visible = BandMapFilterEngine.visible(afterBandMode, finalFilter.copy(
+                sources = emptySet(), maximumAgeSeconds = Long.MAX_VALUE, minimumSpotters = 0,
+                minimumSourceDiversity = 0, spotterContinents = emptySet(), targetContinents = emptySet(),
+                bands = bandMapVisibleBands.toSet(), segments = emptyList(), modes = emptySet(), search = "",
+            ), now)
             val ranked = BandMapPriorityEngine.rank(visible, preset.weights, now)
             val result = BandMapUiSnapshot(generation, inputs.context.generation, now, settings.selectedLayout,
                 settings.selectedBands, preset.filter, ranked, snapshot.selectedSpotId?.takeIf { id -> ranked.any { it.spot.id == id } }, inputs.keyer,
-                BandMapDiagnostic(generation, inputs.observations.size, enriched.size, ranked.size,
+                BandMapDiagnostic(generation, inputs.observations.size, enriched.size, afterSource.size,
+                    afterBandMode.size, visible.size, ranked.size,
                     (System.nanoTime() - started) / 1_000_000, cancelledGenerations,
                     inputs.providerHealth.mapKeys { it.key.name }.mapValues { if (it.value) "AVAILABLE" else "UNAVAILABLE" }),
-                buildList { if (!inputs.needs.complete) add("Needs projection unavailable"); if (inputs.observations.isEmpty()) add("No current source observations") })
+                buildList {
+                    if (!inputs.needs.complete) add("Needs projection unavailable")
+                    if (inputs.observations.isEmpty()) add(if (inputs.providerHealth[BandMapSource.DX_CLUSTER] == false)
+                        "Cluster disconnected · no current source observations" else "Connected but no spots received")
+                    else if (ranked.isEmpty()) add(if (afterBandMode.isEmpty()) "Unsupported band or mode · reset filters"
+                        else "Spots received but all filtered · reset filters")
+                    if (inputs.providerHealth.values.any { !it }) add("One or more sources degraded")
+                })
             if (generation == issuedGeneration.get() && !closed) withContext(Dispatchers.Main.immediate) { if (generation == issuedGeneration.get()) snapshot = result }
         }
     }
@@ -235,7 +269,27 @@ internal class BandMapController(
                 .ifEmpty { listOf("40m", "20m", "15m", "10m") })
         }
         BandMapSettingsCodec.decode(BandMapSettingsCodec.encode(candidate))
-        settings = candidate; saveSettings(candidate); latestInputs?.let(::submit)
+        settings = candidate
+        scheduleSave(candidate)
+        latestInputs?.let(::submit)
+    }
+
+    fun retrySave() = scheduleSave(settings, immediate = true)
+
+    private fun scheduleSave(candidate: BandMapSettings, immediate: Boolean = false) {
+        saveJob?.cancel()
+        saveTruth = saveTruth.copy(status = BandMapSaveStatus.SAVING, error = "")
+        saveJob = scope.launch {
+            if (!immediate) delay(350)
+            runCatching { saveSettings(candidate) }
+                .onSuccess { withContext(Dispatchers.Main.immediate) {
+                    saveTruth = BandMapSaveTruth(BandMapSaveStatus.SAVED, Instant.now().epochSecond)
+                } }
+                .onFailure { error -> withContext(Dispatchers.Main.immediate) {
+                    saveTruth = BandMapSaveTruth(BandMapSaveStatus.FAILED, saveTruth.savedEpoch,
+                        error.message.orEmpty().take(120))
+                } }
+        }
     }
 
     fun visibleSegment(band: String): BandMapSegment {
@@ -314,7 +368,7 @@ internal class BandMapController(
 
     override fun close() {
         if (closed) return
-        closed = true; issuedGeneration.incrementAndGet(); rebuildJob?.cancel(); scope.cancel()
+        closed = true; issuedGeneration.incrementAndGet(); rebuildJob?.cancel(); saveJob?.cancel(); scope.cancel()
     }
 
     private fun contestState(value: ContestOpportunityState) = BandMapContestState(
