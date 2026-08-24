@@ -6,6 +6,12 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val supportedAbis = listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+val requestedAbi = providers.gradleProperty("rigweaveAbi").orNull?.trim()?.takeIf(String::isNotEmpty)
+require(requestedAbi == null || requestedAbi in supportedAbis) {
+    "rigweaveAbi must be one of ${supportedAbis.joinToString()}"
+}
+
 android {
     namespace = "app.rigweave.mobile"
     compileSdk = 36
@@ -19,6 +25,7 @@ android {
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild { cmake { cppFlags += "-std=c++17 -Wall -Wextra -Wpedantic" } }
+        if (requestedAbi != null) ndk { abiFilters += requestedAbi }
     }
 
     buildFeatures { compose = true; buildConfig = true }
@@ -57,8 +64,9 @@ val buildRustFlex by tasks.registering(Exec::class) {
     workingDir(rootProject.file("../rust/rigweave-flex"))
     val sdkRoot = providers.environmentVariable("ANDROID_SDK_ROOT").orElse(providers.environmentVariable("ANDROID_HOME")).orNull
     if (sdkRoot != null) environment("ANDROID_NDK_HOME", file("$sdkRoot/ndk/${android.ndkVersion}").absolutePath)
-    commandLine(providers.environmentVariable("CARGO").orElse("cargo").get(), "ndk", "-t", "armeabi-v7a", "-t", "arm64-v8a", "-t", "x86", "-t", "x86_64",
-        "build", "--release")
+    val targets = requestedAbi?.let(::listOf) ?: supportedAbis
+    commandLine(listOf(providers.environmentVariable("CARGO").orElse("cargo").get(), "ndk") +
+        targets.flatMap { listOf("-t", it) } + listOf("build", "--release"))
 }
 
 val hamlibSource = rootProject.file("../core/third_party/hamlib")
@@ -71,9 +79,11 @@ val buildHamlibAndroid by tasks.registering(Exec::class) {
         .orElse(providers.environmentVariable("ANDROID_HOME"))
     inputs.dir(hamlibSource)
     inputs.file(hamlibBuildScript)
-    outputs.files(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64").map {
+    val targets = requestedAbi?.let(::listOf) ?: supportedAbis
+    outputs.files(targets.map {
         hamlibOutput.map { root -> root.file("$it/libhamlib.a") }
     })
+    if (requestedAbi != null) environment("HAMLIB_ABIS", requestedAbi)
     commandLine("bash", hamlibBuildScript.absolutePath, hamlibSource.absolutePath,
         hamlibOutput.get().asFile.absolutePath,
         file("${sdkRoot.get()}/ndk/${android.ndkVersion}").absolutePath)

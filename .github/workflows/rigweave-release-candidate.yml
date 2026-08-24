@@ -17,6 +17,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - run: python3 scripts/check_release_candidate.py
+      - run: python3 scripts/check_hamlib_upstream.py
       - run: python3 -m unittest scripts/test_check_openhamclock_upstream.py
       - run: test -s NOTICE && test -s core/third_party/iturhfprop/SOURCE_MANIFEST.json
 
@@ -39,8 +40,32 @@ jobs:
         with:
           targets: armv7-linux-androideabi,aarch64-linux-android,i686-linux-android,x86_64-linux-android
       - run: cargo install cargo-ndk --version 4.1.2 --locked
-      - run: cd android && ./gradlew testDebugUnitTest lintDebug assembleDebug bundleDebug compileDebugAndroidTestSources --no-daemon
+      - run: cd android && ./gradlew testDebugUnitTest lintDebug assembleDebug bundleDebug compileDebugAndroidTestSources --no-daemon --max-workers=4
       - run: python3 scripts/audit_android_package_size.py android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/bundle/debug/app-debug.aab
+      - name: Verify four-ABI AAB size
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+          path = Path("android/app/build/outputs/bundle/debug/app-debug.aab")
+          assert path.stat().st_size <= 60_000_000, path.stat().st_size
+          with zipfile.ZipFile(path) as bundle:
+              abis = {name.split("/")[2] for name in bundle.namelist() if name.startswith("base/lib/") and len(name.split("/")) > 3}
+          assert abis == {"armeabi-v7a", "arm64-v8a", "x86", "x86_64"}, abis
+          PY
+      - run: cd android && ./gradlew :app:assembleDebug -PrigweaveAbi=arm64-v8a --no-daemon --max-workers=4
+      - name: Verify arm64 tablet APK
+        run: |
+          python3 scripts/audit_android_package_size.py android/app/build/outputs/apk/debug/app-debug.apk
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+          path = Path("android/app/build/outputs/apk/debug/app-debug.apk")
+          assert path.stat().st_size <= 130_000_000, path.stat().st_size
+          with zipfile.ZipFile(path) as apk:
+              abis = {name.split("/")[1] for name in apk.namelist() if name.startswith("lib/") and len(name.split("/")) > 2}
+          assert abis == {"arm64-v8a"}, abis
+          PY
 
   apple:
     runs-on: macos-15
@@ -92,4 +117,10 @@ jobs:
       - run: python3 scripts/check_nexus_upstream.py
         continue-on-error: true
       - run: python3 scripts/check_neural_dx_watcher_upstream.py
+        continue-on-error: true
+      - run: python3 scripts/check_qmx_panadapter_upstream.py
+        continue-on-error: true
+      - run: python3 scripts/check_rgo_one_upstream.py
+        continue-on-error: true
+      - run: python3 scripts/check_rotator_upstreams.py
         continue-on-error: true

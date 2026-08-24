@@ -2,6 +2,7 @@ package app.rigweave.mobile
 
 import android.content.Context
 import android.content.SharedPreferences
+import app.rigweave.mobile.rotator.RotatorSettingsCodec
 import org.json.JSONObject
 import java.security.MessageDigest
 
@@ -47,6 +48,8 @@ class ConfigurationRecovery(private val context: Context) {
         PreferenceSection("digi", "rigweave-digi") { key -> !unsafeKey(key) },
         PreferenceSection("audio_routes", "rigweave-audio-routes") { key -> !unsafeKey(key) },
         PreferenceSection("usb_radio", "rigweave-usb") { key -> !unsafeKey(key) },
+        PreferenceSection("radio_platform", "rigweave-radio-platform") { key -> !unsafeKey(key) },
+        PreferenceSection("rotator", "rigweave-rotator") { key -> !unsafeKey(key) },
         PreferenceSection("cluster", "dx_cluster") { key -> key in setOf("host", "port", "callsign", "watchlist", "fallback_host", "fallback_port", "fallback2_host", "fallback2_port") },
         PreferenceSection("neural", "neural-dx-v12") { key -> key in setOf("notifications", "briefing_dx_mode", "briefing_order") || key.startsWith("display_") || key.startsWith("outlook_") },
         PreferenceSection("wavelog_binding", "wavelog") { key -> key in setOf("base_url", "station_id", "ntp_server", "log_mode") },
@@ -63,7 +66,8 @@ class ConfigurationRecovery(private val context: Context) {
         sections.sortedBy { it.name }.forEach { section ->
             val values = JSONObject()
             preferences(section).all.toSortedMap().forEach { (key, value) ->
-                if (section.allow(key) && supported(value)) values.put(key, encodeValue(value))
+                val safeValue = safeConfigurationValue(section, key, value)
+                if (section.allow(key) && supported(safeValue)) values.put(key, encodeValue(safeValue))
             }
             payload.put(section.name, values)
         }
@@ -108,7 +112,8 @@ class ConfigurationRecovery(private val context: Context) {
                 val editor = preferences(section).edit()
                 incoming.keys().forEach { key ->
                     require(section.allow(key)) { "Unsafe or unknown key in ${section.name}" }
-                    putPreference(editor, key, incoming.getJSONObject(key))
+                    val decoded = decodeComparable(incoming.getJSONObject(key))
+                    putRaw(editor, key, safeConfigurationValue(section, key, decoded))
                 }
                 require(editor.commit()) { "Unable to commit ${section.name}" }
             }
@@ -159,8 +164,16 @@ class ConfigurationRecovery(private val context: Context) {
 
     private fun preferences(section: PreferenceSection) = context.getSharedPreferences(section.store, Context.MODE_PRIVATE)
 
+    private fun safeConfigurationValue(section: PreferenceSection, key: String, value: Any?): Any? {
+        if (section.name != "rotator" || key != "document" || value !is String) return value
+        return runCatching {
+            RotatorSettingsCodec.encode(RotatorSettingsCodec.decode(value), includeLanEndpoints = false)
+        }.getOrNull()
+    }
+
     private fun clearUnsafeRuntimePreferences() {
-        listOf("rigweave-app", "rigweave-digi", "rigweave-contest-settings", "dxchaser-settings").forEach { name ->
+        listOf("rigweave-app", "rigweave-digi", "rigweave-contest-settings", "dxchaser-settings",
+            "rigweave-radio-platform", "rigweave-rotator").forEach { name ->
             val prefs = context.getSharedPreferences(name, Context.MODE_PRIVATE)
             val editor = prefs.edit()
             prefs.all.keys.filter(::unsafeKey).forEach(editor::remove)
@@ -178,7 +191,9 @@ class ConfigurationRecovery(private val context: Context) {
 private fun unsafeKey(key: String): Boolean {
     val value = key.lowercase()
     return listOf("password", "secret", "token", "api_key", "credential", "ptt", "tx_arm", "transmit_arm",
-        "transmit_enabled", "continuous_tx", "sequencer_active", "temporary_command").any(value::contains)
+        "transmit_enabled", "continuous_tx", "sequencer_active", "temporary_command", "automation_arm",
+        "radio_connection", "rotator_connection", "rotator_motion", "current_target", "pending_movement",
+        "satellite_tracking").any(value::contains)
 }
 
 private fun supported(value: Any?) = value is String || value is Boolean || value is Int || value is Long || value is Float
