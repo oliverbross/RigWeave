@@ -120,6 +120,18 @@ quint64 QsoDatabase::revision() const {
 
 bool QsoDatabase::save(const QsoRecord &input, QString *error) {
     QsoRecord r = input;
+    QString *textFields[] = {
+        &r.callsign, &r.band, &r.bandRx, &r.mode, &r.submode, &r.rstSent,
+        &r.rstReceived, &r.grid, &r.comment, &r.stationProfileId,
+        &r.stationCallsign, &r.operatorCallsign, &r.dxcc, &r.country,
+        &r.cqZone, &r.ituZone, &r.contestId, &r.satelliteName,
+        &r.satelliteMode, &r.potaRef, &r.sotaRef, &r.iota, &r.wwffRef,
+        &r.qslReceived, &r.lotwReceived, &r.eqslReceived, &r.qrzReceived,
+        &r.provenance, &r.remoteId,
+    };
+    for (QString *field : textFields) {
+        if (field->isNull()) *field = QStringLiteral("");
+    }
     r.callsign = normalizedCallsign(r.callsign);
     if (r.callsign.isEmpty() || r.frequencyHz <= 0 || r.mode.trimmed().isEmpty()) {
         if (error) *error = QStringLiteral("Callsign, positive frequency, and mode are required");
