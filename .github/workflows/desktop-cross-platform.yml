@@ -24,7 +24,7 @@ jobs:
           host: mac
           target: desktop
           arch: clang_64
-          modules: 'qtmultimedia qtserialport qtwebsockets qtsvg qtlocation'
+          modules: 'qtmultimedia qtserialport qtwebsockets qtlocation'
           cache: true
       - name: Configure same desktop source
         run: cmake -S desktop -B build/macos -G Ninja -DCMAKE_BUILD_TYPE=Release -DRIGWEAVE_BUILD_TESTS=ON
