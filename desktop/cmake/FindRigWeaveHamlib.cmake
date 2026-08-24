@@ -9,6 +9,6 @@ if(RigWeaveHamlib_FOUND AND NOT TARGET RigWeave::Hamlib)
         IMPORTED_LOCATION "${RigWeaveHamlib_LIBRARY}"
         INTERFACE_INCLUDE_DIRECTORIES "${RigWeaveHamlib_INCLUDE_DIR}")
     if(WIN32)
-        set_property(TARGET RigWeave::Hamlib APPEND PROPERTY INTERFACE_LINK_LIBRARIES ws2_32 winmm setupapi version)
+        set_property(TARGET RigWeave::Hamlib APPEND PROPERTY INTERFACE_LINK_LIBRARIES ws2_32 winmm setupapi iphlpapi version)
     endif()
 endif()
