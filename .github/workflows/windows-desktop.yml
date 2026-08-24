@@ -34,7 +34,7 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check "aqtinstall==3.3.0"
           python desktop/ci/install_qt_windows.py --output "$env:GITHUB_WORKSPACE/Qt" --cache "$env:RUNNER_TEMP/qt-archives"
-          python -m aqt install-tool windows desktop tools_mingw1310 13.1.0-202407240918 qt.tools.win64_mingw1310 -O "$env:GITHUB_WORKSPACE/Qt"
+          python -m aqt install-tool windows desktop tools_mingw1310 qt.tools.win64_mingw1310 -O "$env:GITHUB_WORKSPACE/Qt"
           $qtRoot = "$env:GITHUB_WORKSPACE/Qt/6.11.2/mingw_64"
           $mingwRoot = "$env:GITHUB_WORKSPACE/Qt/Tools/mingw1310_64"
           "$qtRoot/bin" | Out-File $env:GITHUB_PATH -Append

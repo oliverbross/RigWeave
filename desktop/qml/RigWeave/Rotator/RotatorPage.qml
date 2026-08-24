@@ -3,7 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "../Components"
 
-Item { Dialog{id:confirm;title:"Confirm physical movement";modal:true;standardButtons:Dialog.Ok|Dialog.Cancel;contentItem:SafetyBanner{width:440;text:"Move the explicitly connected rotator to AZ "+Rotator.preparedAzimuth.toFixed(1)+" / EL "+Rotator.preparedElevation.toFixed(1)+"? Preparation alone never moves."};onAccepted:Rotator.confirmMove()}
+Item { Dialog{id:confirm;title:"Confirm physical movement";modal:true;standardButtons:Dialog.Ok|Dialog.Cancel;contentItem:SafetyBanner{width:440;text:"Move the explicitly connected rotator to AZ "+Rotator.preparedAzimuth.toFixed(1)+" / EL "+Rotator.preparedElevation.toFixed(1)+"? Preparation alone never moves."}onAccepted:Rotator.confirmMove()}
     Connections{target:Rotator;function onConfirmationRequired(){confirm.open()}}
     ColumnLayout{anchors.fill:parent;anchors.margins:18;spacing:14
         SafetyBanner{Layout.fillWidth:true;text:"Default disconnected and automation disarmed. Windows Alpha supports MANUAL/PROMPT only. Restore, selected spots, grids, and satellite items may prepare a target but never move it."}

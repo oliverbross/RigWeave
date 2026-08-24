@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QTimeZone>
 #include <QUuid>
 
 namespace rigweave::desktop {
@@ -48,7 +49,7 @@ qint64 frequencyHz(const QString &mhz) {
 AdifService::AdifService(QsoDatabase *database, QObject *parent) : QObject(parent), m_database(database) {}
 
 QByteArray AdifService::serialize(const QsoRecord &record) {
-    const QDateTime utc = QDateTime::fromSecsSinceEpoch(record.createdAt, Qt::UTC);
+    const QDateTime utc = QDateTime::fromSecsSinceEpoch(record.createdAt, QTimeZone::UTC);
     QByteArray out;
     out += field("QSO_DATE", utc.toString(QStringLiteral("yyyyMMdd")));
     out += field("TIME_ON", utc.toString(QStringLiteral("HHmmss")));
@@ -86,7 +87,7 @@ std::optional<QsoRecord> AdifService::parseRecord(const QByteArray &record, QStr
     QDate date = QDate::fromString(map.value("QSO_DATE"), QStringLiteral("yyyyMMdd"));
     QString timeValue = map.value("TIME_ON").left(6).leftJustified(6, '0');
     QTime time = QTime::fromString(timeValue, QStringLiteral("HHmmss"));
-    q.createdAt = date.isValid() && time.isValid() ? QDateTime(date, time, Qt::UTC).toSecsSinceEpoch() : QDateTime::currentSecsSinceEpoch();
+    q.createdAt = date.isValid() && time.isValid() ? QDateTime(date, time, QTimeZone::UTC).toSecsSinceEpoch() : QDateTime::currentSecsSinceEpoch();
     static const QSet<QString> known{"QSO_DATE","TIME_ON","CALL","FREQ","FREQ_RX","BAND","BAND_RX","MODE","SUBMODE","RST_SENT","RST_RCVD","GRIDSQUARE","COMMENT","STATION_CALLSIGN","OPERATOR","DXCC","COUNTRY","CQZ","ITUZ","CONTEST_ID","SAT_NAME","SAT_MODE","POTA_REF","SOTA_REF","IOTA","WWFF_REF","QSL_RCVD","LOTW_QSL_RCVD","EQSL_QSL_RCVD","APP_RIGWEAVE_QRZ_RCVD"};
     for (auto it = map.cbegin(); it != map.cend(); ++it) if (!known.contains(it.key())) q.extraAdif.insert(it.key(), it.value());
     if (q.frequencyHz <= 0 || q.mode.isEmpty()) { if (error) *error = QStringLiteral("ADIF record requires FREQ and MODE"); return std::nullopt; }

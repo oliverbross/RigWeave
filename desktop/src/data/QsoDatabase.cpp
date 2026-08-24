@@ -9,6 +9,7 @@
 #include <QUuid>
 #include <QRegularExpression>
 #include <QSet>
+#include <QTimeZone>
 #include <limits>
 
 namespace rigweave::desktop {
@@ -259,7 +260,7 @@ QVariantMap qsoToVariant(const QsoRecord &r) {
 QsoTableModel::QsoTableModel(QsoDatabase *database,QObject *parent):QAbstractTableModel(parent),m_database(database){reload();}
 int QsoTableModel::rowCount(const QModelIndex &p)const{return p.isValid()?0:m_rows.size();}
 int QsoTableModel::columnCount(const QModelIndex &p)const{return p.isValid()?0:9;}
-QVariant QsoTableModel::data(const QModelIndex &i,int role)const{if(!i.isValid()||i.row()<0||i.row()>=m_rows.size())return{};const auto&r=m_rows.at(i.row());if(role>=Qt::UserRole){const auto map=qsoToVariant(r);return map.value(QString::fromLatin1(roleNames().value(role)));}if(role!=Qt::DisplayRole)return{};switch(i.column()){case 0:return QDateTime::fromSecsSinceEpoch(r.createdAt,Qt::UTC).toString(Qt::ISODate);case 1:return r.callsign;case 2:return r.frequencyHz;case 3:return r.band;case 4:return r.mode;case 5:return r.rstSent;case 6:return r.rstReceived;case 7:return r.grid;case 8:return r.provenance;default:return{};}}
+QVariant QsoTableModel::data(const QModelIndex &i,int role)const{if(!i.isValid()||i.row()<0||i.row()>=m_rows.size())return{};const auto&r=m_rows.at(i.row());if(role>=Qt::UserRole){const auto map=qsoToVariant(r);return map.value(QString::fromLatin1(roleNames().value(role)));}if(role!=Qt::DisplayRole)return{};switch(i.column()){case 0:return QDateTime::fromSecsSinceEpoch(r.createdAt,QTimeZone::UTC).toString(Qt::ISODate);case 1:return r.callsign;case 2:return r.frequencyHz;case 3:return r.band;case 4:return r.mode;case 5:return r.rstSent;case 6:return r.rstReceived;case 7:return r.grid;case 8:return r.provenance;default:return{};}}
 QVariant QsoTableModel::headerData(int s,Qt::Orientation o,int role)const{if(o!=Qt::Horizontal||role!=Qt::DisplayRole)return{};static const QStringList h{"UTC","Callsign","Frequency","Band","Mode","RST S","RST R","Grid","Source"};return h.value(s);}
 QHash<int,QByteArray> QsoTableModel::roleNames()const{return{{Qt::UserRole+1,"id"},{Qt::UserRole+2,"callsign"},{Qt::UserRole+3,"frequencyHz"},{Qt::UserRole+4,"band"},{Qt::UserRole+5,"mode"},{Qt::UserRole+6,"rstSent"},{Qt::UserRole+7,"rstReceived"},{Qt::UserRole+8,"grid"},{Qt::UserRole+9,"comment"},{Qt::UserRole+10,"provenance"},{Qt::UserRole+11,"createdAt"}};}
 void QsoTableModel::setPageSize(int v){v=qBound(1,v,250);if(v==m_query.limit)return;m_query.limit=v;emit pageSizeChanged();firstPage();}
