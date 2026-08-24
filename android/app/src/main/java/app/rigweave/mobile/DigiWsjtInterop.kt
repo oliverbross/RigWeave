@@ -48,6 +48,10 @@ object WsjtDatagram {
         writeLong(endedMs); qString(""); qString(""); qString(""); qString(""); qString(draft.operatorCallsign)
         qString(draft.stationCallsign); qString(draft.stationGrid); qString(draft.comment)
     }
+    internal fun control(id: String, type: Int): ByteArray {
+        require(type in setOf(3, 7, 8))
+        return packet(type, id)
+    }
     fun headerType(bytes: ByteArray): Int? {
         if (bytes.size < 12) return null
         val input = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
@@ -94,16 +98,17 @@ class DigiWsjtInterop(
         while (!opened.isClosed) {
             val packet = DatagramPacket(buffer, buffer.size)
             val received = runCatching { opened.receive(packet); packet.data.copyOf(packet.length) }.getOrNull() ?: continue
-            val type = WsjtDatagram.headerType(received)
-            val accepted = when (type) {
-                8 -> { onHaltTx(); true }
-                3 -> { onClear(); true }
-                7 -> { onReplay(); true }
-                else -> false
-            }
+            val accepted = handleIncoming(received)
             state = state.copy(lastReceivedEpoch = System.currentTimeMillis() / 1_000,
                 accepted = state.accepted + if (accepted) 1 else 0, rejected = state.rejected + if (accepted) 0 else 1)
         }
+    }
+
+    internal fun handleIncoming(received: ByteArray): Boolean = when (WsjtDatagram.headerType(received)) {
+        8 -> { onHaltTx(); true }
+        3 -> { onClear(); true }
+        7 -> { onReplay(); true }
+        else -> false
     }
 
     fun stop() {

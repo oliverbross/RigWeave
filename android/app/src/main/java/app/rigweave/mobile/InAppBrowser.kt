@@ -8,6 +8,9 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ArrowForward
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -65,8 +68,8 @@ internal fun InAppBrowserDialog(state: InAppBrowserState) {
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    IconButton({ webView?.goBack() }, enabled = canGoBack) { Icon(Icons.Outlined.ArrowBack, "Back") }
-                    IconButton({ webView?.goForward() }, enabled = canGoForward) { Icon(Icons.Outlined.ArrowForward, "Forward") }
+                    IconButton({ webView?.goBack() }, enabled = canGoBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
+                    IconButton({ webView?.goForward() }, enabled = canGoForward) { Icon(Icons.AutoMirrored.Outlined.ArrowForward, "Forward") }
                     IconButton({ webView?.reload() }) { Icon(Icons.Outlined.Refresh, "Reload") }
                     Column(Modifier.weight(1f)) {
                         Text(pageTitle.ifBlank { "Secure browser" }, maxLines = 1)
@@ -77,7 +80,7 @@ internal fun InAppBrowserDialog(state: InAppBrowserState) {
                             runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) }
                         }
                     }) {
-                        Icon(Icons.Outlined.OpenInNew, null); Spacer(Modifier.width(5.dp)); Text("EXTERNAL")
+                        Icon(Icons.AutoMirrored.Outlined.OpenInNew, null); Spacer(Modifier.width(5.dp)); Text("EXTERNAL")
                     }
                     IconButton(state::close) { Icon(Icons.Outlined.Close, "Close") }
                 }

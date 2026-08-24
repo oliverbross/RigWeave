@@ -4,7 +4,7 @@
 
 Three independent whole-source reviews examined the Android, Apple, shared C++, networking, persistence, radio-control, digital-mode, contest, Groups.io, Wavelog, and release-support paths. Findings were merged, checked against the source, and repaired on `integration/rigweave-final-whole-app-v1`.
 
-This review includes source inspection, native tests, Android production compilation and unit tests, an Apple simulator build, release-policy checks, provenance tests, and script/data syntax checks. It does not claim physical tablet, iPad, radio, audio, authenticated-service, network-peer, or RF evidence. No application was installed or deployed and no radio was connected.
+This review includes source inspection, native tests, Android production compilation, unit tests and instrumentation-source compilation, an Apple simulator build and golden-corpus test, release-policy checks, provenance tests, and script/data syntax checks. It does not claim physical tablet/iPad visual behavior, radio, audio, authenticated-service, network-peer, or RF evidence. Tablet installation and its separate preservation checks are performed only after the reviewed source is committed and consolidated into `main`.
 
 ## Correctness and safety repairs
 
@@ -31,26 +31,33 @@ This review includes source inspection, native tests, Android production compila
 - Excluded Keystore-dependent encrypted preference files from Android backup/device transfer so unrestorable ciphertext is not migrated.
 - Removed internal task/phase copy from shipping error messages and corrected the product contract’s stale digital-mode statement.
 
+## Automated completion pass
+
+- Completed the CALLBOOK workspace handoff: a concrete profile dialog opens immediately with CTY-derived fallback data and is enriched by the live lookup.
+- Added persisted, editable N1MM trusted-LAN management and a deliberately scoped typed-command bridge. Only unambiguous QSO add/resync traffic can reach the existing canonical QSO coordinator; edits, deletes, radio, keyer, Digi, time, file, and arbitrary payload commands remain review-only or denied.
+- Reworked Digi raw recording to use bounded queued PCM16 block writes and report dropped frames under storage backpressure.
+- Replaced the targeted Digi source-substring checks with behavioral fakes around transmit authority, WSJT callbacks, companion/reference decodes, and recorder backpressure.
+- Added the Apple Fast Entry golden corpus to the hosted release workflow and retained hosted Android instrumentation coverage for persistence/import behavior.
+- Added instrumentation regressions for oversized Groups.io binary cleanup and preservation of QSO outbox/ADIF child data across parent updates.
+- Updated deprecated Material tab/icon and lifecycle-owner usage touched by the review.
+
 ## Follow-up backlog
 
 The review intentionally leaves these as explicit follow-ups rather than presenting them as completed:
 
-- Replace remaining Android MapLibre annotation APIs, old Material tab/icon APIs, and Kotlin intersection-type inference before their upstream deprecations become build errors.
-- Replace source-substring “safety tests” with behavioral fakes around Digi CAT/audio ownership and add hosted Apple/unit plus Android instrumentation jobs to the release workflow.
-- Finish the CALLBOOK workspace handoff so a lookup result opens a concrete profile instead of only routing to Radio.
-- Add the production N1MM trust-management/editor surface and a deliberately scoped typed-command bridge; current defaults remain fail-closed and monitor-only.
-- Stream Digi raw recording writes in blocks and expose dropped-frame accounting under slow storage.
-- Add device tests for oversized Groups.io archive/import cleanup and database child-row preservation.
+- Migrate the remaining Android MapLibre annotation/layer APIs. This is a visual map-layer rewrite and should be paired with tablet acceptance instead of being presented as safe from compilation alone.
+- Continue replacing older source-substring architecture checks outside the Digi area with behavioral contract tests where practical.
 - Complete physical and authenticated acceptance separately: protected tablet/iPad UI, USB/radio CAT, DigiRig/Flex audio, SmartLink/Groups.io/Wavelog services, and RF behavior.
 
 ## Validation
 
 - Shared C++ Debug build: passed.
 - CTest: 2/2 passed, including the malformed numeric CAT regression.
-- Android `compileDebugKotlin testDebugUnitTest`: passed (`BUILD SUCCESSFUL`, 19m 42s).
+- Android `testDebugUnitTest compileDebugAndroidTestSources lintDebug`: passed (`BUILD SUCCESSFUL`, 40m 19s).
+- Earlier Android production and test-source compilation gate: passed (`BUILD SUCCESSFUL`, 9m 59s).
 - Apple `RigWeave` Debug simulator build with signing disabled: passed.
+- Apple Fast Entry golden corpus: 3/3 passed.
 - Release-candidate policy audit: passed.
 - OpenHamClock upstream checker tests: 7 passed.
 - Python compile and repository JSON parsing: passed.
 - `git diff --check`: passed.
-

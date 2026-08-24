@@ -13,7 +13,7 @@ class N1mmNetworkController(
     private val peers: N1mmPeerRegistry = N1mmPeerRegistry(config.maximumPeers),
     private val diagnostics: N1mmDiagnostics = N1mmDiagnostics(config.retainedEvents),
     private val trusts: List<N1mmPeerTrust> = emptyList(),
-    private val onCommand: (N1mmTypedCommand, N1mmPolicyDecision) -> Unit = { _, _ -> },
+    private val onCommand: (String, N1mmTypedCommand, N1mmPolicyContext, N1mmPolicyDecision) -> Unit = { _, _, _, _ -> },
     private val clock: () -> Long = { System.currentTimeMillis()/1_000 },
 ) : Closeable {
     private val running=AtomicBoolean(false)
@@ -87,8 +87,10 @@ class N1mmNetworkController(
         val typed=runCatching{N1mmCommandCodec.decode(frame)}.getOrElse{diagnostics.record(frame.command,"REJECTED","malformed command",frame.station);return}
         if(typed.command==N1mmCommand.ECHOREQ){broadcast(N1mmFrame(config.stationNumber,config.stationName,N1mmCommand.ECHO.name,listOf(typed.values["date"].orEmpty(),typed.values["time"].orEmpty())))}
         if(typed.command==N1mmCommand.CONTESTNAME)peers.updateContest(frame.station,typed.values["contestName"].orEmpty())
-        val peer=peers.snapshots().find{it.station==frame.station};val context=N1mmPolicyContext(config.mode,peer?.trusted==true,typed.values["contestName"].orEmpty().let{it.isBlank()||it==config.contestName})
-        val decision=N1mmCommandPolicy.decide(typed.command,context);diagnostics.record(typed.command.name,decision.name,"policy evaluated",frame.station);onCommand(typed,decision)
+        val peer=peers.snapshots().find{it.station==frame.station};val context=N1mmPolicyContext(config.mode,peer?.trusted==true,
+            typed.values["ContestName"].orEmpty().let{it.isBlank()||it==config.contestName},
+            typed.command==N1mmCommand.QSO && typed.values["Id"].orEmpty().isNotBlank() && typed.values["IsOriginal"]=="1")
+        val decision=N1mmCommandPolicy.decide(typed.command,context);diagnostics.record(typed.command.name,decision.name,"policy evaluated",frame.station);onCommand(frame.station,typed,context,decision)
         if(typed.command==N1mmCommand.DISCONNECT_ME)sourceLink.close()
     }
 

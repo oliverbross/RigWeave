@@ -599,8 +599,13 @@ class DigiController(
 
     fun toggleRawRecording() {
         rawRecordingActive = if (rawRecorder.active) {
-            rawRecorder.stop()
-            status = "Bounded raw recording saved in app-private storage"
+            val saved = rawRecorder.stop()
+            val dropped = rawRecorder.droppedFrames
+            status = when {
+                saved == null -> "Raw recording could not be finalized"
+                dropped > 0 -> "Raw recording saved · $dropped frame(s) dropped while storage was busy"
+                else -> "Bounded raw recording saved in app-private storage · no dropped frames"
+            }
             false
         } else {
             val started = rawRecorder.start()
@@ -916,6 +921,7 @@ class DigiController(
         if (rawRecorder.active && !rawRecorder.append(samples)) {
             rawRecordingActive = false
             updateSettings { it.copy(rawRecording = false) }
+            status = "Raw recording reached its limit · ${rawRecorder.droppedFrames} dropped frame(s)"
         }
         framesReceived += samples.size
         lastFrameMonotonicMs = android.os.SystemClock.elapsedRealtime()
