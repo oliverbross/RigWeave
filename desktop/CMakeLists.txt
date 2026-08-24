@@ -115,8 +115,8 @@ set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
 set(CPACK_NSIS_MODIFY_PATH OFF)
 set(CPACK_NSIS_MUI_FINISHPAGE_RUN "RigWeaveDesktop.exe")
 set(CPACK_NSIS_CREATE_ICONS_EXTRA
-    "CreateShortCut '$SMPROGRAMS\\RigWeave Windows Desktop Alpha.lnk' '$INSTDIR\\RigWeaveDesktop.exe'")
+    "CreateShortCut '$SMPROGRAMS\\\\RigWeave Windows Desktop Alpha.lnk' '$INSTDIR\\\\RigWeaveDesktop.exe'")
 set(CPACK_NSIS_DELETE_ICONS_EXTRA
-    "Delete '$SMPROGRAMS\\RigWeave Windows Desktop Alpha.lnk'")
+    "Delete '$SMPROGRAMS\\\\RigWeave Windows Desktop Alpha.lnk'")
 set(CPACK_GENERATOR "NSIS")
 include(CPack)
