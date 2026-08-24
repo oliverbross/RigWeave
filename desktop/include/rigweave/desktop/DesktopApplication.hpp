@@ -1,0 +1,58 @@
+#pragma once
+
+#include "rigweave/desktop/AdifService.hpp"
+#include "rigweave/desktop/ClusterController.hpp"
+#include "rigweave/desktop/DesktopPanadapter.hpp"
+#include "rigweave/desktop/DesktopPlatform.hpp"
+#include "rigweave/desktop/DesktopRadioController.hpp"
+#include "rigweave/desktop/DesktopRotatorController.hpp"
+#include "rigweave/desktop/WavelogSync.hpp"
+
+#include <QQmlApplicationEngine>
+
+namespace rigweave::desktop {
+
+class DesktopApplication final : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(QString currentDestination READ currentDestination WRITE setCurrentDestination NOTIFY currentDestinationChanged)
+    Q_PROPERTY(bool shuttingDown READ shuttingDown NOTIFY shuttingDownChanged)
+public:
+    explicit DesktopApplication(QObject *parent = nullptr);
+    ~DesktopApplication() override;
+    bool initialize(QString *error = nullptr);
+    void expose(QQmlApplicationEngine &engine);
+    QString currentDestination() const { return m_currentDestination; }
+    void setCurrentDestination(const QString &destination);
+    bool shuttingDown() const { return m_shuttingDown; }
+    Q_INVOKABLE QVariantMap health() const;
+    Q_INVOKABLE QVariantMap intelligence() const;
+    Q_INVOKABLE QVariantMap buildInformation() const;
+    Q_INVOKABLE bool saveFastEntry(const QVariantMap &values);
+    Q_INVOKABLE void globalStop();
+    Q_INVOKABLE void shutdown();
+
+signals:
+    void currentDestinationChanged();
+    void shuttingDownChanged();
+    void error(QString message);
+
+private:
+    DesktopPaths m_paths;
+    SystemCredentialVault m_credentials;
+    std::unique_ptr<DesktopConfigurationManager> m_configuration;
+    std::unique_ptr<QsoDatabase> m_database;
+    std::unique_ptr<QsoTableModel> m_logbook;
+    std::unique_ptr<AdifService> m_adif;
+    SpotRepository m_spots;
+    ClusterController m_cluster;
+    WavelogSyncEngine *m_wavelog{};
+    HamlibModelRegistry m_radioModels;
+    DesktopRadioController m_radio;
+    DesktopRotatorController m_rotator;
+    DesktopPanadapter m_panadapter;
+    SupportBundle m_supportBundle;
+    QString m_currentDestination{"Home"};
+    bool m_shuttingDown{};
+};
+
+} // namespace rigweave::desktop
