@@ -1,6 +1,6 @@
 # Android hardening live acceptance
 
-Date: 2026-08-25  
+Date: 2026-08-25
 Package: `app.rigweave.mobile`
 
 ## Mandatory boundary

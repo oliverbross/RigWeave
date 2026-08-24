@@ -1,8 +1,8 @@
 # Android native lifecycle hardening v1
 
-Date: 2026-08-25  
-Branch: `fix/android-native-lifecycle-hardening-v1`  
-Implementation anchor: `25bc191b868b75facc27bc086ba1e8bd42003d8a`  
+Date: 2026-08-25
+Branch: `fix/android-native-lifecycle-hardening-v1`
+Implementation anchor: `25bc191b868b75facc27bc086ba1e8bd42003d8a`
 Sweep 3 source: `8582c0250188f62d683e10c156e7261a07b3dd6c`
 
 ## Outcome

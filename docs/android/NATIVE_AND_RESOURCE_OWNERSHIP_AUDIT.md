@@ -1,7 +1,7 @@
 # Android native and long-lived resource ownership audit
 
-Date: 2026-08-25  
-Source anchor: `8582c0250188f62d683e10c156e7261a07b3dd6c`  
+Date: 2026-08-25
+Source anchor: `8582c0250188f62d683e10c156e7261a07b3dd6c`
 Branch: `fix/android-native-lifecycle-hardening-v1`
 
 ## Audit rule
