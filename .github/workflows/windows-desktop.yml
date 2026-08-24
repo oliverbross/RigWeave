@@ -80,7 +80,7 @@ jobs:
           cp src/.libs/libhamlib.a "$install_root/lib/libhamlib.a"
           cp include/hamlib/config.h "$install_root/include/hamlib/config.h"
           cp -R "$source_root/core/third_party/hamlib/include/hamlib/." "$install_root/include/hamlib/"
-          python3 "$source_root/scripts/check_hamlib_upstream.py"
+          python "$source_root/scripts/check_hamlib_upstream.py"
       - name: Configure Release
         shell: pwsh
         run: cmake -S desktop -B build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DRIGWEAVE_BUILD_TESTS=ON -DRIGWEAVE_REQUIRE_HAMLIB=ON "-DRIGWEAVE_HAMLIB_ROOT=$env:RUNNER_TEMP/hamlib"
