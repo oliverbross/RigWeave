@@ -22,6 +22,7 @@ else()
     find_package(RigWeaveHamlib QUIET)
 endif()
 
+set(RIGWEAVE_CORE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../core" "${CMAKE_CURRENT_BINARY_DIR}/core" EXCLUDE_FROM_ALL)
 include(RigWeaveWarnings)
 
@@ -99,11 +100,6 @@ endif()
 if(RIGWEAVE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
-    # The embedded core registers assert-based standalone tests unconditionally;
-    # Release defines NDEBUG, so its own project runs those in a Debug gate.
-    # This superproject owns and runs the focused desktop test matrix below.
-    set_tests_properties(rigweave_core_tests rigweave_propagation_adapter_tests
-        PROPERTIES DISABLED TRUE)
 endif()
 
 set(CPACK_PACKAGE_NAME "RigWeave")
