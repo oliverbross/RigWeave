@@ -59,7 +59,17 @@ jobs:
           msystem: MSYS
           update: false
           install: autoconf automake libtool make
+      - name: Verify pinned Hamlib provenance
+        shell: pwsh
+        run: python scripts/check_hamlib_upstream.py
+      - name: Restore pinned Hamlib static library
+        id: hamlib-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/hamlib
+          key: windows-hamlib-4.7.2-mingw1310-${{ hashFiles('core/third_party/hamlib/SOURCE_MANIFEST.json') }}
       - name: Build pinned Hamlib static library and supported backends
+        if: steps.hamlib-cache.outputs.cache-hit != 'true'
         shell: msys2 {0}
         run: |
           set -euo pipefail
@@ -80,7 +90,12 @@ jobs:
           cp src/.libs/libhamlib.a "$install_root/lib/libhamlib.a"
           cp include/hamlib/config.h "$install_root/include/hamlib/config.h"
           cp -R "$source_root/core/third_party/hamlib/include/hamlib/." "$install_root/include/hamlib/"
-          python "$source_root/scripts/check_hamlib_upstream.py"
+      - name: Save pinned Hamlib static library
+        if: steps.hamlib-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/hamlib
+          key: windows-hamlib-4.7.2-mingw1310-${{ hashFiles('core/third_party/hamlib/SOURCE_MANIFEST.json') }}
       - name: Configure Release
         shell: pwsh
         run: cmake -S desktop -B build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DRIGWEAVE_BUILD_TESTS=ON -DRIGWEAVE_REQUIRE_HAMLIB=ON "-DRIGWEAVE_HAMLIB_ROOT=$env:RUNNER_TEMP/hamlib"
