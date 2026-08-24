@@ -202,7 +202,11 @@ bool QsoDatabase::tombstone(const QString &id, QString *error) {
     QSqlQuery t(m_database); t.prepare(QStringLiteral("INSERT OR REPLACE INTO qso_tombstone(qso_id,remote_id,canonical_hash,deleted_at) VALUES(?,?,?,?)"));
     t.addBindValue(id); t.addBindValue(select.value(0)); t.addBindValue(QString::fromLatin1(QCryptographicHash::hash(select.value(1).toByteArray(),QCryptographicHash::Sha256).toHex())); t.addBindValue(QDateTime::currentSecsSinceEpoch());
     if (!t.exec() || !execute(QStringLiteral("UPDATE desktop_meta SET value=CAST(value AS INTEGER)+1 WHERE key='database_revision'"), error)) { if(error&&error->isEmpty())*error=sqlError(t); m_database.rollback(); return false; }
-    if (!m_database.commit()) return false; emit revisionChanged(); return true;
+    if (!m_database.commit()) {
+        return false;
+    }
+    emit revisionChanged();
+    return true;
 }
 
 QVector<QsoRecord> QsoDatabase::page(const QsoQuery &input, QString *error) const {
@@ -222,7 +226,10 @@ QVector<QsoRecord> QsoDatabase::page(const QsoQuery &input, QString *error) cons
     QSqlQuery q(m_database);
     q.prepare(QStringLiteral("SELECT * FROM qso WHERE %1 ORDER BY %2 %3,id %3 LIMIT ?")
                   .arg(where.join(" AND "), query.sortColumn, query.sortOrder == Qt::AscendingOrder ? "ASC" : "DESC"));
-    for (const auto &value : binds) q.addBindValue(value); q.addBindValue(query.limit);
+    for (const auto &value : binds) {
+        q.addBindValue(value);
+    }
+    q.addBindValue(query.limit);
     QVector<QsoRecord> rows;
     if (!q.exec()) { if (error) *error=sqlError(q); return rows; }
     while (q.next()) rows.push_back(fromQuery(q));
@@ -250,14 +257,26 @@ QVariantMap QsoDatabase::workedConfirmed(const QString &callsign, const QString 
 
 QVariantMap QsoDatabase::intelligenceSummary(const QsoQuery &) const {
     QSqlQuery q(m_database); q.exec(QStringLiteral("SELECT COUNT(*),COUNT(DISTINCT callsign_norm),COUNT(DISTINCT NULLIF(dxcc,'')),SUM(confirmed),COUNT(DISTINCT NULLIF(grid,'')),COUNT(DISTINCT NULLIF(portable_ref,'')) FROM qso_projection WHERE deleted=0"));
-    if(!q.next())return{}; return{{"qsos",q.value(0)},{"callsigns",q.value(1)},{"entities",q.value(2)},{"confirmed",q.value(3)},{"grids",q.value(4)},{"portableReferences",q.value(5)},{"awardTruth","Local estimates only; official programme credit is not claimed."}};
+    if (!q.next()) {
+        return {};
+    }
+    return{{"qsos",q.value(0)},{"callsigns",q.value(1)},{"entities",q.value(2)},{"confirmed",q.value(3)},{"grids",q.value(4)},{"portableReferences",q.value(5)},{"awardTruth","Local estimates only; official programme credit is not claimed."}};
 }
 
 bool QsoDatabase::rebuildProjection(QString *error) {
-    if(!m_database.transaction())return false; if(!execute("DELETE FROM qso_projection",error)){m_database.rollback();return false;}
+    if (!m_database.transaction()) {
+        return false;
+    }
+    if (!execute("DELETE FROM qso_projection",error)) {
+        m_database.rollback();
+        return false;
+    }
     QSqlQuery q(m_database); if(!q.exec("SELECT * FROM qso")){if(error)*error=sqlError(q);m_database.rollback();return false;}
     while(q.next()){if(!updateProjection(fromQuery(q),error)){m_database.rollback();return false;}}
-    if(!m_database.commit())return false; return true;
+    if (!m_database.commit()) {
+        return false;
+    }
+    return true;
 }
 
 bool QsoDatabase::verifyProjection(QString *error) const {
