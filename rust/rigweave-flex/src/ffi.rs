@@ -587,4 +587,17 @@ mod tests {
             quiet_row.iter().copied().fold(0.0_f32, f32::max));
         assert!(loud_row.iter().all(|value| (0.0..=1.0).contains(value)));
     }
+
+    #[test]
+    fn native_context_lifecycle_stress_returns_every_owner() {
+        for _ in 0..500 {
+            let flex = rw_flex_context_create();
+            assert!(!flex.is_null());
+            unsafe { rw_flex_context_destroy(flex) };
+
+            let digi = rw_digi_context_create(12_000, 700.0, false, 2_210.0);
+            assert!(!digi.is_null());
+            unsafe { rw_digi_context_destroy(digi) };
+        }
+    }
 }

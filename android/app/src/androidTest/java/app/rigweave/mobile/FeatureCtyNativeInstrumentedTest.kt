@@ -10,6 +10,23 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class FeatureCtyNativeInstrumentedTest {
+    @Test fun zeroAndRetiredHandlesReturnNeutralValues() {
+        NativeCore.destroy(0)
+        assertEquals(0, NativeCore.feed(0, byteArrayOf(1)))
+        assertEquals("", NativeCore.state(0))
+        NativeCore.featureDestroy(0)
+        assertFalse(NativeCore.featureLoadCty(0, "ignored"))
+        assertFalse(NativeCore.featureClusterLine(0, "ignored", 0))
+        assertFalse(NativeCore.featureBeginWorkedSync(0))
+        assertFalse(NativeCore.featureEndWorkedSync(0))
+        assertEquals(0, JSONObject(NativeCore.featureDxSnapshot(0, 0)).length())
+        NativeCore.flexDestroy(0)
+        assertEquals(-1, NativeCore.flexFeed(0, byteArrayOf(1)))
+        assertEquals(0, JSONObject(NativeCore.flexState(0)).length())
+        NativeCore.digiDestroy(0)
+        assertEquals(0, NativeCore.digiSstvImage(0).size)
+    }
+
     @Test fun ctyAndWorkedLogControlNativeJapanEntityBonus() {
         val handle = NativeCore.featureCreate()
         try {

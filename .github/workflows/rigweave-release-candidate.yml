@@ -28,6 +28,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --manifest-path rust/rigweave-flex/Cargo.toml --locked
       - run: cmake -S core -B build/core && cmake --build build/core && ctest --test-dir build/core --output-on-failure
+      - name: Native lifecycle ASan and UBSan
+        run: >-
+          cmake -S core -B build/core-sanitized -DCMAKE_BUILD_TYPE=Debug
+          -DRIGWEAVE_ENABLE_ASAN=ON -DRIGWEAVE_ENABLE_UBSAN=ON
+          && cmake --build build/core-sanitized
+          && ctest --test-dir build/core-sanitized --output-on-failure
 
   android:
     runs-on: ubuntu-latest

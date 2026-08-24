@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
 project(rigweave_core VERSION 0.1.0 LANGUAGES CXX)
 
+option(RIGWEAVE_ENABLE_ASAN "Enable AddressSanitizer for host tests" OFF)
+option(RIGWEAVE_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer for host tests" OFF)
+
 set(RIGWEAVE_PORTABLE_SOURCES
     portable/src/adif.cpp
     portable/src/cat_parser.cpp
@@ -31,3 +34,25 @@ add_executable(rigweave_propagation_adapter_tests test/propagation_adapter_tests
 target_link_libraries(rigweave_propagation_adapter_tests PRIVATE rigweave_core)
 target_compile_options(rigweave_propagation_adapter_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
 add_test(NAME rigweave_propagation_adapter_tests COMMAND rigweave_propagation_adapter_tests)
+
+add_executable(rigweave_lifecycle_stress_tests test/lifecycle_stress_tests.cpp)
+target_link_libraries(rigweave_lifecycle_stress_tests PRIVATE rigweave_core)
+target_compile_options(rigweave_lifecycle_stress_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_test(NAME rigweave_lifecycle_stress_tests COMMAND rigweave_lifecycle_stress_tests)
+
+set(RIGWEAVE_SANITIZER_FLAGS)
+if(RIGWEAVE_ENABLE_ASAN)
+    list(APPEND RIGWEAVE_SANITIZER_FLAGS -fsanitize=address)
+endif()
+if(RIGWEAVE_ENABLE_UBSAN)
+    list(APPEND RIGWEAVE_SANITIZER_FLAGS -fsanitize=undefined)
+endif()
+if(RIGWEAVE_SANITIZER_FLAGS)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        message(FATAL_ERROR "RigWeave host sanitizers require Clang or GCC")
+    endif()
+    foreach(target rigweave_core rigweave_core_tests rigweave_propagation_adapter_tests rigweave_lifecycle_stress_tests)
+        target_compile_options(${target} PRIVATE ${RIGWEAVE_SANITIZER_FLAGS} -fno-omit-frame-pointer)
+        target_link_options(${target} PRIVATE ${RIGWEAVE_SANITIZER_FLAGS})
+    endforeach()
+endif()

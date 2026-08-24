@@ -2,6 +2,7 @@ package app.rigweave.mobile
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -11,6 +12,18 @@ import kotlin.math.sin
 
 @RunWith(AndroidJUnit4::class)
 class PanadapterNativeInstrumentedTest {
+    @Test fun zeroHandleAndMalformedArraysAreRejectedWithoutDereference() {
+        NativePanadapter.destroy(0)
+        assertFalse(NativePanadapter.configure(0, 96_000, 4_096, 50, 3,
+            -140f, 0f, 1f, 1f, 1, false, 0f, false,
+            false, false, false, false, 1f, 1f, 1, 0f))
+        assertFalse(NativePanadapter.push(0, shortArrayOf(0), 1, false))
+        assertEquals(0, NativePanadapter.snapshot(0, LongArray(9), FloatArray(14),
+            FloatArray(1), FloatArray(1), FloatArray(1)))
+        assertFalse(NativePanadapter.setIqCorrection(0, 1f, 0f, 0f, 0f, true))
+        NativePanadapter.resetPeakHold(0)
+    }
+
     @Test fun dedicatedJniContextConfiguresPushesAndReturnsOneCoherentFrame() {
         val handle = NativePanadapter.create()
         try {

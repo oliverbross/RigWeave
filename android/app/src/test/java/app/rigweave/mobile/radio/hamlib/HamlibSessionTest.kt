@@ -11,12 +11,17 @@ class HamlibSessionTest {
         assertThrows(IllegalStateException::class.java) { HamlibSession(999, api) }
     }
     @Test fun closeIsIdempotent() { val api = FakeHamlibApi(); val session = HamlibSession(1, api); session.close(); session.close(); assertEquals(1, api.destroyCount) }
+    @Test fun fiveHundredDummySessionsOpenAndCloseWithoutLeakingHandles() {
+        val api = FakeHamlibApi()
+        repeat(500) { HamlibSession(1, api).close() }
+        assertEquals(500, api.destroyCount)
+    }
     @Test fun readOnlyReachesNative() { val api = FakeHamlibApi(); val session = HamlibSession(1, api); session.setReadOnly(true); assertTrue(api.readOnly) }
     @Test fun serialConfigurationAndBridgeIoAreBounded() {
         val api = FakeHamlibApi(); val session = HamlibSession(1, api)
         session.configure(HamlibSerialProfile("stable", 9600)); assertEquals(9600, api.serial?.baud)
-        assertEquals(3, api.bridgeWrite(session.handle, byteArrayOf(1, 2, 3)))
-        assertArrayEquals(ByteArray(0), api.bridgeRead(session.handle, 32, 50))
+        assertEquals(3, session.withHandle { api.bridgeWrite(it, byteArrayOf(1, 2, 3)) })
+        assertArrayEquals(ByteArray(0), session.withHandle { api.bridgeRead(it, 32, 50) })
         assertThrows(IllegalArgumentException::class.java) { HamlibSerialProfile("stable", 9600, timeoutMs = 1) }
     }
     @Test fun networkConfigurationAndBoundsReachNative() {
