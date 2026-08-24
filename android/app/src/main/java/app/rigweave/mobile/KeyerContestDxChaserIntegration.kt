@@ -821,6 +821,7 @@ class OperatorStopRouter(
     private val repeatCq: RepeatCqController,
     private val contest: ContestRuntime,
     private val chaser: DxChaserRuntime,
+    private val stopRotator: () -> Unit = {},
 ) {
     fun stopAll(reason: String = "OPERATOR_STOP") {
         digi.stopSequence()
@@ -828,5 +829,6 @@ class OperatorStopRouter(
         repeatCq.stop()
         chaser.stop(reason)
         contest.setNetworkArmed(false)
+        stopRotator()
     }
 }

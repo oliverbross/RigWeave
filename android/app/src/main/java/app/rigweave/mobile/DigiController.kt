@@ -143,6 +143,7 @@ class DigiController(
     private val stationCallsign: () -> String,
     private val stationGrid: () -> String,
     private val dependencies: DigiDependencies,
+    private val transmitEligible: () -> Boolean = { true },
 ) : AutoCloseable {
     private val prefs = context.getSharedPreferences("rigweave-digi", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -290,11 +291,22 @@ class DigiController(
 
     fun arm() {
         if (txActive) return
+        if (!transmitEligible()) {
+            txArmed = false
+            status = "Digi TX is unavailable for the selected radio backend"
+            return
+        }
         txArmed = !txArmed
         status = if (txArmed) "TX armed for one ${mode.label} transmission · tap SEND to transmit" else "TX disarmed"
     }
 
     fun updateTxEnabled(value: Boolean) {
+        if (value && !transmitEligible()) {
+            txEnabled = false
+            disarm()
+            status = "Digi TX is unavailable for the selected radio backend"
+            return
+        }
         if (value && settings.companionMode) {
             status = "Companion mode owns decode interoperability; local TX remains disabled"
             return
@@ -1479,6 +1491,12 @@ class DigiController(
     }
 
     private suspend fun transmit(text: String) {
+        if (!transmitEligible()) {
+            txEnabled = false
+            disarm()
+            status = "Digi TX blocked: selected backend has no integrated Digi transmit route"
+            return
+        }
         val selectedMode = mode
         val selectedRadio = dependencies.radioState()
         val selectedFrequency = selectedRadio.frequencyHz

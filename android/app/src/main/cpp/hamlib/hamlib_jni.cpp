@@ -22,6 +22,8 @@
 
 #include "hamlib/rig.h"
 #include "hamlib/riglist.h"
+#include "hamlib/rotator.h"
+#include "hamlib/rotlist.h"
 #include "hamlib/port.h"
 
 namespace {
@@ -43,8 +45,29 @@ struct Session {
     bool cancelled = false;
 };
 
+struct RotatorSession {
+    std::mutex mutex;
+    ROT *rotator = nullptr;
+    int bridge_hamlib = -1;
+    int bridge_application = -1;
+    bool open = false;
+    bool read_only = true;
+    bool cancelled = false;
+};
+
 Session *session(jlong handle) {
     return reinterpret_cast<Session *>(static_cast<intptr_t>(handle));
+}
+
+RotatorSession *rotator_session(jlong handle) {
+    return reinterpret_cast<RotatorSession *>(static_cast<intptr_t>(handle));
+}
+
+void close_rotator_bridge(RotatorSession *value) {
+    if (value->bridge_hamlib >= 0) close(value->bridge_hamlib);
+    if (value->bridge_application >= 0) close(value->bridge_application);
+    value->bridge_hamlib = -1;
+    value->bridge_application = -1;
 }
 
 std::string text(JNIEnv *env, jstring value) {
@@ -149,10 +172,50 @@ struct ModelCollection {
     std::vector<const rig_caps *> values;
 };
 
+struct RotatorModelCollection {
+    std::vector<const rot_caps *> values;
+};
+
 int collect_model(const rig_caps *caps, rig_ptr_t opaque) {
     auto *models = static_cast<ModelCollection *>(opaque);
     if (caps && models->values.size() < kMaximumModels) models->values.push_back(caps);
     return 1;
+}
+
+int collect_rotator_model(const rot_caps *caps, rig_ptr_t opaque) {
+    auto *models = static_cast<RotatorModelCollection *>(opaque);
+    if (caps && models->values.size() < kMaximumModels) models->values.push_back(caps);
+    return 1;
+}
+
+std::string rotator_models_json() {
+    rot_load_all_backends();
+    RotatorModelCollection models;
+    rot_list_foreach(collect_rotator_model, &models);
+    std::sort(models.values.begin(), models.values.end(), [](const rot_caps *left, const rot_caps *right) {
+        return left->rot_model < right->rot_model;
+    });
+    std::ostringstream out;
+    out << '[';
+    for (size_t index = 0; index < models.values.size(); ++index) {
+        const rot_caps *caps = models.values[index];
+        if (index) out << ',';
+        out << "{\"id\":" << caps->rot_model
+            << ",\"manufacturer\":" << quoted(caps->mfg_name)
+            << ",\"model\":" << quoted(caps->model_name)
+            << ",\"macro\":" << quoted(caps->macro_name)
+            << ",\"version\":" << quoted(caps->version)
+            << ",\"status\":" << quoted(rig_strstatus(caps->status))
+            << ",\"port\":" << quoted(port_name(caps->port_type))
+            << ",\"minAz\":" << caps->min_az << ",\"maxAz\":" << caps->max_az
+            << ",\"minEl\":" << caps->min_el << ",\"maxEl\":" << caps->max_el
+            << ",\"getPosition\":" << (caps->get_position ? "true" : "false")
+            << ",\"setPosition\":" << (caps->set_position ? "true" : "false")
+            << ",\"stop\":" << (caps->stop ? "true" : "false")
+            << ",\"park\":" << (caps->park ? "true" : "false") << '}';
+    }
+    out << ']';
+    return out.str();
 }
 
 void append_ranges(std::ostringstream &out, const rig_caps *caps,
@@ -670,6 +733,209 @@ Java_app_rigweave_mobile_radio_hamlib_NativeHamlib_tuneNative(
     std::lock_guard<std::mutex> guard(value->mutex);
     if (!value->open || !(value->rig->caps->vfo_ops & RIG_OP_TUNE)) return -RIG_ENAVAIL;
     return rig_vfo_op(value->rig, RIG_VFO_CURR, RIG_OP_TUNE);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_radio_hamlib_NativeHamlib_rotatorModelsNative(JNIEnv *env, jobject) {
+    const std::string output = rotator_models_json();
+    return env->NewStringUTF(output.c_str());
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_app_rigweave_mobile_radio_hamlib_NativeHamlib_rotatorSessionCreateNative(
+        JNIEnv *, jobject, jint model_id) {
+    rot_load_all_backends();
+    if (model_id <= 0 || !rot_get_caps(model_id)) return 0;
+    auto *value = new RotatorSession();
+    value->rotator = rot_init(model_id);
+    if (!value->rotator) {
+        delete value;
+        return 0;
+    }
+    return static_cast<jlong>(reinterpret_cast<intptr_t>(value));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_rigweave_mobile_radio_hamlib_NativeHamlib_rotatorSessionDestroyNative(
+        JNIEnv *, jobject, jlong handle) {
+    RotatorSession *value = rotator_session(handle);
+    if (!value) return;
+    {
+        std::lock_guard<std::mutex> guard(value->mutex);
+        value->cancelled = true;
+        if (value->open) rot_close(value->rotator);
+        value->open = false;
+        close_rotator_bridge(value);
+        if (value->rotator) rot_cleanup(value->rotator);
+        value->rotator = nullptr;
+    }
+    delete value;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_app_rigweave_mobile_radio_hamlib_NativeHamlib_rotatorSessionSetReadOnlyNative(
+        JNIEnv *, jobject, jlong handle, jboolean read_only) {
+    RotatorSession *value = rotator_session(handle);
+    if (!value || !value->rotator) return -RIG_EINVAL;
+    std::lock_guard<std::mutex> guard(value->mutex);
+    value->read_only = read_only == JNI_TRUE;
+    return RIG_OK;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_app_rigweave_mobile_radio_hamlib_NativeHamlib_rotatorSessionConfigureSerialNative(
+        JNIEnv *, jobject, jlong handle, jint baud, jint data_bits, jint stop_bits,
+        jint parity, jint handshake, jint timeout_ms, jint rts, jint dtr) {
+    RotatorSession *value = rotator_session(handle);
+    if (!value || !value->rotator || value->open || baud < 300 || baud > 3000000 ||
+            data_bits < 5 || data_bits > 8 || stop_bits < 1 || stop_bits > 2 ||
+            timeout_ms < 50 || timeout_ms > 60000) return -RIG_EINVAL;
+    std::lock_guard<std::mutex> guard(value->mutex);
+    close_rotator_bridge(value);
+    int descriptors[2] = {-1, -1};
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, descriptors) != 0) return -RIG_EIO;
+    value->bridge_hamlib = descriptors[0];
+    value->bridge_application = descriptors[1];
+    fcntl(value->bridge_hamlib, F_SETFD, FD_CLOEXEC);
+    fcntl(value->bridge_application, F_SETFD, FD_CLOEXEC);
+    hamlib_port_t *port = HAMLIB_ROTPORT(value->rotator);
+    port->type.rig = RIG_PORT_SERIAL;
+    std::snprintf(port->pathname, sizeof(port->pathname), "rigweave-rot-fd:%d", value->bridge_hamlib);
+    port->parm.serial.rate = baud;
+    port->parm.serial.data_bits = data_bits;
+    port->parm.serial.stop_bits = stop_bits;
+    port->parm.serial.parity = static_cast<serial_parity_e>(parity);
+    port->parm.serial.handshake = static_cast<serial_handshake_e>(handshake);
+    port->parm.serial.rts_state = static_cast<serial_control_state_e>(rts);
+    port->parm.serial.dtr_state = static_cast<serial_control_state_e>(dtr);
+    port->timeout = timeout_ms;
+    value->cancelled = false;
+    return RIG_OK;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_app_rigweave_mobile_radio_hamlib_NativeHamlib_rotatorSessionConfigureNetworkNative(
+        JNIEnv *env, jobject, jlong handle, jstring host_value, jint port_value, jint timeout_ms) {
+    RotatorSession *value = rotator_session(handle);
+    const std::string host = text(env, host_value);
+    if (!value || !value->rotator || value->open || host.empty() || host.size() > 253 ||
+            port_value < 1 || port_value > 65535 || timeout_ms < 50 || timeout_ms > 60000 ||
+            std::any_of(host.begin(), host.end(), [](unsigned char c) {
+                return !(std::isalnum(c) || c == '.' || c == '-' || c == ':' || c == '[' || c == ']');
+            })) return -RIG_EINVAL;
+    std::lock_guard<std::mutex> guard(value->mutex);
+    close_rotator_bridge(value);
+    hamlib_port_t *port = HAMLIB_ROTPORT(value->rotator);
+    port->type.rig = RIG_PORT_NETWORK;
+    std::snprintf(port->pathname, sizeof(port->pathname), "%s:%d", host.c_str(), port_value);
+    port->timeout = timeout_ms;
+    value->cancelled = false;
+    return RIG_OK;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_app_rigweave_mobile_radio_hamlib_NativeHamlib_rotatorSessionOpenNative(
+        JNIEnv *, jobject, jlong handle) {
+    RotatorSession *value = rotator_session(handle);
+    if (!value || !value->rotator) return -RIG_EINVAL;
+    std::lock_guard<std::mutex> guard(value->mutex);
+    if (value->open) return RIG_OK;
+    const int status = rot_open(value->rotator);
+    value->open = status == RIG_OK;
+    return status;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_app_rigweave_mobile_radio_hamlib_NativeHamlib_rotatorSessionCloseNative(
+        JNIEnv *, jobject, jlong handle) {
+    RotatorSession *value = rotator_session(handle);
+    if (!value || !value->rotator) return -RIG_EINVAL;
+    std::lock_guard<std::mutex> guard(value->mutex);
+    value->cancelled = true;
+    const int status = value->open ? rot_close(value->rotator) : RIG_OK;
+    value->open = false;
+    close_rotator_bridge(value);
+    return status;
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_app_rigweave_mobile_radio_hamlib_NativeHamlib_rotatorBridgeReadNative(
+        JNIEnv *env, jobject, jlong handle, jint maximum, jint timeout_ms) {
+    RotatorSession *value = rotator_session(handle);
+    if (!value || maximum < 1 || maximum > kMaximumBridgeTransfer || timeout_ms < 0 || timeout_ms > 60000)
+        return env->NewByteArray(0);
+    int descriptor;
+    {
+        std::lock_guard<std::mutex> guard(value->mutex);
+        descriptor = value->bridge_application;
+        if (descriptor < 0 || value->cancelled) return env->NewByteArray(0);
+    }
+    pollfd poll_value{descriptor, POLLIN, 0};
+    if (poll(&poll_value, 1, timeout_ms) <= 0 || !(poll_value.revents & POLLIN)) return env->NewByteArray(0);
+    std::vector<unsigned char> buffer(static_cast<size_t>(maximum));
+    const ssize_t count = read(descriptor, buffer.data(), buffer.size());
+    return bytes(env, buffer.data(), count > 0 ? static_cast<int>(count) : 0);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_app_rigweave_mobile_radio_hamlib_NativeHamlib_rotatorBridgeWriteNative(
+        JNIEnv *env, jobject, jlong handle, jbyteArray data) {
+    RotatorSession *value = rotator_session(handle);
+    if (!value || !data) return -RIG_EINVAL;
+    const jsize count = env->GetArrayLength(data);
+    if (count < 1 || count > kMaximumBridgeTransfer) return -RIG_EINVAL;
+    int descriptor;
+    {
+        std::lock_guard<std::mutex> guard(value->mutex);
+        descriptor = value->bridge_application;
+        if (descriptor < 0 || value->cancelled) return -RIG_EIO;
+    }
+    jbyte *input = env->GetByteArrayElements(data, nullptr);
+    const ssize_t written = write(descriptor, input, static_cast<size_t>(count));
+    env->ReleaseByteArrayElements(data, input, JNI_ABORT);
+    return written >= 0 ? static_cast<int>(written) : -RIG_EIO;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_radio_hamlib_NativeHamlib_rotatorPollNative(
+        JNIEnv *env, jobject, jlong handle) {
+    RotatorSession *value = rotator_session(handle);
+    if (!value || !value->rotator) return env->NewStringUTF("{\"ok\":false,\"code\":-1}");
+    std::lock_guard<std::mutex> guard(value->mutex);
+    azimuth_t azimuth = 0;
+    elevation_t elevation = 0;
+    const int status = value->open ? rot_get_position(value->rotator, &azimuth, &elevation) : -RIG_EIO;
+    std::ostringstream out;
+    out << "{\"ok\":" << (status == RIG_OK ? "true" : "false") << ",\"code\":" << status
+        << ",\"azimuth\":" << azimuth << ",\"elevation\":" << elevation << '}';
+    return env->NewStringUTF(out.str().c_str());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_app_rigweave_mobile_radio_hamlib_NativeHamlib_rotatorSetPositionNative(
+        JNIEnv *, jobject, jlong handle, jdouble azimuth, jdouble elevation) {
+    RotatorSession *value = rotator_session(handle);
+    if (!value || !value->rotator || value->read_only || !std::isfinite(azimuth) || !std::isfinite(elevation)) return -RIG_EINVAL;
+    std::lock_guard<std::mutex> guard(value->mutex);
+    return value->open ? rot_set_position(value->rotator, static_cast<azimuth_t>(azimuth), static_cast<elevation_t>(elevation)) : -RIG_EIO;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_app_rigweave_mobile_radio_hamlib_NativeHamlib_rotatorStopNative(
+        JNIEnv *, jobject, jlong handle) {
+    RotatorSession *value = rotator_session(handle);
+    if (!value || !value->rotator) return -RIG_EINVAL;
+    std::lock_guard<std::mutex> guard(value->mutex);
+    return value->open ? rot_stop(value->rotator) : -RIG_EIO;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_app_rigweave_mobile_radio_hamlib_NativeHamlib_rotatorParkNative(
+        JNIEnv *, jobject, jlong handle) {
+    RotatorSession *value = rotator_session(handle);
+    if (!value || !value->rotator || value->read_only) return -RIG_EINVAL;
+    std::lock_guard<std::mutex> guard(value->mutex);
+    return value->open ? rot_park(value->rotator) : -RIG_EIO;
 }
 
 extern "C" JNIEXPORT jstring JNICALL

@@ -139,7 +139,7 @@ class EmbeddedHamlibRotatorDriver(
 ) : RotatorDriver {
     private var session: RotatorHamlibSession? = null
     override suspend fun connect(readOnlyProbe: Boolean): RotatorStateSnapshot {
-        val opened = hamlib.open(profile); session = opened; return hamlib.poll(opened)
+        val opened = hamlib.open(profile, readOnlyProbe); session = opened; return hamlib.poll(opened)
     }
     override suspend fun poll(generation: Long): RotatorStateSnapshot = hamlib.poll(requireNotNull(session))
     override suspend fun move(azimuthDeg: Double, elevationDeg: Double?, generation: Long) = hamlib.setPosition(requireNotNull(session), azimuthDeg, elevationDeg)

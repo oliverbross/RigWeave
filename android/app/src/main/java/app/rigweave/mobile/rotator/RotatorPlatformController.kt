@@ -24,6 +24,7 @@ class RotatorBackendRegistry {
 class RotatorPlatformController(
     private val store: RotatorProfileStore,
     private val registry: RotatorBackendRegistry,
+    private val sharedPhysicalAuthority: RotatorPhysicalAuthorityPort? = null,
     private val clock: () -> Instant = { Instant.now() },
 ) : RotatorReadOnlyPort, RotatorActionPort {
     private val drivers = mutableMapOf<String, RotatorDriver>()
@@ -49,10 +50,18 @@ class RotatorPlatformController(
         val profile = requireNotNull(store.snapshot().profiles.firstOrNull { it.id == profileId })
         val identity = physicalIdentity(profile)
         synchronized(this) {
+            val activeProfile = drivers.keys.firstOrNull()
+            require(activeProfile == null || activeProfile == profileId) { "another rotator profile already owns movement authority" }
+            require(profileId !in drivers) { "rotator profile is already connected" }
             val owner = physicalAuthorities[identity]
             require(owner == null || owner == profileId) { "physical device already has a movement authority" }
         }
-        val driver = registry.create(profile)
+        val ownerTag = "rotator:$profileId"
+        require(sharedPhysicalAuthority?.acquire(identity, ownerTag) != false) { "physical device is owned by another backend" }
+        val driver = try { registry.create(profile) } catch (failure: Exception) {
+            sharedPhysicalAuthority?.release(identity, ownerTag)
+            throw failure
+        }
         return try {
             val state = driver.connect(readOnlyProbe)
             synchronized(this) {
@@ -62,6 +71,7 @@ class RotatorPlatformController(
             }
             state
         } catch (failure: Exception) {
+            sharedPhysicalAuthority?.release(identity, ownerTag)
             synchronized(this) { errorCount++; session = session.cleared(); event("connection", "connection failed") }
             throw failure
         }
@@ -103,6 +113,7 @@ class RotatorPlatformController(
 
     suspend fun disconnect(profileId: String) {
         val driver = synchronized(this) { drivers.remove(profileId) } ?: return
+        val profile = store.snapshot().profiles.firstOrNull { it.id == profileId }
         driver.close()
         synchronized(this) {
             physicalAuthorities.entries.removeAll { it.value == profileId }
@@ -110,6 +121,7 @@ class RotatorPlatformController(
                 movement = RotatorMovementState.UNKNOWN, lastUpdate = clock()) ?: return@synchronized
             session = session.cleared(); event("connection", "profile disconnected; motion state unknown")
         }
+        profile?.let { sharedPhysicalAuthority?.release(physicalIdentity(it), "rotator:$profileId") }
     }
 
     override fun health(): RotatorHealthSnapshot = synchronized(this) {
@@ -130,7 +142,9 @@ class RotatorPlatformController(
     private fun physicalIdentity(profile: RotatorDeviceProfile): String = when (profile.transport) {
         RotatorTransportKind.SERIAL -> "serial:${profile.serial?.stableIdentityHash}"
         RotatorTransportKind.TCP, RotatorTransportKind.ROTCTLD -> "tcp:${profile.tcp?.host?.lowercase()}:${profile.tcp?.port}"
-        RotatorTransportKind.EMBEDDED_HAMLIB -> "hamlib:${profile.hamlibModelId}:${profile.id}"
+        RotatorTransportKind.EMBEDDED_HAMLIB -> profile.hamlibSerial?.let { "serial:${it.stableIdentityHash}" }
+            ?: profile.hamlibTcp?.let { "tcp:${it.host.lowercase()}:${it.port}" }
+            ?: "hamlib:${profile.hamlibModelId}:${profile.id}"
     }
     private fun event(state: String, detail: String) {
         events.addLast(RotatorDiagnosticEvent(clock(), state.take(40), detail.take(160)))

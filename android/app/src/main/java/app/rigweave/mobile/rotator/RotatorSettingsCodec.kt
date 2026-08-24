@@ -41,6 +41,11 @@ object RotatorSettingsCodec {
         .put("tcp", profile.tcp?.let { if (includeLan) JSONObject().put("host", it.host).put("port", it.port)
             .put("connectTimeoutMs", it.connectTimeoutMs).put("readTimeoutMs", it.readTimeoutMs).put("lanOptIn", it.lanOptIn) else JSONObject.NULL })
         .put("hamlibModelId", profile.hamlibModelId).put("connectOnForeground", profile.connectOnForeground)
+        .put("hamlibSerial", profile.hamlibSerial?.let { JSONObject().put("stableIdentityHash", it.stableIdentityHash)
+            .put("baud", it.baud).put("dataBits", it.dataBits).put("parity", it.parity).put("stopBits", it.stopBits)
+            .put("dtr", it.dtr).put("rts", it.rts).put("readTimeoutMs", it.readTimeoutMs).put("writeTimeoutMs", it.writeTimeoutMs) })
+        .put("hamlibTcp", profile.hamlibTcp?.let { if (includeLan) JSONObject().put("host", it.host).put("port", it.port)
+            .put("connectTimeoutMs", it.connectTimeoutMs).put("readTimeoutMs", it.readTimeoutMs).put("lanOptIn", it.lanOptIn) else JSONObject.NULL })
         .put("pollIntervalMs", profile.pollIntervalMs).put("limits", JSONObject().put("azMin", profile.limits.azMin)
             .put("azMax", profile.limits.azMax).put("elMin", profile.limits.elMin).put("elMax", profile.limits.elMax))
         .put("parkAzimuthDeg", profile.parkAzimuthDeg).put("parkElevationDeg", profile.parkElevationDeg)
@@ -58,9 +63,15 @@ object RotatorSettingsCodec {
             it.optBoolean("rts"), it.optInt("readTimeoutMs", 1500), it.optInt("writeTimeoutMs", 1500)) }
         val tcp = item.optJSONObject("tcp")?.let { TcpSettings(it.getString("host"), it.getInt("port"),
             it.optInt("connectTimeoutMs", 2000), it.optInt("readTimeoutMs", 1500), it.optBoolean("lanOptIn")) }
+        fun parseSerial(name: String) = item.optJSONObject(name)?.let { SerialSettings(it.getString("stableIdentityHash"), it.optInt("baud", 9600),
+            it.optInt("dataBits", 8), it.optString("parity", "N"), it.optInt("stopBits", 1), it.optBoolean("dtr"),
+            it.optBoolean("rts"), it.optInt("readTimeoutMs", 1500), it.optInt("writeTimeoutMs", 1500)) }
+        fun parseTcp(name: String) = item.optJSONObject(name)?.let { TcpSettings(it.getString("host"), it.getInt("port"),
+            it.optInt("connectTimeoutMs", 2000), it.optInt("readTimeoutMs", 1500), it.optBoolean("lanOptIn")) }
         return RotatorDeviceProfile(item.getString("id"), item.getString("name"), RotatorBackend.valueOf(item.getString("backend")),
             RotatorProtocolKind.valueOf(item.getString("protocol")), RotatorTransportKind.valueOf(item.getString("transport")),
-            serial, tcp, item.optIntOrNull("hamlibModelId"), item.optBoolean("connectOnForeground"), item.optInt("pollIntervalMs", 1000),
+            serial, tcp, item.optIntOrNull("hamlibModelId"), parseSerial("hamlibSerial"), parseTcp("hamlibTcp"),
+            item.optBoolean("connectOnForeground"), item.optInt("pollIntervalMs", 1000),
             RotatorLimits(limits.getDouble("azMin"), limits.getDouble("azMax"), limits.getDouble("elMin"), limits.getDouble("elMax")),
             item.optDoubleOrNull("parkAzimuthDeg"), item.optDoubleOrNull("parkElevationDeg"),
             HeadingOffsetOwner.valueOf(item.optString("headingOffsetOwner", HeadingOffsetOwner.NONE.name)), item.optDouble("calibrationOffsetDeg", 0.0),

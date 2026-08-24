@@ -131,6 +131,8 @@ data class RotatorDeviceProfile(
     val serial: SerialSettings? = null,
     val tcp: TcpSettings? = null,
     val hamlibModelId: Int? = null,
+    val hamlibSerial: SerialSettings? = null,
+    val hamlibTcp: TcpSettings? = null,
     val connectOnForeground: Boolean = false,
     val pollIntervalMs: Int = 1_000,
     val limits: RotatorLimits = RotatorLimits(),
@@ -155,6 +157,8 @@ data class RotatorDeviceProfile(
         require((transport == RotatorTransportKind.TCP || transport == RotatorTransportKind.ROTCTLD) == (tcp != null))
         require(transport != RotatorTransportKind.ROTCTLD || protocol == RotatorProtocolKind.ROTCTLD)
         require(backend != RotatorBackend.EMBEDDED_HAMLIB || hamlibModelId != null)
+        require(backend == RotatorBackend.EMBEDDED_HAMLIB || (hamlibSerial == null && hamlibTcp == null))
+        require(hamlibSerial == null || hamlibTcp == null)
         require(parkAzimuthDeg == null || limits.contains(parkAzimuthDeg, parkElevationDeg))
         if (headingOffsetOwner == HeadingOffsetOwner.ROTATOR_CONTROLLER) require(calibrationOffsetDeg == 0.0)
     }
@@ -300,7 +304,7 @@ data class RotatorHamlibSession(val id: String, val modelId: Int)
 interface RotatorHamlibPort {
     suspend fun enumerateModels(): List<RotatorHamlibModelDescriptor>
     suspend fun capabilities(modelId: Int): RotatorHamlibCapabilitySnapshot
-    suspend fun open(profile: RotatorDeviceProfile): RotatorHamlibSession
+    suspend fun open(profile: RotatorDeviceProfile, readOnly: Boolean = false): RotatorHamlibSession
     suspend fun close(session: RotatorHamlibSession)
     suspend fun poll(session: RotatorHamlibSession): RotatorStateSnapshot
     suspend fun setPosition(session: RotatorHamlibSession, azimuthDeg: Double, elevationDeg: Double?): Boolean
@@ -315,6 +319,10 @@ interface RotatorRadioStatePort { fun isTransmitting(radioProfileId: String?): B
 interface RotatorSatellitePort { fun sample(sessionId: String, at: Instant): SatellitePointingSample? }
 interface RotatorReadOnlyPort { fun states(): List<RotatorStateSnapshot>; fun health(): RotatorHealthSnapshot }
 interface RotatorActionPort { suspend fun submit(profileId: String, action: RotatorAction, azimuthDeg: Double? = null, elevationDeg: Double? = null): Boolean }
+interface RotatorPhysicalAuthorityPort {
+    fun acquire(identity: String, owner: String): Boolean
+    fun release(identity: String, owner: String)
+}
 
 data class SatellitePointingSample(
     val sessionId: String, val at: Instant, val azimuthDeg: Double, val elevationDeg: Double,

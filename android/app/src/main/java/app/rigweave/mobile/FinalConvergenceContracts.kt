@@ -16,6 +16,9 @@ data class OperatingContextSnapshot(
     val activationProgram: ContextValue<String> = ContextValue("", "none"),
     val activationReference: ContextValue<String> = ContextValue("", "none"),
     val activationSession: ContextValue<String> = ContextValue("", "none"),
+    val radioProfileId: ContextValue<String> = ContextValue("", "none"),
+    val radioBackendKind: ContextValue<String> = ContextValue("", "none"),
+    val radioCapabilityRevision: ContextValue<String> = ContextValue("", "none"),
     val radioFamily: ContextValue<String> = ContextValue("", "none"),
     val radioModel: ContextValue<String> = ContextValue("", "none"),
     val radioIdentity: ContextValue<String> = ContextValue("", "none"),
@@ -31,6 +34,12 @@ data class OperatingContextSnapshot(
     val selectedDxTarget: ContextValue<String> = ContextValue("", "none"),
     val selectedContestId: ContextValue<String> = ContextValue("", "none"),
     val selectedSatelliteNorad: ContextValue<Long?> = ContextValue(null, "none"),
+    val rotatorProfileId: ContextValue<String> = ContextValue("", "none"),
+    val rotatorConnected: ContextValue<Boolean> = ContextValue(false, "none"),
+    val rotatorAzimuthDeg: ContextValue<Double?> = ContextValue(null, "none"),
+    val rotatorElevationDeg: ContextValue<Double?> = ContextValue(null, "none"),
+    val rotatorMovement: ContextValue<String> = ContextValue("UNKNOWN", "none"),
+    val rotatorAutomationArmed: ContextValue<Boolean> = ContextValue(false, "none"),
     val networkAvailable: ContextValue<Boolean> = ContextValue(false, "none"),
     val foreground: ContextValue<Boolean> = ContextValue(false, "none"),
     val qsoDatabaseRevision: ContextValue<Long> = ContextValue(0, "none"),
@@ -54,7 +63,7 @@ class OperatingContextAuthority {
 
 enum class WorkspaceDestination {
     HOME, RADIO, DIGI, DX_CHASER, CONTEST, BAND_MAPS, PANADAPTER, EQ, LOGBOOK, PROGRESS, SYNC, PRESETS,
-    DX, CALLBOOK, PORTABLE, OPERATIONS, SATELLITE, GROUPS_IO, SETTINGS
+    DX, CALLBOOK, PORTABLE, OPERATIONS, SATELLITE, ROTATOR, GROUPS_IO, SETTINGS
 }
 
 data class WorkspaceAction(

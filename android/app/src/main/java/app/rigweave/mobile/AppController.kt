@@ -24,6 +24,12 @@ internal fun decodeRadioFamily(stored: String?): RadioFamily = when (stored) {
     else -> runCatching { RadioFamily.valueOf(stored) }.getOrDefault(RadioFamily.ELECRAFT_KX3)
 }
 
+internal fun legacyRadioFamily(profile: RadioConnectionProfile): RadioFamily = when (profile.backendKind) {
+    RadioBackendKind.NATIVE_FLEX -> RadioFamily.FLEXRADIO
+    RadioBackendKind.NATIVE_ELECRAFT -> if (profile.modelId.value == "KX2") RadioFamily.ELECRAFT_KX2 else RadioFamily.ELECRAFT_KX3
+    else -> RadioFamily.ELECRAFT_KX3
+}
+
 internal fun eqDestinationVisible(policy: EqVisibilityPolicy, selectedRadio: RadioFamily): Boolean = when (policy) {
     EqVisibilityPolicy.AUTO -> selectedRadio.isElecraft
     EqVisibilityPolicy.SHOW -> true
@@ -69,7 +75,10 @@ class AppController(private val context: Context) {
     private val configurationRecovery = ConfigurationRecovery(context.applicationContext)
     private val needsDxccCountryColumnMigration = !prefs.getBoolean("logbook_dxcc_country_v1", false)
     var fieldProfile by mutableStateOf(runCatching { FieldProfile.valueOf(prefs.getString("profile", "DAY")!!) }.getOrDefault(FieldProfile.DAY)); private set
-    var radioFamily by mutableStateOf(decodeRadioFamily(prefs.getString("radio_family", null))); private set
+    var selectedRadioProfileId by mutableStateOf(RadioProfileCatalog.migrate(
+        prefs.getString("radio_profile_id", null), prefs.getString("radio_family", null))); private set
+    val selectedRadioProfile: RadioConnectionProfile get() = selectedProfile(selectedRadioProfileId)
+    var radioFamily by mutableStateOf(legacyRadioFamily(selectedRadioProfile)); private set
     var preferredFlexStation by mutableStateOf(prefs.getString("flex_station", "").orEmpty()); private set
     var manualFlexIp by mutableStateOf(prefs.getString("flex_manual_ip", "").orEmpty().takeIf { it.isBlank() || manualFlexDiscovery(it) != null }.orEmpty()); private set
     var panadapterEnabled by mutableStateOf(prefs.getBoolean("panadapter_enabled", false)); private set
@@ -77,6 +86,7 @@ class AppController(private val context: Context) {
         EqVisibilityPolicy.valueOf(prefs.getString("eq_visibility_policy", EqVisibilityPolicy.AUTO.name).orEmpty())
     }.getOrDefault(EqVisibilityPolicy.AUTO)); private set
     var contestEnabled by mutableStateOf(prefs.getBoolean("contest_destination_enabled", true)); private set
+    var rotatorEnabled by mutableStateOf(prefs.getBoolean("rotator_destination_enabled", false)); private set
     var transmitArmed by mutableStateOf(false); private set
     var cwMacrosArmed by mutableStateOf(false); private set
     var voiceMacrosArmed by mutableStateOf(false); private set
@@ -114,6 +124,7 @@ class AppController(private val context: Context) {
     init {
         val defaults = prefs.edit()
         if (prefs.getString("radio_family", null) == "ELECRAFT_KX") defaults.putString("radio_family", radioFamily.name)
+        defaults.putString("radio_profile_id", selectedRadioProfileId.value)
         if (!prefs.contains("station_call")) defaults.putString("station_call", stationCallsign)
         if (!prefs.contains("station_name")) defaults.putString("station_name", stationName)
         if (!prefs.contains("station_grid")) defaults.putString("station_grid", stationGrid)
@@ -129,7 +140,30 @@ class AppController(private val context: Context) {
     }
 
     fun selectRadioFamily(value: RadioFamily) {
-        disarmAll(); radioFamily = value; prefs.edit().putString("radio_family", value.name).apply()
+        selectRadioProfile(when (value) {
+            RadioFamily.ELECRAFT_KX3 -> RadioProfileCatalog.KX3
+            RadioFamily.ELECRAFT_KX2 -> RadioProfileCatalog.KX2
+            RadioFamily.FLEXRADIO -> RadioProfileCatalog.FLEX
+        })
+    }
+
+    fun selectRadioProfile(value: RadioConnectionProfile) {
+        disarmAll()
+        selectedRadioProfileId = value.id
+        radioFamily = legacyRadioFamily(value)
+        prefs.edit().putString("radio_profile_id", value.id.value)
+            .putString("radio_family", radioFamily.name)
+            .apply()
+    }
+
+    fun selectHamlibModel(modelId: Int, manufacturer: String, model: String, network: Boolean = false) {
+        require(modelId > 0)
+        prefs.edit().putInt("hamlib_model_id", modelId)
+            .putString("hamlib_manufacturer", manufacturer.take(80))
+            .putString("hamlib_model", model.take(96))
+            .putBoolean("hamlib_network", network)
+            .apply()
+        selectRadioProfile(selectedProfile(RadioProfileId("hamlib.${if (network) "network" else "embedded"}.$modelId")))
     }
 
     fun savePreferredFlexStation(value: String) {
@@ -157,6 +191,11 @@ class AppController(private val context: Context) {
     fun updateContestEnabled(value: Boolean) {
         contestEnabled = value
         prefs.edit().putBoolean("contest_destination_enabled", value).apply()
+    }
+
+    fun updateRotatorEnabled(value: Boolean) {
+        rotatorEnabled = value
+        prefs.edit().putBoolean("rotator_destination_enabled", value).apply()
     }
 
     fun updateTransmitArmed(value: Boolean) { transmitArmed = value }
@@ -303,6 +342,28 @@ class AppController(private val context: Context) {
         disarmAll()
         "Recovery restored · ${sections.size}/${preview.sections.size} sections · restart required"
     }.getOrElse { "Restore failed: ${it.message}" }
+
+    private fun selectedProfile(id: RadioProfileId): RadioConnectionProfile {
+        RadioProfileCatalog.find(id)?.let { return it }
+        val modelId = prefs.getInt("hamlib_model_id", 0)
+        if (id.value.startsWith("hamlib.") && modelId > 0) {
+            val network = id.value.startsWith("hamlib.network.")
+            return RadioConnectionProfile(
+                id = id,
+                name = prefs.getString("hamlib_model", "Hamlib model $modelId").orEmpty().ifBlank { "Hamlib model $modelId" },
+                backendKind = if (network) RadioBackendKind.HAMLIB_NETWORK else RadioBackendKind.HAMLIB_EMBEDDED,
+                modelId = RadioModelId("HAMLIB:$modelId"),
+                manufacturer = prefs.getString("hamlib_manufacturer", "Hamlib").orEmpty().ifBlank { "Hamlib" },
+                model = prefs.getString("hamlib_model", "Model $modelId").orEmpty().ifBlank { "Model $modelId" },
+                transport = if (network) RadioTransportType.RIGCTLD else RadioTransportType.USB_SERIAL,
+                host = if (network) "127.0.0.1" else null,
+                port = if (network) 4_532 else null,
+                hamlibModelId = modelId,
+                readOnly = true,
+            )
+        }
+        return RadioProfileCatalog.UNKNOWN
+    }
 
     private fun loadPresets(): List<RadioPreset> = runCatching {
         val rows = JSONArray(prefs.getString("presets", "[]"))

@@ -7,6 +7,9 @@ import app.rigweave.mobile.groupsio.groupsIoDestinationVisible
 import app.rigweave.mobile.keyer.*
 import app.rigweave.mobile.dxchaser.DxChaserActionType
 import app.rigweave.mobile.bandmap.*
+import app.rigweave.mobile.radio.hamlib.HamlibConnectionController
+import app.rigweave.mobile.radio.hamlib.HamlibModelDescriptor
+import app.rigweave.mobile.rotator.*
 
 import android.Manifest
 import android.content.ClipData
@@ -137,11 +140,11 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Intelligence"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), OPERATIONS("Operations"), GROUPS_IO("Groups.io"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Intelligence"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), OPERATIONS("Operations"), ROTATOR("Rotator"), GROUPS_IO("Groups.io"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
-    AUDIO("Audio"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), INTEGRATIONS("Integrations"), COLOURS("Colours"),
+    AUDIO("Audio"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), ROTATOR("Rotator"), INTEGRATIONS("Integrations"), COLOURS("Colours"),
     HEALTH("Health"), DIAG("Diag"), ABOUT("About")
 }
 private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Station"), GENERAL("General"), NOTES("Notes"), QSL("QSL") }
@@ -199,6 +202,29 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val activation = remember { PotaActivationController(context, database) }
     val features = remember { FeatureController(context) }
     val app = remember { AppController(context) }
+    val physicalAuthority = remember { PhysicalDeviceAuthority() }
+    val platformTransport = remember { UsbRadioTransport(context, "rigweave-radio-platform-usb") }
+    val androidRadioFactory = remember { AndroidRadioBackendFactory(platformTransport) }
+    val radioPlatform = remember {
+        RadioPlatformController(
+            mapOf(
+                RadioBackendKind.NATIVE_QMX to androidRadioFactory,
+                RadioBackendKind.NATIVE_RGO_ONE to androidRadioFactory,
+                RadioBackendKind.HAMLIB_EMBEDDED to androidRadioFactory,
+                RadioBackendKind.HAMLIB_NETWORK to androidRadioFactory,
+            ),
+            devices = physicalAuthority,
+            disarmTransmitWorkflows = app::disarmAll,
+        )
+    }
+    val rotator = remember { AndroidRotatorRuntime(context, physicalAuthority) }
+    val hamlibRegistry = remember { HamlibConnectionController() }
+    val hamlibModels = remember { runCatching { hamlibRegistry.registry.models }.getOrDefault(emptyList()) }
+    val selectedProfile = app.selectedRadioProfile
+    val integratedRadioSelected = selectedProfile.backendKind in setOf(
+        RadioBackendKind.NATIVE_QMX, RadioBackendKind.NATIVE_RGO_ONE,
+        RadioBackendKind.HAMLIB_EMBEDDED, RadioBackendKind.HAMLIB_NETWORK,
+    )
     val bandMapStore = remember { BandMapStateStore(context) }
     val bandMaps = remember { BandMapController(bandMapStore.load(), bandMapStore::save) }
     val keyerProfiles = remember { KeyerProfileStore(context, app.macroLabels.toList(), app.macroTexts.toList(), app.voiceMacroLabels.toList(), app.cqRepeatSeconds) }
@@ -222,6 +248,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val cwDecoder = remember { CwDecodeBuffer() }
     var kxRadio by remember { mutableStateOf(NativeCore.parseState(NativeCore.state(core))) }
     var radio by remember { mutableStateOf(kxRadio) }
+    var platformSnapshot by remember { mutableStateOf(RadioRuntimeSnapshot()) }
     val voiceStore = remember { VoiceMacroStore(context) { app.voiceMacroLabels.toList() } }
     flex.attachVoiceMacroStore(voiceStore)
     val voiceAudio = remember { VoiceMacroAudioController(context, audio, voiceStore) }
@@ -237,7 +264,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         radioState = { radio }, foreground = { foreground }, audioOperationIdle = { voiceAudio.state is VoiceAudioState.Idle }, onFrames = { frames ->
             NativeCore.feed(core, frames)
             kxRadio = NativeCore.parseState(NativeCore.state(core)).copy(cwDecodedText = cwDecoder.text)
-            if (app.radioFamily.isElecraft) radio = kxRadio
+            if (selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT) radio = kxRadio
         }) }
     var usbDetail by remember { mutableStateOf("No USB CAT adapter opened") }
     val navigationPrefs = remember { context.getSharedPreferences("navigation", android.content.Context.MODE_PRIVATE) }
@@ -246,11 +273,15 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             Destination.valueOf(navigationPrefs.getString("destination", Destination.HOME.name).orEmpty())
         }.getOrDefault(Destination.HOME))
     }
-    val eqVisible = eqDestinationVisible(app.eqVisibilityPolicy, app.radioFamily)
+    val eqVisible = selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT &&
+        eqDestinationVisible(app.eqVisibilityPolicy, app.radioFamily)
     var integratedDigiPage by rememberSaveable { mutableStateOf(IntegratedDigiPage.DIGI) }
     LaunchedEffect(destination) { navigationPrefs.edit().putString("destination", destination.name).apply() }
     LaunchedEffect(groupsIo.enabled, destination) {
         if (!groupsIo.enabled && destination == Destination.GROUPS_IO) destination = Destination.SETTINGS
+    }
+    LaunchedEffect(app.rotatorEnabled, destination) {
+        if (!app.rotatorEnabled && destination == Destination.ROTATOR) destination = Destination.SETTINGS
     }
     LaunchedEffect(bandMaps.settings.enabled, bandMaps.settings.navigationVisible, destination) {
         if ((!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible) && destination == Destination.BAND_MAPS) destination = Destination.SETTINGS
@@ -288,6 +319,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             WorkspaceDestination.PORTABLE -> Destination.PORTABLE
             WorkspaceDestination.OPERATIONS -> Destination.OPERATIONS
             WorkspaceDestination.SATELLITE -> Destination.OPERATIONS
+            WorkspaceDestination.ROTATOR -> if (app.rotatorEnabled) Destination.ROTATOR else Destination.SETTINGS
             WorkspaceDestination.GROUPS_IO -> Destination.GROUPS_IO
             WorkspaceDestination.SETTINGS -> Destination.SETTINGS
         }
@@ -328,13 +360,23 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 pendingHomeReceiveTune = HomeReceiveTuneReview(145_800_000L, "FM", "ISS SSTV receive-only session",
                     "Review the 145.800 MHz downlink. This does not transmit or tune without confirmation.")
             },
-        )) }
+        ), transmitEligible = {
+            app.selectedRadioProfile.backendKind in setOf(RadioBackendKind.NATIVE_ELECRAFT, RadioBackendKind.NATIVE_FLEX)
+        }) }
     LaunchedEffect(foreground) { digi.onForegroundChanged(foreground) }
+    LaunchedEffect(foreground) { if (!foreground) rotator.background() }
+    LaunchedEffect(rotator.state?.profileId, rotator.state?.connected, foreground) {
+        while (foreground && rotator.state?.connected == true) {
+            delay(rotator.profiles.firstOrNull { it.id == rotator.state?.profileId }?.pollIntervalMs?.toLong() ?: 1_000L)
+            rotator.poll()
+        }
+    }
     LaunchedEffect(radio.identity, radio.frequencyHz, radio.connected) { digi.onRadioStateChanged(radio) }
     val contextGeneration = remember(app.stationCallsign, app.stationGrid, app.activationProgram, app.activationReference,
         wavelog.stationId, wavelog.selectedStation, activation.session, radio, foreground, networkAvailable,
         database.changeToken(), cty.dataRevision, neuralDx.lastRefreshEpoch, features.liveSpots.size,
-        contest.activeSession.id, contest.activeSession.state, contest.activeSession.role) {
+        contest.activeSession.id, contest.activeSession.state, contest.activeSession.role,
+        selectedProfile.id, platformSnapshot.capabilities, rotator.state, rotator.automation) {
         operatingContext.beginUpdate()
     }
     val contextSnapshot = remember(contextGeneration) {
@@ -355,7 +397,10 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             activationReference = ContextValue(session?.setup?.primaryReference ?: app.activationReference, "PotaActivationController -> AppController fallback"),
             activationSession = ContextValue(session?.id.orEmpty(), "PotaActivationController"),
             selectedContestId = ContextValue(contest.activeSession.id.value, "ContestRuntime"),
-            radioFamily = ContextValue(app.radioFamily.name, "AppController"),
+            radioProfileId = ContextValue(selectedProfile.id.value, "AppController"),
+            radioBackendKind = ContextValue(selectedProfile.backendKind.name, "AppController"),
+            radioCapabilityRevision = ContextValue(platformSnapshot.capabilities.hashCode().toString(), "RadioPlatformController"),
+            radioFamily = ContextValue(app.radioFamily.name, "AppController compatibility"),
             radioModel = ContextValue(radio.model, "radio backend"),
             radioIdentity = ContextValue(radio.identity, "radio backend"),
             connected = ContextValue(radio.connected, "radio backend"),
@@ -367,6 +412,12 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             submode = ContextValue(radio.dataSubmode.takeIf { it >= 0 }?.toString().orEmpty(), "radio backend"),
             split = ContextValue(radio.split, "radio backend"),
             radioState = ContextValue(if (radio.transmitting) "TX" else "RX", "radio backend"),
+            rotatorProfileId = ContextValue(rotator.state?.profileId.orEmpty(), "RotatorPlatformController"),
+            rotatorConnected = ContextValue(rotator.state?.connected == true, "RotatorPlatformController"),
+            rotatorAzimuthDeg = ContextValue(rotator.state?.azimuthDeg, "RotatorPlatformController"),
+            rotatorElevationDeg = ContextValue(rotator.state?.elevationDeg, "RotatorPlatformController"),
+            rotatorMovement = ContextValue(rotator.state?.movement?.name ?: "UNKNOWN", "RotatorPlatformController"),
+            rotatorAutomationArmed = ContextValue(rotator.automation.armed, "RotatorPlatformController"),
             networkAvailable = ContextValue(networkAvailable, "ConnectivityManager"),
             foreground = ContextValue(foreground, "Android lifecycle"),
             qsoDatabaseRevision = ContextValue(database.changeToken(), "QsoDatabase"),
@@ -381,7 +432,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 cwDecoder.feed(result.cwFrames)
                 NativeCore.feed(core, result.frames)
                 kxRadio = NativeCore.parseState(NativeCore.state(core)).copy(cwDecodedText = cwDecoder.text)
-                if (app.radioFamily.isElecraft) radio = kxRadio
+                if (selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT) radio = kxRadio
                 usbDetail = result.detail
             }
             is UsbResult.PermissionRequired -> { usbDetail = result.detail; app.disarmAll(); voiceTx.stop("CAT permission unavailable") }
@@ -393,8 +444,36 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         usbDetail = "Connecting to ${app.radioFamily.displayName}…"
         accept(transport.connect())
     }
-    val connect: () -> Unit = { scope.launch { connectKx3() } }
-    val direct: (String) -> Unit = { command -> scope.launch { accept(transport.send(command)) } }
+    suspend fun connectSelectedRadio() {
+        if (selectedProfile.id == RadioProfileCatalog.UNKNOWN.id) {
+            app.disarmAll()
+            voiceTx.stop("Unknown radio profile remains disconnected")
+            usbDetail = "Unknown radio profile · choose a reviewed model before connecting"
+            return
+        }
+        when (selectedProfile.backendKind) {
+            RadioBackendKind.NATIVE_ELECRAFT -> connectKx3()
+            RadioBackendKind.NATIVE_FLEX -> {
+                usbDetail = "Select a discovered FlexRadio station to connect"
+                flex.discoverLan()
+            }
+            else -> {
+                app.disarmAll(); voiceTx.stop("Radio connection clears transmit arms")
+                radioPlatform.select(selectedProfile, connectAfterSelection = false)
+                val connected = radioPlatform.connectSelected()
+                platformSnapshot = radioPlatform.snapshot
+                radio = platformSnapshot.asRadioState(selectedProfile)
+                usbDetail = if (connected) "Connected · ${selectedProfile.name}" else "Connection failed closed · ${selectedProfile.name}"
+            }
+        }
+    }
+    val connect: () -> Unit = { scope.launch { connectSelectedRadio() } }
+    val direct: (String) -> Unit = { command -> scope.launch {
+        if (selectedProfile.id == RadioProfileCatalog.UNKNOWN.id) {
+            usbDetail = "Unknown radio profile · raw CAT blocked"
+        } else if (selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT) accept(transport.send(command))
+        else usbDetail = "Raw CAT is unavailable for ${selectedProfile.name}; use capability actions"
+    } }
     val keyerRuntime = remember(keyerProfiles) { AndroidKeyerRuntime(keyerProfiles, app, voiceTx,
         { radio }, { operatingContext.snapshot }, { foreground }, { foregroundGeneration }, direct, scope) }
     val keyer = keyerRuntime.controller
@@ -410,7 +489,9 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             else -> dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.DX, callsign = intent.callsign,
                 source = "DX Chaser", reason = intent.reason.ifBlank { "Open exact DX details" }))
         } }) }
-    val operatorStop = remember { OperatorStopRouter(digi, keyer, repeatCq, contest, chaser) }
+    val operatorStop = remember { OperatorStopRouter(digi, keyer, repeatCq, contest, chaser) {
+        scope.launch { rotator.stopAndDisarm() }
+    } }
     val panadapter = remember { PanadapterController(context, audio, { radio }, direct) }
     val sendKx: (String) -> Unit = { raw ->
         val command = raw.uppercase()
@@ -422,24 +503,44 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     }
     val send: (String) -> Unit = { raw ->
         val command = parseGeneralRadioCommand(raw)
-        if (app.radioFamily.isElecraft) sendKx(command.raw) else {
+        if (selectedProfile.id == RadioProfileCatalog.UNKNOWN.id) {
+            usbDetail = "Unknown radio profile · commands blocked"
+        } else if (selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT) sendKx(command.raw)
+        else if (selectedProfile.backendKind == RadioBackendKind.NATIVE_FLEX) {
             val target = command.frequencyHz ?: flex.snapshot.selected(flex.selectedSliceIndex)?.frequencyHz
             if (target != null) scope.launch { flex.tune(ReceiveTuneRequest(target, command.mode)) }
+        } else {
+            command.frequencyHz?.let { frequency -> scope.launch {
+                radioPlatform.dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "frequency", longValue = frequency))
+            } }
         }
     }
-    LaunchedEffect(transport, app.radioFamily) {
+    LaunchedEffect(transport, selectedProfile.id) {
         digi.stopRx("Radio selection changed · RX stopped")
         digi.disarm()
+        radioPlatform.disconnect()
+        transport.disconnect()
+        flex.disconnect()
+        app.disarmAll()
         audio.refreshDevices()
-        delay(250)
-        if (app.radioFamily.isElecraft) {
-            flex.disconnect(); connectKx3()
-            while (app.radioFamily.isElecraft) { delay(240); transport.poll()?.let(::accept) }
-        } else {
-            transport.disconnect(); app.disarmAll(); voiceTx.stop("FlexRadio selection closes KX CAT")
+        usbDetail = "${selectedProfile.name} selected · press Connect"
+        radio = RadioState(identity = selectedProfile.id.value, model = selectedProfile.model)
+        if (selectedProfile.backendKind == RadioBackendKind.NATIVE_FLEX) {
+            voiceTx.stop("FlexRadio selection closes KX CAT")
             if (destination in setOf(Destination.EQ, Destination.PANADAPTER)) destination = Destination.RADIO
             flex.discoverLan()
-            while (app.radioFamily == RadioFamily.FLEXRADIO) { radio = flex.state; delay(120) }
+            while (app.selectedRadioProfileId == selectedProfile.id) { radio = flex.state; delay(120) }
+        } else if (selectedProfile.id == RadioProfileCatalog.UNKNOWN.id) {
+            voiceTx.stop("Unknown radio profile remains disconnected")
+        } else if (selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT) {
+            while (app.selectedRadioProfileId == selectedProfile.id) { delay(240); transport.poll()?.let(::accept) }
+        } else {
+            radioPlatform.select(selectedProfile, connectAfterSelection = false)
+            while (app.selectedRadioProfileId == selectedProfile.id) {
+                platformSnapshot = radioPlatform.snapshot
+                radio = platformSnapshot.asRadioState(selectedProfile)
+                delay(200)
+            }
         }
     }
     LaunchedEffect(features, database, wavelog, cty) {
@@ -547,7 +648,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     }
     DisposableEffect(Unit) { onDispose {
         app.disarmAll(); bandMaps.close(); chaser.close(); contest.close(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close(); groupsIo.close()
-        scope.launch { transport.disconnect() }; neuralDx.close(); features.close(); wavelogNative.close(); wavelog.close(); callbook.close(); cty.close()
+        scope.launch { transport.disconnect(); radioPlatform.close(); platformTransport.disconnect(); rotator.stopAndDisarm(); rotator.disconnect() }; hamlibRegistry.close()
+        neuralDx.close(); features.close(); wavelogNative.close(); wavelog.close(); callbook.close(); cty.close()
         portable.close(); progress.close(); operations.close(); syncHub.close(); NativeCore.destroy(core)
     } }
     pendingRisk?.let { command ->
@@ -648,6 +750,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                     item == Destination.SYNC ||
                     (item == Destination.GROUPS_IO && !groupsIoDestinationVisible(groupsIo.enabled, compact = false)) ||
                     (item == Destination.BAND_MAPS && (!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible)) ||
+                    (item == Destination.ROTATOR && !app.rotatorEnabled) ||
                     (item == Destination.PANADAPTER && (!app.panadapterEnabled || app.radioFamily == RadioFamily.FLEXRADIO)) ||
                     (item == Destination.EQ && !eqVisible) ||
                     (item == Destination.CONTEST && !contestDestinationVisible(app.contestEnabled))
@@ -655,7 +758,15 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
-                panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
+                panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app,
+                selectedProfile, platformSnapshot, hamlibModels, rotator,
+                { scope.launch { radioPlatform.disconnect(); platformSnapshot = radioPlatform.snapshot } },
+                { action -> scope.launch {
+                    val accepted = radioPlatform.dispatch(action)
+                    platformSnapshot = radioPlatform.snapshot
+                    if (!accepted) usbDetail = "Action unavailable or blocked by the selected profile"
+                } },
+                transport, flex, digi,
                 voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, keyerProfiles, keyer, repeatCq, bandMaps,
                 BandMapKeyerContext(keyer.snapshot(), keyer.availability(keyerRuntime.context()), contest.activeSession.role.name),
                 contest, chaser, integratedDigiPage, { integratedDigiPage = it }, { destination = Destination.CONTEST },
@@ -682,11 +793,19 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 { id -> dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.LOGBOOK, qsoId = id,
                     source = "Home QSO marker", reason = "Open exact QSO")) })
         } else Scaffold(modifier = Modifier.padding(top = keyerStripInset), bottomBar = { NavigationBar(containerColor = Panel) {
-            Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.OPERATIONS || it == Destination.GROUPS_IO || (it == Destination.CONTEST && !contestDestinationVisible(app.contestEnabled)) || (it == Destination.BAND_MAPS && (!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible)) }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
+            Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.OPERATIONS || it == Destination.GROUPS_IO || (it == Destination.ROTATOR && !app.rotatorEnabled) || (it == Destination.CONTEST && !contestDestinationVisible(app.contestEnabled)) || (it == Destination.BAND_MAPS && (!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible)) }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
-                panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, transport, flex, digi,
+                panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app,
+                selectedProfile, platformSnapshot, hamlibModels, rotator,
+                { scope.launch { radioPlatform.disconnect(); platformSnapshot = radioPlatform.snapshot } },
+                { action -> scope.launch {
+                    val accepted = radioPlatform.dispatch(action)
+                    platformSnapshot = radioPlatform.snapshot
+                    if (!accepted) usbDetail = "Action unavailable or blocked by the selected profile"
+                } },
+                transport, flex, digi,
                 voiceStore, voiceAudio, voiceTx, eqStudio, groupsIo, contextSnapshot, keyerProfiles, keyer, repeatCq, bandMaps,
                 BandMapKeyerContext(keyer.snapshot(), keyer.availability(keyerRuntime.context()), contest.activeSession.role.name),
                 contest, chaser, integratedDigiPage, { integratedDigiPage = it }, { destination = Destination.CONTEST },
@@ -734,6 +853,7 @@ private fun navIcon(item: Destination) = when (item) {
     Destination.PORTABLE -> Icons.Outlined.Hiking
     Destination.GROUPS_IO -> Icons.Outlined.Forum
     Destination.OPERATIONS -> Icons.Outlined.EventNote
+    Destination.ROTATOR -> Icons.Outlined.Explore
     Destination.SETTINGS -> Icons.Outlined.Settings
 }
 
@@ -744,6 +864,9 @@ private fun navIcon(item: Destination) = when (item) {
     features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, wavelogNative: WavelogNativeController,
     syncHub: SyncHubController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
     portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
+    selectedProfile: RadioConnectionProfile, platformSnapshot: RadioRuntimeSnapshot, hamlibModels: List<HamlibModelDescriptor>,
+    rotator: AndroidRotatorRuntime,
+    disconnectPlatform: () -> Unit, dispatchPlatform: (RadioPlatformAction) -> Unit,
     transport: UsbRadioTransport, flex: FlexRadioController, digi: DigiController, voiceStore: VoiceMacroStore, voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController,
     eqStudio: EqStudioController, groupsIo: GroupsIoController, operatingContext: OperatingContextSnapshot,
     keyerProfiles: KeyerProfileStore, keyer: KeyerController, repeatCq: RepeatCqController,
@@ -758,6 +881,10 @@ private fun navIcon(item: Destination) = when (item) {
     openGroupsIo: () -> Unit, openOperations: () -> Unit, prepareSatelliteLogger: (SatellitePassRow) -> Unit,
     requestHomeReceiveTune: (Long, String?, String, String) -> Unit,
     homeQsoId: String?, consumeHomeQso: () -> Unit, openHomeQso: (String) -> Unit) {
+    val integratedRadioSelected = selectedProfile.id == RadioProfileCatalog.UNKNOWN.id || selectedProfile.backendKind in setOf(
+        RadioBackendKind.NATIVE_QMX, RadioBackendKind.NATIVE_RGO_ONE,
+        RadioBackendKind.HAMLIB_EMBEDDED, RadioBackendKind.HAMLIB_NETWORK,
+    )
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     val intelligencePortableSpots = portable.pota.spots.map(PotaSpot::toPortable) + portable.sotaSpots + portable.wwffSpots
     val deliveredStates = setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED)
@@ -887,7 +1014,15 @@ private fun navIcon(item: Destination) = when (item) {
                         if (showCompactBandMap) CompactRadioBandMap(bandMaps, database, cty, operatingContext, app, workspaceAction,
                             Modifier.fillMaxHeight().weight(.1f))
                         Box(Modifier.fillMaxHeight().weight(if (showCompactBandMap) .9f else 1f)) {
-                        if (app.radioFamily == RadioFamily.FLEXRADIO) FlexRadioScreen(flex, openLogbook)
+                        if (selectedProfile.backendKind == RadioBackendKind.NATIVE_FLEX) FlexRadioScreen(flex, openLogbook)
+                        else if (integratedRadioSelected) IntegratedRadioPlatformScreen(
+                            selectedProfile,
+                            platformSnapshot,
+                            detail,
+                            connect,
+                            disconnectPlatform,
+                            dispatchPlatform,
+                        )
                         else if (!compact || !app.panadapterEnabled) RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty,
                             features, voiceStore, voiceTx, connect, send, direct, requestVoice, clearCwDecode,
                             portableDraft, consumePortableDraft, portable::notifyQsoChanged)
@@ -911,11 +1046,11 @@ private fun navIcon(item: Destination) = when (item) {
             onOpenSettings = openSettings) else EqUnavailableScreen("Contest is hidden in Settings", openSettings)
         Destination.BAND_MAPS -> BandMapScreen(bandMaps, database, features, neuralDx, portable, cty, contest, chaser,
             operatingContext, bandMapKeyer, app, workspaceAction)
-        Destination.PANADAPTER -> if (app.panadapterEnabled && app.radioFamily.isElecraft)
+        Destination.PANADAPTER -> if (app.panadapterEnabled && selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT)
             PanadapterScreen(panadapter, radio, features.liveSpots, compact)
         else RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty, features, voiceStore, voiceTx,
             connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
-        Destination.EQ -> if (app.radioFamily.isElecraft) EqStudioScreen(eqStudio, radio, compact, closeEq)
+        Destination.EQ -> if (selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT) EqStudioScreen(eqStudio, radio, compact, closeEq)
             else EqUnavailableScreen("EQ is unavailable for ${app.radioFamily.displayName}; SHOW only exposes this setup state and sends no CAT command.", openSettings)
         Destination.LOGBOOK -> Column(Modifier.fillMaxSize()) {
             PotaActivationStrip(activation, radio, openActivation)
@@ -949,10 +1084,12 @@ private fun navIcon(item: Destination) = when (item) {
                 requestHomeReceiveTune(frequency, mode, "Operations satellite receive preview",
                     "Review receive-only downlink change")
             }, prepareSatelliteLogger)
+        Destination.ROTATOR -> if (app.rotatorEnabled) IntegratedRotatorScreen(rotator)
+            else EqUnavailableScreen("Rotator workspace is hidden in Settings", openSettings)
         Destination.SETTINGS -> Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f)) { SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, syncHub, callbook, cty, audio, panadapter, app,
                 transport, flex, digi, voiceStore, voiceAudio, voiceTx, groupsIo, operatingContext, keyerProfiles, keyer, repeatCq,
-                bandMaps, contest, chaser, openEq, openContest, openSync, openDigi, openGroupsIo, connect, direct) }
+                bandMaps, contest, chaser, hamlibModels, rotator, openEq, openContest, openSync, openDigi, openGroupsIo, connect, direct) }
         }
     }
 }
@@ -4204,9 +4341,11 @@ private fun statusColourForeground(argb: Int): Color {
     voiceAudio: VoiceMacroAudioController, voiceTx: VoiceMacroTransmitController, groupsIo: GroupsIoController,
     operatingContext: OperatingContextSnapshot, keyerProfiles: KeyerProfileStore, keyer: KeyerController, repeatCq: RepeatCqController,
     bandMaps: BandMapController, contestRuntime: ContestRuntime, chaserRuntime: DxChaserRuntime,
+    hamlibModels: List<HamlibModelDescriptor>, rotator: AndroidRotatorRuntime,
     openEq: () -> Unit, openContest: () -> Unit, openSync: () -> Unit, openDigi: () -> Unit, openGroupsIo: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
     var section by remember { mutableStateOf(SettingsSection.RADIO) }
+    var hamlibSearch by remember { mutableStateOf("") }
     var host by remember { mutableStateOf(features.clusterHost) }; var port by remember { mutableStateOf(features.clusterPort.toString()) }
     var fallbackHost by remember { mutableStateOf(features.fallbackHost) }; var fallbackPort by remember { mutableStateOf(features.fallbackPort.toString()) }
     var fallback2Host by remember { mutableStateOf(features.fallback2Host) }; var fallback2Port by remember { mutableStateOf(features.fallback2Port.toString()) }
@@ -4335,12 +4474,35 @@ private fun statusColourForeground(argb: Int): Color {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             SettingsSection.entries.forEach { item -> FilterChip(section == item, { section = item }, { Text(item.label) }) }
         }
-        if (section == SettingsSection.RADIO) SettingsCard("RADIO FAMILY") {
+        if (section == SettingsSection.RADIO) SettingsCard("RADIO PROFILE") {
             Text("Select the single active radio backend. Switching closes the previous connection before the next backend starts.", color = Muted)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(app.radioFamily == RadioFamily.ELECRAFT_KX3, { app.selectRadioFamily(RadioFamily.ELECRAFT_KX3) }, { Text("Elecraft KX3") })
-                FilterChip(app.radioFamily == RadioFamily.ELECRAFT_KX2, { app.selectRadioFamily(RadioFamily.ELECRAFT_KX2) }, { Text("Elecraft KX2") })
-                FilterChip(app.radioFamily == RadioFamily.FLEXRADIO, { app.selectRadioFamily(RadioFamily.FLEXRADIO) }, { Text("FlexRadio") })
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                RadioProfileCatalog.nativeProfiles.forEach { profile ->
+                    FilterChip(app.selectedRadioProfileId == profile.id, { app.selectRadioProfile(profile) }, { Text(profile.name) })
+                }
+            }
+            Text("Native profiles are preferred when RigWeave has a dedicated integration. Unknown or future stored identifiers restore disconnected.", color = Muted)
+            OutlinedTextField(
+                hamlibSearch,
+                { hamlibSearch = it.take(80) },
+                label = { Text("Search ${hamlibModels.size} embedded Hamlib models") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            val modelMatches = remember(hamlibSearch, hamlibModels) {
+                val needle = hamlibSearch.trim()
+                hamlibModels.asSequence().filter { needle.isBlank() || it.label.contains(needle, true) || it.id.toString() == needle }
+                    .take(24).toList()
+            }
+            if (hamlibSearch.isNotBlank()) Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                modelMatches.forEach { model ->
+                    FilterChip(
+                        app.selectedRadioProfile.hamlibModelId == model.id,
+                        { app.selectHamlibModel(model.id, model.manufacturer, model.model) },
+                        { Text("${model.label} · ${model.id} · ${model.status}") },
+                    )
+                }
+                if (modelMatches.isEmpty()) Text("No configured Hamlib model matches this search.", color = Muted)
             }
             Text("EQ DESTINATION", color = Amber, fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -4348,14 +4510,15 @@ private fun statusColourForeground(argb: Int): Color {
                     FilterChip(app.eqVisibilityPolicy == policy, { app.updateEqVisibilityPolicy(policy) }, { Text(policy.name) })
                 }
             }
-            val eqShown = eqDestinationVisible(app.eqVisibilityPolicy, app.radioFamily)
+            val nativeElecraft = app.selectedRadioProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT
+            val eqShown = nativeElecraft && eqDestinationVisible(app.eqVisibilityPolicy, app.radioFamily)
             Text(when (app.eqVisibilityPolicy) {
                 EqVisibilityPolicy.AUTO -> if (eqShown) "AUTO · supported ${app.radioFamily.displayName} selected" else "AUTO · hidden for ${app.radioFamily.displayName}"
-                EqVisibilityPolicy.SHOW -> if (app.radioFamily.isElecraft) "SHOW · supported ${app.radioFamily.displayName}" else "SHOW · setup/demo only; CAT commands blocked"
+                EqVisibilityPolicy.SHOW -> if (nativeElecraft) "SHOW · supported ${app.radioFamily.displayName}" else "SHOW · unavailable for ${app.selectedRadioProfile.name}"
                 EqVisibilityPolicy.HIDE -> "HIDE · active EQ route redirects to Radio"
             }, color = if (eqShown) Healthy else Muted)
             OutlinedButton(openEq, enabled = eqShown, modifier = Modifier.heightIn(min = 48.dp)) { Text("OPEN EQ") }
-            if (app.radioFamily == RadioFamily.FLEXRADIO) {
+            if (app.selectedRadioProfile.backendKind == RadioBackendKind.NATIVE_FLEX) {
                 Text(flex.connectionState.label, color = Hold, fontWeight = FontWeight.Bold)
                 Text("KX USB polling, KX EQ and the physical-I/Q panadapter are disabled while FlexRadio is selected. Flex uses its own SmartLink/LAN, VITA panafall, PC audio and session-gated transmit cockpit.", color = Muted)
                 val invalidManualFlexIp = manualFlexIp.isNotBlank() && manualFlexDiscovery(manualFlexIp) == null
@@ -4374,7 +4537,7 @@ private fun statusColourForeground(argb: Int): Color {
                         systemMessage = if (manualFlexIp.isBlank()) "Manual FlexRadio address cleared" else "Manual FlexRadio address saved"
                     } else systemMessage = "Enter a valid IPv4 address"
                 }, enabled = !invalidManualFlexIp) { Text("SAVE FLEX ADDRESS") }
-            } else Text("${app.radioFamily.displayName} USB CAT and its dedicated Radio console are active.", color = Muted)
+            } else Text("${app.selectedRadioProfile.name} · ${app.selectedRadioProfile.backendKind} · ${if (app.selectedRadioProfile.readOnly) "READ ONLY" else "operator-controlled"}.", color = Muted)
             HorizontalDivider()
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -4382,7 +4545,7 @@ private fun statusColourForeground(argb: Int): Color {
                     Text("Android can be unreliable with inexpensive USB sound cards and hubs. Leave this off unless your I/Q route is known-good.", color = Hold)
                 }
                 Switch(app.panadapterEnabled, app::updatePanadapterEnabled,
-                    enabled = app.radioFamily.isElecraft)
+                    enabled = app.selectedRadioProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT)
             }
         }
         if (section == SettingsSection.BAND_MAPS) SettingsCard("INTELLIGENT BAND MAPS") { BandMapSettingsPanel(bandMaps) }
@@ -4412,6 +4575,20 @@ private fun statusColourForeground(argb: Int): Color {
             Text("Digital-mode setup is shared with the Digi cockpit so mode capabilities, USB audio health, waterfall calibration, UDP interoperability, and storage diagnostics always describe the active session.", color = Muted)
             Button(onClick = openDigi) { Text("OPEN DIGI SETUP") }
             Text("Opening setup never enables or arms transmit. Digi TX remains a separate session switch plus one-shot arm.", color = Muted)
+        }
+        if (section == SettingsSection.ROTATOR) SettingsCard("ROTATOR PLATFORM") {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("ROTATOR WORKSPACE", color = Amber, fontWeight = FontWeight.Bold)
+                    Text("Opt-in navigation. Restoring this setting does not connect, arm automation, park, or move hardware.", color = Muted)
+                }
+                Switch(app.rotatorEnabled, app::updateRotatorEnabled)
+            }
+            Text("Configured profiles · ${rotator.profiles.size}", color = if (rotator.profiles.isNotEmpty()) Healthy else Muted)
+            rotator.profiles.forEach { profile ->
+                Text("${profile.name} · ${profile.backend} · ${profile.protocol} · ${profile.transport}", color = Muted)
+            }
+            Text("Serial identities are stored as hashes. LAN endpoints are excluded from ordinary recovery exports. Automation arm and satellite tracking are session-only.", color = Hold)
         }
         if (section == SettingsSection.LOG || section == SettingsSection.MACROS) SettingsCard(if (section == SettingsSection.LOG) "LOCAL STATION" else "MACROS") {
             if (section == SettingsSection.LOG) {
