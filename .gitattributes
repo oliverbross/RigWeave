@@ -1,0 +1,2 @@
+# Hamlib is a byte-preserved vendor import. Never rewrite its line endings.
+core/third_party/hamlib/** -text
