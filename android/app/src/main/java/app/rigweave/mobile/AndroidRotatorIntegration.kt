@@ -70,7 +70,8 @@ private class AndroidRotatorUsbPort(private val transport: UsbRadioTransport) {
                 error("rotator response was incomplete or exceeded its bound")
             }
 
-            override fun close() { kotlinx.coroutines.runBlocking(Dispatchers.IO) { transport.disconnect() } }
+            // AndroidRotatorRuntime owns the suspend disconnect; this synchronous adapter never blocks lifecycle teardown.
+            override fun close() = Unit
         }
 }
 
@@ -131,14 +132,18 @@ class AndroidRotatorRuntime(
         preferences.edit().putString("document", RotatorSettingsCodec.encode(store.snapshot(), includeLanEndpoints = true)).apply()
     }
 
-    suspend fun connect(profileId: String, readOnlyProbe: Boolean = false): Boolean = runCatching {
-        val profile = requireNotNull(profiles.firstOrNull { it.id == profileId })
-        capabilities = if (profile.backend == RotatorBackend.EMBEDDED_HAMLIB) {
-            hamlib.capabilities(requireNotNull(profile.hamlibModelId)).capabilities
-        } else capabilities(profile)
-        state = controller.connect(profileId, readOnlyProbe)
-        state?.connected == true
-    }.getOrDefault(false)
+    suspend fun connect(profileId: String, readOnlyProbe: Boolean = false): Boolean {
+        val connected = runCatching {
+            val profile = requireNotNull(profiles.firstOrNull { it.id == profileId })
+            capabilities = if (profile.backend == RotatorBackend.EMBEDDED_HAMLIB) {
+                hamlib.capabilities(requireNotNull(profile.hamlibModelId)).capabilities
+            } else capabilities(profile)
+            state = controller.connect(profileId, readOnlyProbe)
+            state?.connected == true
+        }.getOrDefault(false)
+        if (!connected) usbTransport.disconnect()
+        return connected
+    }
 
     suspend fun poll() {
         val active = state?.takeIf { it.connected } ?: return
@@ -162,6 +167,7 @@ class AndroidRotatorRuntime(
 
     suspend fun disconnect() {
         state?.profileId?.let { controller.disconnect(it) }
+        usbTransport.disconnect()
         state = controller.states().firstOrNull { it.profileId == state?.profileId }
     }
 

@@ -1,10 +1,12 @@
 package app.rigweave.mobile.radio.hamlib
 
+import app.rigweave.mobile.NativeHandleOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -14,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.Closeable
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 enum class HamlibActionDanger { NORMAL, EDGE, TRANSMIT }
@@ -80,29 +83,33 @@ internal class HamlibSession(
     modelId: Int,
     private val api: HamlibNativeApi,
 ) : Closeable {
-    val handle: Long = api.create(modelId).also { check(it != 0L) { "Hamlib refused model $modelId" } }
+    private val handle = NativeHandleOwner(
+        api.create(modelId).also { check(it != 0L) { "Hamlib refused model $modelId" } },
+        api::destroy,
+    )
     private var portClosed = false
-    private var destroyed = false
 
-    fun setReadOnly(value: Boolean) = checked(api.readOnly(handle, value))
-    fun configure(profile: HamlibSerialProfile) = checked(api.configureSerial(handle, profile))
-    fun configure(profile: HamlibNetworkProfile) = checked(api.configureNetwork(handle, profile))
-    fun open() = checked(api.open(handle))
-    fun snapshot() = HamlibModelRegistry.parseSnapshot(api.snapshot(handle))
-    fun apply(action: HamlibAction) = checked(api.apply(handle, action))
+    fun setReadOnly(value: Boolean) = withRequiredHandle { checked(api.readOnly(it, value)) }
+    fun configure(profile: HamlibSerialProfile) = withRequiredHandle { checked(api.configureSerial(it, profile)) }
+    fun configure(profile: HamlibNetworkProfile) = withRequiredHandle { checked(api.configureNetwork(it, profile)) }
+    fun open() = withRequiredHandle { checked(api.open(it)) }
+    fun snapshot() = withRequiredHandle { HamlibModelRegistry.parseSnapshot(api.snapshot(it)) }
+    fun apply(action: HamlibAction) = withRequiredHandle { checked(api.apply(it, action)) }
+    fun <T> withHandle(block: (Long) -> T): T? = handle.withHandle(block)
 
     fun closePort() {
         if (portClosed) return
         portClosed = true
-        api.close(handle)
+        handle.withHandle { api.close(it) }
     }
 
     override fun close() {
-        if (destroyed) return
         closePort()
-        destroyed = true
-        api.destroy(handle)
+        handle.close()
     }
+
+    private fun <T> withRequiredHandle(block: (Long) -> T): T =
+        checkNotNull(handle.withHandle(block)) { "Hamlib session is closed" }
 
     private fun checked(status: Int): Int {
         check(status == 0) { api.error(status) }
@@ -114,6 +121,7 @@ class HamlibConnectionController internal constructor(
     private val api: HamlibNativeApi = NativeHamlib,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) : Closeable {
+    private val closed = AtomicBoolean(false)
     private val generation = AtomicLong(0)
     private val lifecycle = Mutex()
     private var session: HamlibSession? = null
@@ -126,7 +134,7 @@ class HamlibConnectionController internal constructor(
     val registry: HamlibModelRegistry by lazy { HamlibModelRegistry.parse(api.libraryInfo(), api.models()) }
     private val queue = HamlibCommandQueue(scope) { action, requestedGeneration ->
         lifecycle.withLock {
-            if (requestedGeneration == generation.get()) {
+            if (!closed.get() && requestedGeneration == generation.get()) {
                 runCatching { session?.apply(action) }.onFailure(::recordFailure)
             }
         }
@@ -139,6 +147,7 @@ class HamlibConnectionController internal constructor(
         readOnly: Boolean = true,
         pollIntervalMs: Long = 500,
     ) = lifecycle.withLock {
+        check(!closed.get()) { "Hamlib controller is closed" }
         disconnectLocked()
         val currentGeneration = generation.incrementAndGet()
         val newSession = HamlibSession(modelId, api)
@@ -146,7 +155,7 @@ class HamlibConnectionController internal constructor(
         try {
             newSession.setReadOnly(readOnly)
             newSession.configure(profile)
-            newBridge = HamlibTransportBridge(api, newSession.handle, port)
+            newBridge = HamlibTransportBridge(api, newSession, port)
             newBridge.start(scope, profile)
             newSession.open()
             session = newSession
@@ -167,6 +176,7 @@ class HamlibConnectionController internal constructor(
         readOnly: Boolean = true,
         pollIntervalMs: Long = 500,
     ) = lifecycle.withLock {
+        check(!closed.get()) { "Hamlib controller is closed" }
         require(profile.enabled) { "Network profile must be explicitly enabled" }
         disconnectLocked()
         val currentGeneration = generation.incrementAndGet()
@@ -184,7 +194,9 @@ class HamlibConnectionController internal constructor(
         }
     }
 
-    suspend fun submit(action: HamlibAction) = queue.submit(action, generation.get())
+    suspend fun submit(action: HamlibAction) {
+        if (!closed.get()) queue.submit(action, generation.get())
+    }
 
     suspend fun disconnect() = lifecycle.withLock { disconnectLocked() }
 
@@ -219,6 +231,10 @@ class HamlibConnectionController internal constructor(
     }
 
     override fun close() {
-        scope.launch { lifecycle.withLock { disconnectLocked() } }
+        if (!closed.compareAndSet(false, true)) return
+        scope.launch {
+            lifecycle.withLock { disconnectLocked() }
+            scope.cancel()
+        }
     }
 }

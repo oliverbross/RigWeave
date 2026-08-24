@@ -99,6 +99,9 @@ internal class SatelliteOperationsController(
     private val prefs = appContext.getSharedPreferences("satellite_operations_v1", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val homePropagationMutex = Mutex()
+    private val providerGeneration = LifecycleGeneration()
+    private val calculationGeneration = LifecycleGeneration()
+    private val selectionGeneration = LifecycleGeneration()
     private var homeJob: Job? = null
     private var homeGeneration = 0L
     private var homeActive = false
@@ -136,6 +139,7 @@ internal class SatelliteOperationsController(
 
     fun refresh(force: Boolean) {
         if (busy) return
+        val generation = providerGeneration.next()
         busy = true
         scope.launch {
             val refreshed = withContext(Dispatchers.IO) {
@@ -145,6 +149,7 @@ internal class SatelliteOperationsController(
                 val timers = providers.refreshTimers(force)
                 RefreshedSatelliteProviders(e, t, s, timers)
             }
+            if (!providerGeneration.isCurrent(generation)) return@launch
             elements = refreshed.elements
             transponders = refreshed.transponders
             status = refreshed.status
@@ -161,6 +166,7 @@ internal class SatelliteOperationsController(
         if (point == null) { message = "Enter a valid Maidenhead observer grid."; passes = emptyList(); return }
         if (busy) return
         busy = true
+        val generation = calculationGeneration.next()
         scope.launch {
             val now = Instant.now().epochSecond
             val end = now + windowHours * 3600L
@@ -177,6 +183,10 @@ internal class SatelliteOperationsController(
                     }
                 }.sortedBy { it.pass.aos }.take(250)
             }
+            if (!calculationGeneration.isCurrent(generation)) {
+                busy = false
+                return@launch
+            }
             passes = calculated
             busy = false
             message = when {
@@ -189,6 +199,7 @@ internal class SatelliteOperationsController(
     }
 
     fun select(row: SatellitePassRow) {
+        val generation = selectionGeneration.next()
         selectedPass = row
         selectedHomeNoradId = row.satellite.noradId
         restartHomeTicker()
@@ -203,12 +214,14 @@ internal class SatelliteOperationsController(
                 val sky = NativeSatellite.samples(row.satellite.elements, observer, row.pass.aos, row.pass.los, skyStep, 300, true)
                 (ground as? SatelliteNativeResult.Success)?.value.orEmpty() to (sky as? SatelliteNativeResult.Success)?.value.orEmpty()
             }
+            if (!selectionGeneration.isCurrent(generation) || selectedPass !== row) return@launch
             groundTrack = tracks.first; skyTrack = tracks.second
             updateLivePoint()
         }
     }
 
     fun selectNorad(noradId: Long) {
+        val generation = selectionGeneration.next()
         selectedHomeNoradId = noradId
         restartHomeTicker()
         passes.firstOrNull { it.satellite.noradId == noradId }?.let { select(it); return }
@@ -223,17 +236,19 @@ internal class SatelliteOperationsController(
                     SatellitePassRow(entry, it, preferredTransponder(entry.noradId))
                 }
             }
-            row?.let(::select)
+            if (selectionGeneration.isCurrent(generation)) row?.let(::select)
         }
     }
 
     fun updateLivePoint(epoch: Long = Instant.now().epochSecond) {
         val selected = selectedPass ?: return
+        val generation = selectionGeneration.current()
         val point = maidenheadCenter(observerGrid) ?: return
         scope.launch {
-            livePoint = withContext(Dispatchers.Default) {
+            val calculated = withContext(Dispatchers.Default) {
                 (NativeSatellite.propagate(selected.satellite.elements, SatelliteObserver(point.latitude, point.longitude), epoch) as? SatelliteNativeResult.Success)?.value
             }
+            if (selectionGeneration.isCurrent(generation) && selectedPass === selected) livePoint = calculated
         }
     }
 
@@ -241,6 +256,8 @@ internal class SatelliteOperationsController(
         favouritesOnly: Boolean = this.favouritesOnly, utc: Boolean = this.utc, mode: String = modeFilter) {
         observerGrid = grid.trim().uppercase(Locale.US); windowHours = hours.coerceIn(1,72); minimumElevation = elevation.coerceIn(0.0,90.0)
         this.favouritesOnly = favouritesOnly; this.utc = utc; modeFilter = mode.trim().uppercase(Locale.US)
+        calculationGeneration.retire()
+        selectionGeneration.retire()
         prefs.edit().putString("observer_grid", observerGrid).putInt("window_hours", windowHours).putFloat("minimum_elevation", minimumElevation.toFloat())
             .putBoolean("favourites_only", favouritesOnly).putBoolean("utc", utc).putString("mode_filter", modeFilter).apply()
     }
@@ -358,7 +375,14 @@ internal class SatelliteOperationsController(
     private fun preferredTransponder(noradId: Long) = transponders.rows.rowsFor(noradId).firstOrNull { it.downlinkLowHz != null && it.alive && it.providerStatus.equals("active",true) }
         ?: transponders.rows.rowsFor(noradId).firstOrNull { it.downlinkLowHz != null }
     private fun List<SatelliteTransponder>.rowsFor(id: Long) = filter { it.noradId == id }
-    fun close() { homeJob?.cancel(); scope.cancel() }
+    fun close() {
+        providerGeneration.close()
+        calculationGeneration.close()
+        selectionGeneration.close()
+        homeGeneration++
+        homeJob?.cancel()
+        scope.cancel()
+    }
 }
 
 internal fun splitSatelliteTrack(points: List<GeoPoint>): List<List<GeoPoint>> {

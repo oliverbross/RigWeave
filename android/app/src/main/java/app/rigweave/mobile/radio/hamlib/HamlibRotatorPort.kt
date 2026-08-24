@@ -1,5 +1,6 @@
 package app.rigweave.mobile.radio.hamlib
 
+import app.rigweave.mobile.NativeHandleOwner
 import app.rigweave.mobile.rotator.CapabilitySupport
 import app.rigweave.mobile.rotator.RotatorBackend
 import app.rigweave.mobile.rotator.RotatorCapability
@@ -34,7 +35,7 @@ class NativeHamlibRotatorPort(
         val capabilities: RotatorCapabilitySnapshot,
     )
     private data class Active(
-        val handle: Long,
+        val handle: NativeHandleOwner,
         val profile: RotatorDeviceProfile,
         val readOnly: Boolean,
         val transport: HamlibSerialTransportPort?,
@@ -54,49 +55,54 @@ class NativeHamlibRotatorPort(
     override suspend fun open(profile: RotatorDeviceProfile, readOnly: Boolean): RotatorHamlibSession {
         require(profile.backend == RotatorBackend.EMBEDDED_HAMLIB)
         val modelId = requireNotNull(profile.hamlibModelId)
-        val handle = NativeHamlib.rotatorCreate(modelId).also { check(it != 0L) { "Hamlib rotator model unavailable" } }
+        val handle = NativeHandleOwner(
+            NativeHamlib.rotatorCreate(modelId).also { check(it != 0L) { "Hamlib rotator model unavailable" } },
+            NativeHamlib::rotatorDestroy,
+        )
         var transport: HamlibSerialTransportPort? = null
         var bridge: Job? = null
         try {
-            checked(NativeHamlib.rotatorReadOnly(handle, readOnly))
+            checked(requireNotNull(handle.withHandle { NativeHamlib.rotatorReadOnly(it, readOnly) }))
             profile.hamlibSerial?.let { serial ->
                 val serialProfile = HamlibSerialProfile(serial.stableIdentityHash, serial.baud, serial.dataBits,
                     serial.stopBits, when (serial.parity) { "E" -> 1; "O" -> 2; else -> 0 },
                     timeoutMs = serial.readTimeoutMs, rts = if (serial.rts) 1 else 0, dtr = if (serial.dtr) 1 else 0)
                 transport = requireNotNull(serialPort(profile)) { "application USB serial authority unavailable" }
                 transport!!.configure(serialProfile)
-                checked(NativeHamlib.rotatorConfigure(handle, serialProfile))
+                checked(requireNotNull(handle.withHandle { NativeHamlib.rotatorConfigure(it, serialProfile) }))
                 bridge = startBridge(handle, transport!!)
             }
             profile.hamlibTcp?.let { tcp ->
                 require(tcp.lanOptIn) { "Hamlib rotator LAN profile is not enabled" }
-                checked(NativeHamlib.rotatorConfigure(handle, HamlibNetworkProfile(tcp.host, tcp.port, tcp.readTimeoutMs, true)))
+                checked(requireNotNull(handle.withHandle {
+                    NativeHamlib.rotatorConfigure(it, HamlibNetworkProfile(tcp.host, tcp.port, tcp.readTimeoutMs, true))
+                }))
             }
             require(profile.hamlibSerial != null || profile.hamlibTcp != null) { "Hamlib rotator transport is not configured" }
-            checked(NativeHamlib.rotatorOpen(handle))
+            checked(requireNotNull(handle.withHandle(NativeHamlib::rotatorOpen)))
             return RotatorHamlibSession(UUID.randomUUID().toString(), modelId).also { session ->
                 synchronized(sessions) { sessions[session.id] = Active(handle, profile, readOnly, transport, bridge) }
             }
         } catch (failure: Throwable) {
             bridge?.cancel()
             runCatching { transport?.disconnect() }
-            runCatching { NativeHamlib.rotatorClose(handle) }
-            NativeHamlib.rotatorDestroy(handle)
+            runCatching { handle.withHandle(NativeHamlib::rotatorClose) }
+            handle.close()
             throw failure
         }
     }
 
     override suspend fun close(session: RotatorHamlibSession) {
         val active = synchronized(sessions) { sessions.remove(session.id) } ?: return
-        runCatching { NativeHamlib.rotatorClose(active.handle) }
+        runCatching { active.handle.withHandle(NativeHamlib::rotatorClose) }
         active.bridge?.cancelAndJoin()
         runCatching { active.transport?.disconnect() }
-        NativeHamlib.rotatorDestroy(active.handle)
+        active.handle.close()
     }
 
     override suspend fun poll(session: RotatorHamlibSession): RotatorStateSnapshot {
         val active = active(session)
-        val row = JSONObject(NativeHamlib.rotatorPoll(active.handle))
+        val row = JSONObject(requireNotNull(active.handle.withHandle(NativeHamlib::rotatorPoll)))
         checked(row.getInt("code"))
         active.generation++
         return RotatorStateSnapshot(
@@ -119,32 +125,33 @@ class NativeHamlibRotatorPort(
     override suspend fun setPosition(session: RotatorHamlibSession, azimuthDeg: Double, elevationDeg: Double?): Boolean {
         val active = active(session)
         if (active.readOnly || !active.profile.limits.contains(azimuthDeg, elevationDeg)) return false
-        return NativeHamlib.rotatorSetPosition(active.handle, azimuthDeg, elevationDeg ?: 0.0) == 0
+        return active.handle.withHandle { NativeHamlib.rotatorSetPosition(it, azimuthDeg, elevationDeg ?: 0.0) } == 0
     }
 
-    override suspend fun stop(session: RotatorHamlibSession): Boolean = NativeHamlib.rotatorStop(active(session).handle) == 0
+    override suspend fun stop(session: RotatorHamlibSession): Boolean =
+        active(session).handle.withHandle(NativeHamlib::rotatorStop) == 0
 
     override suspend fun park(session: RotatorHamlibSession): Boolean {
         val active = active(session)
-        return !active.readOnly && NativeHamlib.rotatorPark(active.handle) == 0
+        return !active.readOnly && active.handle.withHandle(NativeHamlib::rotatorPark) == 0
     }
 
     private fun active(session: RotatorHamlibSession): Active =
         synchronized(sessions) { sessions[session.id] } ?: error("Hamlib rotator session is closed")
 
-    private fun startBridge(handle: Long, port: HamlibSerialTransportPort): Job = scope.launch {
+    private fun startBridge(handle: NativeHandleOwner, port: HamlibSerialTransportPort): Job = scope.launch {
         val applicationToHamlib = launch {
             try {
                 while (isActive) {
                     val input = port.read(4_096, 250)
-                    if (input.isNotEmpty() && NativeHamlib.rotatorBridgeWrite(handle, input) < 0) break
+                    if (input.isNotEmpty() && (handle.withHandle { NativeHamlib.rotatorBridgeWrite(it, input) } ?: -1) < 0) break
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
         }
         val hamlibToApplication = launch {
             try {
                 while (isActive) {
-                    val output = NativeHamlib.rotatorBridgeRead(handle, 4_096, 250)
+                    val output = handle.withHandle { NativeHamlib.rotatorBridgeRead(it, 4_096, 250) } ?: break
                     if (output.isNotEmpty() && port.write(output) < 0) break
                 }
             } catch (cancelled: CancellationException) { throw cancelled }

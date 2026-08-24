@@ -32,7 +32,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
@@ -155,7 +154,7 @@ class DigiController(
     private var issJob: Job? = null
     private var recorder: AudioRecord? = null
     private var flexRxOwned = false
-    private var nativeHandle = 0L
+    private val nativeHandle = NativeHandleOwner(destroyHandle = NativeCore::digiDestroy)
     private var sstvRgb = ByteArray(0)
     private var sstvWidth = 0
     private var sstvHeight = 0
@@ -184,7 +183,7 @@ class DigiController(
     private var lastCompletedSlotMode: DigiMode? = null
     private var lastCompletedSlotFrequencyHz = 0L
     private var lastCompletedSlotSessionId = ""
-    private var closed = false
+    @Volatile private var closed = false
     private var lastRadioIdentity = ""
     private var lastRadioFrequency = 0L
     private var lastRadioConnected = false
@@ -759,6 +758,7 @@ class DigiController(
 
     @SuppressLint("MissingPermission")
     fun startRx() {
+        if (closed) return
         if (txPhase == DigiTxPhase.RX_UNCONFIRMED) {
             status = "RX UNCONFIRMED · use REQUEST RX & RECHECK before restarting the decoder"
             return
@@ -814,11 +814,16 @@ class DigiController(
         AutomaticGainControl.create(record.audioSessionId)?.enabled = false
         NoiseSuppressor.create(record.audioSessionId)?.enabled = false
         AcousticEchoCanceler.create(record.audioSessionId)?.enabled = false
-        nativeHandle = NativeCore.digiCreate(12_000, cwPitchHz, rttyReverse, settings.rttyCarrierHz)
-        if (nativeHandle == 0L) {
+        val createdHandle = NativeCore.digiCreate(12_000, cwPitchHz, rttyReverse, settings.rttyCarrierHz)
+        if (createdHandle == 0L) {
             record.release()
             routes.releaseAudio(AudioOwners.DIGI_RX)
             status = "The native modem could not start"
+            return
+        }
+        if (nativeHandle.install(createdHandle) == null) {
+            record.release()
+            routes.releaseAudio(AudioOwners.DIGI_RX)
             return
         }
         recorder = record
@@ -836,17 +841,17 @@ class DigiController(
     }
 
     private fun startFlexRx() {
-        nativeHandle = NativeCore.digiCreate(12_000, cwPitchHz, rttyReverse, settings.rttyCarrierHz)
-        if (nativeHandle == 0L) {
+        val createdHandle = NativeCore.digiCreate(12_000, cwPitchHz, rttyReverse, settings.rttyCarrierHz)
+        if (createdHandle == 0L) {
             status = "The native modem could not start"
             return
         }
+        if (nativeHandle.install(createdHandle) == null) return
         val wasEnabled = flex.rxAudioEnabled
         flex.setDigitalRxSink(::receiveFlexPcm)
         if (!wasEnabled && !flex.enableRxAudio()) {
             flex.setDigitalRxSink(null)
-            NativeCore.digiDestroy(nativeHandle)
-            nativeHandle = 0L
+            nativeHandle.retire()
             status = "Flex network RX audio could not start · ${flex.detail}"
             return
         }
@@ -861,7 +866,7 @@ class DigiController(
     }
 
     private fun receiveFlexPcm(samples: FloatArray, sampleRate: Int, channels: Int) {
-        if (!receiving.get() || nativeHandle == 0L || channels <= 0) return
+        if (!receiving.get() || channels <= 0 || nativeHandle.withHandle { true } != true) return
         val frames = samples.size / channels
         if (frames <= 0) return
         val mono = FloatArray(frames) { frame ->
@@ -897,23 +902,26 @@ class DigiController(
 
     @Synchronized
     private fun feedNative(samples: FloatArray) {
-        if (!receiving.get() || nativeHandle == 0L || samples.isEmpty()) return
+        if (!receiving.get() || samples.isEmpty() || nativeHandle.withHandle { true } != true) return
+        val generation = nativeHandle.generation()
         observeAudio(samples)
         if (mode.isSlotted) {
             feedSlot(samples)
             return
         }
-        val result = when (mode) {
-            DigiMode.CW -> NativeCore.digiFeedCw(nativeHandle, samples)
-            DigiMode.RTTY -> NativeCore.digiFeedRtty(nativeHandle, samples)
+        val result = nativeHandle.withHandle { handle -> when (mode) {
+            DigiMode.CW -> NativeCore.digiFeedCw(handle, samples)
+            DigiMode.RTTY -> NativeCore.digiFeedRtty(handle, samples)
             DigiMode.PSK31 -> {
                 feedPsk31(samples)
-                return
+                return@withHandle ""
             }
-            DigiMode.SSTV -> NativeCore.digiFeedSstv(nativeHandle, samples)
-            else -> return
+            DigiMode.SSTV -> NativeCore.digiFeedSstv(handle, samples)
+            else -> return@withHandle ""
+        } } ?: return
+        if (result.isNotEmpty()) scope.launch {
+            if (nativeHandle.isCurrent(generation)) applyDecode(result)
         }
-        scope.launch { applyDecode(result) }
     }
 
     private fun observeAudio(samples: FloatArray) {
@@ -982,9 +990,12 @@ class DigiController(
         if (pskPcm.size - pskLastDecoded < 12_000 || pskDecodeJob?.isActive == true) return
         pskLastDecoded = pskPcm.size
         val snapshot = pskPcm.copyOf()
+        val generation = nativeHandle.generation()
         pskDecodeJob = scope.launch(Dispatchers.Default) {
             val value = NativeCore.digiDecodePsk31(snapshot, pskCarrierHz)
-            withContext(Dispatchers.Main.immediate) { if (mode == DigiMode.PSK31) applyDecode(value) }
+            withContext(Dispatchers.Main.immediate) {
+                if (mode == DigiMode.PSK31 && nativeHandle.isCurrent(generation)) applyDecode(value)
+            }
         }
     }
 
@@ -1033,9 +1044,11 @@ class DigiController(
                     continue
                 }
                 status = "${mode.label} slot captured · decoding ${captured.size / 12_000}s"
+                val generation = nativeHandle.generation()
                 slotDecodeJob = scope.launch(Dispatchers.Default) {
                     val result = NativeCore.digiDecodeSlot(decoder, captured, 12_000)
                     withContext(Dispatchers.Main.immediate) {
+                        if (!nativeHandle.isCurrent(generation)) return@withContext
                         applySlotDecode(result, capturedMode, capturedStartMillis, DigiDecodeSource.LIVE_CAPTURE,
                             capturedSessionId, capturedFrequencyHz, exactSlotTiming = true)
                     }
@@ -1162,7 +1175,7 @@ class DigiController(
                 sstvHeight = json.optInt("height")
                 sstvFskId = json.optString("fskId")
                 if (sstvWidth > 0 && sstvHeight > 0) {
-                    sstvRgb = NativeCore.digiSstvImage(nativeHandle)
+                    sstvRgb = nativeHandle.withHandle(NativeCore::digiSstvImage) ?: return
                     imageRevision++
                 }
                 sstvHealth = sstvHealth.copy(
@@ -1301,7 +1314,6 @@ class DigiController(
             status = "The native ${selected.label} decoder could not start"
             return
         }
-        nativeHandle = handle
         try {
             val final = withContext(Dispatchers.Default) {
                 var result = "{}"
@@ -1336,7 +1348,6 @@ class DigiController(
             }
         } finally {
             NativeCore.digiDestroy(handle)
-            if (nativeHandle == handle) nativeHandle = 0L
         }
     }
 
@@ -1397,8 +1408,7 @@ class DigiController(
         runCatching { recorder?.stop() }
         runCatching { recorder?.release() }
         recorder = null
-        if (nativeHandle != 0L) NativeCore.digiDestroy(nativeHandle)
-        nativeHandle = 0
+        nativeHandle.retire()
         rxActive = false
         routes.releaseAudio(AudioOwners.DIGI_RX)
         if (sessionId.isNotBlank()) runCatching { sessionStore.endSession(sessionId, Instant.now().epochSecond, reason.take(40)) }
@@ -1838,14 +1848,11 @@ class DigiController(
         stopRx("Digi closed")
         txJob?.cancel()
         txEnabled = false; disarm()
-        runCatching { runBlocking(Dispatchers.IO) {
-            runCatching { transport.send("RX;") }
-            runCatching { flex.stopTransmit("Digi controller closed") }
-        } }
         interop.close()
         rawRecorder.close()
         sessionStore.close()
         sourceOriginal?.recycle(); sourceOriginal = null
+        nativeHandle.close()
         scope.cancel()
     }
 }

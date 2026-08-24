@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class HamlibSerialProfile(
     val stableDeviceId: String,
@@ -49,7 +50,7 @@ interface HamlibSerialTransportPort {
 
 internal class HamlibTransportBridge(
     private val api: HamlibNativeApi,
-    private val handle: Long,
+    private val session: HamlibSession,
     private val serial: HamlibSerialTransportPort,
 ) {
     private var outbound: Job? = null
@@ -61,7 +62,7 @@ internal class HamlibTransportBridge(
         serial.setControlLines(profile.rts, profile.dtr)
         outbound = scope.launch(Dispatchers.IO) {
             while (isActive) {
-                val bytes = api.bridgeRead(handle, 16_384, 250)
+                val bytes = session.withHandle { api.bridgeRead(it, 16_384, 250) } ?: break
                 if (bytes.isNotEmpty()) {
                     var offset = 0
                     while (offset < bytes.size && isActive) {
@@ -75,8 +76,9 @@ internal class HamlibTransportBridge(
         inbound = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 val bytes = serial.read(16_384, 250)
-                if (bytes.isNotEmpty()) check(api.bridgeWrite(handle, bytes) == bytes.size) {
-                    "Hamlib bridge rejected serial input"
+                if (bytes.isNotEmpty()) {
+                    val written = session.withHandle { api.bridgeWrite(it, bytes) } ?: break
+                    check(written == bytes.size) { "Hamlib bridge rejected serial input" }
                 }
             }
         }
@@ -86,11 +88,15 @@ internal class HamlibTransportBridge(
         serial.cancelPendingIo()
         outbound?.cancel(CancellationException("Hamlib bridge closing"))
         inbound?.cancel(CancellationException("Hamlib bridge closing"))
-        outbound?.join()
-        inbound?.join()
+        withTimeoutOrNull(2_000L) {
+            outbound?.join()
+            inbound?.join()
+        }
         outbound = null
         inbound = null
-        serial.flush()
-        serial.disconnect()
+        withTimeoutOrNull(2_000L) {
+            serial.flush()
+            serial.disconnect()
+        }
     }
 }

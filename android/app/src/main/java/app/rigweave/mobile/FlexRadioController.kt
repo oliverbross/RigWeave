@@ -46,7 +46,10 @@ class FlexRadioController(
         RadioCapability.RECEIVE_STATE, RadioCapability.RECEIVE_TUNE, RadioCapability.FILTER,
         RadioCapability.PANADAPTER, RadioCapability.MACROS, RadioCapability.TRANSMIT,
     )
-    private val native = NativeCore.flexCreate()
+    private val native = NativeHandleOwner(
+        initialHandle = NativeCore.flexCreate().also { check(it != 0L) { "Native Flex parser unavailable" } },
+        destroyHandle = NativeCore::flexDestroy,
+    )
     private val controllerJob = SupervisorJob()
     private val scope = CoroutineScope(controllerJob + Dispatchers.IO)
     private val sequence = AtomicInteger(1)
@@ -59,6 +62,7 @@ class FlexRadioController(
     private var discovery: Job? = null
     private var smartLinkDiscovery: Job? = null
     private var reconnect: Job? = null
+    @Volatile private var closed = false
     private var operatorEstablished = false
     private var lastTarget: FlexDiscovery? = null
     private val smartLinkConfig = SmartLinkConfig.issued()
@@ -245,6 +249,7 @@ class FlexRadioController(
     }
 
     suspend fun connectLan(radio: FlexDiscovery, operatorInitiated: Boolean = true): Boolean {
+        if (closed) return false
         lastTarget = radio
         disconnectSession()
         connectionState = FlexConnectionState.CONNECTING; detail = "Connecting to ${radio.nickname.ifBlank { radio.model }}"
@@ -292,8 +297,13 @@ class FlexRadioController(
                 if (count < 0) break
                 val chunk = buffer.copyOf(count)
                 statusFramer.feed(chunk).mapNotNull(::parseFlexProtocolLine).forEach(::handleProtocolLine)
-                NativeCore.flexFeed(native, chunk)
-                snapshot = parseFlexSnapshot(NativeCore.flexState(native))
+                val nativeGeneration = native.generation()
+                val nativeState = native.withHandle { handle ->
+                    NativeCore.flexFeed(handle, chunk)
+                    NativeCore.flexState(handle)
+                } ?: break
+                if (!native.isCurrent(nativeGeneration)) break
+                snapshot = parseFlexSnapshot(nativeState)
                 extended = extendedTracker.snapshot()
                 updateTxEligibility()
                 updateSelection()
@@ -310,6 +320,7 @@ class FlexRadioController(
     }
 
     private fun scheduleReconnect() {
+        if (closed) return
         val target = lastTarget ?: return
         if (!operatorEstablished || reconnect?.isActive == true) return
         reconnect = scope.launch {
@@ -686,9 +697,10 @@ class FlexRadioController(
     }
 
     override fun close() {
+        if (closed) return
+        closed = true
         operatorEstablished = false; discovery?.cancel(); smartLinkDiscovery?.cancel(); reconnect?.cancel(); keepalive?.cancel(); reader?.cancel(); broker?.close(); broker = null
-        sendBody(FlexCommands.cwxClear()); sendBody(FlexCommands.tune(false)); sendBody(FlexCommands.mox(false))
-        tx.clearGate(); disableRxAudio(); streamSession.close()
-        runCatching { socket?.close() }; socket = null; controllerJob.cancel(); NativeCore.flexDestroy(native)
+        tx.connectionLost(); tx.clearGate(); disableRxAudio(); streamSession.close()
+        runCatching { socket?.close() }; socket = null; controllerJob.cancel(); native.close()
     }
 }

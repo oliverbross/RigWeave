@@ -119,7 +119,8 @@ private class QmxRawPort(private val transport: UsbRadioTransport) : QmxSerialPo
     override fun exchange(command: String, timeoutMillis: Long): String = runBlocking(Dispatchers.IO) {
         transport.rawExchange(command.toByteArray(Charsets.US_ASCII), timeoutMillis.toInt()).toString(Charsets.US_ASCII)
     }
-    override fun close() { runBlocking(Dispatchers.IO) { transport.disconnect() } }
+    // The managed backend performs the suspend disconnect before closing this synchronous adapter.
+    override fun close() = Unit
 }
 
 private class QmxManagedBackend(
@@ -197,12 +198,13 @@ private class RgoRawPort(
     override fun exchange(command: ByteArray, maximumResponseBytes: Int, timeoutMillis: Long): ByteArray? = runBlocking(Dispatchers.IO) {
         runCatching { transport.rawExchange(command, timeoutMillis.toInt()).take(maximumResponseBytes).toByteArray() }.getOrNull()
     }
-    override fun close() { runBlocking(Dispatchers.IO) { transport.disconnect() } }
+    // The managed backend performs the suspend disconnect before closing this synchronous adapter.
+    override fun close() = Unit
 }
 
 private class RgoOneManagedBackend(
     override val profile: RadioConnectionProfile,
-    transport: UsbRadioTransport,
+    private val transport: UsbRadioTransport,
 ) : ManagedRadioBackend {
     private val serial = RgoRawPort(profile, transport)
     private val controller = RgoOneConnectionController(
@@ -229,7 +231,10 @@ private class RgoOneManagedBackend(
         generation = if (profile.modelId.value == "RGO_ONE_V6") RgoOneGeneration.V6 else RgoOneGeneration.UNKNOWN,
         transport = RgoOneTransportType.USB_CAT,
     ))
-    override suspend fun disconnect() = controller.disconnect()
+    override suspend fun disconnect() {
+        controller.disconnect()
+        transport.disconnect()
+    }
     override suspend fun requestReceive() = controller.dispatch(RgoOneAction.Receive).name == "SENT"
     override suspend fun execute(action: RadioPlatformAction): Boolean {
         val mapped = when (action.name) {

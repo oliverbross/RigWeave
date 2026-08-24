@@ -65,7 +65,11 @@ class PanadapterController(
     private val audioManager = context.getSystemService(AudioManager::class.java)
     private val prefs = context.getSharedPreferences("rigweave-app", Context.MODE_PRIVATE)
     private val main = Handler(Looper.getMainLooper())
-    private val nativeHandle = NativePanadapter.create()
+    private val nativeHandle = NativeHandleOwner(
+        initialHandle = NativePanadapter.create().also { check(it != 0L) { "Native panadapter unavailable" } },
+        destroyHandle = NativePanadapter::destroy,
+    )
+    @Volatile private var closed = false
     private val running = AtomicBoolean(false)
     private val publicationPending = AtomicBoolean(false)
     private var recorder: AudioRecord? = null
@@ -209,6 +213,7 @@ class PanadapterController(
 
     @SuppressLint("MissingPermission") // RECORD_AUDIO is checked immediately below; builder failures are caught per candidate.
     fun start() {
+        if (closed) return
         if (running.get() || lifecycle == PanadapterLifecycle.STARTING) return
         wantedLive = true
         stopReplay()
@@ -382,19 +387,20 @@ class PanadapterController(
         val physicalRate = proof.physicalRate
         routeProof = proof
         val configured = settings.copy(requestedRate = physicalRate)
-        if (!NativePanadapter.configure(nativeHandle, physicalRate, configured.fftSize, configured.overlapPercent,
+        val nativeConfigured = nativeHandle.withHandle { handle -> NativePanadapter.configure(handle, physicalRate, configured.fftSize, configured.overlapPercent,
                 configured.window.nativeValue, configured.displayFloorDb, configured.displayTopDb,
                 configured.attack, configured.release, configured.averageFrames, configured.peakHold,
                 configured.peakDecayDbPerSecond, configured.genericKx3Flatness, configured.swapIq,
                 configured.invertI, configured.invertQ, configured.conjugate, configured.iTrim, configured.qTrim,
-                configured.zoomDecimation, configured.zoomOffsetHz)) {
+                configured.zoomDecimation, configured.zoomOffsetHz) } ?: false
+        if (!nativeConfigured) {
             record.removeOnRoutingChangedListener(routeListener); runCatching { record.stop() }; record.release()
             audio.releaseAudio("PANADAPTER"); lifecycle = PanadapterLifecycle.ERROR
             status = "Native DSP rejected the proven physical format"; return
         }
-        NativePanadapter.setIqCorrection(nativeHandle, configured.iqAReal, configured.iqAImag,
+        nativeHandle.withHandle { handle -> NativePanadapter.setIqCorrection(handle, configured.iqAReal, configured.iqAImag,
             configured.iqBReal, configured.iqBImag,
-            configured.iqCorrectionEnabled && configured.calibrationDeviceKey == selected.stableKey && configured.calibrationRate == physicalRate)
+            configured.iqCorrectionEnabled && configured.calibrationDeviceKey == selected.stableKey && configured.calibrationRate == physicalRate) }
         buffers = Array(3) { NativeBuffer(LongArray(9), FloatArray(14), FloatArray(configured.fftSize),
             FloatArray(configured.fftSize), FloatArray(configured.fftSize), IntArray(waterfallWidth(configured.fftSize))) }
         rebuildWaterfall(configured.fftSize)
@@ -458,13 +464,14 @@ class PanadapterController(
             val discontinuity = count % 2 != 0
             appendRecording(samples, count, recordingBytes, record.sampleRate)
             accumulateCalibration(samples, count, record.sampleRate)
-            val ready = NativePanadapter.push(nativeHandle, samples, count, discontinuity)
+            val nativeGeneration = nativeHandle.generation()
+            val ready = nativeHandle.withHandle { NativePanadapter.push(it, samples, count, discontinuity) } ?: return
             val now = System.nanoTime()
             if (ready && publicationPending.compareAndSet(false, true)) {
                 if (!spectrumFrameDue(now)) { publicationPending.set(false); continue }
                 val buffer = buffers[bufferIndex]
-                val copied = NativePanadapter.snapshot(nativeHandle, buffer.meta, buffer.metrics,
-                    buffer.trace, buffer.waterfall, buffer.peak)
+                val copied = nativeHandle.withHandle { NativePanadapter.snapshot(it, buffer.meta, buffer.metrics,
+                    buffer.trace, buffer.waterfall, buffer.peak) } ?: return
                 if (copied > 0) {
                     val analysis = displayAnalyzer.analyze(buffer.waterfall, routeProof.physicalRate, settings)
                     buffer.analysis = analysis
@@ -475,7 +482,7 @@ class PanadapterController(
                     }
                     bufferIndex = (bufferIndex + 1) % buffers.size
                     main.post {
-                        publish(buffer, copied)
+                        if (nativeHandle.isCurrent(nativeGeneration)) publish(buffer, copied)
                         publicationPending.set(false)
                     }
                 } else publicationPending.set(false)
@@ -602,7 +609,7 @@ class PanadapterController(
         return "Undo requested · ${formatRadioFrequency(qsy.previousHz)} MHz"
     }
 
-    fun resetPeakHold() = NativePanadapter.resetPeakHold(nativeHandle)
+    fun resetPeakHold() { nativeHandle.withHandle(NativePanadapter::resetPeakHold) }
 
     fun startRecording(seconds: Int = 10): String {
         if (lifecycle != PanadapterLifecycle.LIVE || !routeProof.verified) return "Recording requires verified live stereo I/Q"
@@ -677,7 +684,7 @@ class PanadapterController(
                         if (read <= 0) break
                         val even = read - read % 4
                         ByteBuffer.wrap(byteBuffer, 0, even).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shortBuffer, 0, even / 2)
-                        if (NativePanadapter.push(nativeHandle, shortBuffer, even / 2, false)) publishNativeReplay()
+                        if (nativeHandle.withHandle { NativePanadapter.push(it, shortBuffer, even / 2, false) } == true) publishNativeReplay()
                     }
                 }
             }.onFailure { error -> main.post { lifecycle = PanadapterLifecycle.ERROR; status = "Replay failed: ${error.message}" } }
@@ -694,17 +701,17 @@ class PanadapterController(
 
     private fun configureNativeForRate(rate: Int): Boolean {
         val configured = settings
-        val ok = NativePanadapter.configure(nativeHandle, rate, configured.fftSize, configured.overlapPercent,
+        val ok = nativeHandle.withHandle { handle -> NativePanadapter.configure(handle, rate, configured.fftSize, configured.overlapPercent,
             configured.window.nativeValue, configured.displayFloorDb, configured.displayTopDb,
             configured.attack, configured.release, configured.averageFrames, configured.peakHold,
             configured.peakDecayDbPerSecond, configured.genericKx3Flatness, configured.swapIq,
             configured.invertI, configured.invertQ, configured.conjugate, configured.iTrim, configured.qTrim,
-            configured.zoomDecimation, configured.zoomOffsetHz)
+            configured.zoomDecimation, configured.zoomOffsetHz) } ?: false
         if (ok) {
             val selectedKey = selectedInput?.stableKey.orEmpty()
-            NativePanadapter.setIqCorrection(nativeHandle, configured.iqAReal, configured.iqAImag,
+            nativeHandle.withHandle { handle -> NativePanadapter.setIqCorrection(handle, configured.iqAReal, configured.iqAImag,
                 configured.iqBReal, configured.iqBImag,
-                configured.iqCorrectionEnabled && configured.calibrationDeviceKey == selectedKey && configured.calibrationRate == rate)
+                configured.iqCorrectionEnabled && configured.calibrationDeviceKey == selectedKey && configured.calibrationRate == rate) }
             buffers = Array(3) { NativeBuffer(LongArray(9), FloatArray(14), FloatArray(configured.fftSize),
                 FloatArray(configured.fftSize), FloatArray(configured.fftSize), IntArray(waterfallWidth(configured.fftSize))) }
             bufferIndex = 0
@@ -715,8 +722,10 @@ class PanadapterController(
 
     private fun publishNativeReplay() {
         if (!publicationPending.compareAndSet(false, true)) return
+        val nativeGeneration = nativeHandle.generation()
         val buffer = buffers[bufferIndex]
-        val copied = NativePanadapter.snapshot(nativeHandle, buffer.meta, buffer.metrics, buffer.trace, buffer.waterfall, buffer.peak)
+        val copied = nativeHandle.withHandle { NativePanadapter.snapshot(it, buffer.meta, buffer.metrics, buffer.trace, buffer.waterfall, buffer.peak) }
+            ?: run { publicationPending.set(false); return }
         if (copied > 0) {
             val analysis = displayAnalyzer.analyze(buffer.waterfall, buffer.meta[4].toInt(), settings)
             buffer.analysis = analysis
@@ -727,7 +736,10 @@ class PanadapterController(
                 prepareWaterfallRow(buffer.waterfall, buffer.waterfallPixels, analysis)
             }
             bufferIndex = (bufferIndex + 1) % buffers.size
-            main.post { publish(buffer, copied); publicationPending.set(false) }
+            main.post {
+                if (nativeHandle.isCurrent(nativeGeneration)) publish(buffer, copied)
+                publicationPending.set(false)
+            }
         }
         else publicationPending.set(false)
     }
@@ -737,7 +749,7 @@ class PanadapterController(
         if (lifecycle != PanadapterLifecycle.LIVE || !routeProof.verified || !current.validStereo) return "Calibration requires verified independent stereo channels"
         if (abs(knownOffsetHz) < 500f || abs(knownOffsetHz) > current.effectiveSampleRate * .42f) return "Place marker A on one known stable tone clearly off centre"
         if (current.peakDb - current.floorDb < 20f || current.clippedFraction > .001f) return "Calibration tone must be stable, unclipped, and at least 20 dB above floor"
-        NativePanadapter.setIqCorrection(nativeHandle, 1f, 0f, 0f, 0f, false)
+        nativeHandle.withHandle { NativePanadapter.setIqCorrection(it, 1f, 0f, 0f, 0f, false) }
         calibrationTargetFrames = routeProof.configuredRate.toLong() * seconds.coerceIn(2, 8)
         calibrationCount = 0; calibrationSumI = 0.0; calibrationSumQ = 0.0
         calibrationSumII = 0.0; calibrationSumQQ = 0.0; calibrationSumIQ = 0.0
@@ -804,7 +816,7 @@ class PanadapterController(
             main.post { calibrationStatus = "Calibration rejected: correction is not finite or plausible"; restoreSavedCorrection() }
             return
         }
-        NativePanadapter.setIqCorrection(nativeHandle, 1f, 0f, bReal, bImag, true)
+        nativeHandle.withHandle { NativePanadapter.setIqCorrection(it, 1f, 0f, bReal, bImag, true) }
         main.post {
             calibrationCandidate = PanadapterCalibrationCandidate(bReal, bImag, calibrationKnownOffsetHz, rejectionBefore,
                 measuredOffsetHz = measuredOffset, axisErrorHz = measuredOffset - calibrationKnownOffsetHz,
@@ -929,10 +941,10 @@ class PanadapterController(
     }
 
     private fun restoreSavedCorrection() {
-        NativePanadapter.setIqCorrection(nativeHandle, settings.iqAReal, settings.iqAImag,
+        nativeHandle.withHandle { handle -> NativePanadapter.setIqCorrection(handle, settings.iqAReal, settings.iqAImag,
             settings.iqBReal, settings.iqBImag,
             settings.iqCorrectionEnabled && settings.calibrationDeviceKey == routeProof.requestedDevice &&
-                settings.calibrationRate == routeProof.configuredRate)
+                settings.calibrationRate == routeProof.configuredRate) }
     }
 
     private fun applyMeasuredFlatness(buffer: NativeBuffer, count: Int, validMask: BooleanArray) {
@@ -1087,9 +1099,11 @@ class PanadapterController(
     }.getOrElse { "Support export failed: ${it.message}" }
 
     fun close() {
+        if (closed) return
+        closed = true
         stop(); stopReplay(); wantedLive = false
         audioManager.unregisterAudioDeviceCallback(deviceCallback)
         waterfallBitmap?.recycle(); waterfallBitmap = null
-        NativePanadapter.destroy(nativeHandle)
+        nativeHandle.close()
     }
 }
