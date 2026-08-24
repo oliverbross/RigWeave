@@ -99,11 +99,11 @@ endif()
 if(RIGWEAVE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
-    foreach(upstream_test IN ITEMS rigweave_core_tests rigweave_propagation_adapter_tests)
-        if(TARGET ${upstream_test})
-            add_dependencies(RigWeaveDesktop ${upstream_test})
-        endif()
-    endforeach()
+    # The embedded core registers assert-based standalone tests unconditionally;
+    # Release defines NDEBUG, so its own project runs those in a Debug gate.
+    # This superproject owns and runs the focused desktop test matrix below.
+    set_tests_properties(rigweave_core_tests rigweave_propagation_adapter_tests
+        PROPERTIES DISABLED TRUE)
 endif()
 
 set(CPACK_PACKAGE_NAME "RigWeave")
