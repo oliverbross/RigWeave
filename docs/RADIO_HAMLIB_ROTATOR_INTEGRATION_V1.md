@@ -25,3 +25,5 @@ The rotator workspace instantiates native serial, rotctld and embedded-Hamlib dr
 The protected Lenovo install used only `adb install -r` with the arm64 candidate. UID 10352, all 146 pre-launch non-cache file hashes, schema 16, 67,223 QSOs and 67,223 projections were preserved. The same PID survived 180 seconds and relaunch, the crash buffer stayed empty, and Radio, Settings and the empty Rotator workspace rendered while every backend remained disconnected. Exact hosted run identity is reported externally alongside the immutable SHA it validates. Physical QMX, RGO ONE and rotator acceptance remains pending and is not inferred from these checks.
 
 See `RADIO_PLATFORM_OWNERSHIP.md`, `RADIO_PROFILE_AND_BACKEND_MATRIX.md`, `ROTATOR_INTEGRATION_AND_BAND_POLICY.md`, and `RADIO_ROTATOR_LIVE_ACCEPTANCE.md` for the detailed boundaries.
+
+Sweep 3 adds operator-facing Radio Profiles/Add Radio and Rotator Profiles/Add Rotator surfaces. Built-in native radio selection and Hamlib model selection remain disconnected. Rotator profile documents persist after safe create/edit/delete; creation and band assignment do not connect, move, park or arm automation.

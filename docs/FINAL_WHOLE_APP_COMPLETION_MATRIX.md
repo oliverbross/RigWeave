@@ -34,3 +34,5 @@ Mandatory build, watcher, package, scale, hosted exact-SHA, push and device resu
 | Hamlib radio and rotator | SOURCE_COMPLETE | One vendored 4.7.2 archive/JNI bridge; physical models pending. |
 | Rotator workspace and safety | SOURCE_COMPLETE; MOTION_PENDING | One owner, explicit motion review, session-only automation, immediate STOP. |
 | Protected tablet | DEVICE_ACCEPTANCE_PENDING | Backup, `adb install -r`, launch and persistence evidence required. |
+
+Sweep 3 makes Radio, Hamlib, QMX/QMX+, RGO ONE, Rotator and WWFF operator-reachable through Settings and workspace routes. CQ/ITU/state geometry remains `PROVIDER_BLOCKED / UNAVAILABLE_DATA`; physical radio, RF and rotator-motion acceptance remains pending and is never inferred.

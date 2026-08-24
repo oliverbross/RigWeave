@@ -45,3 +45,5 @@ Local log ADIF export/import, configuration export/import and the sanitized supp
 - Rotator profiles may contain private LAN endpoints. Ordinary recovery export excludes those endpoints; restoring configuration clears connection, movement, automation-arm and tracking state.
 - Diagnostics retain bounded, sanitized errors and capability/settings digests. Raw CAT frames, serial numbers, authenticated endpoints, QSO data and audio are excluded.
 - QMX UAC routing is accepted only when the route proves the expected stable-device digest; microphone fallback is prohibited.
+
+Sweep 3 adds safe alert/display profile definitions, global Contest defaults, muted Groups.io alert group identifiers, cluster counters/history-request metadata and rotator profile documents. It adds no raw cluster lines, Groups.io message bodies, credentials, private WWFF directory, CAT frames, RF payload or screen content to support bundles. Debug Groups.io alert injection is synthetic and is not persisted.

@@ -25,3 +25,5 @@
 ## Protected-tablet UI evidence
 
 The installed candidate rendered Radio as CAT offline with explicit Connect, rendered the radio profile Settings page with native QMX/QMX+/RGO choices and 304 embedded Hamlib models, and rendered the Rotator settings plus the empty Rotator workspace. The workspace reported zero configured profiles; no Connect, PTT, TUNE, park, motion or hardware action was invoked. Its temporary navigation opt-in was restored OFF and the prior Digi destination restored.
+
+Sweep 3 source exposes full profile cards, setup actions, persistence and health truth, but prior Sweep 2 tablet screenshots are not Sweep 3 evidence. Repeat the protected install/UI checklist at the exact final SHA without connecting a radio or rotator and without invoking PTT/TUNE/movement.
