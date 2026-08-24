@@ -49,7 +49,10 @@ jobs:
           choco install ninja --version 1.13.2 -y --no-progress
           choco install nsis --version 3.11 -y --no-progress
           & "$env:RIGWEAVE_MINGW_BIN/gcc.exe" --version
-          makensis /VERSION
+          $nsis = "${env:ProgramFiles(x86)}/NSIS/makensis.exe"
+          if (!(Test-Path $nsis)) { throw 'Pinned NSIS executable was not installed' }
+          ([IO.Path]::GetDirectoryName($nsis)) | Out-File $env:GITHUB_PATH -Append
+          & $nsis /VERSION
       - name: Install MSYS2 autotools shell
         uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
         with:

@@ -48,7 +48,7 @@ QtWavelogEndpoint::QtWavelogEndpoint(QObject *parent):QObject(parent){}
 
 QUrl QtWavelogEndpoint::normalizedRoot(const QUrl &input) {
     QUrl url=input;if(url.scheme().isEmpty())url=QUrl(QStringLiteral("https://%1").arg(input.toString()));
-    if(url.scheme()!=QStringLiteral("https")||url.host().isEmpty())return{};url.setQuery({});url.setFragment({});
+    if(url.scheme()!=QStringLiteral("https")||url.host().isEmpty())return{};url.setQuery(QString{});url.setFragment(QString{});
     QString path=url.path();while(path.endsWith('/'))path.chop(1);
     if(path.endsWith("/index.php"))path+="/api/v2";else if(!path.endsWith("/api/v2")&&!path.endsWith("/index.php/api/v2"))path+="/index.php/api/v2";
     if (!path.endsWith('/')) path += '/';
