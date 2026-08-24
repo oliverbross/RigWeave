@@ -1853,6 +1853,15 @@ class DigiController(
         sessionStore.close()
         sourceOriginal?.recycle(); sourceOriginal = null
         nativeHandle.close()
-        scope.cancel()
+        val shutdown = scope.launch {
+            withContext(NonCancellable) {
+                withTimeoutOrNull(2_500L) {
+                    runCatching { flex.stopTransmit("Digi controller closed") }
+                    runCatching { transport.send("RX;") }
+                    routes.releaseAudio(AudioOwners.DIGI_TX)
+                }
+            }
+        }
+        shutdown.invokeOnCompletion { scope.cancel() }
     }
 }
