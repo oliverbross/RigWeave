@@ -39,8 +39,8 @@ Source/unit/build evidence does not prove authenticated services, physical UI/au
 
 - Android JVM tests, `bundleDebug`, instrumentation-source compilation, instrumentation APK assembly and `lintDebug`: PASS.
 - The programme's named `assembleArm64Debug` task is not registered by the frozen source. The existing supported single-ABI mechanism, `assembleDebug -PrigweaveAbi=arm64-v8a`, passed and produced the tablet APK.
-- Four-ABI AAB: 53 MB, SHA-256 `1dd012ffd08b924661c057b2890efbc296341a9afb96746158965a308f9fae49`.
-- Arm64-only APK: 56 MB, SHA-256 `2c5ead550d5621762b53bb6c4a2859571289c4afc68f416222ff85468679d8a4`.
+- Four-ABI AAB: 53 MB in the pre-delivery local gate, below the 60 MB ceiling. The final exact-SHA artifact hash belongs in delivery evidence rather than a self-referential source commit.
+- Arm64-only APK: 56 MB in the pre-delivery local gate, below the 130 MB ceiling. Its final exact-SHA hash is recorded after the branch identity is frozen.
 - Rust: 97 passed, zero failed, one intentionally ignored. Debug shared core: 2/2 CTest targets passed.
 - Unsigned generic iOS Simulator and generic iOS device regression builds: PASS. Apple feature parity was not claimed.
 - Package audit: all four required AAB ABIs are present; the arm64 APK contains only `arm64-v8a`; no `rigctl`, `rigctld` or packaged `libc++_shared.so` payload was found.
