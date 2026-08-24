@@ -1,4 +1,5 @@
 #include "rigweave/desktop/ClusterController.hpp"
+#include "rigweave/desktop/DesktopPlatform.hpp"
 #include "rigweave/desktop/WavelogSync.hpp"
 
 #include <QTemporaryDir>

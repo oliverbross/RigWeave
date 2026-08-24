@@ -3,6 +3,7 @@
 #include "rigweave/desktop/WavelogSync.hpp"
 
 #include <QElapsedTimer>
+#include <QSqlError>
 #include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QtTest>
