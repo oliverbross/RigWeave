@@ -1,0 +1,46 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {"major": 3, "minor": 28, "patch": 0},
+  "configurePresets": [
+    {
+      "name": "desktop-common",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/desktop/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CXX_STANDARD": "17",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "RIGWEAVE_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "desktop-macos-release",
+      "inherits": "desktop-common",
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}
+    },
+    {
+      "name": "desktop-windows-release",
+      "inherits": "desktop-common",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "RIGWEAVE_REQUIRE_HAMLIB": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {"name": "desktop-macos-release", "configurePreset": "desktop-macos-release"},
+    {"name": "desktop-windows-release", "configurePreset": "desktop-windows-release"}
+  ],
+  "testPresets": [
+    {
+      "name": "desktop-macos-release",
+      "configurePreset": "desktop-macos-release",
+      "output": {"outputOnFailure": true}
+    },
+    {
+      "name": "desktop-windows-release",
+      "configurePreset": "desktop-windows-release",
+      "output": {"outputOnFailure": true}
+    }
+  ]
+}
