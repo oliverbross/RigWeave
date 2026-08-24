@@ -130,4 +130,4 @@ Only eligible global forecasts persist on 15-minute station/window/band slots. V
 - Feature stress performs 1,000 create/close cycles; Digi, Flex, Hamlib and satellite contracts perform 500 cycles; map callback simulation performs 100 dispose cycles.
 - JNI byte/float arrays are capped at 4 Mi elements, encoded sample output at 16 Mi elements, Flex discovery at 64 KiB and SSTV dimensions at 2,048 by 2,048.
 - Digi receive cleanup is asynchronous and capped at 2.5 seconds; Hamlib transport join/flush/disconnect uses bounded timeouts; lifecycle close no longer calls `runBlocking` for USB disconnect.
-- ASan and UBSan report no finding across all three native CTest targets. Device PSS/native heap/thread/FD plateau evidence remains a protected-tablet gate.
+- ASan and UBSan report no finding across all three native CTest targets. The protected tablet's 30-minute locked-state process soak remained one PID with 40 threads, 179-180 FDs and bounded PSS/native heap; visible unlocked foreground/navigation acceptance remains blocked by the secure keyguard.

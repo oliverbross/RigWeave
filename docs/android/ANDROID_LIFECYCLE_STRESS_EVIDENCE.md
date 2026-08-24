@@ -35,5 +35,8 @@ No AddressSanitizer or UndefinedBehaviorSanitizer finding was emitted. ThreadSan
 | arm64 debug APK | 58,426,676 | `f99b529f43e28bc16834fd80cd488293234d5399e04a972d2d87ae83240896b9` |
 | four-ABI debug AAB | 55,739,195 | `e43aeb115149899d19d95060464fd5274cb74612d8a60c66a8fe3976aee8f053` |
 
-Device soak memory/thread/file-descriptor samples are recorded in `ANDROID_HARDENING_LIVE_ACCEPTANCE.md`.
+## Protected-device process stress
 
+The protected Lenovo passed 25/25 force-stop/relaunch cycles, 20/20 HOME/relaunch lifecycle cycles and a 30-minute locked-state process/resource soak with one stable PID and an empty crash buffer. Soak total PSS moved from 268,607 KB through a 289,276 KB midpoint to 260,130 KB; native-heap PSS moved from 58,564 KB through 67,984 KB to 65,060 KB. Threads remained 40 and FDs 179-180. A final force-stop/relaunch produced a fresh process and another empty crash buffer.
+
+The secure keyguard remained active throughout. These measurements prove bounded process/resource behavior behind the lock screen, not safe visible workspace navigation or a true unlocked foreground-provider soak. The exact device boundary is recorded in `ANDROID_HARDENING_LIVE_ACCEPTANCE.md`.

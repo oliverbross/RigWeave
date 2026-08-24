@@ -36,5 +36,6 @@ Canonical QSO mutation remains singular. Radio and rotator restore remain discon
 - Package: 58,426,676-byte arm64 APK and 55,739,195-byte four-ABI AAB; prohibited payload, private evidence, rigctl/rigctld and duplicate libc++ checks passed.
 - Watchers: Wavelog, Hamlib, MSHV, Neural DX and RGO ONE returned no source blocker; Nexus, OpenHamClock, QMX and rotator sources returned advisory review-required/unavailable status. No upstream source was absorbed.
 
-Exact-SHA hosted evidence and protected-tablet evidence are recorded separately because source/build results do not prove device, authenticated service, audio, CAT/PTT/TUNE, RF or rotator behavior.
+Hosted release-candidate run `32784249372` passed all seven jobs at exact SHA `826ba3031d869f12e0c9d37649257f9b2fac1ecf`. On the protected tablet, hash-first backup, schema compatibility, `adb install -r`, UID/private-data/schema/QSO preservation, 25 relaunch cycles, 20 HOME/relaunch cycles, a 30-minute locked-state resource soak and final crash-buffer check passed. The secure keyguard was not bypassed, so safe visible workspace navigation and a true unlocked foreground-provider soak remain an explicit acceptance blocker.
 
+Source/build/install/process results do not prove authenticated service, audio, CAT/PTT/TUNE, RF or rotator behavior.
