@@ -5,6 +5,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QGuiApplication>
+#include <QKeyEvent>
 #include <QQmlContext>
 #include <QSet>
 #include <QTimer>
@@ -104,8 +105,6 @@ bool DesktopApplication::initialize(QString *error) {
   });
   if (!m_parity.open(m_paths.databases(), m_paths.cache(), m_demoMode, error))
     return false;
-  QTimer::singleShot(0, &m_radio,
-                     &DesktopRadioController::startConfiguredAutoConnect);
   if (m_demoMode) {
     m_rfObservations.loadDeterministicDemo();
     const qint64 now = QDateTime::currentSecsSinceEpoch();
@@ -202,9 +201,9 @@ QVariantList DesktopApplication::commands() const {
   add("edit.paste", "Paste", "EDIT", "paste", shortcut("Meta+V", "Ctrl+V"));
   add("edit.delete", "Delete", "EDIT", "delete");
   add("edit.selectAll", "Select All", "EDIT", "select", shortcut("Meta+A", "Ctrl+A"));
-  add("edit.find", "Find", "EDIT", "search", shortcut("Meta+F", "Ctrl+F"));
-  add("view.sidebarToggle", "Show/Hide Sidebar", "VIEW", "sidebar", shortcut("Meta+\\", "Ctrl+\\"));
-  add("view.sidebarMode", "Expand/Collapse Sidebar", "VIEW", "sidebar");
+  add("edit.find", "Find", "EDIT", "search", shortcut("Meta+F", "Ctrl+F"), "", false, false);
+  add("view.sidebarToggle", "Workspace Sidebar", "VIEW", "sidebar", {}, "", false, false);
+  add("view.sidebarMode", "Sidebar Display Mode", "VIEW", "sidebar", {}, "", false, false);
   add("view.fullScreen", "Full Screen", "VIEW", "fullscreen", shortcut("Meta+Ctrl+F", "F11"));
   add("view.shack", "Shack Display", "VIEW", "shack", shortcut("Meta+Shift+S", "Ctrl+Shift+D"));
   add("view.resetLayout", "Reset Workspace Layout", "VIEW", "reset");
@@ -248,10 +247,17 @@ void DesktopApplication::invokeCommand(const QString &commandId) {
       m_radio.disconnectRadio();
     else if (commandId == "view.sidebarMode")
       setSidebarExpanded(!m_sidebarExpanded);
-    else if (commandId.startsWith("edit.")) {
+    else if (commandId == "edit.delete") {
+      if (QObject *focus = QGuiApplication::focusObject()) {
+        QKeyEvent press(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+        QKeyEvent release(QEvent::KeyRelease, Qt::Key_Delete, Qt::NoModifier);
+        QCoreApplication::sendEvent(focus, &press);
+        QCoreApplication::sendEvent(focus, &release);
+      }
+    } else if (commandId.startsWith("edit.")) {
       QObject *focus = QGuiApplication::focusObject();
       const QByteArray method = commandId.mid(5).toUtf8();
-      if (focus && commandId != "edit.find" && commandId != "edit.delete")
+      if (focus)
         QMetaObject::invokeMethod(focus, method.constData());
     }
     else if (commandId == "app.quit")
@@ -259,6 +265,10 @@ void DesktopApplication::invokeCommand(const QString &commandId) {
     emit commandInvoked(commandId);
     return;
   }
+}
+
+QString DesktopApplication::localFilePath(const QUrl &url) const {
+  return url.isLocalFile() ? url.toLocalFile() : QString{};
 }
 bool DesktopApplication::prepareGalleryTci(const QUrl &endpoint) {
   if (!m_demoMode || !endpoint.isValid())

@@ -37,6 +37,12 @@ jobs:
         run: |
           cmake --build build/macos --parallel 2
           ctest --test-dir build/macos --output-on-failure
+      - name: Deterministic UI lifecycle stress
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          mkdir -p artifacts
+          build/macos/RigWeaveDesktop.app/Contents/MacOS/RigWeaveDesktop --ui-stress-report artifacts/ui-stress-macos.json
       - name: Unsigned app packaging proof
         run: |
           cmake --install build/macos --prefix artifacts/macos
@@ -51,7 +57,7 @@ jobs:
           build/macos/RigWeaveDesktop.app/Contents/MacOS/RigWeaveDesktop --gallery-dir artifacts/ui-gallery/1440x900 --gallery-width 1440 --gallery-height 900
           build/macos/RigWeaveDesktop.app/Contents/MacOS/RigWeaveDesktop --gallery-dir artifacts/ui-gallery/1512x982 --gallery-width 1512 --gallery-height 982
           build/macos/RigWeaveDesktop.app/Contents/MacOS/RigWeaveDesktop --gallery-dir artifacts/ui-gallery/2560x1440 --gallery-width 2560 --gallery-height 1440
-          QT_SCALE_FACTOR=1.5 build/macos/RigWeaveDesktop.app/Contents/MacOS/RigWeaveDesktop --gallery-dir artifacts/ui-gallery/150pct --gallery-width 1920 --gallery-height 1080
+          QT_SCALE_FACTOR=1.5 build/macos/RigWeaveDesktop.app/Contents/MacOS/RigWeaveDesktop --gallery-dir artifacts/ui-gallery/150pct --gallery-width 1280 --gallery-height 720
           for profile in 1440x900 1512x982 1920x1080 2560x1440 150pct; do
             test "$(find "artifacts/ui-gallery/$profile" -name '*.png' | wc -l | tr -d ' ')" = 39
           done
@@ -61,5 +67,6 @@ jobs:
           path: |
             artifacts/macos
             artifacts/ui-gallery
+            artifacts/ui-stress-macos.json
           if-no-files-found: error
           retention-days: 14

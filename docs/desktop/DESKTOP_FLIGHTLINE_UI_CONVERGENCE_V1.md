@@ -5,10 +5,10 @@ This branch converges the Qt desktop shell with the proven Android Flightline in
 ## Delivered
 
 - A canonical 48-command C++ registry shared by navigation, platform menus, keyboard shortcuts and command palette.
-- A packaged, original 40-icon SVG family covering every destination and global action.
-- Grouped 238 px navigation with a persisted 64 px compact mode and automatic narrow-window collapse.
-- A native macOS global menu with Qt application roles and no in-window Windows menu.
-- An Alt-accessible Windows File/Edit/View/Radio/Tools/Window/Help bar.
+- A packaged, original 40-icon SVG family plus native `.ico`/`.icns` application assets.
+- Full-width workspaces with no persistent global side navigation.
+- A native macOS global menu with Qt application roles and no in-window menu.
+- An Alt-accessible Win32 File/Edit/View/Radio/Navigate/Tools/Window/Help menu attached to native chrome.
 - Adaptive status header, persistent written Global Stop, accessible names/focus/tooltips and shortcut reference.
 - Complete 39-frame deterministic destination gallery, including Presets, across narrow, standard, high-resolution and 150% profiles.
 - New tablet atlas, baseline gap, workspace, reachability, menu, iconography, responsive and visual acceptance evidence.

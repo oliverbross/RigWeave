@@ -3,8 +3,7 @@
 | Visible action | UI → command | Service / storage / result | Error and test | Status |
 |---|---|---|---|---|
 | Open any workspace | Rail/menu/palette → `nav.*` | `Desktop.setCurrentDestination` → safe display config → loader | Unknown IDs rejected; command/UI contract test | FUNCTIONAL |
-| Expand/collapse rail | Rail/View → `view.sidebarMode` | `setSidebarExpanded` → display config | Narrow auto-collapse preserves preference; source contract | FUNCTIONAL |
-| Show/hide rail | View → `view.sidebarToggle` | Window-local presentation state | Reset Layout recovery; gallery profiles | FUNCTIONAL |
+| Global workspace navigation | Native Navigate menu / palette → `nav.*` | Full-width workspace loader | No persistent rail consumes client width; command contract | FUNCTIONAL |
 | Command palette | Menu/shortcut → `tools.palette` | Opens searchable enabled registry | Disabled commands omitted; command contract | FUNCTIONAL |
 | Global Stop | Header/menu/palette/Escape → `radio.stop` | Desktop stop → Radio/Rotator/Parity stop owners → safe state | Existing safety tests plus command contract | FUNCTIONAL |
 | Disconnect radio | Radio menu/page → `radio.disconnect` | Radio controller disconnect | Idempotent disconnected result; platform safety tests | FUNCTIONAL |
@@ -19,7 +18,7 @@
 | Edit actions | Edit menu/shortcut → `edit.*` | Current focus object standard edit methods | No focus means no mutation; QML tests | FUNCTIONAL |
 | Full screen | View/Window → `view.fullScreen` | Native window visibility | Same action restores windowed; visual profiles | FUNCTIONAL |
 | Shack Display | View/Window → `view.shack` | Window Shack loader | Global Stop stays visible; gallery frame | FUNCTIONAL |
-| Reset Layout | View → `view.resetLayout` | Restores visible rail/expanded preference/exits Shack | Prevents lost panes; source contract | FUNCTIONAL |
+| Reset Layout | View → `view.resetLayout` | Exits Shack and restores standard full-width workspace | Prevents lost panes; source contract | FUNCTIONAL |
 | Keyboard shortcuts | Shortcut guide / canonical registry | Application-scoped action dispatch | Disabled entries cannot fire; command contract | FUNCTIONAL |
 | Provider enable/refresh | Settings provider rows | Parity provider lifecycle/cache | CURRENT/STALE/OFFLINE_CACHE/EMPTY/ERROR/UNAVAILABLE; parity tests | TRUTHFUL_FOUNDATION |
 | Apply RX | Radio page | Radio requestFrequency/requestMode | Enabled only when connected; radio safety tests | LIVE_ACCEPTANCE_PENDING |

@@ -46,6 +46,7 @@ public:
   Q_INVOKABLE QVariantMap intelligence() const;
   Q_INVOKABLE QVariantMap buildInformation() const;
   Q_INVOKABLE bool saveFastEntry(const QVariantMap &values);
+  Q_INVOKABLE QString localFilePath(const QUrl &url) const;
   Q_INVOKABLE void invokeCommand(const QString &commandId);
   Q_INVOKABLE void globalStop();
   Q_INVOKABLE void shutdown();

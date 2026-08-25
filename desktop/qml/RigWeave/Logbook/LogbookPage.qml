@@ -21,8 +21,8 @@ Item { id: root
             Label{text:"Satellite"} TextField{id:satellite;Layout.fillWidth:true} Label{text:"Comments"} TextField{id:comment;Layout.fillWidth:true}
         }
     }
-    FileDialog { id: importDialog; title: "Import ADIF"; nameFilters: ["ADIF files (*.adi *.adif)"]; onAccepted: Adif.importFile(selectedFile.toString().replace("file://", "")) }
-    FileDialog { id: exportDialog; title: "Export ADIF"; fileMode: FileDialog.SaveFile; nameFilters: ["ADIF files (*.adi)"]; onAccepted: Adif.exportFile(selectedFile.toString().replace("file://", "")) }
+    FileDialog { id: importDialog; title: "Import ADIF"; nameFilters: ["ADIF files (*.adi *.adif)"]; onAccepted: Adif.importFile(Desktop.localFilePath(selectedFile)) }
+    FileDialog { id: exportDialog; title: "Export ADIF"; fileMode: FileDialog.SaveFile; nameFilters: ["ADIF files (*.adi)"]; onAccepted: Adif.exportFile(Desktop.localFilePath(selectedFile)) }
     ColumnLayout { anchors.fill: parent; anchors.margins: 18; spacing: 8
         RowLayout { Layout.fillWidth: true
             TextField { id: filterCall; placeholderText: "Callsign"; onEditingFinished: LogbookModel.setFilters(text,filterBand.currentText,filterMode.currentText,filterSource.currentText) }

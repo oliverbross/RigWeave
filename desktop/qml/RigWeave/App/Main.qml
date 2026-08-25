@@ -7,7 +7,7 @@ ApplicationWindow {
     id: window
     FlightlinePalette { id: flightline }
     property bool shackMode: false
-    property bool sidebarShown: true
+    property bool sidebarShown: false
     property int galleryRadioBackend: 0
     readonly property bool isMac: Qt.platform.os === "osx"
     readonly property bool compactShell: width < flightline.navBreakpoint
@@ -20,74 +20,24 @@ ApplicationWindow {
     title: isMac ? "RigWeave" : "RigWeave Desktop — " + Desktop.currentDestination
     color: flightline.graphiteDeep
 
-    menuBar: MenuBar {
-        visible: !window.isMac
-        height: visible ? implicitHeight : 0
-        Accessible.name: "RigWeave application menu"
-        Menu { title: qsTr("&File")
-            CommandAction { commandId: "file.fastEntry" }
-            MenuSeparator {}
-            CommandAction { commandId: "file.importAdif" }
-            CommandAction { commandId: "file.exportAdif" }
-            CommandAction { commandId: "file.importConfig" }
-            CommandAction { commandId: "file.exportConfig" }
-            MenuSeparator {}
-            CommandAction { commandId: "app.quit" }
-        }
-        Menu { title: qsTr("&Edit")
-            CommandAction { commandId: "edit.undo" }
-            CommandAction { commandId: "edit.redo" }
-            MenuSeparator {}
-            CommandAction { commandId: "edit.cut" }
-            CommandAction { commandId: "edit.copy" }
-            CommandAction { commandId: "edit.paste" }
-            CommandAction { commandId: "edit.delete" }
-            CommandAction { commandId: "edit.selectAll" }
-            MenuSeparator {}
-            CommandAction { commandId: "edit.find" }
-        }
-        Menu { title: qsTr("&View")
-            CommandAction { commandId: "view.sidebarToggle" }
-            CommandAction { commandId: "view.sidebarMode" }
-            MenuSeparator {}
-            CommandAction { commandId: "view.fullScreen" }
-            CommandAction { commandId: "view.shack" }
-            CommandAction { commandId: "view.resetLayout" }
-        }
-        Menu { title: qsTr("&Radio")
-            CommandAction { commandId: "radio.connect" }
-            CommandAction { commandId: "radio.disconnect" }
-            CommandAction { commandId: "radio.review" }
-            MenuSeparator {}
-            CommandAction { commandId: "radio.stop" }
-        }
-        Menu { title: qsTr("&Tools")
-            CommandAction { commandId: "tools.palette" }
-            CommandAction { commandId: "nav.settings" }
-            CommandAction { commandId: "nav.health" }
-            CommandAction { commandId: "tools.support" }
-        }
-        Menu { title: qsTr("&Window")
-            CommandAction { commandId: "view.fullScreen" }
-            CommandAction { commandId: "view.shack" }
-        }
-        Menu { title: qsTr("&Help")
-            CommandAction { commandId: "help.guide" }
-            CommandAction { commandId: "help.shortcuts" }
-            MenuSeparator {}
-            CommandAction { commandId: "nav.about" }
-            CommandAction { commandId: "help.licences" }
-        }
-    }
-
     Instantiator {
         model: Desktop.commands
         delegate: Shortcut {
             required property var modelData
             sequence: modelData.shortcut || ""
-            enabled: modelData.enabled === true && sequence.length > 0
+            enabled: !window.isMac && modelData.enabled === true && sequence.length > 0 && modelData.id !== "radio.stop"
             context: Qt.ApplicationShortcut
             onActivated: Desktop.invokeCommand(modelData.id)
+        }
+    }
+    Shortcut {
+        sequence: "Escape"
+        context: Qt.ApplicationShortcut
+        onActivated: {
+            Desktop.invokeCommand("radio.stop")
+            window.shackMode = false
+            commandPalette.close()
+            navigation.forceActiveFocus()
         }
     }
 
@@ -99,14 +49,13 @@ ApplicationWindow {
                 commandPalette.open()
                 commandSearch.forceActiveFocus()
             } else if (commandId === "view.sidebarToggle") {
-                window.sidebarShown = !window.sidebarShown
+                window.sidebarShown = false
             } else if (commandId === "view.fullScreen") {
                 window.visibility = window.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen
             } else if (commandId === "view.shack") {
                 window.shackMode = !window.shackMode
             } else if (commandId === "view.resetLayout") {
-                window.sidebarShown = true
-                Desktop.sidebarExpanded = true
+                window.sidebarShown = false
                 window.shackMode = false
             } else if (commandId === "file.close") {
                 window.close()
@@ -128,7 +77,7 @@ ApplicationWindow {
     SplitView {
         anchors.fill: parent
         orientation: Qt.Horizontal
-        handle: Rectangle { implicitWidth: 1; color: "#343a40" }
+        handle: Rectangle { implicitWidth: navigation.visible ? 1 : 0; color: "#343a40" }
 
         Rectangle {
             id: navigation

@@ -7,23 +7,36 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QElapsedTimer>
+#include <QEvent>
+#include <QEventLoop>
 #include <QFont>
 #include <QFontDatabase>
+#include <QJsonDocument>
+#include <QIcon>
 #include <QApplication>
 #include <QAction>
 #include <QMenu>
 #include <QMenuBar>
 #include <QHostAddress>
+#include <QHash>
 #include <QPointer>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
+#include <QSaveFile>
 #include <QTimer>
 #include <QWebSocket>
 #include <QWebSocketServer>
 #include <cmath>
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <qqml.h>
+
+#ifdef Q_OS_WIN
+#include <QAbstractNativeEventFilter>
+#include <qt_windows.h>
+#endif
 
 using namespace rigweave::desktop;
 
@@ -126,6 +139,25 @@ bool installPlatformUiFont(QGuiApplication &app) {
 #endif
 }
 
+bool validGalleryFrame(const QImage &image) {
+  if (image.isNull() || image.width() < 1180 || image.height() < 720)
+    return false;
+  int minimum = 255, maximum = 0, opaque = 0, samples = 0;
+  for (int row = 0; row < 24; ++row) {
+    const int y = row * (image.height() - 1) / 23;
+    for (int column = 0; column < 32; ++column) {
+      const int x = column * (image.width() - 1) / 31;
+      const QColor colour = image.pixelColor(x, y);
+      const int luminance = qGray(colour.rgb());
+      minimum = std::min(minimum, luminance);
+      maximum = std::max(maximum, luminance);
+      opaque += colour.alpha() >= 250 ? 1 : 0;
+      ++samples;
+    }
+  }
+  return maximum - minimum >= 18 && opaque * 100 >= samples * 98;
+}
+
 #ifdef Q_OS_MACOS
 std::unique_ptr<QMenuBar> buildNativeMenuBar(DesktopApplication &desktop) {
   auto menuBar = std::make_unique<QMenuBar>();
@@ -178,9 +210,6 @@ std::unique_ptr<QMenuBar> buildNativeMenuBar(DesktopApplication &desktop) {
   command(edit, "edit.find");
 
   QMenu *view = menuBar->addMenu(QStringLiteral("View"));
-  command(view, "view.sidebarToggle");
-  command(view, "view.sidebarMode");
-  view->addSeparator();
   command(view, "view.fullScreen");
   command(view, "view.shack");
   command(view, "view.resetLayout");
@@ -208,7 +237,24 @@ std::unique_ptr<QMenuBar> buildNativeMenuBar(DesktopApplication &desktop) {
     if (QWindow *window = QGuiApplication::focusWindow())
       window->showMinimized();
   });
-  command(window, "view.fullScreen")->setText(QStringLiteral("Zoom / Full Screen"));
+  QAction *zoom = window->addAction(QStringLiteral("Zoom"));
+  QObject::connect(zoom, &QAction::triggered, qApp, [] {
+    if (QWindow *active = QGuiApplication::focusWindow()) {
+      if (active->visibility() == QWindow::Maximized)
+        active->showNormal();
+      else
+        active->showMaximized();
+    }
+  });
+  QAction *front = window->addAction(QStringLiteral("Bring All to Front"));
+  QObject::connect(front, &QAction::triggered, qApp, [] {
+    for (QWindow *candidate : QGuiApplication::allWindows()) {
+      candidate->show();
+      candidate->raise();
+    }
+  });
+  window->addSeparator();
+  command(window, "view.fullScreen")->setText(QStringLiteral("Enter Full Screen"));
 
   QMenu *help = menuBar->addMenu(QStringLiteral("Help"));
   command(help, "help.guide");
@@ -219,6 +265,140 @@ std::unique_ptr<QMenuBar> buildNativeMenuBar(DesktopApplication &desktop) {
   command(help, "help.licences");
   return menuBar;
 }
+#endif
+
+#ifdef Q_OS_WIN
+class WindowsNativeMenu final : public QAbstractNativeEventFilter {
+public:
+  explicit WindowsNativeMenu(DesktopApplication &desktop)
+      : m_desktop(desktop), m_root(CreateMenu()) {
+    HMENU file = addMenu(L"&File");
+    addCommand(file, "file.fastEntry");
+    addSeparator(file);
+    addCommand(file, "file.importAdif");
+    addCommand(file, "file.exportAdif");
+    addCommand(file, "file.importConfig");
+    addCommand(file, "file.exportConfig");
+    addSeparator(file);
+    addCommand(file, "app.quit", "Exit");
+
+    HMENU edit = addMenu(L"&Edit");
+    addCommand(edit, "edit.undo");
+    addCommand(edit, "edit.redo");
+    addSeparator(edit);
+    addCommand(edit, "edit.cut");
+    addCommand(edit, "edit.copy");
+    addCommand(edit, "edit.paste");
+    addCommand(edit, "edit.delete");
+    addCommand(edit, "edit.selectAll");
+    addSeparator(edit);
+    addCommand(edit, "edit.find");
+
+    HMENU view = addMenu(L"&View");
+    addCommand(view, "view.fullScreen");
+    addCommand(view, "view.shack");
+    addCommand(view, "view.resetLayout");
+
+    HMENU radio = addMenu(L"&Radio");
+    addCommand(radio, "radio.connect");
+    addCommand(radio, "radio.disconnect");
+    addCommand(radio, "radio.review");
+    addSeparator(radio);
+    addCommand(radio, "radio.stop");
+
+    HMENU navigate = addMenu(L"&Navigate");
+    for (const QVariant &value : m_desktop.commands()) {
+      const QVariantMap item = value.toMap();
+      if (item.value("rail").toBool())
+        addCommand(navigate, item.value("id").toString());
+    }
+    addSeparator(navigate);
+    addCommand(navigate, "tools.palette");
+
+    HMENU tools = addMenu(L"&Tools");
+    addCommand(tools, "tools.palette");
+    addCommand(tools, "nav.settings");
+    addCommand(tools, "nav.health");
+    addCommand(tools, "tools.support");
+
+    HMENU window = addMenu(L"&Window");
+    addCommand(window, "view.fullScreen");
+    addCommand(window, "view.shack");
+
+    HMENU help = addMenu(L"&Help");
+    addCommand(help, "help.guide");
+    addCommand(help, "help.shortcuts");
+    addSeparator(help);
+    addCommand(help, "nav.about", "About RigWeave");
+    addCommand(help, "help.licences");
+  }
+
+  ~WindowsNativeMenu() override {
+    if (m_window && IsWindow(m_window)) {
+      SetMenu(m_window, nullptr);
+      DestroyMenu(m_root);
+    }
+  }
+
+  bool attach(QQuickWindow *window) {
+    m_window = reinterpret_cast<HWND>(window->winId());
+    return m_window && SetMenu(m_window, m_root) && DrawMenuBar(m_window);
+  }
+
+  bool nativeEventFilter(const QByteArray &, void *message,
+                         qintptr *result) override {
+    auto *nativeMessage = static_cast<MSG *>(message);
+    if (nativeMessage && nativeMessage->message == WM_COMMAND &&
+        HIWORD(nativeMessage->wParam) == 0) {
+      const UINT command = LOWORD(nativeMessage->wParam);
+      const auto it = m_commands.constFind(command);
+      if (it != m_commands.cend()) {
+        m_desktop.invokeCommand(it.value());
+        if (result)
+          *result = 0;
+        return true;
+      }
+    }
+    return false;
+  }
+
+private:
+  HMENU addMenu(const wchar_t *label) {
+    HMENU menu = CreatePopupMenu();
+    AppendMenuW(m_root, MF_POPUP, reinterpret_cast<UINT_PTR>(menu), label);
+    return menu;
+  }
+
+  void addSeparator(HMENU menu) { AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); }
+
+  void addCommand(HMENU menu, const QString &commandId,
+                  const QString &overrideLabel = {}) {
+    for (const QVariant &value : m_desktop.commands()) {
+      const QVariantMap item = value.toMap();
+      if (item.value("id").toString() != commandId)
+        continue;
+      QString label = overrideLabel.isEmpty() ? item.value("label").toString()
+                                              : overrideLabel;
+      const QString shortcut = item.value("shortcut").toString();
+      if (!shortcut.isEmpty())
+        label += QStringLiteral("\t") + shortcut;
+      const UINT id = m_nextId++;
+      const UINT flags = MF_STRING |
+                         (item.value("enabled").toBool() ? MF_ENABLED
+                                                         : MF_GRAYED);
+      AppendMenuW(menu, flags, id,
+                  reinterpret_cast<LPCWSTR>(label.utf16()));
+      m_commands.insert(id, commandId);
+      return;
+    }
+  }
+
+  DesktopApplication &m_desktop;
+  HMENU m_root{};
+  HWND m_window{};
+  UINT m_nextId{1000};
+  QHash<UINT, QString> m_commands;
+};
 #endif
 
 struct GalleryFrame {
@@ -326,7 +506,7 @@ void captureGallery(QGuiApplication &app, DesktopApplication &desktop,
           QTimer::singleShot(
               150, window, [window, directory, frame, index, step, &app] {
                 const QImage image = window->grabWindow();
-                if (image.isNull() ||
+                if (!validGalleryFrame(image) ||
                     !image.save(directory + "/" + frame.fileName + ".png")) {
                   qCritical("UI gallery frame failed: %s",
                             qPrintable(frame.fileName));
@@ -341,6 +521,93 @@ void captureGallery(QGuiApplication &app, DesktopApplication &desktop,
   QTimer::singleShot(500, window, [step] { (*step)(); });
 }
 
+bool runUiStress(QGuiApplication &app, DesktopApplication &desktop,
+                 QQuickWindow *window, const QString &reportPath) {
+  const QStringList destinations{
+      "Home", "Radio", "Digi", "Panadapter", "EQ", "Logbook",
+      "Intelligence", "Sync", "Contest", "Band Maps", "Presets", "DX",
+      "Portable", "Operations", "Groups.io", "Rotator", "Settings", "Health",
+      "About"};
+  const QStringList settingsCategories{
+      "station", "radio", "audio", "digi", "keyer", "cluster", "alerts",
+      "contest", "bandmaps", "wavelog", "groups", "providers", "operations",
+      "rotator", "appearance", "health"};
+  const auto settle = [] {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  };
+  QElapsedTimer elapsed;
+  elapsed.start();
+  const int initialObjects = window->findChildren<QObject *>().size();
+  int peakObjects = initialObjects;
+  for (int cycle = 0; cycle < 500; ++cycle) {
+    desktop.setCurrentDestination(destinations.at(cycle % destinations.size()));
+    settle();
+    if (cycle % 25 == 0)
+      peakObjects = std::max(peakObjects, window->findChildren<QObject *>().size());
+  }
+  for (int cycle = 0; cycle < 100; ++cycle) {
+    desktop.setSidebarExpanded(cycle % 2 == 0);
+    settle();
+  }
+  desktop.setSidebarExpanded(true);
+  for (int cycle = 0; cycle < 100; ++cycle) {
+    window->setProperty("shackMode", cycle % 2 == 0);
+    settle();
+  }
+  window->setProperty("shackMode", false);
+  desktop.setCurrentDestination("Settings");
+  settle();
+  if (QObject *loader = window->findChild<QObject *>("workspaceLoader")) {
+    if (QObject *settings = qvariant_cast<QObject *>(loader->property("item"))) {
+      for (int cycle = 0; cycle < 100; ++cycle) {
+        settings->setProperty(
+            "currentCategory",
+            settingsCategories.at(cycle % settingsCategories.size()));
+        settle();
+      }
+    }
+  }
+  for (int cycle = 0; cycle < 50; ++cycle) {
+    window->showFullScreen();
+    settle();
+    window->showNormal();
+    settle();
+  }
+  for (int cycle = 0; cycle < 100; ++cycle) {
+    window->resize(1180 + (cycle % 7) * 120, 720 + (cycle % 5) * 70);
+    settle();
+  }
+  for (int cycle = 0; cycle < 100; ++cycle) {
+    desktop.invokeCommand(cycle % 2 == 0 ? "nav.home" : "nav.health");
+    settle();
+  }
+  desktop.setCurrentDestination("Home");
+  window->resize(1440, 900);
+  settle();
+  const int finalObjects = window->findChildren<QObject *>().size();
+  QElapsedTimer shutdown;
+  shutdown.start();
+  desktop.shutdown();
+  const qint64 shutdownMs = shutdown.elapsed();
+  const QVariantMap report{
+      {"workspaceChanges", 500}, {"sidebarCycles", 100},
+      {"shackCycles", 100},      {"settingsCategoryChanges", 100},
+      {"fullScreenCycles", 50},  {"resizeCycles", 100},
+      {"commandActionCycles", 100}, {"initialQmlObjects", initialObjects},
+      {"peakQmlObjects", peakObjects}, {"finalQmlObjects", finalObjects},
+      {"elapsedMs", elapsed.elapsed()}, {"shutdownMs", shutdownMs},
+      {"renderer", "Qt Quick offscreen deterministic stress"},
+      {"threads", "service-owner tests and process exit gate"},
+      {"rss", "reported by platform workflow when available"}};
+  QSaveFile file(reportPath);
+  if (!file.open(QIODevice::WriteOnly) ||
+      file.write(QJsonDocument::fromVariant(report).toJson(QJsonDocument::Indented)) < 0 ||
+      !file.commit())
+    return false;
+  return finalObjects <= initialObjects + 40 && shutdownMs < 5000;
+}
+
 } // namespace
 
 int main(int argc, char *argv[]) {
@@ -353,6 +620,7 @@ int main(int argc, char *argv[]) {
   QCoreApplication::setOrganizationDomain(QStringLiteral("rigweave.app"));
   QCoreApplication::setApplicationName(QStringLiteral("RigWeave Desktop"));
   QCoreApplication::setApplicationVersion(QStringLiteral("1.0.0-parity.1"));
+  app.setWindowIcon(QIcon(QStringLiteral(":/RigWeave/App/AppIcon.png")));
 
   QCommandLineParser parser;
   parser.addHelpOption();
@@ -363,11 +631,16 @@ int main(int argc, char *argv[]) {
       {"gallery-width", "Gallery width in pixels.", "width", "1920"});
   parser.addOption(
       {"gallery-height", "Gallery height in pixels.", "height", "1080"});
+  parser.addOption(
+      {"ui-stress-report", "Run deterministic UI lifecycle stress.", "file"});
   parser.process(app);
   const bool gallery = parser.isSet("gallery-dir");
+  const bool uiStress = parser.isSet("ui-stress-report");
+  if (gallery && uiStress)
+    return 4;
   if (gallery && !platformFontReady)
     return 4;
-  if (gallery)
+  if (gallery || uiStress)
     qputenv("RIGWEAVE_DESKTOP_DEMO", "1");
   const bool demo = qEnvironmentVariableIntValue("RIGWEAVE_DESKTOP_DEMO") == 1;
 
@@ -387,6 +660,9 @@ int main(int argc, char *argv[]) {
                    &QCoreApplication::quit);
 #ifdef Q_OS_MACOS
   std::unique_ptr<QMenuBar> nativeMenuBar = buildNativeMenuBar(desktop);
+#endif
+#ifdef Q_OS_WIN
+  std::unique_ptr<WindowsNativeMenu> nativeMenuBar;
 #endif
   std::unique_ptr<GalleryTciServer> galleryTci;
   if (gallery) {
@@ -418,6 +694,17 @@ int main(int argc, char *argv[]) {
   engine.load(QUrl(QStringLiteral("qrc:/RigWeave/App/Main.qml")));
   if (engine.rootObjects().isEmpty())
     return 3;
+#ifdef Q_OS_WIN
+  auto *mainWindow = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+  if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+    nativeMenuBar = std::make_unique<WindowsNativeMenu>(desktop);
+    if (!mainWindow || !nativeMenuBar->attach(mainWindow)) {
+      qCritical("Cannot attach native Windows menu");
+      return 3;
+    }
+    app.installNativeEventFilter(nativeMenuBar.get());
+  }
+#endif
 
   if (parser.isSet("smoke-test"))
     QTimer::singleShot(1500, &app, &QCoreApplication::quit);
@@ -431,6 +718,13 @@ int main(int argc, char *argv[]) {
       return 4;
     captureGallery(app, desktop, window, parser.value("gallery-dir"), width,
                    height);
+  }
+  if (uiStress) {
+    auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+    if (!window ||
+        !runUiStress(app, desktop, window, parser.value("ui-stress-report")))
+      return 4;
+    QTimer::singleShot(0, &app, &QCoreApplication::quit);
   }
   return app.exec();
 }

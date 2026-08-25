@@ -10,7 +10,7 @@ Capture used one explicit ADB serial, `192.168.4.232:46455`. It launched the alr
 - Scrollable: long forms, provider inventories, message bodies, activity lists, and secondary settings.
 - Hierarchy: workspace first; current operating state second; filters/actions third; dense evidence below.
 - Density: 8/12/16 px rhythm, compact controls and tables, dark graphite surfaces, amber selection, written non-colour status.
-- Desktop adaptation: resizable panes replace fixed tablet columns; the rail can collapse; tables gain pointer/keyboard behavior; macOS uses a global menu and Windows an Alt-accessible in-window menu.
+- Desktop adaptation: resizable panes replace fixed tablet columns; native system Navigate menus replace permanent global side navigation; tables gain pointer/keyboard behavior; macOS uses a global menu and Windows a Win32 menu attached to window chrome.
 
 ## Screen atlas
 

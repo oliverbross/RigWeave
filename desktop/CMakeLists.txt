@@ -68,6 +68,15 @@ target_compile_definitions(rigweave_desktop_services PRIVATE
     RIGWEAVE_DESKTOP_SCHEMA=16)
 
 qt_add_executable(RigWeaveDesktop WIN32 MACOSX_BUNDLE src/app/main.cpp)
+if(WIN32)
+    target_sources(RigWeaveDesktop PRIVATE resources/windows-icon.rc)
+elseif(APPLE)
+    set_source_files_properties(resources/app-icon.icns PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources")
+    target_sources(RigWeaveDesktop PRIVATE resources/app-icon.icns)
+    set_target_properties(RigWeaveDesktop PROPERTIES
+        MACOSX_BUNDLE_ICON_FILE "app-icon.icns")
+endif()
 target_link_libraries(RigWeaveDesktop PRIVATE rigweave_desktop_services)
 rigweave_target_warnings(RigWeaveDesktop)
 if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -78,6 +87,8 @@ endif()
 
 file(GLOB_RECURSE RIGWEAVE_QML_FILES CONFIGURE_DEPENDS "qml/*.qml")
 file(GLOB RIGWEAVE_ICON_FILES CONFIGURE_DEPENDS "resources/icons/*.svg")
+set(RIGWEAVE_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/../assets/branding/rigweave-app-icon-1024.png")
+set_source_files_properties(${RIGWEAVE_APP_ICON} PROPERTIES QT_RESOURCE_ALIAS "AppIcon.png")
 foreach(qml_file IN LISTS RIGWEAVE_QML_FILES)
     if(qml_file MATCHES "/qml/RigWeave/App/Main\\.qml$")
         set_source_files_properties(${qml_file} PROPERTIES QT_RESOURCE_ALIAS "Main.qml")
@@ -95,7 +106,7 @@ qt_add_qml_module(RigWeaveDesktop
     VERSION 1.0
     QML_FILES ${RIGWEAVE_QML_FILES}
     RESOURCES resources/default-band-plan.json resources/THIRD_PARTY_NOTICES.txt
-              ${RIGWEAVE_ICON_FILES})
+              ${RIGWEAVE_ICON_FILES} ${RIGWEAVE_APP_ICON})
 
 install(TARGETS RigWeaveDesktop
     BUNDLE DESTINATION .

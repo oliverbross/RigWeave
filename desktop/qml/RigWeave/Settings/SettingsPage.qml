@@ -7,6 +7,7 @@ import "../Components"
 Item {
     id: root
     property string currentCategory: "station"
+    property var importPreview: ({})
     readonly property var categories: [
         {id:"station", label:"Station", icon:"home"},
         {id:"radio", label:"Radio", icon:"radio"},
@@ -37,8 +38,8 @@ Item {
         return map[currentCategory] || "Settings"
     }
 
-    FileDialog { id: importBundle; title: "Preview configuration bundle"; nameFilters: ["RigWeave JSON (*.json)"] }
-    FileDialog { id: exportBundle; title: "Export safe configuration"; fileMode: FileDialog.SaveFile; nameFilters: ["RigWeave JSON (*.json)"]; onAccepted: DesktopConfig.exportBundle(selectedFile.toString().replace("file://", "")) }
+    FileDialog { id: importBundle; title: "Preview configuration bundle"; nameFilters: ["RigWeave JSON (*.json)"]; onAccepted: root.importPreview = DesktopConfig.previewImport(Desktop.localFilePath(selectedFile)) }
+    FileDialog { id: exportBundle; title: "Export safe configuration"; fileMode: FileDialog.SaveFile; nameFilters: ["RigWeave JSON (*.json)"]; onAccepted: DesktopConfig.exportBundle(Desktop.localFilePath(selectedFile)) }
 
     SplitView {
         anchors.fill: parent
@@ -114,6 +115,8 @@ Item {
                             Button { text: "Choose import for preview"; onClicked: importBundle.open() }
                             Button { text: "Export safe bundle"; onClicked: exportBundle.open() }
                         }
+                        Label { text: "Import preview" }
+                        Label { Layout.fillWidth: true; text: root.importPreview.valid ? (root.importPreview.requiresReview ? "Valid · explicit review required · unknown sections: " + root.importPreview.unknownSections : "Valid safe bundle · preview only") : (root.importPreview.error || "No bundle selected"); color: root.importPreview.valid ? "#e3c765" : "#aeb5ba"; wrapMode: Text.WordWrap }
                     }
                 }
                 GroupBox {

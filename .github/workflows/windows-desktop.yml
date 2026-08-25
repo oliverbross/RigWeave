@@ -115,6 +115,14 @@ jobs:
         run: |
           $process = Start-Process -FilePath 'build/windows/RigWeaveDesktop.exe' -ArgumentList @('--smoke-test') -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Smoke test exited with code $($process.ExitCode)" }
+      - name: Deterministic UI lifecycle stress
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $process = Start-Process -FilePath 'build/windows/RigWeaveDesktop.exe' -ArgumentList @('--ui-stress-report', 'artifacts/ui-stress-windows.json') -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "UI stress exited with code $($process.ExitCode)" }
       - name: Deterministic Windows UI gallery
         shell: pwsh
         env:
@@ -129,7 +137,7 @@ jobs:
           Invoke-Gallery 'artifacts/ui-gallery/1920x1080' 1920 1080 '1'
           Invoke-Gallery 'artifacts/ui-gallery/1366x768' 1366 768 '1'
           Invoke-Gallery 'artifacts/ui-gallery/2560x1440' 2560 1440 '1'
-          Invoke-Gallery 'artifacts/ui-gallery/150pct' 1920 1080 '1.5'
+          Invoke-Gallery 'artifacts/ui-gallery/150pct' 1280 720 '1.5'
           foreach ($profile in @('1366x768', '1920x1080', '2560x1440', '150pct')) {
             $count = (Get-ChildItem "artifacts/ui-gallery/$profile" -Filter '*.png').Count
             if ($count -ne 39) { throw "$profile gallery has $count frames; expected 39" }
@@ -150,5 +158,6 @@ jobs:
           path: |
             artifacts/windows
             artifacts/ui-gallery
+            artifacts/ui-stress-windows.json
           if-no-files-found: error
           retention-days: 14

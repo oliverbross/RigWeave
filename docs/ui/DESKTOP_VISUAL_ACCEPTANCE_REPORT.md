@@ -13,12 +13,12 @@
 
 ## Acceptance criteria
 
-- Every workspace is reachable through expanded and collapsed navigation, the menu model, and the command palette.
+- Every workspace is reachable through the native Navigate menu, shortcuts, and the command palette without a persistent global side rail.
 - macOS has no in-window Windows menu and the app/window identity is “RigWeave”.
-- Windows exposes File/Edit/View/Radio/Tools/Window/Help with Alt access.
+- Windows exposes a native File/Edit/View/Radio/Navigate/Tools/Window/Help menu in window chrome with Alt access.
 - Every command icon resolves from the packaged original SVG family.
-- Written status accompanies colour; focus borders, compact-rail tooltips and accessible names remain present.
-- 1366×768 and 150% auto-collapse without losing a destination or Global Stop.
+- Written status accompanies colour; focus borders and accessible names remain present.
+- 1366×768 and an effective 1280×720 viewport at 150% retain every destination and Global Stop.
 - Deterministic galleries remain isolated and do not read production credentials or operate hardware.
 
 ## Explicit non-claims

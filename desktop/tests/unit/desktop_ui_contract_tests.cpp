@@ -49,10 +49,23 @@ void DesktopUiContractTests::shellUsesCanonicalCommandsAndResponsiveRail() {
   const QByteArray qml = file.readAll();
   QVERIFY(qml.contains("Desktop.commands.filter"));
   QVERIFY(qml.contains("Desktop.invokeCommand"));
-  QVERIFY(qml.contains("width < 1420"));
+  QVERIFY(qml.contains("width < flightline.navBreakpoint"));
+  QFile palette(QStringLiteral(RIGWEAVE_DESKTOP_QML_DIR
+                               "/Components/FlightlinePalette.qml"));
+  QVERIFY(palette.open(QIODevice::ReadOnly));
+  const QByteArray tokens = palette.readAll();
+  QVERIFY(tokens.contains("navBreakpoint: 1420"));
+  QVERIFY(tokens.contains("navExpandedWidth: 238"));
+  QVERIFY(tokens.contains("navCollapsedWidth: 64"));
   QVERIFY(qml.contains("Qt.platform.os === \"osx\""));
-  QVERIFY(qml.contains("title: qsTr(\"&File\")"));
-  QVERIFY(qml.contains("title: qsTr(\"&Radio\")"));
+  QVERIFY(!qml.contains("menuBar: MenuBar"));
+  QFile appSource(QStringLiteral(RIGWEAVE_DESKTOP_APP_DIR "/main.cpp"));
+  QVERIFY(appSource.open(QIODevice::ReadOnly));
+  const QByteArray nativeMenus = appSource.readAll();
+  QVERIFY(nativeMenus.contains("buildNativeMenuBar"));
+  QVERIFY(nativeMenus.contains("WindowsNativeMenu"));
+  QVERIFY(nativeMenus.contains("addMenu(L\"&File\")"));
+  QVERIFY(nativeMenus.contains("addMenu(L\"&Navigate\")"));
   QVERIFY(qml.contains("Accessible.name"));
   QVERIFY(!qml.contains("RigWeave Windows Desktop"));
 }

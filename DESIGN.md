@@ -55,7 +55,7 @@ The Phase 0 documentation and licensing work changed no navigation or operator-f
 
 ## Qt desktop parity shell
 
-The desktop uses a resizable split navigation rail, 19 routed workspaces, a searchable Ctrl+K palette, native menus and a full-window Shack Display. Escape is both a focus escape and global Stop: it cancels provider/review work, leaves Shack mode and restores navigation focus. Desktop feature foundations use the same dark instrument palette but must label unavailable production actions explicitly; visual completeness never substitutes for a controller, capability snapshot or readback.
+The desktop uses 19 routed full-width workspaces, a searchable Ctrl+K palette, native system menus and a full-window Shack Display. Persistent global side navigation is omitted to preserve operating width; Navigate menus and the palette own workspace switching. Escape is both a focus escape and global Stop: it cancels provider/review work, leaves Shack mode and restores window focus. Desktop feature foundations use the same dark instrument palette but must label unavailable production actions explicitly; visual completeness never substitutes for a controller, capability snapshot or readback.
 
 ## Desktop TCI, multi-receiver, spectrum, and RF geography
 
@@ -69,6 +69,6 @@ The desktop uses a resizable split navigation rail, 19 routed workspaces, a sear
 
 ## Desktop Flightline convergence
 
-The desktop shell uses the same operational hierarchy as the tablet without copying tablet pixels. One canonical command registry owns destination, menu, shortcut and command-palette routing. Navigation groups are OPERATE, LOG & INTELLIGENCE, FIELD & CONNECTED and SYSTEM; the rail is 238 px expanded, 64 px compact, and auto-collapses below 1420 logical px. Original 24×24 Flightline SVGs provide a coherent offline icon family.
+The desktop shell uses the same operational hierarchy as the tablet without copying tablet pixels. One canonical command registry owns destination, system-menu, shortcut and command-palette routing. Persistent global side navigation is intentionally absent so workspaces retain the full window width; all destinations live in the native Navigate menu and command palette. Original 24×24 Flightline SVGs provide a coherent offline icon family in the palette, Settings categories and workspace actions.
 
-macOS uses the native global menu and the title “RigWeave”. Windows uses an Alt-accessible File/Edit/View/Radio/Tools/Window/Help bar within native window chrome. Graphite/amber surfaces, system UI fonts, 8/12/16 px spacing, 34 px table rows, 36 px controls, written status, focus borders and a persistent Global Stop define the shared desktop system. UI convergence never changes a service owner or promotes a foundation to functional parity.
+macOS uses the native global menu and the title “RigWeave”. Windows attaches an Alt-accessible native Win32 File/Edit/View/Radio/Navigate/Tools/Window/Help menu to the window chrome; no application menu consumes the QML content area on either platform. Graphite/amber surfaces, system UI fonts, 8/12/16 px spacing, 34 px table rows, 36 px controls, written status, focus borders and a persistent Global Stop define the shared desktop system. UI convergence never changes a service owner or promotes a foundation to functional parity.
