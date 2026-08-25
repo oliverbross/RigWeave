@@ -7,6 +7,7 @@
 #include <QSGGeometryNode>
 #include <QSGSimpleTextureNode>
 #include <algorithm>
+#include <utility>
 
 namespace rigweave::desktop {
 namespace {
@@ -127,20 +128,30 @@ void PanadapterSceneItem::setSpectrumRatio(double value) {
   update();
 }
 
+void PanadapterSceneItem::queueRendererHealth(QString health) {
+  QMetaObject::invokeMethod(
+      this,
+      [this, health = std::move(health)] {
+        if (m_rendererHealth == health)
+          return;
+        m_rendererHealth = health;
+        emit rendererHealthChanged();
+      },
+      Qt::QueuedConnection);
+}
+
 QSGNode *PanadapterSceneItem::updatePaintNode(QSGNode *oldNode,
                                               UpdatePaintNodeData *) {
   auto *node = static_cast<PanadapterNode *>(oldNode);
   if (!node)
     node = new PanadapterNode;
   if (!m_source || !window()) {
-    m_rendererHealth = "Idle — source unavailable";
-    emit rendererHealthChanged();
+    queueRendererHealth(QStringLiteral("Idle — source unavailable"));
     return node;
   }
   const PanadapterRenderFrame frame = m_source->renderFrame(m_receiverId);
   if (frame.trace.size() < 2) {
-    m_rendererHealth = "Idle — no observed frame";
-    emit rendererHealthChanged();
+    queueRendererHealth(QStringLiteral("Idle — no observed frame"));
     return node;
   }
   const QString mode = m_source->displayMode();
@@ -188,15 +199,14 @@ QSGNode *PanadapterSceneItem::updatePaintNode(QSGNode *oldNode,
   }
   if (!waterfallVisible)
     node->waterfall->setRect({});
-  m_rendererHealth = QStringLiteral("Healthy · scene graph · %1 bins · DPR %2")
-                         .arg(visible)
-                         .arg(window()->effectiveDevicePixelRatio(), 0, 'f', 2);
-  emit rendererHealthChanged();
+  queueRendererHealth(
+      QStringLiteral("Healthy · scene graph · %1 bins · DPR %2")
+          .arg(visible)
+          .arg(window()->effectiveDevicePixelRatio(), 0, 'f', 2));
   return node;
 }
 void PanadapterSceneItem::releaseResources() {
-  m_rendererHealth = "Released cleanly";
-  emit rendererHealthChanged();
+  queueRendererHealth(QStringLiteral("Released cleanly"));
 }
 
 } // namespace rigweave::desktop

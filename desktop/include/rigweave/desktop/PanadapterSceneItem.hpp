@@ -42,6 +42,7 @@ protected:
   void releaseResources() override;
 
 private:
+  void queueRendererHealth(QString health);
   DesktopPanadapter *m_source{};
   QMetaObject::Connection m_frameConnection;
   QString m_receiverId;
