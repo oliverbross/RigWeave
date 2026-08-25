@@ -112,16 +112,23 @@ jobs:
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
-        run: build/windows/RigWeaveDesktop.exe --smoke-test
+        run: |
+          $process = Start-Process -FilePath 'build/windows/RigWeaveDesktop.exe' -ArgumentList @('--smoke-test') -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Smoke test exited with code $($process.ExitCode)" }
       - name: Deterministic Windows UI gallery
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          build/windows/RigWeaveDesktop.exe --gallery-dir artifacts/ui-gallery/1920x1080 --gallery-width 1920 --gallery-height 1080
-          build/windows/RigWeaveDesktop.exe --gallery-dir artifacts/ui-gallery/2560x1440 --gallery-width 2560 --gallery-height 1440
-          $env:QT_SCALE_FACTOR = '1.5'
-          build/windows/RigWeaveDesktop.exe --gallery-dir artifacts/ui-gallery/150pct --gallery-width 1920 --gallery-height 1080
+          function Invoke-Gallery([string]$Directory, [int]$Width, [int]$Height, [string]$Scale) {
+            $env:QT_SCALE_FACTOR = $Scale
+            $arguments = @('--gallery-dir', $Directory, '--gallery-width', "$Width", '--gallery-height', "$Height")
+            $process = Start-Process -FilePath 'build/windows/RigWeaveDesktop.exe' -ArgumentList $arguments -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "$Directory gallery exited with code $($process.ExitCode)" }
+          }
+          Invoke-Gallery 'artifacts/ui-gallery/1920x1080' 1920 1080 '1'
+          Invoke-Gallery 'artifacts/ui-gallery/2560x1440' 2560 1440 '1'
+          Invoke-Gallery 'artifacts/ui-gallery/150pct' 1920 1080 '1.5'
           foreach ($profile in @('1920x1080', '2560x1440', '150pct')) {
             $count = (Get-ChildItem "artifacts/ui-gallery/$profile" -Filter '*.png').Count
             if ($count -ne 25) { throw "$profile gallery has $count frames; expected 25" }
