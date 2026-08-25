@@ -36,6 +36,7 @@ set(RIGWEAVE_DESKTOP_SERVICE_SOURCES
     src/platform/DesktopPlatform.cpp
     src/platform/DesktopParityPlatform.cpp
     src/radio/DesktopRadioController.cpp
+    src/radio/TciClient.cpp
     src/rotator/DesktopRotatorController.cpp
     src/panadapter/DesktopPanadapter.cpp
 )

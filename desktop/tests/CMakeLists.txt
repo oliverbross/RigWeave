@@ -12,6 +12,11 @@ target_link_libraries(desktop_network_contract_tests PRIVATE ${RIGWEAVE_TEST_LIB
 rigweave_target_warnings(desktop_network_contract_tests)
 add_test(NAME desktop_network_contract_tests COMMAND desktop_network_contract_tests)
 
+qt_add_executable(desktop_tci_contract_tests integration/desktop_tci_contract_tests.cpp)
+target_link_libraries(desktop_tci_contract_tests PRIVATE ${RIGWEAVE_TEST_LIBS} Qt6::WebSockets)
+rigweave_target_warnings(desktop_tci_contract_tests)
+add_test(NAME desktop_tci_contract_tests COMMAND desktop_tci_contract_tests)
+
 qt_add_executable(desktop_platform_safety_tests unit/desktop_platform_safety_tests.cpp)
 target_link_libraries(desktop_platform_safety_tests PRIVATE ${RIGWEAVE_TEST_LIBS})
 rigweave_target_warnings(desktop_platform_safety_tests)
