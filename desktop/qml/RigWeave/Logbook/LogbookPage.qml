@@ -5,6 +5,11 @@ import QtQuick.Layouts
 import "../Components"
 
 Item { id: root
+    function handleCommand(commandId) {
+        if (commandId === "file.fastEntry") entry.open()
+        else if (commandId === "file.importAdif") importDialog.open()
+        else if (commandId === "file.exportAdif") exportDialog.open()
+    }
     Dialog { id: entry; title: "Fast Entry — local QSO"; modal: true; width: 620; standardButtons: Dialog.Save | Dialog.Cancel
         onAccepted: Desktop.saveFastEntry({callsign:call.text,frequencyHz:Number(freq.text),band:band.text,mode:mode.currentText,rstSent:rstS.text,rstReceived:rstR.text,grid:grid.text,comment:comment.text,contestId:contest.text,potaRef:pota.text,sotaRef:sota.text,satelliteName:satellite.text,extraAdif:{APP_RIGWEAVE_SOURCE:"DESKTOP_FAST_ENTRY"}})
         GridLayout { columns: 4; width: parent.width

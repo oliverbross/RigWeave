@@ -4,6 +4,7 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QGuiApplication>
 #include <QQmlContext>
 #include <QSet>
 #include <QTimer>
@@ -86,6 +87,9 @@ bool DesktopApplication::initialize(QString *error) {
     m_configuration->setSection("display", display);
   });
   m_currentDestination = m_configuration->lastDestination();
+  m_sidebarExpanded = m_configuration->section("display")
+                          .value("sidebarExpanded", true)
+                          .toBool();
   m_database = std::make_unique<QsoDatabase>(
       m_paths.databases() + "/rigweave-desktop.sqlite", this);
   if (!m_database->open(error))
@@ -147,6 +151,114 @@ void DesktopApplication::setCurrentDestination(const QString &destination) {
   if (m_configuration)
     m_configuration->setLastDestination(destination);
   emit currentDestinationChanged();
+}
+
+QVariantList DesktopApplication::commands() const {
+#ifdef Q_OS_MACOS
+  const auto shortcut = [](const char *mac, const char *) { return QString::fromUtf8(mac); };
+#else
+  const auto shortcut = [](const char *, const char *desktop) { return QString::fromUtf8(desktop); };
+#endif
+  QVariantList result;
+  const auto add = [&result](const char *id, const char *label,
+                             const char *category, const char *icon,
+                             const QString &key = {}, const char *destination = "",
+                             bool rail = false, bool enabled = true) {
+    result.push_back(QVariantMap{{"id", id}, {"label", label},
+                                 {"category", category}, {"icon", icon},
+                                 {"shortcut", key}, {"destination", destination},
+                                 {"rail", rail}, {"enabled", enabled}});
+  };
+  add("nav.home", "Home", "OPERATE", "home", shortcut("Meta+1", "Ctrl+1"), "Home", true);
+  add("nav.radio", "Radio", "OPERATE", "radio", shortcut("Meta+2", "Ctrl+2"), "Radio", true);
+  add("nav.digi", "Digi", "OPERATE", "digi", shortcut("Meta+3", "Ctrl+3"), "Digi", true);
+  add("nav.panadapter", "Panadapter", "OPERATE", "panadapter", {}, "Panadapter", true);
+  add("nav.eq", "EQ", "OPERATE", "eq", {}, "EQ", true);
+  add("nav.logbook", "Logbook", "LOG & INTELLIGENCE", "logbook", shortcut("Meta+L", "Ctrl+L"), "Logbook", true);
+  add("nav.intelligence", "Intelligence", "LOG & INTELLIGENCE", "intelligence", {}, "Intelligence", true);
+  add("nav.sync", "Sync", "LOG & INTELLIGENCE", "sync", {}, "Sync", true);
+  add("nav.contest", "Contest", "LOG & INTELLIGENCE", "contest", {}, "Contest", true);
+  add("nav.bandmaps", "Band Maps", "LOG & INTELLIGENCE", "bandmaps", {}, "Band Maps", true);
+  add("nav.presets", "Presets", "LOG & INTELLIGENCE", "presets", {}, "Presets", true);
+  add("nav.dx", "DX", "LOG & INTELLIGENCE", "dx", {}, "DX", true);
+  add("nav.portable", "Portable", "FIELD & CONNECTED", "portable", {}, "Portable", true);
+  add("nav.operations", "Operations", "FIELD & CONNECTED", "operations", {}, "Operations", true);
+  add("nav.groups", "Groups.io", "FIELD & CONNECTED", "groups", {}, "Groups.io", true);
+  add("nav.rotator", "Rotator", "FIELD & CONNECTED", "rotator", {}, "Rotator", true);
+  add("nav.settings", "Settings", "SYSTEM", "settings", shortcut("Meta+,", "Ctrl+,"), "Settings", true);
+  add("nav.health", "Health", "SYSTEM", "health", {}, "Health", true);
+  add("nav.about", "About", "SYSTEM", "about", {}, "About", true);
+  add("file.fastEntry", "Fast Entry", "FILE", "logbook", shortcut("Meta+N", "Ctrl+N"));
+  add("file.importAdif", "Import ADIF…", "FILE", "import");
+  add("file.exportAdif", "Export ADIF…", "FILE", "export");
+  add("file.importConfig", "Import Configuration…", "FILE", "import", {}, "", false, false);
+  add("file.exportConfig", "Export Configuration…", "FILE", "export");
+  add("file.close", "Close Window", "FILE", "close", shortcut("Meta+W", "Ctrl+W"));
+  add("app.quit", "Quit RigWeave", "FILE", "close", shortcut("Meta+Q", "Ctrl+Q"));
+  add("edit.undo", "Undo", "EDIT", "undo", shortcut("Meta+Z", "Ctrl+Z"));
+  add("edit.redo", "Redo", "EDIT", "redo", shortcut("Meta+Shift+Z", "Ctrl+Y"));
+  add("edit.cut", "Cut", "EDIT", "cut", shortcut("Meta+X", "Ctrl+X"));
+  add("edit.copy", "Copy", "EDIT", "copy", shortcut("Meta+C", "Ctrl+C"));
+  add("edit.paste", "Paste", "EDIT", "paste", shortcut("Meta+V", "Ctrl+V"));
+  add("edit.delete", "Delete", "EDIT", "delete");
+  add("edit.selectAll", "Select All", "EDIT", "select", shortcut("Meta+A", "Ctrl+A"));
+  add("edit.find", "Find", "EDIT", "search", shortcut("Meta+F", "Ctrl+F"));
+  add("view.sidebarToggle", "Show/Hide Sidebar", "VIEW", "sidebar", shortcut("Meta+\\", "Ctrl+\\"));
+  add("view.sidebarMode", "Expand/Collapse Sidebar", "VIEW", "sidebar");
+  add("view.fullScreen", "Full Screen", "VIEW", "fullscreen", shortcut("Meta+Ctrl+F", "F11"));
+  add("view.shack", "Shack Display", "VIEW", "shack", shortcut("Meta+Shift+S", "Ctrl+Shift+D"));
+  add("view.resetLayout", "Reset Workspace Layout", "VIEW", "reset");
+  add("radio.connect", "Connect…", "RADIO", "connect", {}, "", false, false);
+  add("radio.disconnect", "Disconnect", "RADIO", "disconnect");
+  add("radio.review", "Receive Review", "RADIO", "radio");
+  add("radio.stop", "Emergency RX / Global Stop", "RADIO", "stop", "Escape");
+  add("tools.palette", "Command Palette", "TOOLS", "search", shortcut("Meta+K", "Ctrl+K"));
+  add("tools.support", "Create Support Bundle…", "TOOLS", "support", {}, "", false, false);
+  add("help.guide", "Operator Guide", "HELP", "help", {}, "", false, false);
+  add("help.shortcuts", "Keyboard Shortcuts", "HELP", "keyboard");
+  add("help.licences", "Licences and Acknowledgements", "HELP", "about");
+  return result;
+}
+
+void DesktopApplication::setSidebarExpanded(bool expanded) {
+  if (m_sidebarExpanded == expanded)
+    return;
+  m_sidebarExpanded = expanded;
+  if (m_configuration) {
+    auto display = m_configuration->section("display");
+    display["sidebarExpanded"] = expanded;
+    m_configuration->setSection("display", display);
+  }
+  emit sidebarExpandedChanged();
+}
+
+void DesktopApplication::invokeCommand(const QString &commandId) {
+  for (const QVariant &value : commands()) {
+    const QVariantMap command = value.toMap();
+    if (command.value("id").toString() != commandId)
+      continue;
+    if (!command.value("enabled").toBool())
+      return;
+    const QString destination = command.value("destination").toString();
+    if (!destination.isEmpty())
+      setCurrentDestination(destination);
+    if (commandId == "radio.stop")
+      globalStop();
+    else if (commandId == "radio.disconnect")
+      m_radio.disconnectRadio();
+    else if (commandId == "view.sidebarMode")
+      setSidebarExpanded(!m_sidebarExpanded);
+    else if (commandId.startsWith("edit.")) {
+      QObject *focus = QGuiApplication::focusObject();
+      const QByteArray method = commandId.mid(5).toUtf8();
+      if (focus && commandId != "edit.find" && commandId != "edit.delete")
+        QMetaObject::invokeMethod(focus, method.constData());
+    }
+    else if (commandId == "app.quit")
+      emit quitRequested();
+    emit commandInvoked(commandId);
+    return;
+  }
 }
 bool DesktopApplication::prepareGalleryTci(const QUrl &endpoint) {
   if (!m_demoMode || !endpoint.isValid())

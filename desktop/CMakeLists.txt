@@ -14,7 +14,7 @@ option(RIGWEAVE_REQUIRE_HAMLIB "Fail configuration when the pinned Hamlib build 
 
 find_package(Qt6 6.11.2 EXACT REQUIRED COMPONENTS
     Core Gui Quick QuickControls2 Qml Network Sql SerialPort Multimedia WebSockets
-    Concurrent Svg Positioning Location Test QuickTest)
+    Concurrent Svg Positioning Location Test QuickTest Widgets)
 
 if(RIGWEAVE_REQUIRE_HAMLIB)
     find_package(RigWeaveHamlib REQUIRED)
@@ -54,7 +54,7 @@ target_include_directories(rigweave_desktop_services PUBLIC include)
 target_link_libraries(rigweave_desktop_services PUBLIC
     rigweave_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::QuickControls2 Qt6::Qml
     Qt6::Network Qt6::Sql Qt6::SerialPort Qt6::Multimedia Qt6::WebSockets
-    Qt6::Concurrent Qt6::Svg Qt6::Positioning Qt6::Location)
+    Qt6::Concurrent Qt6::Svg Qt6::Positioning Qt6::Location Qt6::Widgets)
 if(RigWeaveHamlib_FOUND)
     target_link_libraries(rigweave_desktop_services PUBLIC RigWeave::Hamlib)
     target_compile_definitions(rigweave_desktop_services PRIVATE RIGWEAVE_HAVE_HAMLIB=1)

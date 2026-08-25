@@ -6,59 +6,305 @@ import "Components"
 ApplicationWindow {
     id: window
     property bool shackMode: false
+    property bool sidebarShown: true
     property int galleryRadioBackend: 0
-    width: 1440; height: 900; minimumWidth: 1280; minimumHeight: 720; visible: true
-    title: "RigWeave Windows Desktop — " + Desktop.currentDestination
-    color: "#171a1d"
-    menuBar: MenuBar {
-        Menu { title: "File"
-            Action { text: "Export ADIF…"; onTriggered: Desktop.currentDestination = "Logbook" }
-            MenuSeparator {}
-            Action { text: "Exit"; shortcut: StandardKey.Quit; onTriggered: window.close() }
-        }
-        Menu { title: "Navigate"
-            Action { text: "Home"; shortcut: "Ctrl+1"; onTriggered: Desktop.currentDestination = "Home" }
-            Action { text: "Logbook"; shortcut: "Ctrl+L"; onTriggered: Desktop.currentDestination = "Logbook" }
-            Action { text: "Radio"; shortcut: "Ctrl+R"; onTriggered: Desktop.currentDestination = "Radio" }
-            Action { text: "Health"; shortcut: "Ctrl+H"; onTriggered: Desktop.currentDestination = "Health" }
-        }
-        Menu { title: "View"; Action { text: "Shack Display"; shortcut: "F11"; onTriggered: { Desktop.currentDestination = "Home"; window.shackMode = true } } }
-        Menu { title: "Safety"; Action { text: "Global STOP"; shortcut: "Ctrl+Shift+S"; onTriggered: Desktop.globalStop() } }
-        Menu { title: "Help"; Action { text: "About / Licences"; onTriggered: Desktop.currentDestination = "About" } }
-    }
-    Shortcut { sequence: "Escape"; onActivated: { Desktop.globalStop(); window.shackMode = false; commandPalette.close(); navigation.forceActiveFocus() } }
-    Shortcut { sequence: "Ctrl+K"; onActivated: { commandPalette.open(); commandSearch.forceActiveFocus() } }
-    onClosing: function(close) { Desktop.shutdown(); close.accepted = true }
+    readonly property bool isMac: Qt.platform.os === "osx"
+    readonly property bool compactShell: width < 1420
+    readonly property bool railExpanded: sidebarShown && Desktop.sidebarExpanded && !compactShell
+    width: 1440
+    height: 900
+    minimumWidth: 1180
+    minimumHeight: 720
+    visible: true
+    title: isMac ? "RigWeave" : "RigWeave Desktop — " + Desktop.currentDestination
+    color: "#15181b"
 
-    SplitView { anchors.fill: parent; orientation: Qt.Horizontal
-        Rectangle { id: navigation; visible: !window.shackMode; SplitView.preferredWidth: visible ? 226 : 0; SplitView.minimumWidth: visible ? 176 : 0; SplitView.maximumWidth: visible ? 330 : 0; color: "#20252a"
-            ColumnLayout { anchors.fill: parent; spacing: 0
-                Label { text: "RIGWEAVE"; color: "#d38b22"; font.pixelSize: 20; font.bold: true; Layout.margins: 18; Layout.bottomMargin: 10 }
-                ListView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true
-                    model: ["Home","Radio","Digi","Panadapter","EQ","Logbook","Intelligence","Sync","Contest","Band Maps","Presets","DX","Portable","Operations","Groups.io","Rotator","Settings","Health"]
-                    delegate: ItemDelegate { required property string modelData; width: ListView.view.width; height: 42; text: modelData; highlighted: Desktop.currentDestination === modelData; palette.text: "#f2efe7"; palette.highlightedText: "#171a1d"; palette.highlight: "#d38b22"; onClicked: Desktop.currentDestination = modelData }
+    menuBar: MenuBar {
+        visible: !window.isMac
+        height: visible ? implicitHeight : 0
+        Accessible.name: "RigWeave application menu"
+        Menu { title: qsTr("&File")
+            CommandAction { commandId: "file.fastEntry" }
+            MenuSeparator {}
+            CommandAction { commandId: "file.importAdif" }
+            CommandAction { commandId: "file.exportAdif" }
+            CommandAction { commandId: "file.importConfig" }
+            CommandAction { commandId: "file.exportConfig" }
+            MenuSeparator {}
+            CommandAction { commandId: "app.quit" }
+        }
+        Menu { title: qsTr("&Edit")
+            CommandAction { commandId: "edit.undo" }
+            CommandAction { commandId: "edit.redo" }
+            MenuSeparator {}
+            CommandAction { commandId: "edit.cut" }
+            CommandAction { commandId: "edit.copy" }
+            CommandAction { commandId: "edit.paste" }
+            CommandAction { commandId: "edit.delete" }
+            CommandAction { commandId: "edit.selectAll" }
+            MenuSeparator {}
+            CommandAction { commandId: "edit.find" }
+        }
+        Menu { title: qsTr("&View")
+            CommandAction { commandId: "view.sidebarToggle" }
+            CommandAction { commandId: "view.sidebarMode" }
+            MenuSeparator {}
+            CommandAction { commandId: "view.fullScreen" }
+            CommandAction { commandId: "view.shack" }
+            CommandAction { commandId: "view.resetLayout" }
+        }
+        Menu { title: qsTr("&Radio")
+            CommandAction { commandId: "radio.connect" }
+            CommandAction { commandId: "radio.disconnect" }
+            CommandAction { commandId: "radio.review" }
+            MenuSeparator {}
+            CommandAction { commandId: "radio.stop" }
+        }
+        Menu { title: qsTr("&Tools")
+            CommandAction { commandId: "tools.palette" }
+            CommandAction { commandId: "nav.settings" }
+            CommandAction { commandId: "nav.health" }
+            CommandAction { commandId: "tools.support" }
+        }
+        Menu { title: qsTr("&Window")
+            CommandAction { commandId: "view.fullScreen" }
+            CommandAction { commandId: "view.shack" }
+        }
+        Menu { title: qsTr("&Help")
+            CommandAction { commandId: "help.guide" }
+            CommandAction { commandId: "help.shortcuts" }
+            MenuSeparator {}
+            CommandAction { commandId: "nav.about" }
+            CommandAction { commandId: "help.licences" }
+        }
+    }
+
+    Instantiator {
+        model: Desktop.commands
+        delegate: Shortcut {
+            required property var modelData
+            sequence: modelData.shortcut || ""
+            enabled: modelData.enabled === true && sequence.length > 0
+            context: Qt.ApplicationShortcut
+            onActivated: Desktop.invokeCommand(modelData.id)
+        }
+    }
+
+    Connections {
+        target: Desktop
+        function onQuitRequested() { window.close() }
+        function onCommandInvoked(commandId) {
+            if (commandId === "tools.palette") {
+                commandPalette.open()
+                commandSearch.forceActiveFocus()
+            } else if (commandId === "view.sidebarToggle") {
+                window.sidebarShown = !window.sidebarShown
+            } else if (commandId === "view.fullScreen") {
+                window.visibility = window.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen
+            } else if (commandId === "view.shack") {
+                window.shackMode = !window.shackMode
+            } else if (commandId === "view.resetLayout") {
+                window.sidebarShown = true
+                Desktop.sidebarExpanded = true
+                window.shackMode = false
+            } else if (commandId === "file.close") {
+                window.close()
+            } else if (commandId === "help.licences") {
+                Desktop.currentDestination = "About"
+            } else if (commandId === "help.shortcuts") {
+                shortcutHelp.open()
+            } else if (["file.fastEntry", "file.importAdif", "file.exportAdif", "file.exportConfig"].includes(commandId)) {
+                const target = commandId === "file.exportConfig" ? "Settings" : "Logbook"
+                Desktop.currentDestination = target
+                Qt.callLater(function() {
+                    if (workspaceLoader.item && workspaceLoader.item.handleCommand)
+                        workspaceLoader.item.handleCommand(commandId)
+                })
+            }
+        }
+    }
+
+    SplitView {
+        anchors.fill: parent
+        orientation: Qt.Horizontal
+        handle: Rectangle { implicitWidth: 1; color: "#343a40" }
+
+        Rectangle {
+            id: navigation
+            visible: window.sidebarShown && !window.shackMode
+            SplitView.preferredWidth: visible ? (window.railExpanded ? 238 : 64) : 0
+            SplitView.minimumWidth: visible ? (window.railExpanded ? 220 : 64) : 0
+            SplitView.maximumWidth: visible ? (window.railExpanded ? 264 : 64) : 0
+            color: "#1c2024"
+            border.color: "#30363c"
+            Accessible.name: "Workspace navigation"
+
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 0
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 62
+                    Layout.leftMargin: window.railExpanded ? 16 : 0
+                    Layout.rightMargin: window.railExpanded ? 8 : 0
+                    spacing: 10
+                    FlightlineIcon { name: "radio"; color: "#d89631"; Layout.preferredWidth: 24; Layout.preferredHeight: 24; Layout.alignment: Qt.AlignHCenter }
+                    Label { visible: window.railExpanded; text: "RIGWEAVE"; color: "#f2efe7"; font.pixelSize: 17; font.weight: Font.DemiBold; font.letterSpacing: 1.1; Layout.fillWidth: true }
+                    ToolButton {
+                        visible: window.railExpanded
+                        Accessible.name: Desktop.sidebarExpanded ? "Collapse sidebar" : "Expand sidebar"
+                        onClicked: Desktop.invokeCommand("view.sidebarMode")
+                        contentItem: FlightlineIcon { name: "sidebar"; color: parent.hovered ? "#f2efe7" : "#98a0a6" }
+                        ToolTip.visible: hovered
+                        ToolTip.text: Accessible.name
+                    }
                 }
-                ItemDelegate { Layout.fillWidth: true; text: "About / Licences"; palette.text: "#98a0a6"; onClicked: Desktop.currentDestination = "About" }
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: "#343a40" }
+                ListView {
+                    id: navList
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    model: Desktop.commands.filter(function(command) { return command.rail })
+                    section.property: "category"
+                    section.criteria: ViewSection.FullString
+                    section.delegate: Item {
+                        required property string section
+                        width: navList.width
+                        height: window.railExpanded ? 30 : 8
+                        Label {
+                            visible: window.railExpanded
+                            anchors.left: parent.left
+                            anchors.leftMargin: 16
+                            anchors.bottom: parent.bottom
+                            anchors.bottomMargin: 5
+                            text: parent.section
+                            color: "#737d85"
+                            font.pixelSize: 10
+                            font.weight: Font.DemiBold
+                            font.letterSpacing: 0.9
+                        }
+                    }
+                    delegate: ItemDelegate {
+                        required property var modelData
+                        width: navList.width
+                        height: 42
+                        leftPadding: window.railExpanded ? 16 : 0
+                        rightPadding: window.railExpanded ? 10 : 0
+                        Accessible.name: modelData.label + " workspace"
+                        Accessible.description: Desktop.currentDestination === modelData.destination ? "Current workspace" : "Open workspace"
+                        onClicked: Desktop.invokeCommand(modelData.id)
+                        background: Rectangle {
+                            color: parent.highlighted ? "#4a351d" : parent.hovered ? "#292f34" : "transparent"
+                            border.width: parent.activeFocus ? 2 : 0
+                            border.color: "#e3c765"
+                        }
+                        highlighted: Desktop.currentDestination === modelData.destination
+                        contentItem: RowLayout {
+                            spacing: 11
+                            FlightlineIcon { name: modelData.icon; color: parent.parent.highlighted ? "#e3c765" : parent.parent.hovered ? "#f2efe7" : "#aab1b6"; Layout.preferredWidth: 22; Layout.preferredHeight: 22; Layout.alignment: Qt.AlignHCenter }
+                            Label { visible: window.railExpanded; text: modelData.label; color: parent.parent.highlighted ? "#f3d98b" : "#dde1e4"; font.pixelSize: 13; font.weight: parent.parent.highlighted ? Font.DemiBold : Font.Normal; Layout.fillWidth: true }
+                            Rectangle { visible: window.railExpanded && modelData.destination === "Radio"; width: 7; height: 7; radius: 4; color: Radio.state.startsWith("Connected") ? "#4ec47b" : "#737d85"; Accessible.ignored: true }
+                        }
+                        ToolTip.visible: !window.railExpanded && hovered
+                        ToolTip.text: modelData.label
+                    }
+                }
+                ToolButton {
+                    visible: !window.railExpanded
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 48
+                    Accessible.name: "Expand sidebar"
+                    onClicked: { window.sidebarShown = true; Desktop.sidebarExpanded = true }
+                    contentItem: FlightlineIcon { name: "sidebar"; color: parent.hovered ? "#f2efe7" : "#98a0a6"; anchors.centerIn: parent }
+                    ToolTip.visible: hovered
+                    ToolTip.text: Accessible.name
+                }
             }
         }
-        Item { SplitView.fillWidth: true
-            ColumnLayout { anchors.fill: parent; spacing: 0
-                WorkspaceHeader { visible: !window.shackMode; Layout.fillWidth: true; title: Desktop.currentDestination; subtitle: "Local-first desktop • restore is disconnected and disarmed • UTC" }
-                Loader { objectName: "workspaceLoader"; Layout.fillWidth: true; Layout.fillHeight: true; source: {
-                    if (window.shackMode) return "Home/ShackDisplay.qml"
-                    const map = {"Home":"Home/HomePage.qml","Radio":"Radio/RadioPage.qml","Digi":"Digi/DigiPage.qml","Panadapter":"Panadapter/PanadapterPage.qml","EQ":"EQ/EqPage.qml","Logbook":"Logbook/LogbookPage.qml","Intelligence":"Intelligence/IntelligencePage.qml","Sync":"Sync/SyncPage.qml","Contest":"Contest/ContestPage.qml","Band Maps":"qrc:/RigWeave/App/BandMaps/BandMapsPage.qml","Presets":"Presets/PresetsPage.qml","DX":"DX/DxPage.qml","Portable":"Portable/PortablePage.qml","Operations":"Operations/OperationsPage.qml","Groups.io":"Groups/GroupsPage.qml","Rotator":"Rotator/RotatorPage.qml","Settings":"Settings/SettingsPage.qml","Health":"Health/HealthPage.qml","About":"Settings/AboutPage.qml"};
-                    return map[Desktop.currentDestination]
-                } }
+
+        Item {
+            SplitView.fillWidth: true
+            SplitView.minimumWidth: 900
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 0
+                WorkspaceHeader {
+                    visible: !window.shackMode
+                    Layout.fillWidth: true
+                    compact: window.width < 1360
+                    title: Desktop.currentDestination
+                    subtitle: "Local-first • restore disconnected and disarmed • UTC"
+                }
+                Loader {
+                    id: workspaceLoader
+                    objectName: "workspaceLoader"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    source: {
+                        if (window.shackMode) return "Home/ShackDisplay.qml"
+                        const map = {"Home":"Home/HomePage.qml","Radio":"Radio/RadioPage.qml","Digi":"Digi/DigiPage.qml","Panadapter":"Panadapter/PanadapterPage.qml","EQ":"EQ/EqPage.qml","Logbook":"Logbook/LogbookPage.qml","Intelligence":"Intelligence/IntelligencePage.qml","Sync":"Sync/SyncPage.qml","Contest":"Contest/ContestPage.qml","Band Maps":"qrc:/RigWeave/App/BandMaps/BandMapsPage.qml","Presets":"Presets/PresetsPage.qml","DX":"DX/DxPage.qml","Portable":"Portable/PortablePage.qml","Operations":"Operations/OperationsPage.qml","Groups.io":"Groups/GroupsPage.qml","Rotator":"Rotator/RotatorPage.qml","Settings":"Settings/SettingsPage.qml","Health":"Health/HealthPage.qml","About":"Settings/AboutPage.qml"}
+                        return map[Desktop.currentDestination]
+                    }
+                }
             }
         }
     }
-    Popup { id: commandPalette; anchors.centerIn: parent; width: 620; height: 430; modal: true; focus: true; closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        background: Rectangle { color: "#20252a"; border.color: "#d38b22"; radius: 6 }
+
+    Popup {
+        id: commandPalette
+        anchors.centerIn: Overlay.overlay
+        width: Math.min(680, window.width - 80)
+        height: Math.min(520, window.height - 100)
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        Accessible.name: "Command palette"
+        background: Rectangle { color: "#20252a"; border.color: "#d89631"; border.width: 1; radius: 6 }
         contentItem: ColumnLayout {
-            TextField { id: commandSearch; Layout.fillWidth: true; placeholderText: "Go to a workspace…" }
-            ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: ["Home","Radio","Digi","Panadapter","EQ","Logbook","Intelligence","Sync","Contest","Band Maps","Presets","DX","Portable","Operations","Groups.io","Rotator","Settings","Health","About"]
-                delegate: ItemDelegate { required property string modelData; width: ListView.view.width; visible: commandSearch.text.length === 0 || modelData.toLowerCase().includes(commandSearch.text.toLowerCase()); text: modelData; palette.text: "#f2efe7"; onClicked: { Desktop.currentDestination = modelData; commandPalette.close() } }
+            spacing: 8
+            TextField { id: commandSearch; Layout.fillWidth: true; placeholderText: "Find a workspace or command"; Accessible.name: "Command search" }
+            ListView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                model: Desktop.commands.filter(function(command) {
+                    return command.enabled && (commandSearch.text.length === 0 || (command.label + " " + command.category).toLowerCase().includes(commandSearch.text.toLowerCase()))
+                })
+                delegate: ItemDelegate {
+                    required property var modelData
+                    width: ListView.view.width
+                    height: 44
+                    onClicked: { Desktop.invokeCommand(modelData.id); commandPalette.close() }
+                    contentItem: RowLayout {
+                        FlightlineIcon { name: modelData.icon; color: "#d89631"; Layout.preferredWidth: 20; Layout.preferredHeight: 20 }
+                        Label { text: modelData.label; color: "#f2efe7"; Layout.fillWidth: true }
+                        Label { text: modelData.category; color: "#737d85"; font.pixelSize: 11 }
+                        Label { text: modelData.shortcut || ""; color: "#b7bec3"; font.pixelSize: 11 }
+                    }
+                }
             }
         }
     }
+
+    Dialog {
+        id: shortcutHelp
+        title: "Keyboard shortcuts"
+        modal: true
+        standardButtons: Dialog.Close
+        width: Math.min(620, window.width - 80)
+        contentItem: ListView {
+            implicitHeight: 420
+            model: Desktop.commands.filter(function(command) { return command.shortcut && command.enabled })
+            delegate: RowLayout {
+                required property var modelData
+                width: ListView.view.width
+                height: 34
+                Label { text: modelData.label; color: "#f2efe7"; Layout.fillWidth: true }
+                Label { text: modelData.shortcut; color: "#e3c765" }
+            }
+        }
+    }
+
+    onClosing: function(close) { Desktop.shutdown(); close.accepted = true }
 }

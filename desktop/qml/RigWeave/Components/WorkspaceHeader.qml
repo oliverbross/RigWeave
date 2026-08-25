@@ -3,16 +3,19 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 Rectangle {
+    id: root
     property string title: "Workspace"
     property string subtitle: ""
-    implicitHeight: 72; color: "#22272b"
-    RowLayout { anchors.fill: parent; anchors.margins: 16; spacing: 16
+    property bool compact: false
+    implicitHeight: compact ? 62 : 72; color: "#22272b"
+    border.color: "#343a40"
+    RowLayout { anchors.fill: parent; anchors.leftMargin: 16; anchors.rightMargin: 12; anchors.topMargin: 8; anchors.bottomMargin: 8; spacing: compact ? 9 : 14
         ColumnLayout { Layout.fillWidth: true; spacing: 2
-            Label { text: title; color: "#f2efe7"; font.pixelSize: 24; font.weight: Font.DemiBold }
-            Label { text: subtitle; color: "#98a0a6"; font.pixelSize: 13; elide: Text.ElideRight; Layout.fillWidth: true }
+            Label { text: root.title; color: "#f2efe7"; font.pixelSize: root.compact ? 20 : 24; font.weight: Font.DemiBold }
+            Label { text: root.subtitle; color: "#aeb5ba"; font.pixelSize: 12; elide: Text.ElideRight; Layout.fillWidth: true }
         }
-        StatusChip { text: Radio.state; kind: Radio.state.startsWith("Connected") ? "healthy" : "neutral" }
-        StatusChip { text: Cluster.state; kind: Cluster.state.startsWith("Connected") ? "healthy" : Cluster.state === "Error" ? "danger" : "neutral" }
-        Button { text: "STOP"; palette.button: "#8c2525"; palette.buttonText: "white"; font.weight: Font.Bold; onClicked: Desktop.globalStop(); Accessible.description: "Global safety stop; distinct from Escape" }
+        StatusChip { visible: !root.compact; text: "RADIO " + Radio.state; kind: Radio.state.startsWith("Connected") ? "healthy" : "neutral" }
+        StatusChip { visible: !root.compact; text: "CLUSTER " + Cluster.state; kind: Cluster.state.startsWith("Connected") ? "healthy" : Cluster.state === "Error" ? "danger" : "neutral" }
+        Button { text: "GLOBAL STOP"; palette.button: "#8c2525"; palette.buttonText: "white"; font.weight: Font.Bold; onClicked: Desktop.invokeCommand("radio.stop"); Accessible.name: "Global Stop"; Accessible.description: "Immediately cancels radio mutations and returns receive systems to their safe state" }
     }
 }

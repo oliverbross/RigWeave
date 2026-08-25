@@ -9,7 +9,10 @@
 #include <QDir>
 #include <QFont>
 #include <QFontDatabase>
-#include <QGuiApplication>
+#include <QApplication>
+#include <QAction>
+#include <QMenu>
+#include <QMenuBar>
 #include <QHostAddress>
 #include <QPointer>
 #include <QQmlApplicationEngine>
@@ -122,6 +125,101 @@ bool installPlatformUiFont(QGuiApplication &app) {
   return true;
 #endif
 }
+
+#ifdef Q_OS_MACOS
+std::unique_ptr<QMenuBar> buildNativeMenuBar(DesktopApplication &desktop) {
+  auto menuBar = std::make_unique<QMenuBar>();
+  menuBar->setNativeMenuBar(true);
+  const auto command = [&desktop](QMenu *menu, const QString &commandId,
+                                  QAction::MenuRole role = QAction::NoRole) {
+    for (const QVariant &value : desktop.commands()) {
+      const QVariantMap item = value.toMap();
+      if (item.value("id").toString() != commandId)
+        continue;
+      auto *action = menu->addAction(item.value("label").toString());
+      action->setEnabled(item.value("enabled").toBool());
+      action->setMenuRole(role);
+      const QString key = item.value("shortcut").toString();
+      if (!key.isEmpty())
+        action->setShortcut(QKeySequence(key));
+      QObject::connect(action, &QAction::triggered, &desktop,
+                       [&desktop, commandId] { desktop.invokeCommand(commandId); });
+      return action;
+    }
+    return static_cast<QAction *>(nullptr);
+  };
+
+  QMenu *appMenu = menuBar->addMenu(QStringLiteral("RigWeave"));
+  command(appMenu, "nav.about", QAction::AboutRole)->setText(QStringLiteral("About RigWeave"));
+  command(appMenu, "nav.settings", QAction::PreferencesRole)->setText(QStringLiteral("Settings…"));
+  appMenu->addSeparator();
+  command(appMenu, "app.quit", QAction::QuitRole);
+
+  QMenu *file = menuBar->addMenu(QStringLiteral("File"));
+  command(file, "file.fastEntry");
+  file->addSeparator();
+  command(file, "file.importAdif");
+  command(file, "file.exportAdif");
+  command(file, "file.importConfig");
+  command(file, "file.exportConfig");
+  file->addSeparator();
+  command(file, "file.close");
+
+  QMenu *edit = menuBar->addMenu(QStringLiteral("Edit"));
+  command(edit, "edit.undo");
+  command(edit, "edit.redo");
+  edit->addSeparator();
+  command(edit, "edit.cut");
+  command(edit, "edit.copy");
+  command(edit, "edit.paste");
+  command(edit, "edit.delete");
+  command(edit, "edit.selectAll");
+  edit->addSeparator();
+  command(edit, "edit.find");
+
+  QMenu *view = menuBar->addMenu(QStringLiteral("View"));
+  command(view, "view.sidebarToggle");
+  command(view, "view.sidebarMode");
+  view->addSeparator();
+  command(view, "view.fullScreen");
+  command(view, "view.shack");
+  command(view, "view.resetLayout");
+
+  QMenu *radio = menuBar->addMenu(QStringLiteral("Radio"));
+  command(radio, "radio.connect");
+  command(radio, "radio.disconnect");
+  command(radio, "radio.review");
+  radio->addSeparator();
+  command(radio, "radio.stop");
+
+  QMenu *navigate = menuBar->addMenu(QStringLiteral("Navigate"));
+  for (const QVariant &value : desktop.commands()) {
+    const QVariantMap item = value.toMap();
+    if (item.value("rail").toBool())
+      command(navigate, item.value("id").toString());
+  }
+  navigate->addSeparator();
+  command(navigate, "tools.palette");
+
+  QMenu *window = menuBar->addMenu(QStringLiteral("Window"));
+  QAction *minimize = window->addAction(QStringLiteral("Minimize"));
+  minimize->setShortcut(QKeySequence(QStringLiteral("Meta+M")));
+  QObject::connect(minimize, &QAction::triggered, qApp, [] {
+    if (QWindow *window = QGuiApplication::focusWindow())
+      window->showMinimized();
+  });
+  command(window, "view.fullScreen")->setText(QStringLiteral("Zoom / Full Screen"));
+
+  QMenu *help = menuBar->addMenu(QStringLiteral("Help"));
+  command(help, "help.guide");
+  command(help, "help.shortcuts");
+  command(help, "nav.health");
+  command(help, "tools.support");
+  help->addSeparator();
+  command(help, "help.licences");
+  return menuBar;
+}
+#endif
 
 struct GalleryFrame {
   QString destination;
@@ -245,7 +343,7 @@ void captureGallery(QGuiApplication &app, DesktopApplication &desktop,
 } // namespace
 
 int main(int argc, char *argv[]) {
-  QGuiApplication app(argc, argv);
+  QApplication app(argc, argv);
   qmlRegisterType<PanadapterSceneItem>("RigWeave.Controls", 1, 0,
                                        "PanadapterScene");
   qmlRegisterType<RfMapItem>("RigWeave.Controls", 1, 0, "RfMapScene");
@@ -284,6 +382,11 @@ int main(int argc, char *argv[]) {
     qCritical("Desktop initialization failed: %s", qPrintable(error));
     return 2;
   }
+  QObject::connect(&desktop, &DesktopApplication::quitRequested, &app,
+                   &QCoreApplication::quit);
+#ifdef Q_OS_MACOS
+  std::unique_ptr<QMenuBar> nativeMenuBar = buildNativeMenuBar(desktop);
+#endif
   std::unique_ptr<GalleryTciServer> galleryTci;
   if (gallery) {
     galleryTci = std::make_unique<GalleryTciServer>(&app);

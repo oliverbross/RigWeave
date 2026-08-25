@@ -33,6 +33,13 @@ target_link_libraries(desktop_parity_contract_tests PRIVATE ${RIGWEAVE_TEST_LIBS
 rigweave_target_warnings(desktop_parity_contract_tests)
 add_test(NAME desktop_parity_contract_tests COMMAND desktop_parity_contract_tests)
 
+qt_add_executable(desktop_ui_contract_tests unit/desktop_ui_contract_tests.cpp)
+target_link_libraries(desktop_ui_contract_tests PRIVATE ${RIGWEAVE_TEST_LIBS})
+target_compile_definitions(desktop_ui_contract_tests PRIVATE
+    RIGWEAVE_DESKTOP_QML_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../qml/RigWeave")
+rigweave_target_warnings(desktop_ui_contract_tests)
+add_test(NAME desktop_ui_contract_tests COMMAND desktop_ui_contract_tests)
+
 qt_add_executable(desktop_scale_soak_tests integration/desktop_scale_soak_tests.cpp)
 target_link_libraries(desktop_scale_soak_tests PRIVATE ${RIGWEAVE_TEST_LIBS})
 rigweave_target_warnings(desktop_scale_soak_tests)

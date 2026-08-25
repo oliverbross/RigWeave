@@ -4,7 +4,8 @@ import QtQuick.Dialogs
 import QtQuick.Layouts
 import "../Components"
 
-ScrollView{contentWidth:availableWidth
+ScrollView{id:root;contentWidth:availableWidth
+    function handleCommand(commandId){if(commandId==="file.exportConfig")exportBundle.open()}
     FileDialog{id:importBundle;title:"Preview configuration bundle";nameFilters:["RigWeave JSON (*.json)"]}
     FileDialog{id:exportBundle;title:"Export safe configuration";fileMode:FileDialog.SaveFile;nameFilters:["RigWeave JSON (*.json)"];onAccepted:DesktopConfig.exportBundle(selectedFile.toString().replace("file://",""))}
     ColumnLayout{width:parent.width;anchors.margins:18;spacing:12
