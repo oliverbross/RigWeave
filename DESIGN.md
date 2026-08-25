@@ -56,3 +56,13 @@ The Phase 0 documentation and licensing work changed no navigation or operator-f
 ## Qt desktop parity shell
 
 The desktop uses a resizable split navigation rail, 19 routed workspaces, a searchable Ctrl+K palette, native menus and a full-window Shack Display. Escape is both a focus escape and global Stop: it cancels provider/review work, leaves Shack mode and restores navigation focus. Desktop feature foundations use the same dark instrument palette but must label unavailable production actions explicitly; visual completeness never substitutes for a controller, capability snapshot or readback.
+
+## Desktop TCI, multi-receiver, spectrum, and RF geography
+
+- `DesktopRadioController` remains the sole radio authority. Hamlib and TCI are mutually exclusive backends; no receiver row or visualization creates a second controller.
+- Active-control, listening, and transmit-compatibility roles are explicit. TCI attaches the bounded union of active and listening receivers; changing roles never tunes, logs, transmits, publishes, or rotates implicitly.
+- TCI profiles restore inert by default. Capability and readback are authoritative, ambiguous writes are not replayed after reconnect, and unknown formats fail closed.
+- The spectrum/waterfall stays an instrument: direct float I/Q, bounded worker queues and history, real traces only, explicit QSY, view-only passband without proven filter capability, and visible overflow/health truth.
+- RF geography is derived evidence beneath canonical QSO, spot, Neural DX, Band Health, and provider owners. LIVE, HISTORICAL, and OUTLOOK remain visually and textually distinct; COARSE is never presented as exact.
+- Flat and globe projections share one selected observation and provide action-free exploration. Any QSY, Logbook, DX, or Band Maps transition remains an explicit operator handoff.
+- No runtime tile service, commercial key, WebView, private Qt API, or copied SDRoxide asset is part of the desktop map/globe.

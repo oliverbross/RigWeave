@@ -7,7 +7,7 @@ Rectangle {
     implicitWidth: 190; implicitHeight: 104; color: "#22272b"; border.color: "#3a4147"; radius: 4
     ColumnLayout { anchors.fill: parent; anchors.margins: 12; spacing: 4
         Label { text: label.toUpperCase(); color: "#d38b22"; font.pixelSize: 11; font.weight: Font.Bold }
-        Label { text: value; color: "#f2efe7"; font.pixelSize: 25; font.family: "monospace" }
+        Label { text: value; color: "#f2efe7"; font.pixelSize: 25 }
         Label { text: truth; color: "#98a0a6"; font.pixelSize: 10; elide: Text.ElideRight; Layout.fillWidth: true }
     }
 }

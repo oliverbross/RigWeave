@@ -11,7 +11,7 @@ Item { property var summary: Desktop.intelligence()
             MetricTile{label:"Entities";value:summary.entities ?? 0;truth:"Stored DXCC/entity fields"}
             MetricTile{label:"RF paths";value:RfObservations.count;truth:"Filtered, provenance-labelled observations"}
         }
-        TabBar{id:tabs;Layout.fillWidth:true;Repeater{model:["Overview","Activity","Geography","Confirmations","Operators","Portable","Needs","Awards","Satellite","Live RF / Outlook"];TabButton{required property string modelData;text:modelData}}}
+        TabBar{id:tabs;objectName:"intelligenceTabs";Layout.fillWidth:true;Repeater{model:["Overview","Activity","Geography","Confirmations","Operators","Portable","Needs","Awards","Satellite","Live RF / Outlook"];TabButton{required property string modelData;text:modelData}}}
         StackLayout{Layout.fillWidth:true;Layout.fillHeight:true;currentIndex:tabs.currentIndex
             Repeater{model:9;Loader{required property int index;active:true;sourceComponent:index===2?rfPanel:placeholder}}
             Loader{sourceComponent:rfPanel}

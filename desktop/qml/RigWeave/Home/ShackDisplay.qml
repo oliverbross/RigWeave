@@ -11,7 +11,7 @@ Rectangle {
     ColumnLayout {
         anchors.fill: parent; anchors.margins: 28; spacing: 18
         RowLayout { Layout.fillWidth: true
-            Label { text: Qt.formatDateTime(root.now, "HH:mm:ss"); color: "#f2efe7"; font.pixelSize: 64; font.family: "monospace"; font.bold: true }
+            Label { text: Qt.formatDateTime(root.now, "HH:mm:ss"); color: "#f2efe7"; font.pixelSize: 64; font.bold: true }
             Label { text: "UTC"; color: "#d38b22"; font.pixelSize: 24 }
             Item { Layout.fillWidth: true }
             StatusChip { text: Parity.safetyState; kind: "healthy" }

@@ -12,6 +12,7 @@
 
 #include <QQmlApplicationEngine>
 #include <QTemporaryDir>
+#include <QUrl>
 
 namespace rigweave::desktop {
 
@@ -20,6 +21,7 @@ class DesktopApplication final : public QObject {
     Q_PROPERTY(QString currentDestination READ currentDestination WRITE setCurrentDestination NOTIFY currentDestinationChanged)
     Q_PROPERTY(bool shuttingDown READ shuttingDown NOTIFY shuttingDownChanged)
     Q_PROPERTY(bool demoMode READ demoMode CONSTANT)
+    Q_PROPERTY(int galleryVariant READ galleryVariant NOTIFY galleryVariantChanged)
 public:
     explicit DesktopApplication(QObject *parent = nullptr);
     ~DesktopApplication() override;
@@ -28,8 +30,10 @@ public:
     QString currentDestination() const { return m_currentDestination; }
     void setCurrentDestination(const QString &destination);
     void setGalleryVariant(const QString &workspace, int variant);
+    bool prepareGalleryTci(const QUrl &endpoint);
     bool shuttingDown() const { return m_shuttingDown; }
     bool demoMode() const { return m_demoMode; }
+    int galleryVariant() const { return m_galleryVariant; }
     Q_INVOKABLE QVariantMap health() const;
     Q_INVOKABLE QVariantMap intelligence() const;
     Q_INVOKABLE QVariantMap buildInformation() const;
@@ -40,6 +44,7 @@ public:
 signals:
     void currentDestinationChanged();
     void shuttingDownChanged();
+    void galleryVariantChanged();
     void error(QString message);
 
 private:
@@ -63,6 +68,7 @@ private:
     QString m_currentDestination{"Home"};
     bool m_shuttingDown{};
     bool m_demoMode{};
+    int m_galleryVariant{-1};
 };
 
 } // namespace rigweave::desktop

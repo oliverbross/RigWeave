@@ -52,3 +52,7 @@ Fake-server, unit, renderer, gallery, hosted build, and package evidence are sof
 ## Phase 0 conclusion
 
 All required owners and integration seams exist. The selected work can proceed without a parallel authority or new dependency. Direct source copying is unnecessary; production code will be a RigWeave-owned clean-room implementation informed by the recorded protocol behavior and standard geometry/rendering techniques.
+
+## Implementation result
+
+Option A is implemented. Portable C++ TCI contracts feed a receive-only Qt WebSockets backend owned by DesktopRadioController; ReceiverListModel projects explicit roles; DesktopPanadapter owns bounded per-receiver DSP contexts and the public Qt Quick renderer; RfObservationModel and RfMapItem provide derived, filtered flat-map/globe evidence beneath existing canonical data owners. The build adds no SDRoxide runtime, Rust FFI, private Qt API, WebView, commercial map key, duplicate radio/QSO/provider/settings owner, or production TX-on path. See TCI_CLIENT.md, MULTI_RECEIVER_MODEL.md, PANADAPTER_WATERFALL_V3.md, RF_MAP_GLOBE.md, and TCI_PHYSICAL_ACCEPTANCE.md for the implemented contracts and remaining physical boundary.

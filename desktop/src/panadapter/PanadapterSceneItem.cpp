@@ -18,7 +18,7 @@ public:
         spectrumGeometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 0);
         spectrum = new QSGGeometryNode;
         spectrumGeometry->setDrawingMode(QSGGeometry::DrawLineStrip);
-        spectrumGeometry->setLineWidth(1.5F);
+        spectrumGeometry->setLineWidth(1.0F);
         spectrum->setGeometry(spectrumGeometry);
         spectrum->setFlags(QSGNode::OwnsGeometry | QSGNode::OwnsMaterial);
         auto *spectrumMaterial = new QSGFlatColorMaterial;

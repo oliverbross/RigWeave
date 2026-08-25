@@ -10,6 +10,7 @@ Item { id: root
     property var activeSnapshot: Radio.receiverSnapshot(Radio.activeReceiverId)
     property real dragStartX: 0
     property real dragStartPan: 0
+    property string secondaryReceiver: { const ids=Panadapter.receiverIds; for(let i=0;i<ids.length;i++) if(ids[i]!==Panadapter.currentReceiverId) return ids[i]; return "" }
     Connections { target: Radio; function onSnapshotChanged() { root.activeSnapshot = Radio.receiverSnapshot(Radio.activeReceiverId) } }
     ColumnLayout { anchors.fill: parent; anchors.margins: 18; spacing: 10
         SafetyBanner { Layout.fillWidth: true; text: "Receive-only. Sources are exact local stereo I/Q or observed TCI float32 I/Q. Display pause does not claim capture stopped; no microphone fallback and no generated production spectrum." }
@@ -55,16 +56,17 @@ Item { id: root
         Rectangle { Layout.fillWidth: true; implicitHeight: 28; color: "#171b1e"; border.color: "#3a4147"
             Row { anchors.fill: parent
                 Repeater { model: scene.zoom < 4 ? ["LOW", "MID", "HIGH", "SAT"] : ["CW", "DIGITAL", "PHONE", "BEACONS"]
-                    Rectangle { required property string modelData; width: parent.width / 4; height: parent.height; color: index % 2 ? "#23292d" : "#1c2226"; Label { anchors.centerIn: parent; text: modelData; color: "#98a0a6"; font.pixelSize: 11 } }
+                    Rectangle { required property string modelData; required property int index; width: parent.width / 4; height: parent.height; color: index % 2 ? "#23292d" : "#1c2226"; Label { anchors.centerIn: parent; text: modelData; color: "#98a0a6"; font.pixelSize: 11 } }
                 }
             }
             Rectangle { anchors.verticalCenter: parent.verticalCenter; x: parent.width / 2 - 1; width: 2; height: parent.height; color: "#d38b22" }
         }
         Rectangle { id: viewport; Layout.fillWidth: true; Layout.fillHeight: true; color: "#101316"; border.color: "#3a4147"; clip: true
-            PanadapterScene { id: scene; anchors.fill: parent; source: Panadapter; receiverId: Panadapter.currentReceiverId }
+            PanadapterScene { id: scene; objectName: "primaryPanadapterScene"; anchors.fill: parent; source: Panadapter; receiverId: Panadapter.currentReceiverId }
             Rectangle { id: passband; anchors.horizontalCenter: parent.horizontalCenter; y: 0; width: Math.max(18, parent.width * 0.08 * scene.zoom); height: parent.height * scene.spectrumRatio; color: "#263f4a66"; border.color: "#5ca6c8"; opacity: 0.8
                 ToolTip.visible: passHover.hovered; ToolTip.text: "Passband overlay · filter drag disabled until capability and readback are proven"
                 HoverHandler { id: passHover }
+                Label { anchors.top: parent.top; anchors.horizontalCenter: parent.horizontalCenter; text: "PASSBAND VIEW ONLY"; color: "#5ca6c8"; font.pixelSize: 9 }
             }
             Rectangle { property real normalized: Panadapter.normalizedForFrequency(root.activeSnapshot.vfoAHz || 0, scene.zoom, scene.pan); visible: normalized >= 0 && normalized <= 1; x: normalized * parent.width - 1; y: 0; width: 2; height: parent.height * scene.spectrumRatio; color: "#f2efe7"; Label { text: "A"; color: "#f2efe7"; anchors.top: parent.top } }
             Rectangle { property real normalized: Panadapter.normalizedForFrequency(root.activeSnapshot.vfoBHz || 0, scene.zoom, scene.pan); visible: normalized >= 0 && normalized <= 1; x: normalized * parent.width - 1; y: 0; width: 2; height: parent.height * scene.spectrumRatio; color: "#5ca6c8"; Label { text: "B"; color: "#5ca6c8"; anchors.top: parent.top } }
@@ -82,6 +84,10 @@ Item { id: root
                 onPositionChanged: function(mouse) { root.cursorFrequency = Panadapter.frequencyAt(mouse.x / width, scene.zoom, scene.pan); if (pressed) scene.pan = Math.max(-1, Math.min(1, root.dragStartPan - (mouse.x - root.dragStartX) / width * 2 / Math.max(.01, 1 - 1 / scene.zoom))) }
                 onPressed: function(mouse) { root.dragStartX = mouse.x; root.dragStartPan = scene.pan }
                 onWheel: function(wheel) { const cursor = wheel.x / width; const oldZoom = scene.zoom; const oldVisible = 1 / oldZoom; const oldLeft = (1 - oldVisible) * (scene.pan + 1) / 2; const anchor = oldLeft + cursor * oldVisible; const nextZoom = Math.max(1, Math.min(32, oldZoom * (wheel.angleDelta.y > 0 ? 1.25 : .8))); const nextVisible = 1 / nextZoom; scene.zoom = nextZoom; scene.pan = nextZoom === 1 ? 0 : Math.max(-1, Math.min(1, (anchor - cursor * nextVisible) / (1 - nextVisible) * 2 - 1)); root.cursorFrequency = Panadapter.frequencyAt(cursor, scene.zoom, scene.pan) }
+            }
+            Rectangle { visible: root.secondaryReceiver.length>0; z: 4; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 12; width: parent.width*.38; height: parent.height*.32; color: "#101316"; border.color: "#d38b22"
+                PanadapterScene { anchors.fill: parent; anchors.margins: 2; source: Panadapter; receiverId: root.secondaryReceiver; spectrumRatio: .38 }
+                Label { anchors.left: parent.left; anchors.top: parent.top; anchors.margins: 5; text: "SECOND RECEIVER · "+root.secondaryReceiver; color: "#e3c765"; font.bold: true; font.pixelSize: 10 }
             }
                 Label { anchors.centerIn: parent; visible: !Panadapter.hasFrame; text: "OFFLINE — no observed I/Q display frame"; color: "#98a0a6" }
         }

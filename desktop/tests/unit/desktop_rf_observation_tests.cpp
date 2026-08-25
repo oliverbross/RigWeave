@@ -41,6 +41,14 @@ private slots:
         QCOMPARE(model.rowCount(), 0);
         model.resetFilters();
         QCOMPARE(model.rowCount(), 3);
+        model.setFilter("confirmed", "Confirmed");
+        QCOMPARE(model.rowCount(), 1);
+        QCOMPARE(model.filteredObservations().first().toMap().value("evidenceClass").toString(), QString("HISTORICAL"));
+        model.resetFilters();
+        model.setFilter("neededDxcc", "Needed DXCC");
+        QCOMPARE(model.rowCount(), 1);
+        QCOMPARE(model.filteredObservations().first().toMap().value("evidenceClass").toString(), QString("LIVE"));
+        model.resetFilters();
         QVERIFY(!model.ingest({{"id", "bad"}, {"source", "fixture"}, {"evidenceClass", "INVENTED"}}));
         QString error;
         QVERIFY(!model.restoreConfiguration({{"schemaVersion", 2}}, &error));
@@ -65,6 +73,8 @@ private slots:
         item.setProjection("Globe");
         const QImage globe = render();
         QVERIFY(globe != flat);
+        model.setSelectedId("demo-live-ja");
+        QCOMPARE(model.selectedObservation().value("id").toString(), QString("demo-live-ja"));
         item.setLongitude(72); item.setLatitude(-18); item.setZoom(1.35);
         const QImage rotated = render();
         QVERIFY(rotated != globe);

@@ -4,7 +4,7 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
-    branches: [feature/windows-desktop-alpha-v1]
+    branches: [feature/windows-desktop-alpha-v1, feature/tci-multirx-waterfall-globe-v1]
     paths:
       - 'desktop/**'
       - 'core/**'
@@ -19,6 +19,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify exact checked-out SHA
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.11.2'
@@ -48,9 +50,9 @@ jobs:
           build/macos/RigWeaveDesktop.app/Contents/MacOS/RigWeaveDesktop --gallery-dir artifacts/ui-gallery/1920x1080 --gallery-width 1920 --gallery-height 1080
           build/macos/RigWeaveDesktop.app/Contents/MacOS/RigWeaveDesktop --gallery-dir artifacts/ui-gallery/2560x1440 --gallery-width 2560 --gallery-height 1440
           QT_SCALE_FACTOR=1.5 build/macos/RigWeaveDesktop.app/Contents/MacOS/RigWeaveDesktop --gallery-dir artifacts/ui-gallery/150pct --gallery-width 1920 --gallery-height 1080
-          test "$(find artifacts/ui-gallery/1920x1080 -name '*.png' | wc -l | tr -d ' ')" = 25
-          test "$(find artifacts/ui-gallery/2560x1440 -name '*.png' | wc -l | tr -d ' ')" = 25
-          test "$(find artifacts/ui-gallery/150pct -name '*.png' | wc -l | tr -d ' ')" = 25
+          test "$(find artifacts/ui-gallery/1920x1080 -name '*.png' | wc -l | tr -d ' ')" = 38
+          test "$(find artifacts/ui-gallery/2560x1440 -name '*.png' | wc -l | tr -d ' ')" = 38
+          test "$(find artifacts/ui-gallery/150pct -name '*.png' | wc -l | tr -d ' ')" = 38
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: RigWeave-macOS-unsigned-${{ github.sha }}

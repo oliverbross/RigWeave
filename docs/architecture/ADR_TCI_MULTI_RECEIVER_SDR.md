@@ -1,6 +1,6 @@
 # ADR: TCI and Multi-Receiver SDR Architecture
 
-Status: Accepted for implementation
+Status: Implemented; physical acceptance pending
 
 ## Context
 

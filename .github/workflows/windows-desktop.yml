@@ -4,7 +4,7 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
-    branches: [feature/windows-desktop-alpha-v1]
+    branches: [feature/windows-desktop-alpha-v1, feature/tci-multirx-waterfall-globe-v1]
     paths:
       - 'desktop/**'
       - 'core/**'
@@ -131,7 +131,7 @@ jobs:
           Invoke-Gallery 'artifacts/ui-gallery/150pct' 1920 1080 '1.5'
           foreach ($profile in @('1920x1080', '2560x1440', '150pct')) {
             $count = (Get-ChildItem "artifacts/ui-gallery/$profile" -Filter '*.png').Count
-            if ($count -ne 25) { throw "$profile gallery has $count frames; expected 25" }
+            if ($count -ne 38) { throw "$profile gallery has $count frames; expected 38" }
           }
       - name: Package portable ZIP and per-user NSIS installer
         shell: pwsh

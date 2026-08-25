@@ -28,7 +28,7 @@ public:
     QVariantList renderObservations(int maximum = 4096) const;
     int storedCount() const { return m_all.size(); }
     quint64 droppedObservations() const { return m_droppedObservations; }
-    QVariantMap selectedObservation() const;
+    Q_INVOKABLE QVariantMap selectedObservation() const;
     QVariantMap configuration() const;
     bool restoreConfiguration(const QVariantMap &value, QString *error = nullptr);
 
@@ -56,6 +56,7 @@ private:
                           {"evidence", "All"}, {"maximumAgeMinutes", 120},
                           {"minimumDistanceKm", 0}, {"maximumDistanceKm", 20000},
                           {"callsign", QString{}}, {"worked", "All"},
+                          {"confirmed", "All"}, {"neededDxcc", "All"},
                           {"freshOnly", false}, {"longPath", false}};
     QString m_selectedId;
     quint64 m_droppedObservations{};

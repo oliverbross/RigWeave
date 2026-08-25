@@ -104,6 +104,7 @@ private:
     void poll();
     void syncTci();
     void syncSelection();
+    void syncTciAttachments();
     int activeTciIndex() const;
     static TciProfile decodeTciProfile(const QVariantMap &profile, bool *ok = nullptr);
     static QVariantMap encodeTciProfile(const TciProfile &profile);

@@ -34,7 +34,7 @@ ScrollView { contentWidth: availableWidth
                 ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: Spots; clip: true
                     delegate: RowLayout { required property string callsign; required property double frequencyHz; required property string mode; required property int ageSeconds; width: ListView.view.width; height: 32
                         Label { text: callsign; color: "#f2efe7"; font.bold: true; Layout.preferredWidth: 110 }
-                        Label { text: (frequencyHz / 1000).toFixed(1) + " kHz"; color: "#e3c765"; font.family: "monospace"; Layout.preferredWidth: 130 }
+                        Label { text: (frequencyHz / 1000).toFixed(1) + " kHz"; color: "#e3c765"; Layout.preferredWidth: 130 }
                         Label { text: mode; color: "#98a0a6"; Layout.preferredWidth: 80 }
                         Label { text: ageSeconds + " s"; color: "#98a0a6" }
                     }

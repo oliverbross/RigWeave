@@ -27,4 +27,6 @@ Pinned reference: `dividebysandwich/sdroxide` commit `312b27ec4303d3fe0ef3a70d3a
 | SDRoxide providers, awards, logbook and operating workflow | REJECT_DUPLICATE_AUTHORITY | Existing RigWeave authorities remain singular |
 | Unrelated SDRoxide modes, voice models and server runtime | OUT_OF_SCOPE | Not built, linked, packaged, or represented |
 
-The classifications describe integration intent, not completion evidence. Status changes are recorded only after production wiring and tests pass.
+## Completion status
+
+All selected REIMPLEMENT and ADAPT rows are implemented in the existing RigWeave owners and covered by deterministic desktop tests. The TCI client, receiver roles, direct-float I/Q path, bounded Qt Quick spectrum/waterfall, RF observation model, flat map, orthographic globe, filters, selection, and action-free handoffs are production-wired. OUT_OF_SCOPE and REJECT_DUPLICATE_AUTHORITY rows remain excluded. Hosted builds, packaging, and gallery runs are recorded separately at the final exact SHA; physical radio, audio, TX, and RF acceptance remain pending.

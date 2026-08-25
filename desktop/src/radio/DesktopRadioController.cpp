@@ -144,10 +144,11 @@ void DesktopRadioController::syncTci(){
     if(m_backend!="tci")return;
     m_state=m_tci.state();m_backendCapabilities=m_tci.capabilities();m_backendCapabilities["receiverCount"]=m_tci.receivers().size();
     m_backendCapabilities["iqStreaming"]=true;m_backendCapabilities["rxAudioStreaming"]=true;m_backendCapabilities["ptt"]=false;m_backendCapabilities["tune"]=false;
-    QVariantList rows=m_tci.receivers();m_receivers.replace(rows,m_activeReceiverId,m_listeningReceiverId,m_transmitReceiverId);syncSelection();
+    QVariantList rows=m_tci.receivers();m_receivers.replace(rows,m_activeReceiverId,m_listeningReceiverId,m_transmitReceiverId);syncSelection();syncTciAttachments();
     m_receivers.replace(rows,m_activeReceiverId,m_listeningReceiverId,m_transmitReceiverId);
     const QVariantMap active=m_receivers.receiver(m_activeReceiverId);m_frequencyHz=active.value("effectiveReceiveHz").toULongLong();m_mode=active.value("mode").toString();emit snapshotChanged();
 }
+void DesktopRadioController::syncTciAttachments(){if(m_backend!="tci"||!m_tci.ready())return;QSet<int> desired;for(const QString&id:{m_activeReceiverId,m_listeningReceiverId})if(id.startsWith("tci:")){bool ok{};const int receiver=id.sliced(4).toInt(&ok);if(ok&&receiver>=0&&receiver<receiverCount())desired.insert(receiver);}for(int receiver=0;receiver<receiverCount();++receiver){if(desired.contains(receiver))m_tci.attachReceiver(receiver);else m_tci.detachReceiver(receiver);}}
 
 bool DesktopRadioController::selectActiveReceiver(const QString&id){if(m_receivers.receiver(id).isEmpty())return false;m_activeReceiverId=id;syncTci();if(m_backend=="hamlib"){m_receivers.replace(m_receivers.snapshots(),id,m_listeningReceiverId,m_transmitReceiverId);emit snapshotChanged();}emit preferencesChanged();return true;}
 bool DesktopRadioController::selectListeningReceiver(const QString&id){if(m_receivers.receiver(id).isEmpty())return false;m_listeningReceiverId=id;syncTci();if(m_backend=="hamlib"){m_receivers.replace(m_receivers.snapshots(),m_activeReceiverId,id,m_transmitReceiverId);emit snapshotChanged();}emit preferencesChanged();return true;}

@@ -172,7 +172,9 @@ private slots:
         QVERIFY(!radio.pttAvailable());
         QVERIFY(!radio.tuneAvailable());
         QVERIFY(radio.selectActiveReceiver("tci:1"));
+        QTRY_VERIFY_WITH_TIMEOUT(server.receivedText.join(QString{}).contains("iq_start:1;"),1'000);
         QVERIFY(radio.selectListeningReceiver("tci:1"));
+        QTRY_VERIFY_WITH_TIMEOUT(server.receivedText.join(QString{}).contains("iq_stop:0;"),1'000);
         QCOMPARE(radio.transmitReceiverId(), QString("tci:0"));
         QVERIFY(radio.requestFrequency(7'076'000U));
         QTRY_VERIFY_WITH_TIMEOUT(server.receivedText.join(QString{}).contains("vfo:1,0,7076000;"), 1'000);
