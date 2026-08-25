@@ -27,3 +27,7 @@ The status describes implemented source behavior. Hosted, package and live-evide
 | macOS desktop proof | `FOUNDATION_COMPLETE` | same-source build/test/unsigned app workflow | signing/notarization deferred |
 
 No row claims Android visual parity, physical transmit, rotator movement, authenticated Wavelog, live cluster/audio, official award credit, signing, store readiness, or macOS product completion.
+
+## Superseded by full-parity audit
+
+The Alpha rows remain historical evidence for their exact SHA. The successor audit is [`WINDOWS_FULL_PARITY_MATRIX.md`](WINDOWS_FULL_PARITY_MATRIX.md): 14 of 31 rows are `SOURCE_COMPLETE`, while 17 are `FOUNDATION_WIRED`. The successor therefore retains a PARTIAL verdict and does not inherit Alpha hosted or package evidence.

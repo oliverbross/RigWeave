@@ -55,3 +55,7 @@ Sweep 3 adds safe alert/display profile definitions, global Contest defaults, mu
 ## Native lifecycle hardening data boundary
 
 The lifecycle repair adds no persisted operator data. `NativeHandleOwner` and lifecycle generations contain only process-local numeric state. The schema-16 regression uses an isolated temporary database and deletes it after close. Package scans found no evidence directory, protected backup, test SQLite file, credential store, rigctl/rigctld executable or prohibited P.533 payload. Protected-tablet evidence records hashes, counts, UID and schema only; it must never print credential values or raw private records.
+
+## Windows parity data boundary
+
+The desktop adds five feature stores under the application database directory and validated provider cache files under the application cache directory. Stores contain Neural evidence/outlook, Digi decodes/drafts, Groups.io offline archive/index, Contest staging state and DX Chaser state; credentials remain alias-only in the platform vault. Deterministic demo/gallery mode uses an isolated temporary root. Support bundles and logs must not include database rows, provider response bodies, credentials, raw CAT frames or private fixtures.

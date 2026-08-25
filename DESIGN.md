@@ -52,3 +52,7 @@ Android Digi is a cycle-sequencer console. Expanded layouts place mode and route
 - Transmit safety: there is no persistent `TX DISABLED` rail. Potentially transmitting controls retain their existing per-action confirmation and Emergency RX remains continuously available.
 
 The Phase 0 documentation and licensing work changed no navigation or operator-facing UI.
+
+## Qt desktop parity shell
+
+The desktop uses a resizable split navigation rail, 19 routed workspaces, a searchable Ctrl+K palette, native menus and a full-window Shack Display. Escape is both a focus escape and global Stop: it cancels provider/review work, leaves Shack mode and restores navigation focus. Desktop feature foundations use the same dark instrument palette but must label unavailable production actions explicitly; visual completeness never substitutes for a controller, capability snapshot or readback.

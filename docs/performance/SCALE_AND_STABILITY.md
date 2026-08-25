@@ -135,3 +135,7 @@ Only eligible global forecasts persist on 15-minute station/window/band slots. V
 - JNI byte/float arrays are capped at 4 Mi elements, encoded sample output at 16 Mi elements, Flex discovery at 64 KiB and SSTV dimensions at 2,048 by 2,048.
 - Digi receive cleanup is asynchronous and capped at 2.5 seconds; Hamlib transport join/flush/disconnect uses bounded timeouts; lifecycle close no longer calls `runBlocking` for USB disconnect.
 - ASan and UBSan report no finding across all three native CTest targets. The protected tablet's 30-minute locked-state process soak remained one PID with 40 threads, 179-180 FDs and bounded PSS/native heap; visible unlocked foreground/navigation acceptance remains blocked by the secure keyguard.
+
+## Windows desktop parity scale probe
+
+The desktop integration suite creates 100,000 canonical QSOs and verifies keyset paging through the existing data contract. The new feature probe inserts 2,880 Neural rows over 180 days, 20,000 Digi rows, 30,000 Groups.io rows with FTS5 indexing, 10,000 Contest staging rows and 20,000 DX Chaser rows. The scale test completes inside the bounded CTest target and all stores close cleanly. This is deterministic storage/lookup evidence, not a multi-hour physical Windows soak.

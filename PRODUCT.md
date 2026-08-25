@@ -69,3 +69,7 @@ Future third-party reuse must record the source URL, immutable upstream commit, 
 Nexus is an evaluated external upstream. The Android Digi implementation incorporates only the component-audited CW/RTTY DSP and the MIT `tempo-sstv` crate at immutable commit `6ec4a7925f1550cc364c7fd95967ce38c696ad3f`, with notices retained in-tree. Its name or licence does not imply endorsement or make every remaining vendored/dependency component automatically reusable.
 
 Public distribution through Apple-controlled channels remains an unresolved legal/platform risk. No App Store submission or compatibility claim is part of this contract.
+
+## Windows full-parity candidate contract
+
+The Qt 6.11.2 desktop candidate now has the full Windows workspace shell and one-owner provider/data/safety platform. Feature labels remain truthful: native radio/rotator, Digi, Contest/N1MM, Groups.io, Portable, Operations, Satellite/QO-100, awards and several HamClock modules are `FOUNDATION_WIRED` until their production controllers are integrated and tested. The product must display disabled, receive-review, `PROVIDER_BLOCKED` or `LICENCE_BLOCKED` state rather than presenting fixture-backed UI as complete behavior.

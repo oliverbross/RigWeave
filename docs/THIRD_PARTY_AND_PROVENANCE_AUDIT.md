@@ -13,3 +13,7 @@ The release audit checks manifests, schema constants, configuration fixtures and
 Sweep 2 reuses the same byte-preserved Hamlib 4.7.2 archive for both radio and rotator APIs. It does not add a second Hamlib build, downloaded backend, proprietary ARCO source or copied firmware table. Native QMX behavior derives from the reviewed QMX branch and published CAT/USB behavior; RGO ONE is bounded to the reviewed V6 source and conservative unknown-generation behavior. microHAM ARCO is supported only through its published GS-232/EasyComm compatibility modes; no proprietary protocol claim is made.
 
 Sweep 3 exposes a bounded in-product acknowledgement registry derived from `NOTICE` and these manifests. It introduces no new third-party source. WWFF Spotline public JSON is attributed to WWFF and refreshed no faster than official guidance; the protected WWFF Directory is neither scraped nor bundled. CQ/ITU/state overlays remain unavailable because no legally reviewed pinned geometry is packaged.
+
+## Windows full-parity v1 provenance
+
+The candidate adds Qt/C++/QML source, tests, workflows and documentation only. It introduces no new vendored source, binary, firmware, map geometry, P.533 payload, `rigctl`/`rigctld` executable or duplicate Hamlib runtime. Windows and macOS builds continue from the single pinned Hamlib 4.7.2 source tree. Provider URLs and protocol names are compatibility metadata; live downloads are bounded, disabled by default and are not redistributed in source artifacts.

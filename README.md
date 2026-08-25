@@ -125,3 +125,7 @@ Android software/device integration is fail-closed. New or missing panadapter se
 - Android KX3 EQ Studio was physically exercised on a Lenovo `TB373FU` with real KXUSB and KX3 MCU firmware `03.02`: RX CW and TX normal-SSB curves were changed by one dB, read back exactly, and restored exactly without any transmission-capable command. Real `USB Advanced Audio Device` captures and A/B playback ran at 48 kHz mono, but the source was too quiet for a credible acoustic recommendation. Split/ESSB hardware buckets, physical conflict injection, compact-phone validation, and KX2 writes remain unverified or deferred. See [`docs/EQ_STUDIO.md`](docs/EQ_STUDIO.md).
 
 Public Apple distribution presents an unresolved GPLv3/platform risk. No App Store submission is authorised; qualified legal review and/or suitable additional permission is required before that distribution path is claimed compatible.
+
+## Windows full-parity branch
+
+`feature/windows-desktop-full-parity-v1` provides the complete Windows navigation shell, bounded provider/data platform, deterministic gallery, scale gates and same-source macOS packaging proof. Its audited verdict is PARTIAL: 14 of 31 rows are source-complete and 17 remain wired foundations without Android-equivalent production controllers. See [`docs/desktop/WINDOWS_FULL_PARITY_V1.md`](docs/desktop/WINDOWS_FULL_PARITY_V1.md) and the [parity matrix](docs/desktop/WINDOWS_FULL_PARITY_MATRIX.md). No physical, authenticated-service, transmit, RF, movement, signing or deployment claim is implied.

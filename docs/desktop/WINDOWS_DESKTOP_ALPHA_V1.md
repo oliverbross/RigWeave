@@ -15,3 +15,7 @@ ctest --test-dir build/desktop --output-on-failure
 Windows CI additionally builds the pinned static Hamlib library, sets `RIGWEAVE_REQUIRE_HAMLIB=ON`, runs the launch smoke, deploys Qt/QML, creates the portable ZIP and NSIS installer, measures/hashes both, and uploads exact-SHA artifacts. macOS CI compiles/tests the same source and packages an unsigned `.app` proof.
 
 This is not Android parity, a signed release, a store submission, an authenticated-service claim or physical hardware acceptance.
+
+## Successor
+
+The Alpha is superseded for further desktop work by [`WINDOWS_FULL_PARITY_V1.md`](WINDOWS_FULL_PARITY_V1.md). The successor adds the full workspace shell, provider/data platform, domain stores, deterministic gallery and broader regressions, but still reports PARTIAL because production-equivalent native radio/rotator and several Android feature controllers remain incomplete.

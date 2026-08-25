@@ -58,3 +58,7 @@ Sweep 3 adds Kotlin/Compose state and no new native archive, dynamic feature, ge
 ## Android lifecycle hardening package evidence
 
 The hardening adds a small C++ host-only lifecycle test target, Kotlin ownership helpers and no production payload family. The final local arm64 APK is 58,426,676 bytes (`f99b529f43e28bc16834fd80cd488293234d5399e04a972d2d87ae83240896b9`). The four-ABI AAB is 55,739,195 bytes (`e43aeb115149899d19d95060464fd5274cb74612d8a60c66a8fe3976aee8f053`). ABI membership, size ceilings, prohibited payloads, private evidence, rigctl/rigctld and duplicate libc++ checks pass.
+
+## Windows parity candidate measurements
+
+The desktop source adds no bundled dataset or third-party payload. The local unsigned macOS ZIP is 79,173,790 bytes with SHA-256 `ff65aa017af44f13c0c8e576f503eee351de1d17020863c54109333e604ca6fe`. The Windows exact-SHA workflow enforces 120 MiB ceilings for both portable ZIP and NSIS installer and 350 MiB unpacked. Current regression artifacts: arm64 APK 58,425,796 bytes; four-ABI AAB 55,730,956 bytes. Final Windows byte counts/hashes remain hosted evidence.

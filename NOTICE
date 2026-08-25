@@ -134,3 +134,9 @@ The Sweep 2 integration also uses the retained Hamlib rotator APIs and backend
 initializers from that same archive. No second Hamlib distribution is bundled.
 microHAM ARCO interoperability is limited to published compatibility protocols;
 no proprietary microHAM protocol implementation or source is included.
+
+The Windows full-parity candidate adds no third-party source, executable, firmware,
+protected dataset or private fixture. It continues to use the single retained Hamlib
+4.7.2 source archive and the already-recorded Qt, SGP4, MapLibre and shared-core
+dependencies. Provider registry entries are interoperability metadata, not bundled
+provider content or an endorsement.

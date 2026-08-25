@@ -51,3 +51,13 @@ Sweep 3 makes Radio, Hamlib, QMX/QMX+, RGO ONE, Rotator and WWFF operator-reacha
 | Hosted exact SHA | PASS | Release-candidate run `32784249372` passed all seven jobs at `826ba3031d869f12e0c9d37649257f9b2fac1ecf`; the final documentation-only tip is rerun externally. |
 | Protected tablet | PROCESS_ACCEPTANCE_PASS; VISUAL_NAVIGATION_BLOCKED | Backup/hash, compatible in-place install, UID/data/schema/QSO preservation, relaunch cycles and locked-state process soak pass. Secure keyguard prevented visible workspace navigation and true unlocked foreground-provider soak. |
 | Authenticated services, physical audio/radio/RF/rotator | LIVE_ACCEPTANCE_PENDING | Never inferred from source, package, process or navigation evidence. |
+
+## Windows desktop full-parity v1 addendum
+
+| Layer | Status | Evidence |
+|---|---|---|
+| Windows navigation/provider/data foundation | SOURCE_COMPLETE | 19 destinations, one owner graph, five versioned domain stores, 17 bounded providers, global Stop. |
+| Android feature parity | PARTIAL | 14/31 audited rows are source-complete; 17 remain wired foundations. |
+| Local desktop/gallery/scale | PASS | 6/6 tests; 75 distinct frames; 100k QSO and feature scale fixtures. |
+| Windows package | HOSTED_PENDING | Exact-SHA Windows ZIP/NSIS workflow added; local macOS host cannot produce acceptance-grade Windows artifacts. |
+| Live hardware/services | PENDING | No authenticated service, audio, CAT/PTT/TUNE, RF or movement acceptance performed. |
