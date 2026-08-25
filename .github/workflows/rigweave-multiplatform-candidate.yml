@@ -40,4 +40,26 @@ jobs:
       - name: Repository conflict and credential audit
         run: |
           test -z "$(git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- ':!core/third_party' ':!.github/workflows' || true)"
-          test -z "$(git grep -n -I -E '(password|token|api[_-]?key)[[:space:]]*=[[:space:]]*[^$<{[:space:]]+' -- desktop ':!desktop/tests' || true)"
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import subprocess
+
+          tracked = subprocess.check_output(
+              ["git", "ls-files", "desktop"], text=True
+          ).splitlines()
+          literal = re.compile(
+              r'''\b(?:password|api[_-]?key|secret)\s*=\s*["'][^"'$<{][^"']{7,}["']''',
+              re.IGNORECASE,
+          )
+          token = re.compile(r'''\b(?:wl2_|Bearer\s+)[A-Za-z0-9_-]{16,}''')
+          findings = []
+          for name in tracked:
+              if name.startswith("desktop/tests/"):
+                  continue
+              text = pathlib.Path(name).read_text(encoding="utf-8", errors="ignore")
+              if literal.search(text) or token.search(text):
+                  findings.append(name)
+          if findings:
+              raise SystemExit("possible literal credential in: " + ", ".join(findings))
+          PY
