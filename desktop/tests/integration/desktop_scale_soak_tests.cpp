@@ -1,0 +1,58 @@
+#include "rigweave/desktop/DesktopModels.hpp"
+#include "rigweave/desktop/DesktopParityPlatform.hpp"
+
+#include <QElapsedTimer>
+#include <QTemporaryDir>
+#include <QtTest>
+
+using namespace rigweave::desktop;
+
+class DesktopScaleSoakTests final : public QObject {
+    Q_OBJECT
+private slots:
+    void domainScaleMatrix();
+    void spotCapacityAndLifecycleChurn();
+};
+
+void DesktopScaleSoakTests::domainScaleMatrix() {
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    DesktopParityPlatform platform;
+    QString error;
+    QVERIFY2(platform.open(root.path() + "/db", root.path() + "/cache", false, &error), qPrintable(error));
+    QElapsedTimer total;
+    total.start();
+    const QVariantMap result = platform.runDeterministicScaleProbe(&error);
+    QVERIFY2(!result.isEmpty(), qPrintable(error));
+    QCOMPARE(result.value("Neural").toMap().value("rows").toInt(), 2880);
+    QCOMPARE(result.value("Digi").toMap().value("rows").toInt(), 20000);
+    QCOMPARE(result.value("Groups.io").toMap().value("rows").toInt(), 30000);
+    QCOMPARE(result.value("Contest").toMap().value("rows").toInt(), 10000);
+    QCOMPARE(result.value("DX Chaser").toMap().value("rows").toInt(), 20000);
+    QVERIFY2(total.elapsed() < 120000, "Deterministic domain scale matrix exceeded two minutes");
+}
+
+void DesktopScaleSoakTests::spotCapacityAndLifecycleChurn() {
+    SpotRepository spots;
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    for (int index = 0; index < 20001; ++index) {
+        spots.ingest({quint64(14000000 + index), QStringLiteral("T%1DX").arg(index),
+                      "SCALE", "bounded spot", "20m", "FT8", "SCALE",
+                      now - index, false, false, false});
+    }
+    QCOMPARE(spots.rowCount(), 20000);
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    for (int cycle = 0; cycle < 25; ++cycle) {
+        DesktopParityPlatform platform;
+        QString error;
+        QVERIFY2(platform.open(root.path() + "/db", root.path() + "/cache", cycle % 2, &error), qPrintable(error));
+        QCOMPARE(platform.databaseHealth().size(), 5);
+        platform.globalStop();
+        platform.close();
+    }
+}
+
+QTEST_GUILESS_MAIN(DesktopScaleSoakTests)
+#include "desktop_scale_soak_tests.moc"

@@ -34,6 +34,7 @@ set(RIGWEAVE_DESKTOP_SERVICE_SOURCES
     src/network/WavelogSync.cpp
     src/network/ClusterController.cpp
     src/platform/DesktopPlatform.cpp
+    src/platform/DesktopParityPlatform.cpp
     src/radio/DesktopRadioController.cpp
     src/rotator/DesktopRotatorController.cpp
     src/panadapter/DesktopPanadapter.cpp
@@ -104,19 +105,19 @@ endif()
 
 set(CPACK_PACKAGE_NAME "RigWeave")
 set(CPACK_PACKAGE_VENDOR "RigWeave")
-set(CPACK_PACKAGE_VERSION "0.1.0-alpha.1")
-set(CPACK_PACKAGE_INSTALL_DIRECTORY "RigWeave Alpha")
+set(CPACK_PACKAGE_VERSION "1.0.0-parity.1")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "RigWeave")
 set(CPACK_PACKAGE_FILE_NAME "RigWeave-Windows-x64-setup")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/../COPYING")
-set(CPACK_NSIS_DISPLAY_NAME "RigWeave Windows Desktop Alpha")
-set(CPACK_NSIS_PACKAGE_NAME "RigWeave Windows Desktop Alpha")
+set(CPACK_NSIS_DISPLAY_NAME "RigWeave Windows Desktop")
+set(CPACK_NSIS_PACKAGE_NAME "RigWeave Windows Desktop")
 set(CPACK_NSIS_INSTALL_ROOT "$LOCALAPPDATA")
 set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
 set(CPACK_NSIS_MODIFY_PATH OFF)
 set(CPACK_NSIS_MUI_FINISHPAGE_RUN "RigWeaveDesktop.exe")
 set(CPACK_NSIS_CREATE_ICONS_EXTRA
-    "CreateShortCut '$SMPROGRAMS\\\\RigWeave Windows Desktop Alpha.lnk' '$INSTDIR\\\\RigWeaveDesktop.exe'")
+    "CreateShortCut '$SMPROGRAMS\\\\RigWeave Windows Desktop.lnk' '$INSTDIR\\\\RigWeaveDesktop.exe'")
 set(CPACK_NSIS_DELETE_ICONS_EXTRA
-    "Delete '$SMPROGRAMS\\\\RigWeave Windows Desktop Alpha.lnk'")
+    "Delete '$SMPROGRAMS\\\\RigWeave Windows Desktop.lnk'")
 set(CPACK_GENERATOR "NSIS")
 include(CPack)

@@ -13,6 +13,7 @@
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QRegularExpression>
+#include <cstdio>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -66,6 +67,7 @@ bool writeZip(const QString &path,const QMap<QString,QByteArray>&entries,QString
 }
 
 DesktopPaths::DesktopPaths(QObject *parent):QObject(parent){const QString config=QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);const QString data=QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);const QString cacheRoot=QStandardPaths::writableLocation(QStandardPaths::CacheLocation);m_configuration=config;m_databases=data+"/databases";m_cache=cacheRoot;m_logs=data+"/logs";m_exports=QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)+"/RigWeave Exports";m_supportBundles=data+"/support-bundles";}
+void DesktopPaths::setEphemeralRoot(const QString&root){m_configuration=root+"/configuration";m_databases=root+"/databases";m_cache=root+"/cache";m_logs=root+"/logs";m_exports=root+"/exports";m_supportBundles=root+"/support-bundles";}
 bool DesktopPaths::create(QString*error)const{for(const auto&path:{m_configuration,m_databases,m_cache,m_logs,m_exports,m_supportBundles})if(!QDir().mkpath(path)){if(error)*error=QStringLiteral("Cannot create %1").arg(path);return false;}return true;}
 
 bool FakeCredentialVault::write(const QString&alias,const QString&label,const QString&secret,QString*error){if(alias.size()<1||alias.size()>128||label.size()>128||secret.size()>16384){if(error)*error="Credential label or value exceeds bound";return false;}m_values.insert(alias,secret);return true;}
@@ -95,7 +97,7 @@ bool SystemCredentialVault::remove(const QString&alias,QString*error){
 }
 
 DesktopConfigurationManager::DesktopConfigurationManager(QString path,QObject*parent):QObject(parent),m_path(std::move(path)){}
-bool DesktopConfigurationManager::safeSection(const QString&name){return QStringList{"window","navigation","stations","radioProfiles","rotatorProfiles","bandMaps","clusterProfiles","wavelogBinding","panadapter","alerts","display"}.contains(name);}
+bool DesktopConfigurationManager::safeSection(const QString&name){return QStringList{"window","navigation","stations","radioProfiles","rotatorProfiles","bandMaps","clusterProfiles","wavelogBinding","panadapter","alerts","display","homeModules","digi","keyer","contest","n1mm","dxChaser","portableProviders","operations","satellite","groupsio","neural","presets","accessibility"}.contains(name);}
 bool DesktopConfigurationManager::load(QString*error){QFile file(m_path);if(!file.exists()){m_root={{"version",1},{"navigation",QVariantMap{{"lastDestination","Home"}}}};return save(error);}if(!file.open(QIODevice::ReadOnly)){if(error)*error=file.errorString();return false;}if(file.size()>1048576){if(error)*error="Configuration exceeds 1 MiB bound";return false;}QJsonParseError parse;const auto doc=QJsonDocument::fromJson(file.readAll(),&parse);if(parse.error!=QJsonParseError::NoError||!doc.isObject()){if(error)*error="Invalid configuration JSON";return false;}m_root=doc.object().toVariantMap();return true;}
 bool DesktopConfigurationManager::save(QString*error)const{QSaveFile file(m_path);if(!file.open(QIODevice::WriteOnly)){if(error)*error=file.errorString();return false;}file.write(QJsonDocument::fromVariant(m_root).toJson(QJsonDocument::Indented));if(!file.commit()){if(error)*error=file.errorString();return false;}return true;}
 QString DesktopConfigurationManager::lastDestination()const{return m_root.value("navigation").toMap().value("lastDestination","Home").toString();}
@@ -110,7 +112,7 @@ SingleInstance::SingleInstance(QString name,QObject*parent):QObject(parent),m_na
 bool SingleInstance::acquire(){QLocalSocket socket;socket.connectToServer(m_name);if(socket.waitForConnected(300)){socket.write("activate");socket.waitForBytesWritten(300);return false;}QLocalServer::removeServer(m_name);return m_server.listen(m_name);}
 
 bool BoundedLogger::install(const QString&directory,QString*error){QMutexLocker lock(&logMutex);logDirectory=directory;if(!QDir().mkpath(directory)){if(error)*error="Cannot create log directory";return false;}for(int i=4;i>=1;--i){const QString from=directory+QStringLiteral("/rigweave.%1.log").arg(i),to=directory+QStringLiteral("/rigweave.%1.log").arg(i+1);if(QFile::exists(from)){QFile::remove(to);QFile::rename(from,to);}}const QString active=directory+"/rigweave.log";if(QFileInfo(active).size()>1048576)QFile::rename(active,directory+"/rigweave.1.log");logFile=std::make_unique<QFile>(active);if(!logFile->open(QIODevice::WriteOnly|QIODevice::Append|QIODevice::Text)){if(error)*error=logFile->errorString();logFile.reset();return false;}qInstallMessageHandler(handler);return true;}
-void BoundedLogger::handler(QtMsgType type,const QMessageLogContext&,const QString&message){QMutexLocker lock(&logMutex);if(!logFile)return;const char*level=type==QtDebugMsg?"DEBUG":type==QtInfoMsg?"INFO":type==QtWarningMsg?"WARN":type==QtCriticalMsg?"ERROR":"FATAL";logFile->write(QStringLiteral("%1 %2 %3\n").arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs),QString::fromLatin1(level),cleanMessage(message)).toUtf8());logFile->flush();}
+void BoundedLogger::handler(QtMsgType type,const QMessageLogContext&,const QString&message){QMutexLocker lock(&logMutex);const char*level=type==QtDebugMsg?"DEBUG":type==QtInfoMsg?"INFO":type==QtWarningMsg?"WARN":type==QtCriticalMsg?"ERROR":"FATAL";const QByteArray line=QStringLiteral("%1 %2 %3\n").arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs),QString::fromLatin1(level),cleanMessage(message)).toUtf8();if(logFile){logFile->write(line);logFile->flush();}if(qEnvironmentVariableIntValue("RIGWEAVE_LOG_TO_STDERR")==1){fwrite(line.constData(),1,size_t(line.size()),stderr);fflush(stderr);}}
 void BoundedLogger::shutdown(){qInstallMessageHandler(nullptr);QMutexLocker lock(&logMutex);if(logFile){logFile->flush();logFile->close();logFile.reset();}}
 
 SupportBundle::SupportBundle(DesktopPaths*paths,QObject*parent):QObject(parent),m_paths(paths){}

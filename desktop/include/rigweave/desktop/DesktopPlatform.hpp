@@ -19,6 +19,7 @@ class DesktopPaths final : public QObject {
     Q_PROPERTY(QString supportBundles READ supportBundles CONSTANT)
 public:
     explicit DesktopPaths(QObject *parent = nullptr);
+    void setEphemeralRoot(const QString &root);
     QString configuration() const { return m_configuration; }
     QString databases() const { return m_databases; }
     QString cache() const { return m_cache; }
@@ -85,11 +86,11 @@ public:
     bool save(QString *error = nullptr) const;
     QString lastDestination() const;
     void setLastDestination(const QString &value);
-    QVariantMap previewImport(const QString &path) const;
-    bool applyImport(const QString &path, const QStringList &sections, QString *error = nullptr);
-    bool exportBundle(const QString &path, QString *error = nullptr) const;
-    QVariantMap section(const QString &name) const;
-    void setSection(const QString &name, const QVariantMap &value);
+    Q_INVOKABLE QVariantMap previewImport(const QString &path) const;
+    Q_INVOKABLE bool applyImport(const QString &path, const QStringList &sections, QString *error = nullptr);
+    Q_INVOKABLE bool exportBundle(const QString &path, QString *error = nullptr) const;
+    Q_INVOKABLE QVariantMap section(const QString &name) const;
+    Q_INVOKABLE void setSection(const QString &name, const QVariantMap &value);
 signals:
     void changed();
 private:
