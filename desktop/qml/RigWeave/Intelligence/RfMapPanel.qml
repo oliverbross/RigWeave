@@ -35,6 +35,7 @@ Rectangle { id: root; color: "#171b1e"; border.color: "#3a4147"
                 Button { text: "Band Maps"; onClicked: Desktop.currentDestination="Band Maps" }
             }
             RfMapScene { id: map; Layout.fillWidth: true; Layout.fillHeight: true; model: RfObservations; projection: projection.currentText
+                PinchHandler { id: pinch; property real startingZoom: 1; onActiveChanged: if(active) startingZoom=map.zoom; onActiveScaleChanged: map.zoom=Math.max(1,Math.min(8,startingZoom*activeScale)) }
                 MouseArea { anchors.fill: parent
                     onPressed: function(mouse){root.dragX=mouse.x;root.dragY=mouse.y;root.dragLon=map.longitude;root.dragLat=map.latitude}
                     onPositionChanged: function(mouse){if(!pressed)return;map.longitude=root.dragLon-(mouse.x-root.dragX)/width*180/map.zoom;map.latitude=root.dragLat+(mouse.y-root.dragY)/height*90/map.zoom}
