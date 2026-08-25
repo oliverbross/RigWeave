@@ -5,6 +5,7 @@
 #include <QNetworkAccessManager>
 #include <QJsonObject>
 #include <QMap>
+#include <QSet>
 #include <QUrl>
 #include <functional>
 #include <optional>
@@ -39,6 +40,7 @@ struct MergeResult {
 class WavelogEndpoint {
 public:
     virtual ~WavelogEndpoint() = default;
+    virtual void close() {}
     virtual QVariantMap capabilities(const QUrl &server, const QString &token) = 0;
     virtual QVariantList stations(const QUrl &server, const QString &token) = 0;
     virtual QVariantMap page(const WavelogBinding &binding, const QString &token, int page) = 0;
@@ -51,6 +53,8 @@ class QtWavelogEndpoint final : public QObject, public WavelogEndpoint {
     Q_OBJECT
 public:
     explicit QtWavelogEndpoint(QObject *parent = nullptr);
+    ~QtWavelogEndpoint() override { close(); }
+    void close() override;
     QVariantMap capabilities(const QUrl &server, const QString &token) override;
     QVariantList stations(const QUrl &server, const QString &token) override;
     QVariantMap page(const WavelogBinding &binding, const QString &token, int page) override;
@@ -62,6 +66,8 @@ private:
     QVariantMap request(const QUrl &url, const QString &token, const QByteArray &method,
                         const QJsonObject &body = {});
     QNetworkAccessManager m_network;
+    QSet<QNetworkReply *> m_replies;
+    bool m_closed{};
 };
 
 class WavelogSyncEngine final : public QObject {
@@ -71,7 +77,7 @@ class WavelogSyncEngine final : public QObject {
     Q_PROPERTY(int conflictCount READ conflictCount NOTIFY queueChanged)
 public:
     WavelogSyncEngine(QsoDatabase *database, QObject *parent = nullptr);
-    void setEndpoint(WavelogEndpoint *endpoint) { m_endpoint = endpoint; }
+    void setEndpoint(WavelogEndpoint *endpoint) { m_endpoint = endpoint; if (m_closed && m_endpoint) m_endpoint->close(); }
     void setCredentialResolver(std::function<QString(const QString &)> resolver) { m_credentialResolver = std::move(resolver); }
     QString state() const { return m_state; }
     int pendingCount() const;
@@ -85,6 +91,8 @@ public:
     bool enqueue(const QString &qsoId, const QString &operation, QString *error = nullptr);
     Q_INVOKABLE void synchronize(const QString &mode);
     Q_INVOKABLE void retryPending();
+    Q_INVOKABLE void close();
+    bool closed() const { return m_closed; }
     Q_INVOKABLE bool resolveConflict(const QString &id, const QString &resolution,
                                      const QVariantMap &merged = {});
     static CanonicalQso canonical(const QsoRecord &record);
@@ -104,6 +112,7 @@ private:
     WavelogEndpoint *m_endpoint{};
     std::function<QString(const QString &)> m_credentialResolver;
     QString m_state{"Not configured"};
+    bool m_closed{};
 };
 
 } // namespace rigweave::desktop

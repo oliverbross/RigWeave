@@ -46,6 +46,13 @@ QByteArray CanonicalQso::hash() const { return QCryptographicHash::hash(encoded(
 
 QtWavelogEndpoint::QtWavelogEndpoint(QObject *parent):QObject(parent){}
 
+void QtWavelogEndpoint::close() {
+    if (m_closed) return;
+    m_closed = true;
+    const auto replies = m_replies;
+    for (auto *reply : replies) if (reply) reply->abort();
+}
+
 QUrl QtWavelogEndpoint::normalizedRoot(const QUrl &input) {
     QUrl url=input;if(url.scheme().isEmpty())url=QUrl(QStringLiteral("https://%1").arg(input.toString()));
     if (url.scheme()!=QStringLiteral("https")||url.host().isEmpty()) {
@@ -60,11 +67,12 @@ QUrl QtWavelogEndpoint::normalizedRoot(const QUrl &input) {
 }
 
 QVariantMap QtWavelogEndpoint::request(const QUrl &url,const QString &token,const QByteArray &method,const QJsonObject &body) {
+    if(m_closed)return{{"ok",false},{"error","Wavelog endpoint is closed"}};
     if(url.scheme()!=QStringLiteral("https"))return{{"ok",false},{"error","HTTPS is required"}};
     QNetworkRequest request(url);request.setRawHeader("Accept","application/json");request.setRawHeader("Authorization",QByteArray("Bearer ")+token.toUtf8());request.setTransferTimeout(30000);
-    QNetworkReply *reply=nullptr;if(method=="GET")reply=m_network.get(request);else if(method=="DELETE")reply=m_network.deleteResource(request);else{request.setHeader(QNetworkRequest::ContentTypeHeader,"application/json");reply=m_network.sendCustomRequest(request,method,QJsonDocument(body).toJson(QJsonDocument::Compact));}
+    QNetworkReply *reply=nullptr;if(method=="GET")reply=m_network.get(request);else if(method=="DELETE")reply=m_network.deleteResource(request);else{request.setHeader(QNetworkRequest::ContentTypeHeader,"application/json");reply=m_network.sendCustomRequest(request,method,QJsonDocument(body).toJson(QJsonDocument::Compact));}m_replies.insert(reply);connect(reply,&QObject::destroyed,this,[this,reply]{m_replies.remove(reply);});
     QEventLoop loop;QTimer timer;timer.setSingleShot(true);connect(&timer,&QTimer::timeout,reply,&QNetworkReply::abort);connect(reply,&QNetworkReply::finished,&loop,&QEventLoop::quit);timer.start(30000);loop.exec();
-    const int status=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();const QByteArray bytes=reply->read(4194305);const QString networkError=reply->errorString().left(300);reply->deleteLater();
+    m_replies.remove(reply);const int status=reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();const QByteArray bytes=reply->read(4194305);const QString networkError=reply->errorString().left(300);reply->deleteLater();if(m_closed)return{{"ok",false},{"status",status},{"error","Wavelog endpoint closed during request"}};
     if(bytes.size()>4194304)return{{"ok",false},{"status",status},{"error","Wavelog response exceeded 4 MiB bound"}};
     if (status==204) {
         return{{"ok",true},{"status",status}};
@@ -94,11 +102,13 @@ int WavelogSyncEngine::pendingCount()const{QSqlQuery q(m_database->connection())
 int WavelogSyncEngine::conflictCount()const{QSqlQuery q(m_database->connection());q.exec("SELECT COUNT(*) FROM wavelog_conflict WHERE state='OPEN'");return q.next()?q.value(0).toInt():0;}
 void WavelogSyncEngine::setState(QString value){if(m_state==value)return;m_state=std::move(value);emit stateChanged();}
 
+void WavelogSyncEngine::close(){if(m_closed)return;m_closed=true;if(m_endpoint)m_endpoint->close();m_credentialResolver={};setState("Closed");}
+
 bool WavelogSyncEngine::saveBinding(const WavelogBinding&b,QString*error){if(b.id.isEmpty()||!QtWavelogEndpoint::normalizedRoot(b.serverUrl).isValid()||b.credentialAlias.isEmpty()||b.remoteStationId.isEmpty()){if(error)*error="Complete HTTPS URL, credential alias, and station mapping are required";return false;}auto db=m_database->connection();if(!db.transaction())return false;QSqlQuery clear(db);if(!clear.exec("DELETE FROM wavelog_binding")){db.rollback();return false;}QSqlQuery q(db);q.prepare("INSERT INTO wavelog_binding VALUES(?,?,?,?,?,?,?,?)");q.addBindValue(b.id);q.addBindValue(QtWavelogEndpoint::normalizedRoot(b.serverUrl).toString());q.addBindValue(b.credentialAlias);q.addBindValue(b.localStationProfileId);q.addBindValue(b.remoteStationId);q.addBindValue(b.canRead);q.addBindValue(b.canWrite);q.addBindValue(QDateTime::currentSecsSinceEpoch());if(!q.exec()){if(error)*error=safeError(q);db.rollback();return false;}if(!db.commit())return false;setState(b.canWrite?"Ready — read/write":"Ready — read-only");return true;}
 
 bool WavelogSyncEngine::configureBinding(const QString&serverUrl,const QString&credentialAlias,const QString&localStationProfileId,const QString&remoteStationId,bool canWrite){QString error;const WavelogBinding value{QStringLiteral("desktop-primary"),QUrl(serverUrl),credentialAlias,localStationProfileId,remoteStationId,true,canWrite};const bool ok=saveBinding(value,&error);if(!ok)emit this->error(error);return ok;}
 
-std::optional<WavelogBinding> WavelogSyncEngine::binding()const{QSqlQuery q(m_database->connection());if(!q.exec("SELECT * FROM wavelog_binding LIMIT 1")||!q.next())return std::nullopt;return WavelogBinding{q.value("id").toString(),QUrl(q.value("server_url").toString()),q.value("credential_alias").toString(),q.value("local_station_profile_id").toString(),q.value("remote_station_id").toString(),q.value("can_read").toBool(),q.value("can_write").toBool()};}
+std::optional<WavelogBinding> WavelogSyncEngine::binding()const{if(m_closed)return std::nullopt;QSqlQuery q(m_database->connection());if(!q.exec("SELECT * FROM wavelog_binding LIMIT 1")||!q.next())return std::nullopt;return WavelogBinding{q.value("id").toString(),QUrl(q.value("server_url").toString()),q.value("credential_alias").toString(),q.value("local_station_profile_id").toString(),q.value("remote_station_id").toString(),q.value("can_read").toBool(),q.value("can_write").toBool()};}
 
 CanonicalQso WavelogSyncEngine::canonical(const QsoRecord&r){CanonicalQso c;const QDateTime dt=QDateTime::fromSecsSinceEpoch(r.createdAt,QTimeZone::UTC);c.fields={{"QSO_DATE",dt.toString("yyyyMMdd")},{"TIME_ON",dt.toString("HHmmss")},{"CALL",normalizedCallsign(r.callsign)},{"FREQ",QString::number(r.frequencyHz/1000000.0,'f',6)},{"BAND",r.band},{"MODE",r.mode.toUpper()},{"SUBMODE",r.submode.toUpper()},{"RST_SENT",r.rstSent},{"RST_RCVD",r.rstReceived},{"GRIDSQUARE",r.grid.toUpper()},{"COMMENT",r.comment},{"STATION_CALLSIGN",normalizedCallsign(r.stationCallsign)},{"OPERATOR",normalizedCallsign(r.operatorCallsign)},{"DXCC",r.dxcc},{"COUNTRY",r.country},{"CQZ",r.cqZone},{"ITUZ",r.ituZone},{"CONTEST_ID",r.contestId},{"SAT_NAME",r.satelliteName},{"SAT_MODE",r.satelliteMode},{"POTA_REF",r.potaRef},{"SOTA_REF",r.sotaRef},{"IOTA",r.iota},{"WWFF_REF",r.wwffRef},{"QSL_RCVD",r.qslReceived},{"LOTW_QSL_RCVD",r.lotwReceived},{"EQSL_QSL_RCVD",r.eqslReceived}};for(auto it=r.extraAdif.begin();it!=r.extraAdif.end();++it)c.fields.insert(it.key().toUpper(),canonicalAdifValue(it.value().toString()));for(auto it=c.fields.begin();it!=c.fields.end();)if(it.value().isEmpty())it=c.fields.erase(it);else++it;return c;}
 

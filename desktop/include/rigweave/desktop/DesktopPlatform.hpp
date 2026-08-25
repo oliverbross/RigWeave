@@ -123,8 +123,10 @@ class SupportBundle final : public QObject {
 public:
     SupportBundle(DesktopPaths *paths, QObject *parent = nullptr);
     Q_INVOKABLE QString create(const QVariantMap &health, QString *error = nullptr) const;
+    void close() { m_closed = true; }
 private:
     DesktopPaths *m_paths;
+    bool m_closed{};
 };
 
 bool openAllowlistedExternalUrl(const QUrl &url);
