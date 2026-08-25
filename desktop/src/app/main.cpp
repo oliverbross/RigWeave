@@ -467,6 +467,9 @@ void captureGallery(QGuiApplication &app, DesktopApplication &desktop,
       return;
     }
     const GalleryFrame frame = frames.at(*index);
+    std::fprintf(stderr, "ui-gallery frame: %d %s begin\n", *index,
+                 qPrintable(frame.fileName));
+    std::fflush(stderr);
     window->setProperty("shackMode", frame.fileName == "Shack");
     const int radioBackend = frame.fileName.startsWith("TCI-")
                                  ? 9
@@ -514,6 +517,9 @@ void captureGallery(QGuiApplication &app, DesktopApplication &desktop,
                   app.exit(4);
                   return;
                 }
+                std::fprintf(stderr, "ui-gallery frame: %d %s complete\n",
+                             *index, qPrintable(frame.fileName));
+                std::fflush(stderr);
                 ++*index;
                 (*step)();
               });
