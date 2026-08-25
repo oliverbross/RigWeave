@@ -15,7 +15,6 @@ namespace {
 class PanadapterNode final : public QSGNode {
 public:
   PanadapterNode() {
-    waterfall = new QSGSimpleTextureNode;
     spectrumGeometry =
         new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 0);
     spectrum = new QSGGeometryNode;
@@ -26,7 +25,6 @@ public:
     auto *spectrumMaterial = new QSGFlatColorMaterial;
     spectrumMaterial->setColor(QColor("#d38b22"));
     spectrum->setMaterial(spectrumMaterial);
-    appendChildNode(waterfall);
     appendChildNode(spectrum);
 
     peakGeometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 0);
@@ -40,7 +38,11 @@ public:
     peak->setMaterial(peakMaterial);
     appendChildNode(peak);
   }
-  ~PanadapterNode() override { delete texture; }
+  ~PanadapterNode() override {
+    if (waterfall)
+      waterfall->setTexture(nullptr);
+    delete texture;
+  }
 
   QSGSimpleTextureNode *waterfall{};
   QSGGeometry *spectrumGeometry{};
@@ -188,16 +190,24 @@ QSGNode *PanadapterSceneItem::updatePaintNode(QSGNode *oldNode,
   node->peak->markDirty(QSGNode::DirtyGeometry);
   if (waterfallVisible && !frame.waterfall.isNull() &&
       node->sequence != frame.sequence) {
-    delete node->texture;
-    node->texture = window()->createTextureFromImage(frame.waterfall);
-    node->texture->setFiltering(QSGTexture::Linear);
-    node->waterfall->setTexture(node->texture);
-    node->waterfall->setRect(waterfallBounds);
-    node->waterfall->setSourceRect(
-        QRectF(first, 0, visible, frame.waterfall.height()));
-    node->sequence = frame.sequence;
+    if (QSGTexture *replacement =
+            window()->createTextureFromImage(frame.waterfall)) {
+      if (!node->waterfall) {
+        node->waterfall = new QSGSimpleTextureNode;
+        node->prependChildNode(node->waterfall);
+      }
+      node->waterfall->setTexture(nullptr);
+      delete node->texture;
+      node->texture = replacement;
+      node->texture->setFiltering(QSGTexture::Linear);
+      node->waterfall->setTexture(node->texture);
+      node->waterfall->setRect(waterfallBounds);
+      node->waterfall->setSourceRect(
+          QRectF(first, 0, visible, frame.waterfall.height()));
+      node->sequence = frame.sequence;
+    }
   }
-  if (!waterfallVisible)
+  if (!waterfallVisible && node->waterfall)
     node->waterfall->setRect({});
   queueRendererHealth(
       QStringLiteral("Healthy · scene graph · %1 bins · DPR %2")
