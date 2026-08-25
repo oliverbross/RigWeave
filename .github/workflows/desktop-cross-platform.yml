@@ -4,7 +4,7 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
-    branches: [feature/windows-desktop-alpha-v1, feature/windows-desktop-full-parity-v1]
+    branches: [feature/windows-desktop-alpha-v1]
     paths:
       - 'desktop/**'
       - 'core/**'
