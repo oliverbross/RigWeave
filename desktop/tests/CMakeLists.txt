@@ -2,6 +2,8 @@ set(RIGWEAVE_TEST_LIBS rigweave_desktop_services Qt6::Test)
 
 qt_add_executable(desktop_data_contract_tests unit/desktop_data_contract_tests.cpp)
 target_link_libraries(desktop_data_contract_tests PRIVATE ${RIGWEAVE_TEST_LIBS})
+target_compile_definitions(desktop_data_contract_tests PRIVATE
+    RIGWEAVE_SHARED_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../fixtures/platform")
 rigweave_target_warnings(desktop_data_contract_tests)
 add_test(NAME desktop_data_contract_tests COMMAND desktop_data_contract_tests)
 

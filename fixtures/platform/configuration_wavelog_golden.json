@@ -1,0 +1,54 @@
+{
+  "contract": "rigweave-configuration-wavelog-semantic-v1",
+  "version": 1,
+  "portableSections": [
+    "stations",
+    "radioProfiles",
+    "rotatorProfiles",
+    "bandMaps",
+    "clusterProfiles",
+    "wavelogBinding",
+    "alerts",
+    "display"
+  ],
+  "platformLocalSections": [
+    "window",
+    "navigation",
+    "androidUsbIdentity",
+    "windowsComIdentity",
+    "appleDriverKitIdentity",
+    "audioDeviceIds"
+  ],
+  "alwaysExcluded": [
+    "credentials",
+    "ptt",
+    "tune",
+    "digiTxArmed",
+    "activeKeyerQueue",
+    "activeContest",
+    "n1mmArmed",
+    "dxChaserSession",
+    "radioConnected",
+    "rotatorConnected",
+    "rotatorMoving",
+    "pendingCommands"
+  ],
+  "wavelogScenarios": [
+    "station-discovery",
+    "initial-sync",
+    "quick-sync",
+    "full-reconciliation",
+    "create",
+    "update-whitelist",
+    "delete",
+    "ambiguous-create",
+    "ambiguous-delete",
+    "conflict",
+    "tombstone",
+    "resume-checkpoint",
+    "outbox-retry",
+    "station-isolation"
+  ],
+  "credentialsIncluded": false,
+  "restoreAuthority": false
+}
