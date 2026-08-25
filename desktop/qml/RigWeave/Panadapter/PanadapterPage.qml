@@ -83,7 +83,7 @@ Item { id: root
                 onPressed: function(mouse) { root.dragStartX = mouse.x; root.dragStartPan = scene.pan }
                 onWheel: function(wheel) { const cursor = wheel.x / width; const oldZoom = scene.zoom; const oldVisible = 1 / oldZoom; const oldLeft = (1 - oldVisible) * (scene.pan + 1) / 2; const anchor = oldLeft + cursor * oldVisible; const nextZoom = Math.max(1, Math.min(32, oldZoom * (wheel.angleDelta.y > 0 ? 1.25 : .8))); const nextVisible = 1 / nextZoom; scene.zoom = nextZoom; scene.pan = nextZoom === 1 ? 0 : Math.max(-1, Math.min(1, (anchor - cursor * nextVisible) / (1 - nextVisible) * 2 - 1)); root.cursorFrequency = Panadapter.frequencyAt(cursor, scene.zoom, scene.pan) }
             }
-            Label { anchors.centerIn: parent; visible: Panadapter.trace.length === 0; text: "OFFLINE — no observed I/Q display frame"; color: "#98a0a6" }
+                Label { anchors.centerIn: parent; visible: !Panadapter.hasFrame; text: "OFFLINE — no observed I/Q display frame"; color: "#98a0a6" }
         }
         Slider { Layout.fillWidth: true; from: .2; to: .8; value: scene.spectrumRatio; visible: Panadapter.displayMode === "Spectrum + waterfall"; onMoved: scene.spectrumRatio = value; ToolTip.visible: hovered; ToolTip.text: "Resizable spectrum / waterfall split" }
         Rectangle { Layout.fillWidth: true; implicitHeight: 12; radius: 2

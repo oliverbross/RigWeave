@@ -4,10 +4,12 @@
 #include <QHash>
 #include <QObject>
 #include <QSet>
+#include <QThreadPool>
 #include <QTimer>
 #include <QUrl>
 #include <QVariantList>
 #include <QWebSocket>
+#include <atomic>
 
 namespace rigweave::desktop {
 
@@ -25,6 +27,7 @@ class TciClient final : public QObject {
     Q_OBJECT
 public:
     explicit TciClient(QObject *parent = nullptr);
+    ~TciClient() override;
 
     QString state() const { return m_state; }
     QString device() const { return m_device; }
@@ -58,6 +61,8 @@ private:
     void handleDisconnected();
     void handleText(const QString &message);
     void handleBinary(const QByteArray &message);
+    void deliverBinary(int receiver, quint32 sampleRate, int dataType, QVector<float> values,
+                       int parseError, quint64 generation);
     void handleStatus(const std::string &name, const std::string &arguments);
     void markMalformed(const QString &command);
     void setReceiverCount(int count);
@@ -69,6 +74,7 @@ private:
     void clearSessionState();
 
     QWebSocket m_socket;
+    QThreadPool m_decodePool;
     QTimer m_connectionTimer;
     QTimer m_readyTimer;
     QTimer m_reconnectTimer;
@@ -93,6 +99,9 @@ private:
     quint64 m_malformedBinary{};
     quint64 m_droppedFrames{};
     qint64 m_lastUpdateMs{};
+    std::atomic_int m_pendingBinary{};
+    std::atomic_bool m_binaryDecodedOffOwnerThread{};
+    static constexpr int MaxPendingBinary = 8;
 };
 
 } // namespace rigweave::desktop

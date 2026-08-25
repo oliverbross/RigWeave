@@ -10,7 +10,21 @@
 #endif
 
 namespace rigweave::desktop {
-namespace { constexpr double EarthKm=6371.0088; double radians(double v){return qDegreesToRadians(v);} }
+namespace {
+constexpr double EarthKm=6371.0088;
+double radians(double v){return qDegreesToRadians(v);}
+bool normalizeObservation(const QVariantMap&input,QVariantMap*output,qint64 now){
+    QVariantMap o=input;const QString id=o.value("id").toString(),source=o.value("source").toString(),evidence=o.value("evidenceClass").toString();
+    const double txLat=o.value("txLat").toDouble(),txLon=o.value("txLon").toDouble(),rxLat=o.value("rxLat").toDouble(),rxLon=o.value("rxLon").toDouble();
+    if(id.isEmpty()||source.isEmpty()||!QStringList{"LIVE","HISTORICAL","OUTLOOK"}.contains(evidence)||std::abs(txLat)>90||std::abs(rxLat)>90||std::abs(txLon)>180||std::abs(rxLon)>180)return false;
+    if(!o.value("snrReported").isValid())o.remove("snrReported");
+    const double distance=RfObservationModel::distanceKm({txLon,txLat},{rxLon,rxLat});
+    o["distanceKm"]=distance;o["bearingDeg"]=RfObservationModel::initialBearing({rxLon,rxLat},{txLon,txLat});
+    o["ageMinutes"]=std::max<qint64>(0,(now-o.value("observedUtc").toLongLong())/60);o["freshness"]=o.value("ageMinutes").toInt()<=30?"FRESH":"STALE";
+    QVariantList controls;if(distance>=1000){const int hops=std::clamp(int(std::ceil(distance/3500.0)),1,5);QVector<QPointF> path;for(const auto&segment:RfObservationModel::greatCircle({rxLon,rxLat},{txLon,txLat},false,std::max(8,hops*2)))path+=segment;for(int hop=0;hop<hops;++hop){const QPointF point=path.at(std::clamp(int((hop+.5)*path.size()/hops),0,int(path.size())-1));controls.push_back(QVariantMap{{"lon",point.x()},{"lat",point.y()},{"label",evidence=="OUTLOOK"?"Speculative outlook control point":"Observed-path control point"},{"mufClaim",false}});}}o["controlPoints"]=controls;
+    *output=std::move(o);return true;
+}
+}
 
 RfObservationModel::RfObservationModel(QObject*parent):QAbstractListModel(parent){}
 int RfObservationModel::rowCount(const QModelIndex&p)const{return p.isValid()?0:m_visible.size();}
@@ -22,14 +36,17 @@ double RfObservationModel::initialBearing(QPointF a,QPointF b){const double p1=r
 QVector<QVector<QPointF>> RfObservationModel::greatCircle(QPointF a,QPointF b,bool longPath,int points){points=std::clamp(points,8,256);auto xyz=[](QPointF p){const double lat=radians(p.y()),lon=radians(p.x());return QVector3D(float(std::cos(lat)*std::cos(lon)),float(std::cos(lat)*std::sin(lon)),float(std::sin(lat)));};QVector3D va=xyz(a),vb=xyz(b);double omega=std::acos(std::clamp(double(QVector3D::dotProduct(va,vb)),-1.0,1.0));if(longPath)omega=2*M_PI-omega;QVector<QVector<QPointF>> segments(1);double previous{};for(int i=0;i<=points;++i){const double t=double(i)/points;QVector3D v;if(!longPath){const double s=std::sin(omega);v=s<1e-9?va:va*float(std::sin((1-t)*omega)/s)+vb*float(std::sin(t*omega)/s);}else{QVector3D axis=QVector3D::crossProduct(va,vb).normalized();const double angle=-omega*t;v=va*float(std::cos(angle))+QVector3D::crossProduct(axis,va)*float(std::sin(angle))+axis*float(QVector3D::dotProduct(axis,va)*(1-std::cos(angle)));}v.normalize();const double lon=qRadiansToDegrees(std::atan2(v.y(),v.x())),lat=qRadiansToDegrees(std::asin(v.z()));if(i>0&&std::abs(lon-previous)>180)segments.push_back({});segments.last().push_back(QPointF(lon,lat));previous=lon;}return segments;}
 
 bool RfObservationModel::ingest(const QVariantMap&input){
-    QVariantMap o=input;const QString id=o.value("id").toString(),source=o.value("source").toString(),evidence=o.value("evidenceClass").toString();
-    const double txLat=o.value("txLat").toDouble(),txLon=o.value("txLon").toDouble(),rxLat=o.value("rxLat").toDouble(),rxLon=o.value("rxLon").toDouble();
-    if(id.isEmpty()||source.isEmpty()||!QStringList{"LIVE","HISTORICAL","OUTLOOK"}.contains(evidence)||std::abs(txLat)>90||std::abs(rxLat)>90||std::abs(txLon)>180||std::abs(rxLon)>180)return false;
-    if(!o.value("snrReported").isValid())o.remove("snrReported");const double distance=distanceKm({txLon,txLat},{rxLon,rxLat});o["distanceKm"]=distance;o["bearingDeg"]=initialBearing({rxLon,rxLat},{txLon,txLat});
-    o["ageMinutes"]=std::max<qint64>(0,(QDateTime::currentSecsSinceEpoch()-o.value("observedUtc").toLongLong())/60);o["freshness"]=o.value("ageMinutes").toInt()<=30?"FRESH":"STALE";
-    QVariantList controls;if(distance>=1000){const int hops=std::clamp(int(std::ceil(distance/3500.0)),1,5);QVector<QPointF> path;for(const auto&segment:greatCircle({rxLon,rxLat},{txLon,txLat},false,100))path+=segment;for(int hop=0;hop<hops;++hop){const QPointF point=path.at(std::clamp(int((hop+.5)*path.size()/hops),0,int(path.size())-1));controls.push_back(QVariantMap{{"lon",point.x()},{"lat",point.y()},{"label",evidence=="OUTLOOK"?"Speculative outlook control point":"Observed-path control point"},{"mufClaim",false}});}}o["controlPoints"]=controls;
-    for(auto&existing:m_all)if(existing.value("id")==id){existing=o;applyFilters();return true;}m_all.push_back(o);applyFilters();return true;
+    QVariantMap o;if(!normalizeObservation(input,&o,QDateTime::currentSecsSinceEpoch()))return false;const QString id=o.value("id").toString();
+    for(auto&existing:m_all)if(existing.value("id")==id){existing=o;applyFilters();return true;}m_all.push_back(o);if(m_all.size()>MaxObservations){m_all.removeFirst();++m_droppedObservations;}applyFilters();return true;
 }
+int RfObservationModel::ingestBatch(const QVariantList&inputs){
+    QHash<QString,int> indices;indices.reserve(m_all.size()+inputs.size());for(int i=0;i<m_all.size();++i)indices.insert(m_all.at(i).value("id").toString(),i);
+    const qint64 now=QDateTime::currentSecsSinceEpoch();int accepted=0;
+    for(const QVariant&entry:inputs){QVariantMap o;if(!normalizeObservation(entry.toMap(),&o,now))continue;const QString id=o.value("id").toString();const auto found=indices.constFind(id);if(found!=indices.cend())m_all[*found]=std::move(o);else{indices.insert(id,m_all.size());m_all.push_back(std::move(o));}++accepted;}
+    if(m_all.size()>MaxObservations){const int excess=m_all.size()-MaxObservations;m_all.remove(0,excess);m_droppedObservations+=static_cast<quint64>(excess);}
+    applyFilters();return accepted;
+}
+QVariantList RfObservationModel::renderObservations(int maximum)const{maximum=std::clamp(maximum,1,8192);if(m_visible.size()<=maximum)return m_visible;QVariantList result;result.reserve(maximum+1);const int stride=std::max(1,static_cast<int>(m_visible.size()/maximum));bool selectedIncluded=false;for(int i=0;i<m_visible.size()&&result.size()<maximum;i+=stride){const QVariant&entry=m_visible.at(i);result.push_back(entry);selectedIncluded|=entry.toMap().value("id")==m_selectedId;}if(!m_selectedId.isEmpty()&&!selectedIncluded){for(const QVariant&entry:m_visible)if(entry.toMap().value("id")==m_selectedId){result.push_back(entry);break;}}return result;}
 void RfObservationModel::applyFilters(){QVariantList next;for(const auto&o:m_all){if(m_filters.value("source")!="All"&&o.value("source")!=m_filters.value("source"))continue;if(m_filters.value("band")!="All"&&o.value("band")!=m_filters.value("band"))continue;if(m_filters.value("mode")!="All"&&o.value("mode")!=m_filters.value("mode"))continue;if(m_filters.value("evidence")!="All"&&o.value("evidenceClass")!=m_filters.value("evidence"))continue;if(o.value("ageMinutes").toInt()>m_filters.value("maximumAgeMinutes").toInt())continue;const double d=o.value("distanceKm").toDouble();if(d<m_filters.value("minimumDistanceKm").toDouble()||d>m_filters.value("maximumDistanceKm").toDouble())continue;if(m_filters.value("freshOnly").toBool()&&o.value("freshness")!="FRESH")continue;if(!o.value("callsign").toString().contains(m_filters.value("callsign").toString(),Qt::CaseInsensitive))continue;if(m_filters.value("worked")!="All"&&o.value("worked").toBool()!=(m_filters.value("worked")=="Worked"))continue;next.push_back(o);}beginResetModel();m_visible=next;endResetModel();emit countChanged();emit observationsChanged();}
 void RfObservationModel::setFilter(const QString&name,const QVariant&value){if(!m_filters.contains(name)||m_filters.value(name)==value)return;m_filters[name]=value;applyFilters();emit filtersChanged();}
 void RfObservationModel::resetFilters(){m_filters={{"source","All"},{"band","All"},{"mode","All"},{"evidence","All"},{"maximumAgeMinutes",120},{"minimumDistanceKm",0},{"maximumDistanceKm",20000},{"callsign",QString{}},{"worked","All"},{"freshOnly",false},{"longPath",false}};applyFilters();emit filtersChanged();}

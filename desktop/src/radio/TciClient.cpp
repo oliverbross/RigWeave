@@ -4,6 +4,9 @@
 #include "rigweave/tci.hpp"
 
 #include <QAbstractSocket>
+#include <QDateTime>
+#include <QMetaObject>
+#include <QThread>
 #include <QSslError>
 #include <QStringList>
 
@@ -50,6 +53,10 @@ QVariantMap receiverTemplate(int receiver) {
 } // namespace
 
 TciClient::TciClient(QObject *parent) : QObject(parent) {
+    m_decodePool.setMaxThreadCount(1);
+    m_decodePool.setExpiryTimeout(-1);
+    m_socket.setMaxAllowedIncomingFrameSize(8U*1024U*1024U);
+    m_socket.setMaxAllowedIncomingMessageSize(8U*1024U*1024U);
     m_connectionTimer.setSingleShot(true);
     m_connectionTimer.setInterval(4'000);
     m_readyTimer.setSingleShot(true);
@@ -86,6 +93,13 @@ TciClient::TciClient(QObject *parent) : QObject(parent) {
     connect(&m_mutationTimer, &QTimer::timeout, this, &TciClient::flushMutations);
 }
 
+TciClient::~TciClient() {
+    m_explicitDisconnect = true;
+    ++m_generation;
+    m_socket.abort();
+    m_decodePool.waitForDone();
+}
+
 QVariantList TciClient::receivers() const { return m_receivers; }
 
 QVariantMap TciClient::diagnostics() const {
@@ -96,6 +110,9 @@ QVariantMap TciClient::diagnostics() const {
             {"malformedCommands", QVariant::fromValue<qulonglong>(m_malformedCommands)},
             {"malformedBinary", QVariant::fromValue<qulonglong>(m_malformedBinary)},
             {"droppedFrames", QVariant::fromValue<qulonglong>(m_droppedFrames)},
+            {"binaryDecodeWorker", true}, {"binaryDecodedOffOwnerThread",m_binaryDecodedOffOwnerThread.load()},
+            {"binaryQueueDepth", m_pendingBinary.load()},
+            {"binaryQueueCapacity", MaxPendingBinary},
             {"reconnectAttempts", m_reconnectAttempts},
             {"attachedReceivers", m_attachedReceivers.size()}};
 }
@@ -169,6 +186,7 @@ void TciClient::scheduleReconnect() {
 
 void TciClient::disconnectFromServer() {
     m_explicitDisconnect = true;
+    ++m_generation;
     m_connectionTimer.stop();
     m_readyTimer.stop();
     m_reconnectTimer.stop();
@@ -335,17 +353,49 @@ void TciClient::markMalformed(const QString &command) {
 
 void TciClient::handleBinary(const QByteArray &message) {
     m_lastUpdateMs=QDateTime::currentMSecsSinceEpoch();
-    rigweave::tci::BinaryError parseError{};
-    const auto frame = rigweave::tci::decode_binary(
-        reinterpret_cast<const std::uint8_t *>(message.constData()),
-        static_cast<std::size_t>(message.size()), &parseError,
-        static_cast<std::uint32_t>(qMax(1, m_receivers.size())));
-    if (!frame) {
+    if (m_pendingBinary.load() >= MaxPendingBinary) {
+        ++m_droppedFrames;
+        return;
+    }
+    ++m_pendingBinary;
+    const QByteArray payload=message;
+    const quint64 generation=m_generation;
+    const std::uint32_t receiverCount=static_cast<std::uint32_t>(qMax(1,m_receivers.size()));
+    m_decodePool.start([this,payload,generation,receiverCount] {
+        m_binaryDecodedOffOwnerThread=QThread::currentThread()!=thread();
+        rigweave::tci::BinaryError parseError{};
+        const auto frame=rigweave::tci::decode_binary(
+            reinterpret_cast<const std::uint8_t*>(payload.constData()),
+            static_cast<std::size_t>(payload.size()),&parseError,receiverCount);
+        int receiver=-1;
+        quint32 sampleRate=0;
+        int dataType=-1;
+        QVector<float> values;
+        if(frame){
+            receiver=static_cast<int>(frame->header.receiver);
+            sampleRate=frame->header.sample_rate;
+            dataType=static_cast<int>(frame->header.data_type);
+            values=QVector<float>(frame->values.cbegin(),frame->values.cend());
+        }
+        QMetaObject::invokeMethod(this,[this,receiver,sampleRate,dataType,values=std::move(values),
+                                        parseError=static_cast<int>(parseError),generation]() mutable {
+            --m_pendingBinary;
+            deliverBinary(receiver,sampleRate,dataType,std::move(values),parseError,generation);
+        },Qt::QueuedConnection);
+    });
+}
+
+void TciClient::deliverBinary(int receiver,quint32 sampleRate,int dataType,QVector<float> values,
+                              int parseError,quint64 generation) {
+    if(generation!=m_generation){
+        ++m_droppedFrames;
+        return;
+    }
+    if(receiver<0){
         ++m_malformedBinary;
         emit error(QStringLiteral("Rejected malformed TCI binary frame (%1)").arg(static_cast<int>(parseError)));
         return;
     }
-    const int receiver = static_cast<int>(frame->header.receiver);
     if (!m_attachedReceivers.contains(receiver)) {
         ++m_droppedFrames;
         if (validReceiver(receiver)) {
@@ -356,11 +406,10 @@ void TciClient::handleBinary(const QByteArray &message) {
         }
         return;
     }
-    QVector<float> values(frame->values.cbegin(), frame->values.cend());
-    if (frame->header.data_type == rigweave::tci::DataType::Iq) {
-        emit iqFrame(receiver, frame->header.sample_rate, std::move(values));
-    } else if (frame->header.data_type == rigweave::tci::DataType::RxAudio) {
-        emit rxAudioFrame(receiver, frame->header.sample_rate, std::move(values));
+    if (dataType == static_cast<int>(rigweave::tci::DataType::Iq)) {
+        emit iqFrame(receiver, sampleRate, std::move(values));
+    } else if (dataType == static_cast<int>(rigweave::tci::DataType::RxAudio)) {
+        emit rxAudioFrame(receiver, sampleRate, std::move(values));
     }
 }
 

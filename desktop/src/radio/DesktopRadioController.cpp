@@ -115,7 +115,7 @@ bool DesktopRadioController::saveTciProfile(const QVariantMap &value) {
     bool ok{}; const TciProfile profile=decodeTciProfile(value,&ok);
     if(!ok){emit error("Invalid TCI profile");return false;}
     for(QVariant &entry:m_tciProfiles){if(entry.toMap().value("id").toString()==profile.id){entry=encodeTciProfile(profile);emit preferencesChanged();return true;}}
-    m_tciProfiles.push_back(encodeTciProfile(profile));emit preferencesChanged();return true;
+    if(m_tciProfiles.size()>=32){emit error("TCI profile capacity is 32");return false;}m_tciProfiles.push_back(encodeTciProfile(profile));emit preferencesChanged();return true;
 }
 
 bool DesktopRadioController::removeTciProfile(const QString &id) {
@@ -181,7 +181,7 @@ bool DesktopRadioController::restoreConfiguration(const QVariantMap &input,QStri
     if(schema>RadioProfilesSchema){if(error)*error=QStringLiteral("radioProfiles schema %1 is newer than supported schema %2").arg(schema).arg(RadioProfilesSchema);return false;}
     m_legacyConfiguration=section;
     if(schema==1){QVariantList migrated;for(const QVariant&e:section.value("tciProfiles").toList()){QVariantMap p=e.toMap();if(!p.contains("endpoint")){const QString host=p.take("host").toString();const int port=p.take("port").toInt();p["endpoint"]=QStringLiteral("ws://%1:%2").arg(host).arg(port);}migrated.push_back(p);}section["tciProfiles"]=migrated;}
-    m_activeReceiverId=section.value("activeReceiverId").toString();m_listeningReceiverId=section.value("listeningReceiverId").toString();m_safeView=section.value("safeView",m_safeView).toMap();m_tciProfiles.clear();m_autoConnectProfileId=section.value("autoConnectProfileId").toString();
+    if(section.value("tciProfiles").toList().size()>32){if(error)*error="Persisted TCI profile count exceeds 32";return false;}m_activeReceiverId=section.value("activeReceiverId").toString();m_listeningReceiverId=section.value("listeningReceiverId").toString();m_safeView=section.value("safeView",m_safeView).toMap();m_tciProfiles.clear();m_autoConnectProfileId=section.value("autoConnectProfileId").toString();
     for(const QVariant&e:section.value("tciProfiles").toList()){bool ok{};TciProfile p=decodeTciProfile(e.toMap(),&ok);if(!ok){if(error)*error="Invalid persisted TCI profile";m_tciProfiles.clear();return false;}m_tciProfiles.push_back(encodeTciProfile(p));if(p.autoConnect&&m_autoConnectProfileId.isEmpty())m_autoConnectProfileId=p.id;}
     return true;
 }

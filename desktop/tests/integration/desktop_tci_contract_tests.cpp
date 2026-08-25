@@ -136,6 +136,9 @@ private slots:
         QCOMPARE(radio.configuration().value("nativeProfiles").toList().size(), 1);
         QVERIFY(!radio.restoreConfiguration({{"schemaVersion", 3}}, &error));
         QVERIFY(error.contains("newer"));
+        QVariantList excessive;for(int index=0;index<33;++index){QVariantMap p=legacyProfile;p["id"]=QStringLiteral("profile-%1").arg(index);p["endpoint"]="ws://127.0.0.1:40001";excessive.push_back(p);}
+        QVERIFY(!radio.restoreConfiguration({{"schemaVersion",2},{"tciProfiles",excessive}},&error));
+        QVERIFY(error.contains("exceeds 32"));
     }
 
     void hamlibAdapterProjectsExactlyOneReceiver() {
@@ -208,6 +211,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(iqSpy.size(), 1, 1'000);
         QCOMPARE(iqSpy.at(0).at(0).toInt(), 0);
         QCOMPARE(iqSpy.at(0).at(1).toUInt(), 96'000U);
+        QVERIFY(client.diagnostics().value("binaryDecodedOffOwnerThread").toBool());
 
         const auto audio = rigweave::tci::build_binary_for_test(
             rigweave::tci::DataType::RxAudio, 0U, 48'000U, 2U, {0.1F, 0.1F, -0.1F, -0.1F});

@@ -25,11 +25,15 @@ public:
     QString selectedId() const { return m_selectedId; }
     void setSelectedId(const QString &id);
     QVariantList filteredObservations() const { return m_visible; }
+    QVariantList renderObservations(int maximum = 4096) const;
+    int storedCount() const { return m_all.size(); }
+    quint64 droppedObservations() const { return m_droppedObservations; }
     QVariantMap selectedObservation() const;
     QVariantMap configuration() const;
     bool restoreConfiguration(const QVariantMap &value, QString *error = nullptr);
 
     Q_INVOKABLE bool ingest(const QVariantMap &observation);
+    Q_INVOKABLE int ingestBatch(const QVariantList &observations);
     Q_INVOKABLE void setFilter(const QString &name, const QVariant &value);
     Q_INVOKABLE void resetFilters();
     Q_INVOKABLE void loadDeterministicDemo();
@@ -54,6 +58,8 @@ private:
                           {"callsign", QString{}}, {"worked", "All"},
                           {"freshOnly", false}, {"longPath", false}};
     QString m_selectedId;
+    quint64 m_droppedObservations{};
+    static constexpr int MaxObservations = 100'000;
 };
 
 } // namespace rigweave::desktop

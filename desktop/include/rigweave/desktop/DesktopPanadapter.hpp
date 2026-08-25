@@ -6,8 +6,11 @@
 #include <QImage>
 #include <QIODevice>
 #include <QMediaDevices>
+#include <QMutex>
 #include <QObject>
+#include <QThreadPool>
 #include <QVariantList>
+#include <atomic>
 #include <memory>
 
 namespace rigweave::desktop {
@@ -29,6 +32,7 @@ class DesktopPanadapter final : public QObject {
     Q_PROPERTY(QString currentReceiverId READ currentReceiverId WRITE setCurrentReceiverId NOTIFY currentReceiverChanged)
     Q_PROPERTY(QStringList receiverIds READ receiverIds NOTIFY receiverIdsChanged)
     Q_PROPERTY(QVariantList trace READ trace NOTIFY frameReady)
+    Q_PROPERTY(bool hasFrame READ hasFrame NOTIFY frameReady)
     Q_PROPERTY(double peakDb READ peakDb NOTIFY frameReady)
     Q_PROPERTY(bool validStereo READ validStereo NOTIFY frameReady)
     Q_PROPERTY(bool paused READ paused WRITE setPaused NOTIFY settingsChanged)
@@ -54,6 +58,7 @@ public:
     void setCurrentReceiverId(const QString &id);
     QStringList receiverIds() const;
     QVariantList trace() const;
+    bool hasFrame() const;
     double peakDb() const;
     bool validStereo() const;
     bool paused() const { return m_paused; }
@@ -95,6 +100,8 @@ public:
     Q_INVOKABLE void pushFloatIq(const QString &receiverId, quint32 sampleRate, const QVector<float> &values,
                                  quint64 centreFrequencyHz = 0, bool discontinuity = false);
     bool processPcmForTest(const QByteArray &pcm, int sampleRate = 96000);
+    bool waitForIdleForTest(int timeoutMs = 5000);
+    void setWorkerDelayForTest(int milliseconds);
 
 signals:
     void stateChanged();
@@ -113,11 +120,15 @@ private:
     std::shared_ptr<Context> current() const;
     bool configure(Context &context, int sampleRate, bool swapIq);
     void consume(const char *data, qint64 length);
-    void updateFrame(const QString &receiverId, Context &context);
-    QRgb colour(float normalized) const;
+    bool updateFrame(Context &context, int fftSize, int waterfallRows, bool paused,
+                     bool fitAutoContrast, double manualFloorDb, double manualTopDb,
+                     const QString &colourMap);
+    static QRgb colour(const QString &colourMap, float normalized);
+    void publishWorkerFrame(const QString &receiverId, bool displayReady, quint64 generation);
 
     std::unique_ptr<QAudioSource> m_source;
     std::unique_ptr<Sink> m_sink;
+    QThreadPool m_dspPool;
     QHash<QString, std::shared_ptr<Context>> m_contexts;
     QString m_state{"Offline — select an exact stereo audio route"};
     QString m_selectedDeviceId;
@@ -133,6 +144,14 @@ private:
     double m_manualTopDb{0.0};
     bool m_paused{};
     bool m_fitAutoContrast{true};
+    std::atomic_int m_pendingDsp{};
+    std::atomic_bool m_stopping{};
+    std::atomic_bool m_fftExecutedOffOwnerThread{};
+    std::atomic_int m_workerDelayMs{};
+    std::atomic<quint64> m_workerGeneration{1};
+    static constexpr int MaxPendingDsp = 8;
+    static constexpr int MaxContexts = 9;
+    static constexpr int MaxFloatValuesPerFrame = 2'000'000;
 };
 
 } // namespace rigweave::desktop
