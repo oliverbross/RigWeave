@@ -92,6 +92,7 @@ private:
     quint64 m_malformedCommands{};
     quint64 m_malformedBinary{};
     quint64 m_droppedFrames{};
+    qint64 m_lastUpdateMs{};
 };
 
 } // namespace rigweave::desktop

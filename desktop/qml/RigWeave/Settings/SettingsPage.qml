@@ -26,6 +26,13 @@ ScrollView{contentWidth:availableWidth
             Label{text:"Device identity"}Label{text:"Stable COM/audio IDs are platform-local; no microphone fallback for I/Q";color:"#98a0a6"}
             Label{text:"Credentials"}Label{text:"Aliases only in configuration and stores; secret values remain in Windows Credential Manager";color:"#98a0a6"}
         }}
+        GroupBox{title:"TCI · receivers · Panadapter · RF map/globe";Layout.fillWidth:true;GridLayout{anchors.fill:parent;columns:2
+            Label{text:"TCI profiles"}Label{text:Radio.tciProfiles.length+" saved · explicit connect · PTT/TUNE locked";color:"#4ec47b"}
+            Label{text:"Receiver view"}Label{text:"Control "+(Radio.activeReceiverId||"—")+" · listening "+(Radio.listeningReceiverId||"—")+" · TX authority "+(Radio.transmitReceiverId||"—");color:"#98a0a6"}
+            Label{text:"Panadapter"}Label{text:Panadapter.fftSize+" FFT · "+Panadapter.waterfallRows+" rows · "+Panadapter.colourMap+" · "+(Panadapter.fitAutoContrast?"FIT":"manual");color:"#98a0a6"}
+            Label{text:"RF observations"}Label{text:RfObservations.filterSummary+" · shared flat/globe selection";color:"#98a0a6"}
+            Label{text:"Global Stop"}Label{text:"Cancels radio mutations, sends one de-key/tune-off, detaches TCI receive streams, stops local receive audio, and leaves UI responsive.";color:"#e3c765";wrapMode:Text.WordWrap;Layout.fillWidth:true}
+        }}
         GroupBox{title:"Configuration recovery";Layout.fillWidth:true;RowLayout{anchors.fill:parent;Button{text:"Choose import for preview";onClicked:importBundle.open()}Button{text:"Export safe bundle";onClicked:exportBundle.open()}Label{Layout.fillWidth:true;text:importBundle.selectedFile?"Selected: "+importBundle.selectedFile:"No import selected";color:"#98a0a6";elide:Text.ElideMiddle}}}
         GroupBox{title:"Credential vault";Layout.fillWidth:true;ColumnLayout{anchors.fill:parent;Label{text:"Windows: native generic credentials with bounded labels, update/delete, and sanitized errors.";color:"#f2efe7"}Label{text:"macOS desktop build never reads Windows credentials; live Keychain acceptance is explicitly pending.";color:"#e3c765"}Label{text:"No credential is stored in SQLite, JSON, logs, or support bundles.";color:"#4ec47b"}}}
     }

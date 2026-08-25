@@ -42,7 +42,11 @@ QVariant sanitizeValue(const QVariant &value) {
                                 key.contains("armed") || key == "moving" || key.contains("pendingcommand") ||
                                 key == "livespots" || key == "providerbodies" || key == "qsodata" ||
                                 key.contains("credential") || key.contains("token") || key.contains("password") ||
-                                key.contains("secret") || key.contains("apikey");
+                                key.contains("secret") || key.contains("apikey") || key.contains("hostname") ||
+                                key == "host" || key.contains("endpoint") || key.contains("url") || key.contains("ipaddress") ||
+                                key.contains("latitude") || key.contains("longitude") || key.contains("coordinate") ||
+                                key.contains("callsign") || key == "path" || key.endsWith("path") || key.contains("rawaudio") || key.contains("rawiq") ||
+                                key.contains("websocketpayload") || key.contains("rawpayload");
             if (!unsafe) output.insert(it.key(), sanitizeValue(it.value()));
         }
         return output;
@@ -51,6 +55,12 @@ QVariant sanitizeValue(const QVariant &value) {
         QVariantList output;
         for (const auto &entry : value.toList()) output << sanitizeValue(entry);
         return output;
+    }
+    if (value.metaType().id() == QMetaType::QString) {
+        QString text=cleanMessage(value.toString());
+        text.replace(QRegularExpression(QStringLiteral("(?i)(wss?|https?)://[^\\s]+")),"[PRIVATE URL]");
+        text.replace(QRegularExpression(QStringLiteral("\\b(?:10|127|192\\.168)\\.[0-9.]+\\b")),"[PRIVATE ADDRESS]");
+        return text;
     }
     return value;
 }
@@ -116,7 +126,7 @@ void BoundedLogger::handler(QtMsgType type,const QMessageLogContext&,const QStri
 void BoundedLogger::shutdown(){qInstallMessageHandler(nullptr);QMutexLocker lock(&logMutex);if(logFile){logFile->flush();logFile->close();logFile.reset();}}
 
 SupportBundle::SupportBundle(DesktopPaths*paths,QObject*parent):QObject(parent),m_paths(paths){}
-QString SupportBundle::create(const QVariantMap&health,QString*error)const{if(m_closed){if(error)*error="Support bundle service is closed";return{};}QVariantMap sanitized;for(auto it=health.cbegin();it!=health.cend();++it){const QString key=it.key().toLower();if(!key.contains("credential")&&!key.contains("token")&&!key.contains("comment")&&!key.contains("path"))sanitized.insert(it.key(),it.value());}const QString output=m_paths->supportBundles()+QStringLiteral("/RigWeave-Support-%1.zip").arg(QDateTime::currentDateTimeUtc().toString("yyyyMMdd-HHmmss"));QMap<QString,QByteArray> entries{{"health.json",QJsonDocument::fromVariant(sanitized).toJson(QJsonDocument::Indented)},{"privacy.txt","Credentials, QSO payloads/comments, raw cluster/CAT/serial traffic, and private paths are excluded.\n"},{"build.txt",QStringLiteral("RigWeave Windows Desktop Alpha\nQt %1\nSchema 16\n").arg(qVersion()).toUtf8()}};return writeZip(output,entries,error)?output:QString{};}
+QString SupportBundle::create(const QVariantMap&health,QString*error)const{if(m_closed){if(error)*error="Support bundle service is closed";return{};}const QVariantMap sanitized=sanitizeValue(health).toMap();const QString output=m_paths->supportBundles()+QStringLiteral("/RigWeave-Support-%1.zip").arg(QDateTime::currentDateTimeUtc().toString("yyyyMMdd-HHmmss"));QMap<QString,QByteArray> entries{{"health.json",QJsonDocument::fromVariant(sanitized).toJson(QJsonDocument::Indented)},{"privacy.txt","Credentials, callsigns, station coordinates, private hosts/IPs, URL credentials, QSO payloads/comments, raw audio/IQ, WebSocket payloads, cluster/CAT/serial traffic, and private paths are excluded.\n"},{"build.txt",QStringLiteral("RigWeave Windows Desktop Alpha\nQt %1\nSchema 16\n").arg(qVersion()).toUtf8()}};return writeZip(output,entries,error)?output:QString{};}
 
 bool openAllowlistedExternalUrl(const QUrl&url){return url.scheme()==QStringLiteral("https")&&QStringList{"github.com","www.qt.io","doc.qt.io","hamlib.github.io","www.wavelog.org"}.contains(url.host().toLower())&&QDesktopServices::openUrl(url);}
 

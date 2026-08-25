@@ -89,7 +89,10 @@ TciClient::TciClient(QObject *parent) : QObject(parent) {
 QVariantList TciClient::receivers() const { return m_receivers; }
 
 QVariantMap TciClient::diagnostics() const {
-    return {{"unknownCommands", QVariant::fromValue<qulonglong>(m_unknownCommands)},
+    return {{"state",m_state},{"protocolVersion",m_protocolVersion},{"deviceIdentity",m_device},
+            {"lastUpdateMs",m_lastUpdateMs},{"receivers",m_receivers},
+            {"rxAudioUnderflows",0},{"rxAudioOverflows",0},
+            {"unknownCommands", QVariant::fromValue<qulonglong>(m_unknownCommands)},
             {"malformedCommands", QVariant::fromValue<qulonglong>(m_malformedCommands)},
             {"malformedBinary", QVariant::fromValue<qulonglong>(m_malformedBinary)},
             {"droppedFrames", QVariant::fromValue<qulonglong>(m_droppedFrames)},
@@ -206,6 +209,7 @@ void TciClient::setState(QString state) {
 }
 
 void TciClient::handleText(const QString &message) {
+    m_lastUpdateMs=QDateTime::currentMSecsSinceEpoch();
     const auto commands = rigweave::tci::parse_status(message.toStdString());
     if (commands.empty() && !message.trimmed().isEmpty()) markMalformed("frame");
     for (const auto &command : commands) handleStatus(command.name, command.arguments);
@@ -330,6 +334,7 @@ void TciClient::markMalformed(const QString &command) {
 }
 
 void TciClient::handleBinary(const QByteArray &message) {
+    m_lastUpdateMs=QDateTime::currentMSecsSinceEpoch();
     rigweave::tci::BinaryError parseError{};
     const auto frame = rigweave::tci::decode_binary(
         reinterpret_cast<const std::uint8_t *>(message.constData()),

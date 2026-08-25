@@ -126,6 +126,7 @@ private:
                            {"audioRouteEnabled", false}};
     quint64 m_frequencyHz{};
     QString m_mode;
+    QString m_lastError;
     quint64 m_generation{};
 };
 

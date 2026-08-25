@@ -58,7 +58,7 @@ DesktopRadioController::DesktopRadioController(QObject *parent)
     connect(&m_poll, &QTimer::timeout, this, &DesktopRadioController::poll);
     connect(&m_tci, &TciClient::stateChanged, this, &DesktopRadioController::syncTci);
     connect(&m_tci, &TciClient::receiversChanged, this, &DesktopRadioController::syncTci);
-    connect(&m_tci, &TciClient::error, this, &DesktopRadioController::error);
+    connect(&m_tci, &TciClient::error, this, [this](const QString&message){m_lastError=message.left(300);emit error(m_lastError);});
     connect(&m_tci, &TciClient::iqFrame, this, [this](int rx, quint32 rate, QVector<float> values) {
         emit iqFrame(QStringLiteral("tci:%1").arg(rx), rate, std::move(values));
     });
@@ -186,7 +186,7 @@ bool DesktopRadioController::restoreConfiguration(const QVariantMap &input,QStri
     return true;
 }
 
-QVariantMap DesktopRadioController::health()const{return{{"state",m_state},{"backend",m_backend},{"receiverCount",receiverCount()},{"activeReceiverId",m_activeReceiverId},{"listeningReceiverId",m_listeningReceiverId},{"transmitReceiverId",m_transmitReceiverId},{"pttAvailable",false},{"tuneAvailable",false},{"capabilities",m_backendCapabilities},{"tci",m_tci.diagnostics()}};}
+QVariantMap DesktopRadioController::health()const{return{{"state",m_state},{"backend",m_backend},{"receiverCount",receiverCount()},{"activeReceiverId",m_activeReceiverId},{"listeningReceiverId",m_listeningReceiverId},{"transmitReceiverId",m_transmitReceiverId},{"pttAvailable",false},{"tuneAvailable",false},{"capabilities",m_backendCapabilities},{"lastSanitizedError",m_lastError},{"tci",m_tci.diagnostics()}};}
 void DesktopRadioController::globalStop(){m_tci.globalStop();}
 void DesktopRadioController::setTciTimeoutsForTest(int a,int b,int c){m_tci.setTimeoutsForTest(a,b,c);}
 void DesktopRadioController::setHamlibSnapshotForTest(quint64 frequency,const QString&mode){disconnectRadio();m_backend="hamlib";m_state="Connected — fixture receive controls only; PTT/TUNE disabled";m_model="Hamlib fixture";m_frequencyHz=frequency;m_mode=mode;m_activeReceiverId=m_listeningReceiverId=m_transmitReceiverId="hamlib:0";m_backendCapabilities={{"receiverCount",1},{"iqStreaming",false},{"rxAudioStreaming",false},{"ptt",false},{"tune",false}};m_receivers.replace({hamlibSnapshot(m_model,m_frequencyHz,m_mode)},m_activeReceiverId,m_listeningReceiverId,m_transmitReceiverId);emit snapshotChanged();}
