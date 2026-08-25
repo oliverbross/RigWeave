@@ -52,7 +52,10 @@ bool DesktopApplication::initialize(QString *error) {
         if (m_configuration) m_configuration->setSection("panadapter", m_panadapter.configuration());
     });
     connect(&m_rfObservations, &RfObservationModel::filtersChanged, this, [this] {
-        if (!m_configuration) return; auto display=m_configuration->section("display");display["rfObservations"]=m_rfObservations.configuration();m_configuration->setSection("display",display);
+        if (!m_configuration) return;
+        auto display = m_configuration->section("display");
+        display["rfObservations"] = m_rfObservations.configuration();
+        m_configuration->setSection("display", display);
     });
     m_currentDestination = m_configuration->lastDestination();
     m_database = std::make_unique<QsoDatabase>(
