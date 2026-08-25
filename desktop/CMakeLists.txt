@@ -29,6 +29,8 @@ include(RigWeaveWarnings)
 set(RIGWEAVE_DESKTOP_SERVICE_SOURCES
     src/app/DesktopApplication.cpp
     src/core/DesktopModels.cpp
+    src/intelligence/RfObservationModel.cpp
+    src/intelligence/RfMapItem.cpp
     src/data/QsoDatabase.cpp
     src/data/AdifService.cpp
     src/network/WavelogSync.cpp

@@ -13,7 +13,9 @@ ScrollView { contentWidth: availableWidth
             MetricTile { label: "Cluster"; value: Spots.count; truth: Cluster.state + " / shared repository" }
             MetricTile { label: "Wavelog"; value: Wavelog.pendingCount; truth: Wavelog.state + " / pending" }
             MetricTile { label: "Next satellite"; value: Parity.satellitePasses.count > 0 ? Parity.satellitePasses.item(0).title : "—"; truth: "Local SGP4 / no automatic action" }
+            MetricTile { label: "RF paths"; value: RfObservations.count; truth: RfObservations.filterSummary }
         }
+        Button { text: "Open shared Live RF / Outlook map and globe"; onClicked: Desktop.currentDestination = "Intelligence" }
         Rectangle { Layout.fillWidth: true; implicitHeight: 250; color: "#22272b"; border.color: "#3a4147"; radius: 4
             ColumnLayout { anchors.fill: parent; anchors.margins: 12
                 RowLayout { Layout.fillWidth: true

@@ -22,6 +22,12 @@ target_link_libraries(desktop_platform_safety_tests PRIVATE ${RIGWEAVE_TEST_LIBS
 rigweave_target_warnings(desktop_platform_safety_tests)
 add_test(NAME desktop_platform_safety_tests COMMAND desktop_platform_safety_tests)
 
+qt_add_executable(desktop_rf_observation_tests unit/desktop_rf_observation_tests.cpp)
+target_link_libraries(desktop_rf_observation_tests PRIVATE ${RIGWEAVE_TEST_LIBS})
+rigweave_target_warnings(desktop_rf_observation_tests)
+add_test(NAME desktop_rf_observation_tests COMMAND desktop_rf_observation_tests)
+set_tests_properties(desktop_rf_observation_tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 qt_add_executable(desktop_parity_contract_tests unit/desktop_parity_contract_tests.cpp)
 target_link_libraries(desktop_parity_contract_tests PRIVATE ${RIGWEAVE_TEST_LIBS})
 rigweave_target_warnings(desktop_parity_contract_tests)

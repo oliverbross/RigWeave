@@ -8,6 +8,7 @@
 #include "rigweave/desktop/DesktopRadioController.hpp"
 #include "rigweave/desktop/DesktopRotatorController.hpp"
 #include "rigweave/desktop/WavelogSync.hpp"
+#include "rigweave/desktop/RfObservationModel.hpp"
 
 #include <QQmlApplicationEngine>
 #include <QTemporaryDir>
@@ -49,6 +50,7 @@ private:
     std::unique_ptr<QsoTableModel> m_logbook;
     std::unique_ptr<AdifService> m_adif;
     SpotRepository m_spots;
+    RfObservationModel m_rfObservations;
     ClusterController m_cluster;
     WavelogSyncEngine *m_wavelog{};
     HamlibModelRegistry m_radioModels;

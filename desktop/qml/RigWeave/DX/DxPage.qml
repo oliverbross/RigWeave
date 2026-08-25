@@ -13,6 +13,7 @@ Item { ColumnLayout { anchors.fill:parent;anchors.margins:18;spacing:10
         Button{text:"Disconnect";onClicked:Cluster.disconnectProfile()}
         SpinBox{id:history;from:1;to:500;value:50;onValueChanged:Cluster.shDxCount=value}
         Button{text:"SH/DX";onClicked:Cluster.requestHistory()}
+        Button{text:"RF Map / Globe";onClicked:Desktop.currentDestination="Intelligence"}
         Item{Layout.fillWidth:true} StatusChip{text:Cluster.state;kind:Cluster.state.startsWith("Connected")?"healthy":Cluster.state==="Error"?"danger":"neutral"}
     }
     Rectangle { Layout.fillWidth:true;implicitHeight:34;color:"#4b351c";Row{anchors.fill:parent;Repeater{model:["Callsign","Frequency","Band","Mode","Spotter","Age","Comment"];Label{required property int index;required property string modelData;width:index===1?140:index===6?320:110;height:34;verticalAlignment:Text.AlignVCenter;leftPadding:8;text:modelData;color:"#f2efe7";font.bold:true}}}}

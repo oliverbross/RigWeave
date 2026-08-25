@@ -15,7 +15,7 @@
 
 namespace rigweave::desktop {
 
-DesktopApplication::DesktopApplication(QObject*parent):QObject(parent),m_cluster(&m_spots,this),m_parity(this),m_supportBundle(&m_paths,this){connect(&m_radio,&DesktopRadioController::iqFrame,&m_panadapter,[this](const QString&id,quint32 rate,const QVector<float>&values){const quint64 centre=m_radio.receivers()->receiver(id).value("centreFrequencyHz").toULongLong();m_panadapter.pushFloatIq(id,rate,values,centre,false);});}
+DesktopApplication::DesktopApplication(QObject*parent):QObject(parent),m_rfObservations(this),m_cluster(&m_spots,this),m_parity(this),m_supportBundle(&m_paths,this){connect(&m_radio,&DesktopRadioController::iqFrame,&m_panadapter,[this](const QString&id,quint32 rate,const QVector<float>&values){const quint64 centre=m_radio.receivers()->receiver(id).value("centreFrequencyHz").toULongLong();m_panadapter.pushFloatIq(id,rate,values,centre,false);});}
 DesktopApplication::~DesktopApplication(){shutdown();}
 
 bool DesktopApplication::initialize(QString *error) {
@@ -44,11 +44,15 @@ bool DesktopApplication::initialize(QString *error) {
     m_configuration->setSection("radioProfiles", m_radio.configuration());
     if (!m_panadapter.restoreConfiguration(m_configuration->section("panadapter"), error)) return false;
     m_configuration->setSection("panadapter", m_panadapter.configuration());
+    if (!m_rfObservations.restoreConfiguration(m_configuration->section("display").value("rfObservations").toMap(), error)) return false;
     connect(&m_radio, &DesktopRadioController::preferencesChanged, this, [this] {
         if (m_configuration) m_configuration->setSection("radioProfiles", m_radio.configuration());
     });
     connect(&m_panadapter, &DesktopPanadapter::settingsChanged, this, [this] {
         if (m_configuration) m_configuration->setSection("panadapter", m_panadapter.configuration());
+    });
+    connect(&m_rfObservations, &RfObservationModel::filtersChanged, this, [this] {
+        if (!m_configuration) return; auto display=m_configuration->section("display");display["rfObservations"]=m_rfObservations.configuration();m_configuration->setSection("display",display);
     });
     m_currentDestination = m_configuration->lastDestination();
     m_database = std::make_unique<QsoDatabase>(
@@ -64,6 +68,7 @@ bool DesktopApplication::initialize(QString *error) {
     if (!m_parity.open(m_paths.databases(), m_paths.cache(), m_demoMode, error)) return false;
     QTimer::singleShot(0, &m_radio, &DesktopRadioController::startConfiguredAutoConnect);
     if (m_demoMode) {
+        m_rfObservations.loadDeterministicDemo();
         const qint64 now = QDateTime::currentSecsSinceEpoch();
         m_spots.ingest({14074000, "K1ABC", "N0TEST", "CQ FT8", "20m", "FT8",
                         "DEMO", now - 42, true, false, false});
@@ -75,7 +80,7 @@ bool DesktopApplication::initialize(QString *error) {
     return true;
 }
 
-void DesktopApplication::expose(QQmlApplicationEngine&engine){auto*context=engine.rootContext();context->setContextProperty("Desktop",this);context->setContextProperty("DesktopPaths",&m_paths);context->setContextProperty("DesktopConfig",m_configuration.get());context->setContextProperty("LogbookModel",m_logbook.get());context->setContextProperty("Adif",m_adif.get());context->setContextProperty("Spots",&m_spots);context->setContextProperty("Cluster",&m_cluster);context->setContextProperty("Wavelog",m_wavelog);context->setContextProperty("RadioModels",&m_radioModels);context->setContextProperty("Radio",&m_radio);context->setContextProperty("Rotator",&m_rotator);context->setContextProperty("Panadapter",&m_panadapter);context->setContextProperty("Parity",&m_parity);context->setContextProperty("CredentialVault",&m_credentials);context->setContextProperty("SupportBundle",&m_supportBundle);}
+void DesktopApplication::expose(QQmlApplicationEngine&engine){auto*context=engine.rootContext();context->setContextProperty("Desktop",this);context->setContextProperty("DesktopPaths",&m_paths);context->setContextProperty("DesktopConfig",m_configuration.get());context->setContextProperty("LogbookModel",m_logbook.get());context->setContextProperty("Adif",m_adif.get());context->setContextProperty("Spots",&m_spots);context->setContextProperty("RfObservations",&m_rfObservations);context->setContextProperty("Cluster",&m_cluster);context->setContextProperty("Wavelog",m_wavelog);context->setContextProperty("RadioModels",&m_radioModels);context->setContextProperty("Radio",&m_radio);context->setContextProperty("Rotator",&m_rotator);context->setContextProperty("Panadapter",&m_panadapter);context->setContextProperty("Parity",&m_parity);context->setContextProperty("CredentialVault",&m_credentials);context->setContextProperty("SupportBundle",&m_supportBundle);}
 
 void DesktopApplication::setCurrentDestination(const QString&destination){static const QSet<QString>allowed{"Home","Radio","Digi","Panadapter","EQ","Logbook","Intelligence","Sync","Contest","Band Maps","Presets","DX","Portable","Operations","Groups.io","Rotator","Settings","Health","About"};if(!allowed.contains(destination)||m_currentDestination==destination)return;m_currentDestination=destination;if(m_configuration)m_configuration->setLastDestination(destination);emit currentDestinationChanged();}
 void DesktopApplication::setGalleryVariant(const QString&workspace,int variant){if(m_demoMode&&workspace=="Band Maps")m_parity.setGalleryBandMapLayout(variant);}
