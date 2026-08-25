@@ -547,8 +547,18 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
   const int initialObjects = window->findChildren<QObject *>().size();
   int peakObjects = initialObjects;
   for (int cycle = 0; cycle < 500; ++cycle) {
+    if (cycle < destinations.size() * 2) {
+      std::fprintf(stderr, "ui-stress workspace: %d %s begin\n", cycle,
+                   qPrintable(destinations.at(cycle % destinations.size())));
+      std::fflush(stderr);
+    }
     desktop.setCurrentDestination(destinations.at(cycle % destinations.size()));
     settle();
+    if (cycle < destinations.size() * 2) {
+      std::fprintf(stderr, "ui-stress workspace: %d %s complete\n", cycle,
+                   qPrintable(destinations.at(cycle % destinations.size())));
+      std::fflush(stderr);
+    }
     if (cycle % 25 == 0)
       peakObjects =
           std::max(peakObjects, int(window->findChildren<QObject *>().size()));
