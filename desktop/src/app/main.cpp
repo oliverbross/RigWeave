@@ -29,6 +29,7 @@
 #include <QWebSocketServer>
 #include <cmath>
 #include <algorithm>
+#include <cstdio>
 #include <functional>
 #include <memory>
 #include <qqml.h>
@@ -523,6 +524,10 @@ void captureGallery(QGuiApplication &app, DesktopApplication &desktop,
 
 bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
                  const QString &reportPath) {
+  const auto checkpoint = [](const char *phase) {
+    std::fprintf(stderr, "ui-stress checkpoint: %s\n", phase);
+    std::fflush(stderr);
+  };
   const QStringList destinations{
       "Home", "Radio", "Digi", "Panadapter", "EQ", "Logbook",
       "Intelligence", "Sync", "Contest", "Band Maps", "Presets", "DX",
@@ -538,6 +543,7 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
   };
   QElapsedTimer elapsed;
   elapsed.start();
+  checkpoint("start");
   const int initialObjects = window->findChildren<QObject *>().size();
   int peakObjects = initialObjects;
   for (int cycle = 0; cycle < 500; ++cycle) {
@@ -547,11 +553,13 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
       peakObjects =
           std::max(peakObjects, int(window->findChildren<QObject *>().size()));
   }
+  checkpoint("workspace cycles complete");
   for (int cycle = 0; cycle < 100; ++cycle) {
     window->setProperty("shackMode", cycle % 2 == 0);
     settle();
   }
   window->setProperty("shackMode", false);
+  checkpoint("shack cycles complete");
   desktop.setCurrentDestination("Settings");
   settle();
   if (QObject *loader = window->findChild<QObject *>("workspaceLoader")) {
@@ -564,6 +572,7 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
       }
     }
   }
+  checkpoint("settings cycles complete");
   QList<QObject *> panels;
   for (QObject *candidate : window->findChildren<QObject *>()) {
     if (candidate->objectName().startsWith(QStringLiteral("canvasPanel-")))
@@ -579,20 +588,24 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
   }
   desktop.resetWorkspaceLayout(QStringLiteral("Settings"));
   settle();
+  checkpoint("panel cycles complete");
   for (int cycle = 0; cycle < 50; ++cycle) {
     window->showFullScreen();
     settle();
     window->showNormal();
     settle();
   }
+  checkpoint("full-screen cycles complete");
   for (int cycle = 0; cycle < 100; ++cycle) {
     window->resize(1180 + (cycle % 7) * 120, 720 + (cycle % 5) * 70);
     settle();
   }
+  checkpoint("resize cycles complete");
   for (int cycle = 0; cycle < 100; ++cycle) {
     desktop.invokeCommand(cycle % 2 == 0 ? "nav.home" : "nav.health");
     settle();
   }
+  checkpoint("command cycles complete");
   desktop.setCurrentDestination("Home");
   window->resize(1440, 900);
   settle();
@@ -614,6 +627,7 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
       file.write(QJsonDocument::fromVariant(report).toJson(QJsonDocument::Indented)) < 0 ||
       !file.commit())
     return false;
+  checkpoint("report committed");
   return finalObjects <= initialObjects + 80;
 }
 
