@@ -9,12 +9,20 @@ Item { id: root
         Rectangle { Layout.preferredWidth: 390; Layout.fillHeight: true; color: "#22272b"; border.color: "#3a4147"
             ColumnLayout { anchors.fill: parent; anchors.margins: 12
                 Label { text: "RADIO BACKEND"; color: "#d38b22"; font.bold: true }
-                ComboBox { id: backend; objectName: "radioBackend"; Layout.fillWidth: true; currentIndex: ApplicationWindow.window ? ApplicationWindow.window.galleryRadioBackend : 0; model: ["Native Elecraft KX3","Native Elecraft KX2","Native FlexRadio","Native QMX","Native QMX+","Native RGO ONE V6","Conservative RGO legacy","Embedded Hamlib 4.7.2","Hamlib network"] }
-                Label { Layout.fillWidth: true; text: backend.currentIndex < 7 ? "Native adapter source present · physical readback acceptance pending" : "Capability-driven Hamlib catalogue"; color: "#e3c765"; wrapMode: Text.WordWrap }
-                Label { text: "HAMLIB 4.7.2 MODEL REGISTRY"; color: "#d38b22"; font.bold: true; visible: backend.currentIndex >= 7 }
-                TextField { Layout.fillWidth: true; visible: backend.currentIndex >= 7; placeholderText: "Manufacturer, model, backend"; onTextChanged: RadioModels.setSearch(text) }
-                ListView { Layout.fillWidth: true; Layout.fillHeight: true; visible: backend.currentIndex >= 7; model: RadioModels; clip: true
+                ComboBox { id: backend; objectName: "radioBackend"; Layout.fillWidth: true; currentIndex: ApplicationWindow.window ? ApplicationWindow.window.galleryRadioBackend : 0; model: ["Native Elecraft KX3","Native Elecraft KX2","Native FlexRadio","Native QMX","Native QMX+","Native RGO ONE V6","Conservative RGO legacy","Embedded Hamlib 4.7.2","Hamlib network","TCI receive-only SDR"] }
+                Label { Layout.fillWidth: true; text: backend.currentIndex < 7 ? "Native adapter source present · physical readback acceptance pending" : (backend.currentIndex === 9 ? "TCI WebSocket · bounded multi-receiver IQ · transmit locked" : "Capability-driven Hamlib catalogue"); color: "#e3c765"; wrapMode: Text.WordWrap }
+                Label { text: "HAMLIB 4.7.2 MODEL REGISTRY"; color: "#d38b22"; font.bold: true; visible: backend.currentIndex >= 7 && backend.currentIndex < 9 }
+                TextField { Layout.fillWidth: true; visible: backend.currentIndex >= 7 && backend.currentIndex < 9; placeholderText: "Manufacturer, model, backend"; onTextChanged: RadioModels.setSearch(text) }
+                ListView { Layout.fillWidth: true; Layout.fillHeight: true; visible: backend.currentIndex >= 7 && backend.currentIndex < 9; model: RadioModels; clip: true
                     delegate: ItemDelegate { required property int modelId; required property string manufacturer; required property string model; required property string backend; required property string transport; width: ListView.view.width; text: manufacturer + "  " + model + "\n" + backend + " • " + transport; highlighted: root.selectedModel === modelId; onClicked: root.selectedModel = modelId }
+                }
+                Label { text: "TCI PROFILES"; color: "#d38b22"; font.bold: true; visible: backend.currentIndex === 9 }
+                TextField { id: tciId; Layout.fillWidth: true; visible: backend.currentIndex === 9; placeholderText: "Stable profile ID" }
+                TextField { id: tciName; Layout.fillWidth: true; visible: backend.currentIndex === 9; placeholderText: "Display name" }
+                TextField { id: tciEndpoint; Layout.fillWidth: true; visible: backend.currentIndex === 9; placeholderText: "ws://127.0.0.1:40001" }
+                Button { visible: backend.currentIndex === 9; text: "Save profile"; enabled: tciId.text.length > 0 && tciName.text.length > 0 && tciEndpoint.text.length > 0; onClicked: Radio.saveTciProfile({id:tciId.text, displayName:tciName.text, endpoint:tciEndpoint.text, preferredIqSampleRate:96000, preferredReceiver:0, autoConnect:false, rxAudioOutputRoute:""}) }
+                ListView { Layout.fillWidth: true; Layout.fillHeight: true; visible: backend.currentIndex === 9; model: Radio.tciProfiles; clip: true
+                    delegate: ItemDelegate { width: ListView.view.width; text: modelData.displayName + "\n" + modelData.endpoint; onClicked: Radio.connectTciProfile(modelData.id) }
                 }
             }
         }
@@ -23,8 +31,17 @@ Item { id: root
             RowLayout { Layout.fillWidth: true
                 TextField { id: route; Layout.fillWidth: true; placeholderText: "COM port or Hamlib network route" }
                 SpinBox { id: baud; from: 1200; to: 921600; value: 38400; editable: true }
-                Button { text: "Connect"; enabled: backend.currentIndex >= 7 && root.selectedModel >= 0 && route.text.length > 0; onClicked: Radio.connectRadio(root.selectedModel, route.text, baud.value) }
+                Button { text: "Connect"; enabled: backend.currentIndex >= 7 && backend.currentIndex < 9 && root.selectedModel >= 0 && route.text.length > 0; onClicked: Radio.connectRadio(root.selectedModel, route.text, baud.value) }
                 Button { text: "Disconnect"; onClicked: Radio.disconnectRadio() }
+            }
+            GroupBox { title: "Receivers · control and listening are explicit"; Layout.fillWidth: true; visible: Radio.receiverCount > 0
+                ListView { anchors.fill: parent; implicitHeight: Math.min(contentHeight, 190); model: Radio.receivers; clip: true
+                    delegate: RowLayout { required property string receiverId; required property string displayLabel; required property bool activeControl; required property bool activeListening; required property real effectiveReceiveHz; required property string mode; width: ListView.view.width
+                        Label { Layout.fillWidth: true; text: displayLabel + "  " + (effectiveReceiveHz ? (effectiveReceiveHz / 1000).toFixed(3) + " kHz" : "—") + "  " + (mode || "—") }
+                        Button { text: activeControl ? "CONTROL" : "Control"; onClicked: Radio.selectActiveReceiver(receiverId) }
+                        Button { text: activeListening ? "LISTENING" : "Listen"; onClicked: Radio.selectListeningReceiver(receiverId) }
+                    }
+                }
             }
             Flow { Layout.fillWidth: true; spacing: 12
                 MetricTile { label: "State"; value: Radio.state.startsWith("Connected") ? "CONNECTED" : "DISCONNECTED"; truth: Radio.state }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "rigweave/desktop/TciClient.hpp"
+#include "rigweave/desktop/DesktopRadioController.hpp"
 
 #include "rigweave/tci.hpp"
 
@@ -118,6 +119,70 @@ private:
     }
 
 private slots:
+    void radioProfileMigrationAndFutureSchemaRejection() {
+        DesktopRadioController radio;
+        QString error;
+        const QVariantMap legacyProfile{{"id", "legacy"}, {"displayName", "Legacy fixture"},
+            {"host", "127.0.0.1"}, {"port", 40001}, {"preferredIqSampleRate", 96000},
+            {"preferredReceiver", 0}, {"autoConnect", false}};
+        QVERIFY(radio.restoreConfiguration({{"schemaVersion", 1},
+            {"activeReceiverId", "tci:1"}, {"listeningReceiverId", "tci:0"},
+            {"nativeProfiles", QVariantList{QVariantMap{{"id", "preserved"}}}},
+            {"tciProfiles", QVariantList{legacyProfile}}}, &error));
+        QCOMPARE(radio.tciProfiles().size(), 1);
+        QCOMPARE(radio.tciProfiles().first().toMap().value("endpoint").toString(),
+                 QString("ws://127.0.0.1:40001"));
+        QCOMPARE(radio.configuration().value("schemaVersion").toInt(), 2);
+        QCOMPARE(radio.configuration().value("nativeProfiles").toList().size(), 1);
+        QVERIFY(!radio.restoreConfiguration({{"schemaVersion", 3}}, &error));
+        QVERIFY(error.contains("newer"));
+    }
+
+    void hamlibAdapterProjectsExactlyOneReceiver() {
+        DesktopRadioController radio;
+        radio.setHamlibSnapshotForTest(14'074'000U, "USB");
+        QCOMPARE(radio.backend(), QString("hamlib"));
+        QCOMPARE(radio.receiverCount(), 1);
+        QCOMPARE(radio.activeReceiverId(), QString("hamlib:0"));
+        QCOMPARE(radio.listeningReceiverId(), QString("hamlib:0"));
+        QCOMPARE(radio.transmitReceiverId(), QString("hamlib:0"));
+        QCOMPARE(radio.receivers()->receiver("hamlib:0").value("effectiveReceiveHz").toULongLong(), 14'074'000ULL);
+        QVERIFY(!radio.pttAvailable());
+        QVERIFY(!radio.tuneAvailable());
+    }
+
+    void controllerProjectsTwoReceiversAndOneTransmitAuthority() {
+        FakeTciServer server;
+        QVERIFY(server.listen());
+        DesktopRadioController radio;
+        radio.setTciTimeoutsForTest(500, 500, 50);
+        QVERIFY(radio.saveTciProfile({{"id", "fixture"}, {"displayName", "Controller fixture"},
+            {"endpoint", server.url().toString()}, {"preferredIqSampleRate", 96000},
+            {"preferredReceiver", 0}, {"autoConnect", false}}));
+        QVERIFY(radio.connectTciProfile("fixture"));
+        QTRY_COMPARE_WITH_TIMEOUT(radio.state(), QString("Handshaking — receive only"), 1'000);
+        server.sendText("start;protocol:Fixture;device:Two receivers;trx_count:2;vfo:0,0,14074000;vfo:1,0,7074000;ready;");
+        QTRY_COMPARE_WITH_TIMEOUT(radio.receiverCount(), 2, 1'000);
+        QCOMPARE(radio.activeReceiverId(), QString("tci:0"));
+        QCOMPARE(radio.listeningReceiverId(), QString("tci:0"));
+        QCOMPARE(radio.transmitReceiverId(), QString("tci:0"));
+        QVERIFY(!radio.pttAvailable());
+        QVERIFY(!radio.tuneAvailable());
+        QVERIFY(radio.selectActiveReceiver("tci:1"));
+        QVERIFY(radio.selectListeningReceiver("tci:1"));
+        QCOMPARE(radio.transmitReceiverId(), QString("tci:0"));
+        QVERIFY(radio.requestFrequency(7'076'000U));
+        QTRY_VERIFY_WITH_TIMEOUT(server.receivedText.join(QString{}).contains("vfo:1,0,7076000;"), 1'000);
+        server.sendText("trx_count:1;");
+        QTRY_COMPARE_WITH_TIMEOUT(radio.receiverCount(), 1, 1'000);
+        QCOMPARE(radio.activeReceiverId(), QString("tci:0"));
+        QCOMPARE(radio.listeningReceiverId(), QString("tci:0"));
+        QCOMPARE(radio.transmitReceiverId(), QString("tci:0"));
+        radio.globalStop();
+        QTRY_VERIFY_WITH_TIMEOUT(server.receivedText.join(QString{}).contains("trx:0,false;tune:0,false;"), 1'000);
+        radio.disconnectRadio();
+    }
+
     void delayedUpgradeFragmentedReadyTwoReceiversAndSafeStop() {
         FakeTciServer server;
         QVERIFY(server.listen(40));

@@ -107,6 +107,8 @@ bool TciClient::connectProfile(const TciProfile &profile) {
         return false;
     }
     disconnectFromServer();
+    m_receivers.clear();
+    emit receiversChanged();
     m_profile = profile;
     m_explicitDisconnect = false;
     m_reconnectAttempts = 0;
@@ -136,6 +138,14 @@ void TciClient::handleDisconnected() {
     m_pendingMutations.clear();
     m_attachedReceivers.clear();
     m_ready = false;
+    for (QVariant &entry : m_receivers) {
+        QVariantMap snapshot = entry.toMap();
+        snapshot["stale"] = true;
+        snapshot["iqState"] = "Stopped";
+        snapshot["audioState"] = "Stopped";
+        entry = snapshot;
+    }
+    emit receiversChanged();
     if (m_explicitDisconnect) {
         setState("Disconnected");
         return;
@@ -177,7 +187,13 @@ void TciClient::clearSessionState() {
     m_protocolVersion.clear();
     m_capabilities.clear();
     m_startSeen = false;
-    m_receivers.clear();
+    for (QVariant &entry : m_receivers) {
+        QVariantMap snapshot = entry.toMap();
+        snapshot["stale"] = true;
+        snapshot["iqState"] = "Stopped";
+        snapshot["audioState"] = "Stopped";
+        entry = snapshot;
+    }
     m_attachedReceivers.clear();
     m_pendingMutations.clear();
     emit receiversChanged();
@@ -235,6 +251,12 @@ void TciClient::handleStatus(const std::string &name, const std::string &rawArgu
         m_readyTimer.stop();
         m_ready = true;
         m_reconnectAttempts = 0;
+        for (QVariant &entry : m_receivers) {
+            QVariantMap snapshot = entry.toMap();
+            snapshot["stale"] = false;
+            entry = snapshot;
+        }
+        emit receiversChanged();
         setState("Connected — TCI receive only; PTT/TUNE disabled");
         attachReceiver(qBound(0, m_profile.preferredReceiver, m_receivers.size() - 1));
     } else if (command == "vfo" || command == "dds" || command == "if" ||
