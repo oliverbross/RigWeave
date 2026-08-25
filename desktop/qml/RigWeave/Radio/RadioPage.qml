@@ -8,19 +8,22 @@ Item { id: root
     RowLayout { anchors.fill: parent; anchors.margins: 18; spacing: 16
         Rectangle { Layout.preferredWidth: 390; Layout.fillHeight: true; color: "#22272b"; border.color: "#3a4147"
             ColumnLayout { anchors.fill: parent; anchors.margins: 12
-                Label { text: "HAMLIB 4.7.2 MODEL REGISTRY"; color: "#d38b22"; font.bold: true }
-                TextField { Layout.fillWidth: true; placeholderText: "Manufacturer, model, backend"; onTextChanged: RadioModels.setSearch(text) }
-                ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: RadioModels; clip: true
+                Label { text: "RADIO BACKEND"; color: "#d38b22"; font.bold: true }
+                ComboBox { id: backend; objectName: "radioBackend"; Layout.fillWidth: true; currentIndex: ApplicationWindow.window ? ApplicationWindow.window.galleryRadioBackend : 0; model: ["Native Elecraft KX3","Native Elecraft KX2","Native FlexRadio","Native QMX","Native QMX+","Native RGO ONE V6","Conservative RGO legacy","Embedded Hamlib 4.7.2","Hamlib network"] }
+                Label { Layout.fillWidth: true; text: backend.currentIndex < 7 ? "Native adapter source present · physical readback acceptance pending" : "Capability-driven Hamlib catalogue"; color: "#e3c765"; wrapMode: Text.WordWrap }
+                Label { text: "HAMLIB 4.7.2 MODEL REGISTRY"; color: "#d38b22"; font.bold: true; visible: backend.currentIndex >= 7 }
+                TextField { Layout.fillWidth: true; visible: backend.currentIndex >= 7; placeholderText: "Manufacturer, model, backend"; onTextChanged: RadioModels.setSearch(text) }
+                ListView { Layout.fillWidth: true; Layout.fillHeight: true; visible: backend.currentIndex >= 7; model: RadioModels; clip: true
                     delegate: ItemDelegate { required property int modelId; required property string manufacturer; required property string model; required property string backend; required property string transport; width: ListView.view.width; text: manufacturer + "  " + model + "\n" + backend + " • " + transport; highlighted: root.selectedModel === modelId; onClicked: root.selectedModel = modelId }
                 }
             }
         }
         ColumnLayout { Layout.fillWidth: true; Layout.fillHeight: true; spacing: 12
-            SafetyBanner { Layout.fillWidth: true; text: "Explicit connect only. PTT and TUNE remain disabled in Windows Alpha. No physical transmit test is authorized." }
+            SafetyBanner { Layout.fillWidth: true; text: "Explicit connect only. Native profiles require proven Windows transport identity and readback. PTT/TUNE remain acceptance pending; no physical transmit test is authorized." }
             RowLayout { Layout.fillWidth: true
                 TextField { id: route; Layout.fillWidth: true; placeholderText: "COM port or Hamlib network route" }
                 SpinBox { id: baud; from: 1200; to: 921600; value: 38400; editable: true }
-                Button { text: "Connect"; enabled: root.selectedModel >= 0 && route.text.length > 0; onClicked: Radio.connectRadio(root.selectedModel, route.text, baud.value) }
+                Button { text: "Connect"; enabled: backend.currentIndex >= 7 && root.selectedModel >= 0 && route.text.length > 0; onClicked: Radio.connectRadio(root.selectedModel, route.text, baud.value) }
                 Button { text: "Disconnect"; onClicked: Radio.disconnectRadio() }
             }
             Flow { Layout.fillWidth: true; spacing: 12
@@ -36,7 +39,14 @@ Item { id: root
                     Button { text: "Apply RX"; enabled: Radio.state.startsWith("Connected"); onClicked: { Radio.requestFrequency(Number(frequency.text)); Radio.requestMode(mode.currentText) } }
                 }
             }
-            EmptyState { Layout.fillWidth: true; Layout.fillHeight: true; title: "Capability controls are hidden until connected"; detail: "AF/RF gain, filter, split, RIT/XIT, meters and other controls must only appear when reported by the selected Hamlib backend. The Alpha keeps the generic vertical slice bounded." }
+            GroupBox { title: "CW / voice Keyer"; Layout.fillWidth: true
+                RowLayout { anchors.fill: parent
+                    Repeater { model: Parity.keyerMacros; Button { required property var item; text: item.title; enabled: false; ToolTip.text: "Keyer stopped; foreground shortcut and TX acceptance required"; ToolTip.visible: hovered } }
+                    Item { Layout.fillWidth: true }
+                    Button { text: "Stop"; onClicked: Desktop.globalStop() }
+                }
+            }
+            EmptyState { Layout.fillWidth: true; Layout.fillHeight: true; title: "Capability controls are hidden until connected"; detail: "VFO A/B, filter, split, RIT/XIT, meters, AF/RF gain, power, preamp/attenuator, ATU, macros, EQ and presets appear only after the selected backend proves capability/readback." }
         }
     }
 }

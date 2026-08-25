@@ -32,7 +32,7 @@ Item { id: root
             Button { text: "Export"; onClicked: exportDialog.open() }
         }
         Rectangle { Layout.fillWidth: true; implicitHeight: 34; color: "#4b351c"
-            Row { anchors.fill: parent; Repeater { model: ["UTC","Callsign","Frequency","Band","Mode","RST S","RST R","Grid","Source"]; Label { required property string modelData; width: index===0?180:index===2?140:100; height:34; verticalAlignment:Text.AlignVCenter; leftPadding:8; text:modelData;color:"#f2efe7";font.bold:true } } }
+            Row { anchors.fill: parent; Repeater { model: ["UTC","Callsign","Frequency","Band","Mode","RST S","RST R","Grid","Source"]; Label { required property int index; required property string modelData; width: index===0?180:index===2?140:100; height:34; verticalAlignment:Text.AlignVCenter; leftPadding:8; text:modelData;color:"#f2efe7";font.bold:true } } }
         }
         TableView { Layout.fillWidth: true; Layout.fillHeight: true; model: LogbookModel; clip: true; columnSpacing: 1; rowSpacing: 1; boundsBehavior: Flickable.StopAtBounds
             columnWidthProvider: function(column){return column===0?180:column===2?140:100}
