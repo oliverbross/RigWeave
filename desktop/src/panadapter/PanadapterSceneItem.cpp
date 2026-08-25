@@ -56,8 +56,9 @@ public:
 void updateLine(QSGGeometry &geometry, const QVector<float> &values,
                 const QRectF &bounds, float floor, float top, int first,
                 int last) {
-  const int boundedFirst = std::clamp(first, 0, values.size());
-  const int boundedLast = std::clamp(last, boundedFirst, values.size());
+  const int available = static_cast<int>(values.size());
+  const int boundedFirst = std::clamp(first, 0, available);
+  const int boundedLast = std::clamp(last, boundedFirst, available);
   const int count = boundedLast - boundedFirst;
   if (geometry.vertexCount() != count)
     geometry.allocate(count);
