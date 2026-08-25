@@ -1,6 +1,7 @@
 name: Desktop Cross-Platform Proof
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     branches: [feature/windows-desktop-alpha-v1]

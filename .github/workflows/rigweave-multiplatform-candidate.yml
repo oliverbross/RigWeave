@@ -1,0 +1,19 @@
+name: RigWeave Multiplatform Candidate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [integration/android-hardened-windows-alpha-v1]
+
+permissions:
+  contents: read
+
+jobs:
+  mobile-core-contracts:
+    uses: ./.github/workflows/rigweave-release-candidate.yml
+
+  windows-desktop:
+    uses: ./.github/workflows/windows-desktop.yml
+
+  macos-desktop:
+    uses: ./.github/workflows/desktop-cross-platform.yml
