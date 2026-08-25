@@ -40,6 +40,7 @@ set(RIGWEAVE_DESKTOP_SERVICE_SOURCES
     src/radio/TciClient.cpp
     src/rotator/DesktopRotatorController.cpp
     src/panadapter/DesktopPanadapter.cpp
+    src/panadapter/PanadapterSceneItem.cpp
 )
 file(GLOB RIGWEAVE_DESKTOP_SERVICE_HEADERS CONFIGURE_DEPENDS
     "include/rigweave/desktop/*.hpp")

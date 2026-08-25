@@ -37,7 +37,7 @@ PanadapterDsp::PanadapterDsp() { configure(PanadapterConfig{}); }
 
 bool PanadapterDsp::configure(const PanadapterConfig& requested) {
     if (!valid_fft_size(requested.fft_size) ||
-        (requested.sample_rate != 48000U && requested.sample_rate != 96000U) ||
+        requested.sample_rate < 8000U || requested.sample_rate > 10000000U ||
         (requested.overlap_percent != 25U && requested.overlap_percent != 50U && requested.overlap_percent != 75U) ||
         (requested.zoom_decimation != 1U && requested.zoom_decimation != 2U &&
          requested.zoom_decimation != 4U && requested.zoom_decimation != 8U)) return false;
@@ -132,6 +132,8 @@ void PanadapterDsp::reset() {
     snapshot_.hop_size = config_.fft_size * (100U - config_.overlap_percent) / 100U;
     snapshot_.zoom_decimation = config_.zoom_decimation; snapshot_.zoom_offset_hz = config_.zoom_offset_hz;
     snapshot_.floor_db = snapshot_.raw_floor_db = snapshot_.stabilized_floor_db = kFloorDb;
+    snapshot_.fitted_floor_db = config_.display_floor_db;
+    snapshot_.fitted_top_db = config_.display_top_db;
     rebuild_window();
 }
 
@@ -151,36 +153,54 @@ bool PanadapterDsp::push_pcm(const std::uint8_t* bytes, std::size_t length, unsi
     if (bytes == nullptr || channels < 2U || subframe_bytes < 2U || subframe_bytes > 4U || bits < 16U || bits > 32U || length == 0U) return false;
     const std::size_t frame_bytes = channels * subframe_bytes;
     if (discontinuity || length % frame_bytes != 0U) ++snapshot_.discontinuities;
-    const float dc_alpha = std::exp(-1.0F / (0.5F * static_cast<float>(config_.sample_rate)));
     const std::uint64_t before = snapshot_.sequence;
     for (std::size_t offset = 0; offset + frame_bytes <= length; offset += frame_bytes) {
         float left = decode_sample(bytes + offset, subframe_bytes, bits);
         float right = decode_sample(bytes + offset + subframe_bytes, subframe_bytes, bits);
-        if (config_.swap_iq) std::swap(left, right);
-        float i = left * config_.i_trim * (config_.invert_i ? -1.0F : 1.0F);
-        float q = right * config_.q_trim * (config_.invert_q ? -1.0F : 1.0F);
-        if (std::abs(i) >= 0.999F || std::abs(q) >= 0.999F) ++clipped_samples_;
-        dc_ = dc_ * dc_alpha + std::complex<float>(i, q) * (1.0F - dc_alpha);
-        std::complex<float> value = std::complex<float>(i, q) - dc_;
-        metric_i_power_ += static_cast<double>(value.real()) * value.real(); metric_q_power_ += static_cast<double>(value.imag()) * value.imag();
-        metric_cross_ += static_cast<double>(value.real()) * value.imag();
-        const float delta = value.real() - value.imag(); metric_delta_power_ += static_cast<double>(delta) * delta; ++metric_count_;
-        if (correction_enabled_) value = correction_a_ * value + correction_b_ * std::conj(value);
-        if (config_.conjugate) value = std::conj(value);
-        if (config_.zoom_decimation == 1U) accept_sample(value);
-        else {
-            const std::complex<float> mixed = value * mixer_phase_; mixer_phase_ *= mixer_step_;
-            if ((snapshot_.input_frames & 4095U) == 0U) mixer_phase_ /= std::abs(mixer_phase_);
-            zoom_state_[zoom_write_] = mixed; zoom_write_ = (zoom_write_ + 1U) % zoom_state_.size();
-            if (++zoom_phase_ == config_.zoom_decimation) {
-                zoom_phase_ = 0; std::complex<float> filtered{}; std::size_t index = zoom_write_;
-                for (std::size_t tap = 0; tap < zoom_taps_.size(); ++tap) { index = index == 0U ? zoom_state_.size() - 1U : index - 1U; filtered += zoom_state_[index] * zoom_taps_[tap]; }
-                accept_sample(filtered);
-            }
-        }
-        ++snapshot_.input_frames;
+        process_iq(left, right);
     }
     return snapshot_.sequence != before;
+}
+
+bool PanadapterDsp::push_iq_f32(const float* values, std::size_t value_count, bool discontinuity) {
+    if (values == nullptr || value_count < 2U) return false;
+    if (discontinuity || (value_count & 1U) != 0U) ++snapshot_.discontinuities;
+    const std::uint64_t before = snapshot_.sequence;
+    for (std::size_t index = 0; index + 1U < value_count; index += 2U) process_iq(values[index], values[index + 1U]);
+    return snapshot_.sequence != before;
+}
+
+bool PanadapterDsp::process_iq(float left, float right) {
+    if (!std::isfinite(left) || !std::isfinite(right)) {
+        ++snapshot_.non_finite_samples;
+        ++snapshot_.discontinuities;
+        return false;
+    }
+    if (config_.swap_iq) std::swap(left, right);
+    const float i = left * config_.i_trim * (config_.invert_i ? -1.0F : 1.0F);
+    const float q = right * config_.q_trim * (config_.invert_q ? -1.0F : 1.0F);
+    if (std::abs(i) >= 0.999F || std::abs(q) >= 0.999F) ++clipped_samples_;
+    const float dc_alpha = std::exp(-1.0F / (0.5F * static_cast<float>(config_.sample_rate)));
+    dc_ = dc_ * dc_alpha + std::complex<float>(i, q) * (1.0F - dc_alpha);
+    std::complex<float> value = std::complex<float>(i, q) - dc_;
+    metric_i_power_ += static_cast<double>(value.real()) * value.real(); metric_q_power_ += static_cast<double>(value.imag()) * value.imag();
+    metric_cross_ += static_cast<double>(value.real()) * value.imag();
+    const float delta = value.real() - value.imag(); metric_delta_power_ += static_cast<double>(delta) * delta; ++metric_count_;
+    if (correction_enabled_) value = correction_a_ * value + correction_b_ * std::conj(value);
+    if (config_.conjugate) value = std::conj(value);
+    if (config_.zoom_decimation == 1U) accept_sample(value);
+    else {
+        const std::complex<float> mixed = value * mixer_phase_; mixer_phase_ *= mixer_step_;
+        if ((snapshot_.input_frames & 4095U) == 0U) mixer_phase_ /= std::abs(mixer_phase_);
+        zoom_state_[zoom_write_] = mixed; zoom_write_ = (zoom_write_ + 1U) % zoom_state_.size();
+        if (++zoom_phase_ == config_.zoom_decimation) {
+            zoom_phase_ = 0; std::complex<float> filtered{}; std::size_t index = zoom_write_;
+            for (std::size_t tap = 0; tap < zoom_taps_.size(); ++tap) { index = index == 0U ? zoom_state_.size() - 1U : index - 1U; filtered += zoom_state_[index] * zoom_taps_[tap]; }
+            accept_sample(filtered);
+        }
+    }
+    ++snapshot_.input_frames;
+    return true;
 }
 
 void PanadapterDsp::accept_sample(std::complex<float> sample) {
@@ -252,8 +272,29 @@ void PanadapterDsp::transform() {
             (snapshot_.raw_floor_db > snapshot_.stabilized_floor_db ? 0.08F : 0.018F);
         snapshot_.stabilized_floor_db += alpha * (snapshot_.raw_floor_db - snapshot_.stabilized_floor_db);
         snapshot_.floor_db = snapshot_.stabilized_floor_db;
+        const std::size_t ceilingPercentile = static_cast<std::size_t>(0.98F * static_cast<float>(count - 1U));
+        std::nth_element(floor_scratch_.begin(), floor_scratch_.begin() + ceilingPercentile, floor_scratch_.begin() + count);
+        const float targetFloor = std::clamp(snapshot_.raw_floor_db - 6.0F, kFloorDb, -30.0F);
+        const float targetTop = std::clamp(std::max(floor_scratch_[ceilingPercentile] + 4.0F, targetFloor + 30.0F), targetFloor + 30.0F, 20.0F);
+        if (snapshot_.transforms == 0U) {
+            snapshot_.fitted_floor_db = targetFloor;
+            snapshot_.fitted_top_db = targetTop;
+        } else {
+            const float floorAlpha = targetFloor < snapshot_.fitted_floor_db ? 0.16F : 0.035F;
+            const float topAlpha = targetTop > snapshot_.fitted_top_db ? 0.18F : 0.025F;
+            snapshot_.fitted_floor_db += floorAlpha * (targetFloor - snapshot_.fitted_floor_db);
+            snapshot_.fitted_top_db += topAlpha * (targetTop - snapshot_.fitted_top_db);
+        }
+        snapshot_.fitted_top_db = std::max(snapshot_.fitted_top_db, snapshot_.fitted_floor_db + 30.0F);
     } else {
         snapshot_.raw_floor_db = snapshot_.stabilized_floor_db = snapshot_.floor_db = kFloorDb;
+    }
+    if (config_.fit_auto_contrast) {
+        const float range = std::max(20.0F, snapshot_.fitted_top_db - snapshot_.fitted_floor_db);
+        for (std::size_t x = 0; x < trace_db_.size(); ++x) {
+            const float scaled = (trace_db_[x] - snapshot_.fitted_floor_db) / range;
+            bins_[x] = static_cast<std::uint8_t>(std::clamp(scaled * 255.0F, 0.0F, 255.0F));
+        }
     }
     if (metric_count_ > 0U) {
         const double pi = metric_i_power_ / static_cast<double>(metric_count_), pq = metric_q_power_ / static_cast<double>(metric_count_);

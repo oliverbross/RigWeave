@@ -15,7 +15,7 @@
 
 namespace rigweave::desktop {
 
-DesktopApplication::DesktopApplication(QObject*parent):QObject(parent),m_cluster(&m_spots,this),m_parity(this),m_supportBundle(&m_paths,this){}
+DesktopApplication::DesktopApplication(QObject*parent):QObject(parent),m_cluster(&m_spots,this),m_parity(this),m_supportBundle(&m_paths,this){connect(&m_radio,&DesktopRadioController::iqFrame,&m_panadapter,[this](const QString&id,quint32 rate,const QVector<float>&values){const quint64 centre=m_radio.receivers()->receiver(id).value("centreFrequencyHz").toULongLong();m_panadapter.pushFloatIq(id,rate,values,centre,false);});}
 DesktopApplication::~DesktopApplication(){shutdown();}
 
 bool DesktopApplication::initialize(QString *error) {
@@ -42,8 +42,13 @@ bool DesktopApplication::initialize(QString *error) {
     if (!m_configuration->load(error)) return false;
     if (!m_radio.restoreConfiguration(m_configuration->section("radioProfiles"), error)) return false;
     m_configuration->setSection("radioProfiles", m_radio.configuration());
+    if (!m_panadapter.restoreConfiguration(m_configuration->section("panadapter"), error)) return false;
+    m_configuration->setSection("panadapter", m_panadapter.configuration());
     connect(&m_radio, &DesktopRadioController::preferencesChanged, this, [this] {
         if (m_configuration) m_configuration->setSection("radioProfiles", m_radio.configuration());
+    });
+    connect(&m_panadapter, &DesktopPanadapter::settingsChanged, this, [this] {
+        if (m_configuration) m_configuration->setSection("panadapter", m_panadapter.configuration());
     });
     m_currentDestination = m_configuration->lastDestination();
     m_database = std::make_unique<QsoDatabase>(
@@ -75,7 +80,7 @@ void DesktopApplication::expose(QQmlApplicationEngine&engine){auto*context=engin
 void DesktopApplication::setCurrentDestination(const QString&destination){static const QSet<QString>allowed{"Home","Radio","Digi","Panadapter","EQ","Logbook","Intelligence","Sync","Contest","Band Maps","Presets","DX","Portable","Operations","Groups.io","Rotator","Settings","Health","About"};if(!allowed.contains(destination)||m_currentDestination==destination)return;m_currentDestination=destination;if(m_configuration)m_configuration->setLastDestination(destination);emit currentDestinationChanged();}
 void DesktopApplication::setGalleryVariant(const QString&workspace,int variant){if(m_demoMode&&workspace=="Band Maps")m_parity.setGalleryBandMapLayout(variant);}
 
-QVariantMap DesktopApplication::health()const{QString projectionError;const bool projection=m_database&&m_database->verifyProjection(&projectionError);return{{"database",m_database?"Open / schema 16":"Unavailable"},{"databaseRevision",m_database?QVariant::fromValue<qulonglong>(m_database->revision()):0},{"projection",projection?"Verified":projectionError},{"domainStores",m_parity.databaseHealth()},{"wavelog",m_wavelog?m_wavelog->state():"Unavailable"},{"cluster",m_cluster.state()},{"radio",m_radio.health()},{"rotator",m_rotator.state()},{"panadapter",m_panadapter.state()},{"configuration",m_configuration?"Loaded":"Unavailable"},{"providers",QStringLiteral("%1 registered; disabled by default").arg(m_parity.providers()->rowCount())}};}
+QVariantMap DesktopApplication::health()const{QString projectionError;const bool projection=m_database&&m_database->verifyProjection(&projectionError);return{{"database",m_database?"Open / schema 16":"Unavailable"},{"databaseRevision",m_database?QVariant::fromValue<qulonglong>(m_database->revision()):0},{"projection",projection?"Verified":projectionError},{"domainStores",m_parity.databaseHealth()},{"wavelog",m_wavelog?m_wavelog->state():"Unavailable"},{"cluster",m_cluster.state()},{"radio",m_radio.health()},{"rotator",m_rotator.state()},{"panadapter",m_panadapter.health()},{"configuration",m_configuration?"Loaded":"Unavailable"},{"providers",QStringLiteral("%1 registered; disabled by default").arg(m_parity.providers()->rowCount())}};}
 QVariantMap DesktopApplication::buildInformation()const{return{{"buildSha",QString::fromLatin1(RIGWEAVE_BUILD_SHA).isEmpty()?"local-uncommitted-build":QString::fromLatin1(RIGWEAVE_BUILD_SHA)},{"qtVersion",QString::fromLatin1(qVersion())},{"coreVersion",QString::fromLatin1(rw_core_version())},{"databaseSchema",QsoDatabase::SchemaVersion},{"licence","GPL-3.0-only"},{"hamlib","4.7.2 pinned source; operational only when linked in this build"}};}
 QVariantMap DesktopApplication::intelligence()const{return m_database?m_database->intelligenceSummary():QVariantMap{};}
 

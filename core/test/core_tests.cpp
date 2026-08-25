@@ -12,6 +12,7 @@
 #include <cstring>
 #include <complex>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -301,6 +302,103 @@ int main() {
     assert(std::abs(pan_snapshot.rbw_hz - 23.4375F) < 0.01F);
     assert(pan_snapshot.fft_size == 4096 && pan_snapshot.hop_size == 2048 && pan_snapshot.sequence == 1);
     assert(pan_snapshot.valid_stereo == 1 && pan_snapshot.clipped_fraction == 0.0F);
+
+    // Direct TCI-style interleaved float32 I/Q shares the exact DSP path with PCM.
+    std::vector<float> float_tone(4096U * 2U);
+    for (std::size_t frame_index = 0; frame_index < 4096U; ++frame_index) {
+        const float phase = 2.0F * 3.14159265358979323846F *
+            static_cast<float>(production_bin * frame_index) / 4096.0F;
+        float_tone[frame_index * 2U] = std::cos(phase) * 0.5F;
+        float_tone[frame_index * 2U + 1U] = std::sin(phase) * 0.5F;
+    }
+    assert(rw_panadapter_configure(pan, &pan_config) == 1);
+    assert(rw_panadapter_push_float_iq(pan, float_tone.data(), float_tone.size(), 0) == 1);
+    rw_panadapter_copy_frame(pan, &pan_snapshot, production_trace.data(), production_waterfall.data(),
+        production_peak.data(), production_trace.size());
+    const auto float_peak_bin = static_cast<std::size_t>(std::distance(production_trace.begin(),
+        std::max_element(production_trace.begin(), production_trace.end())));
+    assert(float_peak_bin == production_peak_bin);
+    assert(std::abs(production_trace[float_peak_bin] - (-6.02F)) < 0.35F);
+
+    pan_config.swap_iq = 1;
+    assert(rw_panadapter_configure(pan, &pan_config) == 1);
+    assert(rw_panadapter_push_float_iq(pan, float_tone.data(), float_tone.size(), 0) == 1);
+    rw_panadapter_copy_trace(pan, production_trace.data(), production_trace.size());
+    assert(static_cast<std::size_t>(std::distance(production_trace.begin(),
+        std::max_element(production_trace.begin(), production_trace.end()))) == 2048U - production_bin);
+    pan_config.swap_iq = 0;
+    pan_config.conjugate = 1;
+    assert(rw_panadapter_configure(pan, &pan_config) == 1);
+    assert(rw_panadapter_push_float_iq(pan, float_tone.data(), float_tone.size(), 0) == 1);
+    rw_panadapter_copy_trace(pan, production_trace.data(), production_trace.size());
+    assert(static_cast<std::size_t>(std::distance(production_trace.begin(),
+        std::max_element(production_trace.begin(), production_trace.end()))) == 2048U - production_bin);
+    pan_config.conjugate = 0;
+
+    std::vector<float> non_finite_tone = float_tone;
+    non_finite_tone.insert(non_finite_tone.end(), {0.1F, 0.2F});
+    non_finite_tone[20] = std::numeric_limits<float>::quiet_NaN();
+    pan_config.fit_auto_contrast = 1;
+    assert(rw_panadapter_configure(pan, &pan_config) == 1);
+    assert(rw_panadapter_push_float_iq(pan, non_finite_tone.data(), non_finite_tone.size(), 1) == 1);
+    assert(rw_panadapter_snapshot_copy(pan, &pan_snapshot) == 1);
+    assert(pan_snapshot.non_finite_samples == 1 && pan_snapshot.discontinuities >= 2);
+    assert(std::isfinite(pan_snapshot.fitted_floor_db) && std::isfinite(pan_snapshot.fitted_top_db));
+    assert(pan_snapshot.fitted_top_db - pan_snapshot.fitted_floor_db >= 30.0F);
+    pan_config.fit_auto_contrast = 0;
+
+    // FIT remains finite and robust for silence, stable noise, carriers, a one-sample spike,
+    // an abrupt band change, and gradual floor drift.
+    pan_config.fft_size = 1024; pan_config.fit_auto_contrast = 1; pan_config.sample_rate = 48000;
+    assert(rw_panadapter_configure(pan, &pan_config) == 1);
+    std::vector<float> fit_frame(2048, 0.0F);
+    auto push_fit = [&](const std::vector<float>& values) {
+        assert(rw_panadapter_push_float_iq(pan, values.data(), values.size(), 0) == 1);
+        assert(rw_panadapter_snapshot_copy(pan, &pan_snapshot) == 1);
+        assert(std::isfinite(pan_snapshot.fitted_floor_db));
+        assert(std::isfinite(pan_snapshot.fitted_top_db));
+        assert(pan_snapshot.fitted_top_db - pan_snapshot.fitted_floor_db >= 30.0F);
+    };
+    push_fit(fit_frame);
+    std::uint32_t noise_state = 0x12345678U;
+    for (float &sample : fit_frame) {
+        noise_state = noise_state * 1664525U + 1013904223U;
+        sample = (static_cast<float>((noise_state >> 8U) & 0xffffU) / 32768.0F - 1.0F) * 0.01F;
+    }
+    for (int iteration = 0; iteration < 8; ++iteration) push_fit(fit_frame);
+    const float stable_fit_top = pan_snapshot.fitted_top_db;
+    auto spike_frame = fit_frame; spike_frame[200] = 1.0F; spike_frame[201] = -1.0F;
+    push_fit(spike_frame);
+    assert(std::abs(pan_snapshot.fitted_top_db - stable_fit_top) < 8.0F);
+    for (int carrier = 1; carrier <= 6; ++carrier) for (int frame = 0; frame < 1024; ++frame) {
+        const float phase = 2.0F * 3.14159265358979323846F * static_cast<float>(carrier * 37 * frame) / 1024.0F;
+        fit_frame[2 * frame] += std::cos(phase) * 0.025F;
+        fit_frame[2 * frame + 1] += std::sin(phase) * 0.025F;
+    }
+    push_fit(fit_frame);
+    std::rotate(fit_frame.begin(), fit_frame.begin() + 246, fit_frame.end());
+    push_fit(fit_frame);
+    for (int drift = 1; drift <= 6; ++drift) {
+        auto drift_frame = fit_frame;
+        const float scale = 1.0F + static_cast<float>(drift) * 0.08F;
+        for (float &sample : drift_frame) sample *= scale;
+        push_fit(drift_frame);
+    }
+    pan_config.sample_rate = 192000;
+    assert(rw_panadapter_configure(pan, &pan_config) == 1);
+
+    // Float diagnostics preserve clipping, DC, and duplicate-channel truth.
+    pan_config.sample_rate = 96000; pan_config.fit_auto_contrast = 0;
+    assert(rw_panadapter_configure(pan, &pan_config) == 1);
+    std::vector<float> duplicate(2048);
+    for (int frame = 0; frame < 1024; ++frame) duplicate[2 * frame] = duplicate[2 * frame + 1] = frame == 0 ? 1.2F : 0.2F;
+    assert(rw_panadapter_push_float_iq(pan, duplicate.data(), duplicate.size(), 0) == 1);
+    assert(rw_panadapter_snapshot_copy(pan, &pan_snapshot) == 1);
+    assert(pan_snapshot.clipped_fraction > 0.0F);
+    assert(pan_snapshot.duplicate_correlation > 0.99F);
+    assert(pan_snapshot.i_rms_db > -80.0F && pan_snapshot.q_rms_db > -80.0F);
+
+    pan_config.fft_size = 4096; pan_config.sample_rate = 96000;
 
     // A fixed, explicit widely-linear profile removes a known image; no live-frame covariance is used.
     std::vector<int16_t> imbalanced_tone(4096U * 2U);

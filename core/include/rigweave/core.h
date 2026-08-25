@@ -76,6 +76,7 @@ typedef struct rw_panadapter_config {
     float q_trim;
     uint32_t zoom_decimation;
     float zoom_offset_hz;
+    int fit_auto_contrast;
 } rw_panadapter_config;
 
 typedef struct rw_panadapter_snapshot {
@@ -103,6 +104,9 @@ typedef struct rw_panadapter_snapshot {
     float clipped_fraction;
     float duplicate_correlation;
     int valid_stereo;
+    uint64_t non_finite_samples;
+    float fitted_floor_db;
+    float fitted_top_db;
 } rw_panadapter_snapshot;
 
 rw_context *rw_context_create(void);
@@ -162,6 +166,8 @@ int rw_panadapter_configure(rw_panadapter_context *context, const rw_panadapter_
 int rw_panadapter_push(rw_panadapter_context *context, const uint8_t *bytes, size_t length,
                        unsigned channels, unsigned subframe_bytes, unsigned bits,
                        int discontinuity);
+int rw_panadapter_push_float_iq(rw_panadapter_context *context, const float *interleaved_iq,
+                                size_t value_count, int discontinuity);
 size_t rw_panadapter_copy_trace(const rw_panadapter_context *context, float *output,
                                 size_t output_count);
 size_t rw_panadapter_copy_waterfall(const rw_panadapter_context *context, float *output,

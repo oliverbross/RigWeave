@@ -1,5 +1,6 @@
 #include "rigweave/desktop/DesktopApplication.hpp"
 #include "rigweave/desktop/DesktopPlatform.hpp"
+#include "rigweave/desktop/PanadapterSceneItem.hpp"
 
 #include <QCommandLineOption>
 #include <QCommandLineParser>
@@ -9,6 +10,7 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
+#include <qqml.h>
 #include <QTimer>
 #include <functional>
 #include <memory>
@@ -106,6 +108,7 @@ void captureGallery(QGuiApplication &app, DesktopApplication &desktop, QQuickWin
 
 int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
+    qmlRegisterType<PanadapterSceneItem>("RigWeave.Controls", 1, 0, "PanadapterScene");
     const bool platformFontReady = installPlatformUiFont(app);
     QCoreApplication::setOrganizationName(QStringLiteral("RigWeave"));
     QCoreApplication::setOrganizationDomain(QStringLiteral("rigweave.app"));

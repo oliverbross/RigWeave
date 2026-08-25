@@ -33,6 +33,7 @@ struct PanadapterConfig {
     float q_trim{1.0F};
     unsigned zoom_decimation{1};
     float zoom_offset_hz{0.0F};
+    bool fit_auto_contrast{false};
 };
 
 struct PanadapterSnapshot {
@@ -40,6 +41,7 @@ struct PanadapterSnapshot {
     std::uint64_t input_frames{};
     std::uint64_t transforms{};
     std::uint64_t discontinuities{};
+    std::uint64_t non_finite_samples{};
     std::uint32_t sample_rate{};
     std::uint32_t effective_sample_rate{};
     std::size_t fft_size{};
@@ -52,6 +54,8 @@ struct PanadapterSnapshot {
     float floor_db{-140.0F};
     float raw_floor_db{-140.0F};
     float stabilized_floor_db{-140.0F};
+    float fitted_floor_db{-120.0F};
+    float fitted_top_db{0.0F};
     float valid_bin_fraction{};
     std::uint32_t valid_bin_count{};
     float i_rms_db{-140.0F};
@@ -70,6 +74,8 @@ public:
     bool push_pcm(const std::uint8_t* bytes, std::size_t length,
                   unsigned channels, unsigned subframe_bytes, unsigned bits,
                   bool discontinuity = false);
+    bool push_iq_f32(const float* interleaved_iq, std::size_t value_count,
+                     bool discontinuity = false);
     void set_display_floor(float floor_db);
     void set_window(PanWindow window);
     void set_iq_correction(std::complex<float> a, std::complex<float> b, bool enabled);
@@ -93,6 +99,7 @@ private:
     void rebuild_window();
     void rebuild_zoom_filter();
     void accept_sample(std::complex<float> sample);
+    bool process_iq(float i, float q);
     void transform();
     void fft();
     float flatness_db(float offset_hz) const;

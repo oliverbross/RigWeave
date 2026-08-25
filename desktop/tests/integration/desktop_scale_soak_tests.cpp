@@ -1,5 +1,6 @@
 #include "rigweave/desktop/DesktopModels.hpp"
 #include "rigweave/desktop/DesktopParityPlatform.hpp"
+#include "rigweave/desktop/DesktopPanadapter.hpp"
 
 #include <QElapsedTimer>
 #include <QTemporaryDir>
@@ -12,6 +13,7 @@ class DesktopScaleSoakTests final : public QObject {
 private slots:
     void domainScaleMatrix();
     void spotCapacityAndLifecycleChurn();
+    void panadapterFloatIqBoundedStress();
 };
 
 void DesktopScaleSoakTests::domainScaleMatrix() {
@@ -30,6 +32,33 @@ void DesktopScaleSoakTests::domainScaleMatrix() {
     QCOMPARE(result.value("Contest").toMap().value("rows").toInt(), 10000);
     QCOMPARE(result.value("DX Chaser").toMap().value("rows").toInt(), 20000);
     QVERIFY2(total.elapsed() < 120000, "Deterministic domain scale matrix exceeded two minutes");
+}
+
+void DesktopScaleSoakTests::panadapterFloatIqBoundedStress() {
+    DesktopPanadapter panadapter;
+    panadapter.setFftSize(1024);
+    panadapter.setWaterfallRows(96);
+    QVector<float> iq(2048);
+    QElapsedTimer elapsed;
+    elapsed.start();
+    for (int frame = 0; frame < 600; ++frame) {
+        for (int sample = 0; sample < 1024; ++sample) {
+            const float phase = float(2.0 * 3.141592653589793 * (31 + frame % 17) * sample / 1024.0);
+            iq[2 * sample] = std::cos(phase) * .25F;
+            iq[2 * sample + 1] = std::sin(phase) * .25F;
+        }
+        panadapter.pushFloatIq(frame % 2 ? "tci:1" : "tci:0", 96'000, iq,
+                               frame % 2 ? 7'074'000U : 14'074'000U, frame % 199 == 0);
+    }
+    QCOMPARE(panadapter.receiverIds().size(), 2);
+    for (const QString &id : panadapter.receiverIds()) {
+        const auto rendered = panadapter.renderFrame(id);
+        QCOMPARE(rendered.trace.size(), 1024);
+        QCOMPARE(rendered.waterfall.size(), QSize(1024, 96));
+        QVERIFY(rendered.waterfall.sizeInBytes() <= 1024U * 96U * 4U);
+        QVERIFY(rendered.sequence > 100);
+    }
+    QVERIFY2(elapsed.elapsed() < 30'000, "Bounded dual-receiver float32 stress exceeded 30 seconds");
 }
 
 void DesktopScaleSoakTests::spotCapacityAndLifecycleChurn() {

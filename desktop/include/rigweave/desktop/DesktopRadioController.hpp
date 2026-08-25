@@ -86,6 +86,7 @@ public:
     Q_INVOKABLE void disconnectRadio();
     Q_INVOKABLE bool selectActiveReceiver(const QString &receiverId);
     Q_INVOKABLE bool selectListeningReceiver(const QString &receiverId);
+    Q_INVOKABLE QVariantMap receiverSnapshot(const QString &receiverId) const { return m_receivers.receiver(receiverId); }
     Q_INVOKABLE bool requestFrequency(qulonglong frequencyHz);
     Q_INVOKABLE bool requestMode(const QString &mode);
     Q_INVOKABLE void globalStop();

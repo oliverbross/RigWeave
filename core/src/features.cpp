@@ -123,6 +123,7 @@ kx3::PanadapterConfig native_pan_config(const rw_panadapter_config& value) {
     config.q_trim = value.q_trim;
     config.zoom_decimation = value.zoom_decimation;
     config.zoom_offset_hz = value.zoom_offset_hz;
+    config.fit_auto_contrast = value.fit_auto_contrast != 0;
     return config;
 }
 }
@@ -452,6 +453,13 @@ int rw_panadapter_push(rw_panadapter_context *context, const uint8_t *bytes, siz
                                  discontinuity != 0) ? 1 : 0;
 }
 
+int rw_panadapter_push_float_iq(rw_panadapter_context *context, const float *interleaved_iq,
+                                size_t value_count, int discontinuity) {
+    if (context == nullptr) return 0;
+    std::lock_guard<std::mutex> lock(context->mutex);
+    return context->dsp.push_iq_f32(interleaved_iq, value_count, discontinuity != 0) ? 1 : 0;
+}
+
 namespace {
 size_t copy_pan_values(const std::vector<float>& values, float *output, size_t output_count) {
     if (output == nullptr) return 0;
@@ -487,12 +495,14 @@ int rw_panadapter_snapshot_copy(const rw_panadapter_context *context,
     const auto& source = context->dsp.snapshot();
     output->sequence = source.sequence; output->input_frames = source.input_frames;
     output->transforms = source.transforms; output->discontinuities = source.discontinuities;
+    output->non_finite_samples = source.non_finite_samples;
     output->sample_rate = source.sample_rate; output->effective_sample_rate = source.effective_sample_rate;
     output->fft_size = static_cast<uint32_t>(source.fft_size); output->hop_size = static_cast<uint32_t>(source.hop_size);
     output->zoom_decimation = source.zoom_decimation; output->zoom_offset_hz = source.zoom_offset_hz;
     output->enbw_bins = source.enbw_bins; output->rbw_hz = source.rbw_hz;
     output->peak_db = source.peak_db; output->floor_db = source.floor_db;
     output->raw_floor_db = source.raw_floor_db; output->stabilized_floor_db = source.stabilized_floor_db;
+    output->fitted_floor_db = source.fitted_floor_db; output->fitted_top_db = source.fitted_top_db;
     output->valid_bin_fraction = source.valid_bin_fraction; output->valid_bin_count = source.valid_bin_count;
     output->i_rms_db = source.i_rms_db; output->q_rms_db = source.q_rms_db;
     output->iq_correlation = source.iq_correlation; output->clipped_fraction = source.clipped_fraction;
@@ -513,12 +523,14 @@ int rw_panadapter_copy_frame(const rw_panadapter_context *context,
     if (count == 0U) return 0;
     output->sequence = source.sequence; output->input_frames = source.input_frames;
     output->transforms = source.transforms; output->discontinuities = source.discontinuities;
+    output->non_finite_samples = source.non_finite_samples;
     output->sample_rate = source.sample_rate; output->effective_sample_rate = source.effective_sample_rate;
     output->fft_size = static_cast<uint32_t>(source.fft_size); output->hop_size = static_cast<uint32_t>(source.hop_size);
     output->zoom_decimation = source.zoom_decimation; output->zoom_offset_hz = source.zoom_offset_hz;
     output->enbw_bins = source.enbw_bins; output->rbw_hz = source.rbw_hz;
     output->peak_db = source.peak_db; output->floor_db = source.floor_db;
     output->raw_floor_db = source.raw_floor_db; output->stabilized_floor_db = source.stabilized_floor_db;
+    output->fitted_floor_db = source.fitted_floor_db; output->fitted_top_db = source.fitted_top_db;
     output->valid_bin_fraction = source.valid_bin_fraction; output->valid_bin_count = source.valid_bin_count;
     output->i_rms_db = source.i_rms_db; output->q_rms_db = source.q_rms_db;
     output->iq_correlation = source.iq_correlation; output->clipped_fraction = source.clipped_fraction;
