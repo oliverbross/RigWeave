@@ -1,5 +1,7 @@
 # Android app size and module policy
 
+The Windows integration adds no Android production module and preserves the four-ABI AAB ceiling of 60 MB and arm64 tablet APK ceiling of 130 MB. Desktop Qt/Hamlib runtime packaging is audited separately: Windows portable/installer each remain capped at 120 MiB and unpacked content at 350 MiB.
+
 ## Sweep 2 package decision
 
 No SCP, IOTA, WWFF, WWBOTA, Castle or Lighthouse directory is packaged. All accepted catalogues are bounded app-private runtime caches or user-selected imports. Sweep 2 adds Kotlin/Compose and schema code only; final APK/AAB sizes are recorded from final-tip artifacts.

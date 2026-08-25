@@ -1,5 +1,7 @@
 # Third-Party and Provenance Audit
 
+The integration retains exactly one Hamlib 4.7.2 source at upstream commit `40f63488fe0bd751b147f48d62fd217bf53713a0`. Android, Windows and macOS desktop build from that reviewed source; generated platform configuration may differ. No `rigctl`/`rigctld` executable or duplicate Hamlib tree is added.
+
 RigWeave remains GPL-3.0-only. `NOTICE`, the Wavelog/OpenHamClock/Nexus provenance records, and `core/third_party/iturhfprop/SOURCE_MANIFEST.json` remain the authoritative manifests.
 
 Wavelog behaviour was reviewed at 3.1.0 / `af3256140bd05403b7c4a421746c2ea653a4f04f` under MIT terms. OpenHamClock behaviour was reviewed at stable `d4a50eaaa61d3432a1de5f80cbe61790739930a5`; no upstream implementation was copied in this convergence. Nexus was reviewed at `57d11fd55f098dc9302b6aafed39e6cd4b6db216`, with the later 1.7.6 delta reviewed only for durable mode-visibility lessons.

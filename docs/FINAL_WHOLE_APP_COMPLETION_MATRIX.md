@@ -1,5 +1,9 @@
 # Final whole-application completion matrix
 
+## Multiplatform candidate delta
+
+Hardened Android and Windows Desktop Alpha are integrated without changing either source branch or `main`. Windows has a bounded local service graph, schema-16 semantic contract, fake-service Wavelog coverage and hosted packaging path; full desktop parity and physical/live acceptance remain incomplete. Native SwiftUI iOS and macOS Qt proof are separate build layers.
+
 ## Tablet Acceptance Sweep 2 delta
 
 Sweep 2 adds Contest schema-2 staging/merge, validated private SCP, Band Maps v2 and shared Radio ladder, Intelligence presentation/map corrections, typed portable catalogue truth and Groups.io foreground sync settings. Final hosted/device evidence remains governed by `TABLET_ACCEPTANCE_SWEEP_2_LIVE_CHECKLIST.md` and cannot be inferred from source completion.

@@ -9,6 +9,10 @@ See docs/phase-0/LICENSING_AND_NEXUS_ASSESSMENT.md for the Phase 0
 dependency/provenance assessment. Each distributed release must also provide
 release-specific dependency, notice, build, and corresponding-source records.
 
+The Android/Windows integration uses the single reviewed Hamlib 4.7.2 source
+tree recorded in core/third_party/hamlib/SOURCE_MANIFEST.json; the integration
+does not add a duplicate source or package Hamlib command-line executables.
+
 Nexus was evaluated as an external upstream/reference. No Nexus source, binary,
 dependency, submodule, or derived implementation is incorporated by Phase 0.
 

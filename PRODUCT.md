@@ -2,6 +2,8 @@
 
 ## Positioning
 
+The integration candidate adds a Windows Qt/QML Alpha foundation while preserving hardened Android and native SwiftUI iOS. Windows Alpha is local-first and fail-closed; it is not promoted, physically accepted, or represented as Android parity.
+
 > RigWeave is a radio-native portable operating cockpit that connects discovery, tuning, operating, logging, synchronisation, and progress without requiring fabricated state or permanent network access.
 
 RigWeave is local-first. Radio control and local logging must remain useful without a cloud service. Online enrichment may improve the operating loop but must degrade independently and honestly.

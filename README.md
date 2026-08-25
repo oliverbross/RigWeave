@@ -2,7 +2,9 @@
 
 RigWeave is a radio-native portable operating cockpit that connects discovery, tuning, operating, logging, synchronisation, and progress without requiring fabricated state or permanent network access.
 
-The current repository contains two native mobile clients—an iPad-focused SwiftUI client and an Android Jetpack Compose client—over a shared C++17 core. Elecraft KX3/KX2 is the current radio family. Android implements KX3 EQ Studio and SSB voice macros; these capabilities are not claimed for Apple or unqualified KX2 writes. Desktop, FlexRadio, QMX, and portable-programme workflows remain planned work.
+The current repository contains native SwiftUI iOS and Jetpack Compose Android clients over a shared C++17 core, plus a Windows Qt/QML Desktop Alpha integrated on its candidate branch. The desktop client is not yet promoted to `main`, physically accepted, or claimed to match Android feature coverage. Elecraft KX3/KX2 remains the established mobile radio family; desktop Hamlib operation stays explicit and fail-closed.
+
+Candidate integration scope and evidence boundaries are recorded in `docs/ANDROID_WINDOWS_INTEGRATION_V1.md` and `docs/MULTIPLATFORM_CANDIDATE_READINESS.md`.
 
 ## Current implementation
 

@@ -1,5 +1,9 @@
 # Scale and stability
 
+## Multiplatform integration
+
+The candidate retains Android 100k-QSO projection and native lifecycle stress gates, and Windows 100k-QSO keyset paging, bounded spot retention and repeated service-close coverage. Wavelog/configuration fixtures remain small and deterministic; no generated scale database is committed.
+
 ## Tablet Acceptance Sweep 2
 
 Band Maps retains the bounded input/index and six-lane placement model. Contest session reads are indexed and capped at 10,000 rows; merges are serial, idempotent and restart-safe. SCP suggestions are bounded to 30 and the database to 16 MiB. IOTA is bounded to 8 MiB/5,000 groups; user CSV imports to 32 MiB/250,000 rows; visible catalogue results to 500. Intelligence maps consume bounded projections and retain user camera state. Groups.io foreground refresh bounds groups, topics and messages.

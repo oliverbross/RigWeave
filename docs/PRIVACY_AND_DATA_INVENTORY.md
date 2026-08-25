@@ -1,5 +1,9 @@
 # Privacy and Data Inventory
 
+## Desktop Alpha and cross-platform fixtures
+
+Windows stores configuration, SQLite data, logs and support bundles in platform-local application directories; credentials use the platform vault and are excluded from configuration export, fixtures and support bundles. Shared fixtures contain synthetic QSO/configuration/Wavelog semantics only. Android and Windows database files are not treated as interchangeable.
+
 ## Sweep 2 private caches and settings
 
 SCP.DB, IOTA JSON and user-selected lawful portable CSV files are stored only in app-private storage with source metadata and SHA-256. None is bundled or uploaded. Contest schema 2 stores temporary event QSOs until explicit merge. Groups.io auto-download runs only while its foreground screen is active; preview excerpts are transient Compose state and no message body enters diagnostics.

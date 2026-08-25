@@ -2,7 +2,7 @@
 
 ## Direction
 
-RigWeave is one coherent field instrument across SwiftUI, Compose, and the planned Qt/QML desktop client. The visual language is shared; navigation, focus, dialogs, menus, keyboard, pointer, windowing, and accessibility follow each platform.
+RigWeave is one coherent field instrument across SwiftUI, Compose, and the candidate Qt/QML desktop client. The visual language is shared; navigation, focus, dialogs, menus, keyboard, pointer, windowing, and accessibility follow each platform. Windows remains an Alpha foundation pending physical acceptance.
 
 The instrument is a low-glare graphite chassis around an amber measurement surface. Off-white carries primary labels, yellow carries secondary/hold meaning, green signals healthy observed state, and red is reserved for safety and transmit state. Colour is always reinforced by text, shape, symbol, or state wording.
 

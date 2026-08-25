@@ -1,5 +1,9 @@
 # Release Candidate Readiness
 
+## Android hardened + Windows Alpha integration
+
+Candidate promotion is gated by the exact-SHA multiplatform workflow, Android APK/AAB audits, native/sanitizer tests, unsigned iOS builds, and Windows/macOS Qt build/test/package jobs. Physical Windows, authenticated Wavelog, live cluster and hardware/RF evidence remain pending and are not inferred from hosted builds.
+
 ## Tablet Acceptance Sweep 2 candidate
 
 The Sweep 2 candidate must pass all local commands, exact-SHA hosted validation, package/hash gates and protected in-place installation before PASS. Provider/licence-blocked catalogue programmes are acceptable only with explicit registry truth and no scraping/bundling. Source/build success is not device, service, audio or RF evidence.
