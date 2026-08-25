@@ -88,9 +88,6 @@ bool DesktopApplication::initialize(QString *error) {
     m_configuration->setSection("display", display);
   });
   m_currentDestination = m_configuration->lastDestination();
-  m_sidebarExpanded = m_configuration->section("display")
-                          .value("sidebarExpanded", true)
-                          .toBool();
   m_database = std::make_unique<QsoDatabase>(
       m_paths.databases() + "/rigweave-desktop.sqlite", this);
   if (!m_database->open(error))
@@ -162,11 +159,11 @@ QVariantList DesktopApplication::commands() const {
   const auto add = [&result](const char *id, const char *label,
                              const char *category, const char *icon,
                              const QString &key = {}, const char *destination = "",
-                             bool rail = false, bool enabled = true) {
+                             bool workspace = false, bool enabled = true) {
     result.push_back(QVariantMap{{"id", id}, {"label", label},
                                  {"category", category}, {"icon", icon},
                                  {"shortcut", key}, {"destination", destination},
-                                 {"rail", rail}, {"enabled", enabled}});
+                                 {"workspace", workspace}, {"enabled", enabled}});
   };
   add("nav.home", "Home", "OPERATE", "home", shortcut("Meta+1", "Ctrl+1"), "Home", true);
   add("nav.radio", "Radio", "OPERATE", "radio", shortcut("Meta+2", "Ctrl+2"), "Radio", true);
@@ -202,8 +199,6 @@ QVariantList DesktopApplication::commands() const {
   add("edit.delete", "Delete", "EDIT", "delete");
   add("edit.selectAll", "Select All", "EDIT", "select", shortcut("Meta+A", "Ctrl+A"));
   add("edit.find", "Find", "EDIT", "search", shortcut("Meta+F", "Ctrl+F"), "", false, false);
-  add("view.sidebarToggle", "Workspace Sidebar", "VIEW", "sidebar", {}, "", false, false);
-  add("view.sidebarMode", "Sidebar Display Mode", "VIEW", "sidebar", {}, "", false, false);
   add("view.fullScreen", "Full Screen", "VIEW", "fullscreen", shortcut("Meta+Ctrl+F", "F11"));
   add("view.shack", "Shack Display", "VIEW", "shack", shortcut("Meta+Shift+S", "Ctrl+Shift+D"));
   add("view.resetLayout", "Reset Workspace Layout", "VIEW", "reset");
@@ -217,18 +212,6 @@ QVariantList DesktopApplication::commands() const {
   add("help.shortcuts", "Keyboard Shortcuts", "HELP", "keyboard");
   add("help.licences", "Licences and Acknowledgements", "HELP", "about");
   return result;
-}
-
-void DesktopApplication::setSidebarExpanded(bool expanded) {
-  if (m_sidebarExpanded == expanded)
-    return;
-  m_sidebarExpanded = expanded;
-  if (m_configuration) {
-    auto display = m_configuration->section("display");
-    display["sidebarExpanded"] = expanded;
-    m_configuration->setSection("display", display);
-  }
-  emit sidebarExpandedChanged();
 }
 
 void DesktopApplication::invokeCommand(const QString &commandId) {
@@ -245,8 +228,6 @@ void DesktopApplication::invokeCommand(const QString &commandId) {
       globalStop();
     else if (commandId == "radio.disconnect")
       m_radio.disconnectRadio();
-    else if (commandId == "view.sidebarMode")
-      setSidebarExpanded(!m_sidebarExpanded);
     else if (commandId == "edit.delete") {
       if (QObject *focus = QGuiApplication::focusObject()) {
         QKeyEvent press(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);

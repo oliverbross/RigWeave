@@ -45,7 +45,7 @@ A Rust static library is rejected because Qt WebSockets is already linked and th
 
 ## Safety and evidence boundaries
 
-TCI restore is disconnected unless an operator explicitly enabled auto-connect; the default is off. No production path sends `trx:true` or `tune:true`. Frequency and mode writes are bounded, capability-aware, coalesced, and never replayed after an ambiguous disconnect. Global Stop cancels pending writes, disarms streams, and may send one de-key/tune-off request only when a live connection makes that safe.
+TCI restore is always disconnected; a saved legacy auto-connect preference is not dispatched by desktop startup. The operator must use explicit Connect. No production path sends `trx:true` or `tune:true`. Frequency and mode writes are bounded, capability-aware, coalesced, and never replayed after an ambiguous disconnect. Global Stop cancels pending writes, disarms streams, and may send one de-key/tune-off request only when a live connection makes that safe.
 
 Fake-server, unit, renderer, gallery, hosted build, and package evidence are software evidence. They are not physical-radio, authenticated-provider, audio-device, PTT, TUNE, RF, signing, deployment, or release evidence.
 

@@ -1,6 +1,6 @@
 # Desktop Menu and Command Model
 
-`DesktopApplication::commands()` is the canonical registry. Its 48 stable records carry ID, label, category, SVG key, platform shortcut, optional destination, navigation membership and enabled state. Native Windows menu actions, macOS `QAction`s, platform shortcuts and the command palette all call `Desktop.invokeCommand(id)`.
+`DesktopApplication::commands()` is the canonical registry. Its 46 stable records carry ID, label, category, SVG key, platform shortcut, optional destination, workspace-navigation membership and enabled state. Native Windows menu actions, macOS `QAction`s, platform shortcuts and the command palette all call `Desktop.invokeCommand(id)`.
 
 ## Platform menus
 
@@ -14,4 +14,4 @@ Commands without a completed service are visible where the programme requires di
 
 Escape, the visible header/Shack actions, both platform menus, and the command palette resolve to `radio.stop`. Text editing keeps standard Undo/Redo/Cut/Copy/Paste/Delete/Select All actions through the current focus object; Find remains disabled until a real workspace search owner exists.
 
-`desktop_ui_contract_tests` proves stable unique IDs, 19 unique navigation destinations, required safety/navigation commands, SVG coverage, platform shell markers and responsive breakpoints.
+`desktop_ui_contract_tests` proves stable unique IDs, 19 unique navigation destinations, required safety/navigation commands, SVG coverage, native platform shell markers and the absence of an in-window menu or global sidebar.

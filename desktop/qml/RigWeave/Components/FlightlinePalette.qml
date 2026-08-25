@@ -5,7 +5,6 @@ QtObject {
     readonly property color graphite: "#171a1d"
     readonly property color graphiteDeep: "#15181b"
     readonly property color graphiteRaised: "#22272b"
-    readonly property color graphiteRail: "#1c2024"
     readonly property color graphiteHover: "#292f34"
     readonly property color amber: "#d38b22"
     readonly property color amberBright: "#d89631"
@@ -29,9 +28,6 @@ QtObject {
     readonly property int tableRowHeight: 34
     readonly property int panelRadius: 4
     readonly property int lineWidth: 1
-    readonly property int navExpandedWidth: 238
-    readonly property int navCollapsedWidth: 64
-    readonly property int navBreakpoint: 1420
     readonly property int compactHeaderBreakpoint: 1360
     readonly property int minimumPaneWidth: 280
     readonly property int motionFastMs: 120

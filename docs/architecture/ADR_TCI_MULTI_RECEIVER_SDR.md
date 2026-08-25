@@ -20,7 +20,7 @@ Select Option A.
 
 ## State and safety invariants
 
-The TCI connection states are Disconnected, Connecting, Handshaking, Ready, Reconnecting, Stopping, and Error. Restored profiles are inert unless explicit auto-connect was saved; auto-connect defaults off. Handshake completion requires protocol readiness and a bounded receiver capability snapshot.
+The TCI connection states are Disconnected, Connecting, Handshaking, Ready, Reconnecting, Stopping, and Error. Restored profiles are always inert and require explicit Connect; legacy auto-connect metadata is not dispatched by startup. Handshake completion requires protocol readiness and a bounded receiver capability snapshot.
 
 Readback is authoritative. Frequency/mode writes are validated, coalesced per receiver, and complete only after matching status or a bounded failure. Writes are not replayed after an ambiguous disconnect. Unknown commands, formats, receivers, lengths, types, or non-finite samples fail closed and increment bounded diagnostics.
 

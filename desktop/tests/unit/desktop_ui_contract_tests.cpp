@@ -10,8 +10,8 @@ class DesktopUiContractTests final : public QObject {
   Q_OBJECT
 private slots:
   void commandRegistryIsCompleteAndUnique();
-  void shellUsesCanonicalCommandsAndResponsiveRail();
-  void originalIconFamilyCoversEveryRailDestination();
+  void shellUsesCanonicalCommandsAndNativeMenus();
+  void originalIconFamilyCoversEveryWorkspaceDestination();
 };
 
 void DesktopUiContractTests::commandRegistryIsCompleteAndUnique() {
@@ -19,7 +19,7 @@ void DesktopUiContractTests::commandRegistryIsCompleteAndUnique() {
   const QVariantList commands = desktop.commands();
   QSet<QString> ids;
   QSet<QString> destinations;
-  int railCount = 0;
+  int workspaceCount = 0;
   for (const QVariant &value : commands) {
     const QVariantMap command = value.toMap();
     const QString id = command.value("id").toString();
@@ -28,37 +28,30 @@ void DesktopUiContractTests::commandRegistryIsCompleteAndUnique() {
     ids.insert(id);
     QVERIFY(!command.value("label").toString().isEmpty());
     QVERIFY(!command.value("icon").toString().isEmpty());
-    if (command.value("rail").toBool()) {
-      ++railCount;
+    if (command.value("workspace").toBool()) {
+      ++workspaceCount;
       destinations.insert(command.value("destination").toString());
       QVERIFY(!command.value("category").toString().isEmpty());
     }
   }
-  QCOMPARE(railCount, 19);
+  QCOMPARE(workspaceCount, 19);
   QCOMPARE(destinations.size(), 19);
   for (const QString &required : {QStringLiteral("radio.stop"),
                                   QStringLiteral("tools.palette"),
                                   QStringLiteral("file.fastEntry"),
-                                  QStringLiteral("view.sidebarMode")})
+                                  QStringLiteral("view.fullScreen")})
     QVERIFY2(ids.contains(required), qPrintable(required));
 }
 
-void DesktopUiContractTests::shellUsesCanonicalCommandsAndResponsiveRail() {
+void DesktopUiContractTests::shellUsesCanonicalCommandsAndNativeMenus() {
   QFile file(QStringLiteral(RIGWEAVE_DESKTOP_QML_DIR "/App/Main.qml"));
   QVERIFY(file.open(QIODevice::ReadOnly));
   const QByteArray qml = file.readAll();
-  QVERIFY(qml.contains("Desktop.commands.filter"));
   QVERIFY(qml.contains("Desktop.invokeCommand"));
-  QVERIFY(qml.contains("width < flightline.navBreakpoint"));
-  QFile palette(QStringLiteral(RIGWEAVE_DESKTOP_QML_DIR
-                               "/Components/FlightlinePalette.qml"));
-  QVERIFY(palette.open(QIODevice::ReadOnly));
-  const QByteArray tokens = palette.readAll();
-  QVERIFY(tokens.contains("navBreakpoint: 1420"));
-  QVERIFY(tokens.contains("navExpandedWidth: 238"));
-  QVERIFY(tokens.contains("navCollapsedWidth: 64"));
   QVERIFY(qml.contains("Qt.platform.os === \"osx\""));
   QVERIFY(!qml.contains("menuBar: MenuBar"));
+  QVERIFY(!qml.contains("sidebar"));
+  QVERIFY(!qml.contains("SplitView"));
   QFile appSource(QStringLiteral(RIGWEAVE_DESKTOP_APP_DIR "/main.cpp"));
   QVERIFY(appSource.open(QIODevice::ReadOnly));
   const QByteArray nativeMenus = appSource.readAll();
@@ -70,11 +63,11 @@ void DesktopUiContractTests::shellUsesCanonicalCommandsAndResponsiveRail() {
   QVERIFY(!qml.contains("RigWeave Windows Desktop"));
 }
 
-void DesktopUiContractTests::originalIconFamilyCoversEveryRailDestination() {
+void DesktopUiContractTests::originalIconFamilyCoversEveryWorkspaceDestination() {
   DesktopApplication desktop;
   for (const QVariant &value : desktop.commands()) {
     const QVariantMap command = value.toMap();
-    if (!command.value("rail").toBool())
+    if (!command.value("workspace").toBool())
       continue;
     const QString path = QStringLiteral(RIGWEAVE_DESKTOP_ICON_DIR "/") +
                          command.value("icon").toString() + QStringLiteral(".svg");

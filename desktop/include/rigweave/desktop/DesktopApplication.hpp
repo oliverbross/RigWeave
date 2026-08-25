@@ -25,8 +25,6 @@ class DesktopApplication final : public QObject {
   Q_PROPERTY(
       int galleryVariant READ galleryVariant NOTIFY galleryVariantChanged)
   Q_PROPERTY(QVariantList commands READ commands CONSTANT)
-  Q_PROPERTY(bool sidebarExpanded READ sidebarExpanded WRITE setSidebarExpanded
-                 NOTIFY sidebarExpandedChanged)
 public:
   explicit DesktopApplication(QObject *parent = nullptr);
   ~DesktopApplication() override;
@@ -40,8 +38,6 @@ public:
   bool demoMode() const { return m_demoMode; }
   int galleryVariant() const { return m_galleryVariant; }
   QVariantList commands() const;
-  bool sidebarExpanded() const { return m_sidebarExpanded; }
-  void setSidebarExpanded(bool expanded);
   Q_INVOKABLE QVariantMap health() const;
   Q_INVOKABLE QVariantMap intelligence() const;
   Q_INVOKABLE QVariantMap buildInformation() const;
@@ -55,7 +51,6 @@ signals:
   void currentDestinationChanged();
   void shuttingDownChanged();
   void galleryVariantChanged();
-  void sidebarExpandedChanged();
   void commandInvoked(QString commandId);
   void quitRequested();
   void error(QString message);
@@ -81,7 +76,6 @@ private:
   QString m_currentDestination{"Home"};
   bool m_shuttingDown{};
   bool m_demoMode{};
-  bool m_sidebarExpanded{true};
   int m_galleryVariant{-1};
 };
 

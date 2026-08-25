@@ -224,7 +224,7 @@ std::unique_ptr<QMenuBar> buildNativeMenuBar(DesktopApplication &desktop) {
   QMenu *navigate = menuBar->addMenu(QStringLiteral("Navigate"));
   for (const QVariant &value : desktop.commands()) {
     const QVariantMap item = value.toMap();
-    if (item.value("rail").toBool())
+    if (item.value("workspace").toBool())
       command(navigate, item.value("id").toString());
   }
   navigate->addSeparator();
@@ -309,7 +309,7 @@ public:
     HMENU navigate = addMenu(L"&Navigate");
     for (const QVariant &value : m_desktop.commands()) {
       const QVariantMap item = value.toMap();
-      if (item.value("rail").toBool())
+      if (item.value("workspace").toBool())
         addCommand(navigate, item.value("id").toString());
     }
     addSeparator(navigate);
@@ -521,8 +521,8 @@ void captureGallery(QGuiApplication &app, DesktopApplication &desktop,
   QTimer::singleShot(500, window, [step] { (*step)(); });
 }
 
-bool runUiStress(QGuiApplication &app, DesktopApplication &desktop,
-                 QQuickWindow *window, const QString &reportPath) {
+bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
+                 const QString &reportPath) {
   const QStringList destinations{
       "Home", "Radio", "Digi", "Panadapter", "EQ", "Logbook",
       "Intelligence", "Sync", "Contest", "Band Maps", "Presets", "DX",
@@ -544,13 +544,9 @@ bool runUiStress(QGuiApplication &app, DesktopApplication &desktop,
     desktop.setCurrentDestination(destinations.at(cycle % destinations.size()));
     settle();
     if (cycle % 25 == 0)
-      peakObjects = std::max(peakObjects, window->findChildren<QObject *>().size());
+      peakObjects =
+          std::max(peakObjects, int(window->findChildren<QObject *>().size()));
   }
-  for (int cycle = 0; cycle < 100; ++cycle) {
-    desktop.setSidebarExpanded(cycle % 2 == 0);
-    settle();
-  }
-  desktop.setSidebarExpanded(true);
   for (int cycle = 0; cycle < 100; ++cycle) {
     window->setProperty("shackMode", cycle % 2 == 0);
     settle();
@@ -591,7 +587,7 @@ bool runUiStress(QGuiApplication &app, DesktopApplication &desktop,
   desktop.shutdown();
   const qint64 shutdownMs = shutdown.elapsed();
   const QVariantMap report{
-      {"workspaceChanges", 500}, {"sidebarCycles", 100},
+      {"workspaceChanges", 500}, {"systemMenuCommandCycles", 100},
       {"shackCycles", 100},      {"settingsCategoryChanges", 100},
       {"fullScreenCycles", 50},  {"resizeCycles", 100},
       {"commandActionCycles", 100}, {"initialQmlObjects", initialObjects},
@@ -722,7 +718,7 @@ int main(int argc, char *argv[]) {
   if (uiStress) {
     auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
     if (!window ||
-        !runUiStress(app, desktop, window, parser.value("ui-stress-report")))
+        !runUiStress(desktop, window, parser.value("ui-stress-report")))
       return 4;
     QTimer::singleShot(0, &app, &QCoreApplication::quit);
   }
