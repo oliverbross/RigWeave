@@ -25,4 +25,4 @@ UI convergence does not upgrade functional parity. “Converged” below means t
 | About | 40 | Identity, build/schema, licences and sources | Desktop build info | Informational | Converged |
 | Shack Display | 14 | Full-window glance status | Desktop, Radio, Cluster | Read-only plus Global Stop | Converged |
 
-All destinations remain reachable without a persistent global rail through the native Navigate menu, keyboard shortcuts and command palette. Settings alone retains a searchable internal category sidebar.
+All destinations remain reachable without a persistent global rail through the native Navigate menu, keyboard shortcuts and command palette. Every major module, including the Settings category navigator and detail surface, participates in the movable/resizable desktop canvas. The fixed tablet composition is unchanged.

@@ -43,6 +43,13 @@ public:
   Q_INVOKABLE QVariantMap buildInformation() const;
   Q_INVOKABLE bool saveFastEntry(const QVariantMap &values);
   Q_INVOKABLE QString localFilePath(const QUrl &url) const;
+  Q_INVOKABLE QVariantMap panelGeometry(const QString &workspace,
+                                        const QString &panel,
+                                        const QVariantMap &fallback) const;
+  Q_INVOKABLE void savePanelGeometry(const QString &workspace,
+                                     const QString &panel,
+                                     const QVariantMap &geometry);
+  Q_INVOKABLE void resetWorkspaceLayout(const QString &workspace);
   Q_INVOKABLE void invokeCommand(const QString &commandId);
   Q_INVOKABLE void globalStop();
   Q_INVOKABLE void shutdown();
@@ -51,6 +58,7 @@ signals:
   void currentDestinationChanged();
   void shuttingDownChanged();
   void galleryVariantChanged();
+  void workspaceLayoutReset(QString workspace);
   void commandInvoked(QString commandId);
   void quitRequested();
   void error(QString message);

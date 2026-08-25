@@ -350,8 +350,9 @@ bool DesktopConfigurationManager::safeSection(const QString &name) {
                      "satellite",
                      "groupsio",
                      "neural",
-                     "presets",
-                     "accessibility"}
+                      "presets",
+                      "accessibility",
+                      "desktopLayouts"}
       .contains(name);
 }
 bool DesktopConfigurationManager::load(QString *error) {

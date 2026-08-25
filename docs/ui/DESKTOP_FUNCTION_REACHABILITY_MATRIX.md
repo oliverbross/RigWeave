@@ -2,7 +2,7 @@
 
 | Visible action | UI → command | Service / storage / result | Error and test | Status |
 |---|---|---|---|---|
-| Open any workspace | Rail/menu/palette → `nav.*` | `Desktop.setCurrentDestination` → safe display config → loader | Unknown IDs rejected; command/UI contract test | FUNCTIONAL |
+| Open any workspace | Native Navigate menu/palette → `nav.*` | `Desktop.setCurrentDestination` → safe display config → loader | Unknown IDs rejected; command/UI contract test | FUNCTIONAL |
 | Global workspace navigation | Native Navigate menu / palette → `nav.*` | Full-width workspace loader | No persistent rail consumes client width; command contract | FUNCTIONAL |
 | Command palette | Menu/shortcut → `tools.palette` | Opens searchable enabled registry | Disabled commands omitted; command contract | FUNCTIONAL |
 | Global Stop | Header/menu/palette/Escape → `radio.stop` | Desktop stop → Radio/Rotator/Parity stop owners → safe state | Existing safety tests plus command contract | FUNCTIONAL |
@@ -18,7 +18,8 @@
 | Edit actions | Edit menu/shortcut → `edit.*` | Current focus object standard edit methods | No focus means no mutation; QML tests | FUNCTIONAL |
 | Full screen | View/Window → `view.fullScreen` | Native window visibility | Same action restores windowed; visual profiles | FUNCTIONAL |
 | Shack Display | View/Window → `view.shack` | Window Shack loader | Global Stop stays visible; gallery frame | FUNCTIONAL |
-| Reset Layout | View → `view.resetLayout` | Exits Shack and restores standard full-width workspace | Prevents lost panes; source contract | FUNCTIONAL |
+| Move/resize panel | Panel title bar / eight edge-corner handles | Bounded canvas geometry → debounced `desktopLayouts` persistence | Non-finite/out-of-range values rejected; canvas stress | FUNCTIONAL |
+| Reset Layout | View → `view.resetLayout` | Clears active workspace geometry, restores authored panel defaults, exits Shack | Prevents lost panes; source/hosted stress contract | FUNCTIONAL |
 | Keyboard shortcuts | Shortcut guide / canonical registry | Application-scoped action dispatch | Disabled entries cannot fire; command contract | FUNCTIONAL |
 | Provider enable/refresh | Settings provider rows | Parity provider lifecycle/cache | CURRENT/STALE/OFFLINE_CACHE/EMPTY/ERROR/UNAVAILABLE; parity tests | TRUTHFUL_FOUNDATION |
 | Apply RX | Radio page | Radio requestFrequency/requestMode | Enabled only when connected; radio safety tests | LIVE_ACCEPTANCE_PENDING |

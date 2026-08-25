@@ -1,6 +1,7 @@
 #include "rigweave/desktop/DesktopApplication.hpp"
 
 #include <QFile>
+#include <QDirIterator>
 #include <QSet>
 #include <QtTest>
 
@@ -11,6 +12,7 @@ class DesktopUiContractTests final : public QObject {
 private slots:
   void commandRegistryIsCompleteAndUnique();
   void shellUsesCanonicalCommandsAndNativeMenus();
+  void routedWorkspacesUsePersistedFreeformCanvasPanels();
   void originalIconFamilyCoversEveryWorkspaceDestination();
 };
 
@@ -39,7 +41,8 @@ void DesktopUiContractTests::commandRegistryIsCompleteAndUnique() {
   for (const QString &required : {QStringLiteral("radio.stop"),
                                   QStringLiteral("tools.palette"),
                                   QStringLiteral("file.fastEntry"),
-                                  QStringLiteral("view.fullScreen")})
+                                  QStringLiteral("view.fullScreen"),
+                                  QStringLiteral("view.resetLayout")})
     QVERIFY2(ids.contains(required), qPrintable(required));
 }
 
@@ -61,6 +64,52 @@ void DesktopUiContractTests::shellUsesCanonicalCommandsAndNativeMenus() {
   QVERIFY(nativeMenus.contains("addMenu(L\"&Navigate\")"));
   QVERIFY(qml.contains("Accessible.name"));
   QVERIFY(!qml.contains("RigWeave Windows Desktop"));
+}
+
+void DesktopUiContractTests::routedWorkspacesUsePersistedFreeformCanvasPanels() {
+  QFile canvas(QStringLiteral(RIGWEAVE_DESKTOP_QML_DIR
+                              "/Components/WorkspaceCanvas.qml"));
+  QFile panel(QStringLiteral(RIGWEAVE_DESKTOP_QML_DIR
+                             "/Components/CanvasPanel.qml"));
+  QVERIFY(canvas.open(QIODevice::ReadOnly));
+  QVERIFY(panel.open(QIODevice::ReadOnly));
+  const QByteArray canvasQml = canvas.readAll();
+  const QByteArray panelQml = panel.readAll();
+  QVERIFY(canvasQml.contains("workspaceKey"));
+  QVERIFY(canvasQml.contains("onWorkspaceLayoutReset"));
+  QVERIFY(panelQml.contains("Drag the title bar"));
+  QVERIFY(panelQml.contains("Desktop.savePanelGeometry"));
+  QVERIFY(panelQml.contains("edges.left"));
+  QVERIFY(panelQml.contains("edges.right"));
+  QVERIFY(panelQml.contains("edges.top"));
+  QVERIFY(panelQml.contains("edges.bottom"));
+
+  const QStringList routedPages{
+      "Home/HomePage.qml",       "Radio/RadioPage.qml",
+      "Digi/DigiPage.qml",       "Panadapter/PanadapterPage.qml",
+      "EQ/EqPage.qml",           "Logbook/LogbookPage.qml",
+      "Intelligence/IntelligencePage.qml", "Sync/SyncPage.qml",
+      "Contest/ContestPage.qml", "BandMaps/BandMapsPage.qml",
+      "Presets/PresetsPage.qml", "DX/DxPage.qml",
+      "Portable/PortablePage.qml", "Operations/OperationsPage.qml",
+      "Groups/GroupsPage.qml",   "Rotator/RotatorPage.qml",
+      "Settings/SettingsPage.qml", "Health/HealthPage.qml",
+      "Settings/AboutPage.qml",  "Home/ShackDisplay.qml"};
+  for (const QString &relative : routedPages) {
+    QFile page(QStringLiteral(RIGWEAVE_DESKTOP_QML_DIR "/") + relative);
+    QVERIFY2(page.open(QIODevice::ReadOnly), qPrintable(relative));
+    const QByteArray source = page.readAll();
+    QVERIFY2(source.contains("WorkspaceCanvas"), qPrintable(relative));
+    QVERIFY2(source.contains("CanvasPanel"), qPrintable(relative));
+  }
+
+  QFile application(QStringLiteral(RIGWEAVE_DESKTOP_APP_DIR
+                                   "/DesktopApplication.cpp"));
+  QVERIFY(application.open(QIODevice::ReadOnly));
+  const QByteArray applicationSource = application.readAll();
+  QVERIFY(applicationSource.contains("savePanelGeometry"));
+  QVERIFY(applicationSource.contains("resetWorkspaceLayout"));
+  QVERIFY(applicationSource.contains("desktopLayouts"));
 }
 
 void DesktopUiContractTests::originalIconFamilyCoversEveryWorkspaceDestination() {

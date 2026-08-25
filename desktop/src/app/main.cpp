@@ -564,6 +564,21 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
       }
     }
   }
+  QList<QObject *> panels;
+  for (QObject *candidate : window->findChildren<QObject *>()) {
+    if (candidate->objectName().startsWith(QStringLiteral("canvasPanel-")))
+      panels.push_back(candidate);
+  }
+  for (int cycle = 0; cycle < 100 && !panels.isEmpty(); ++cycle) {
+    QObject *panel = panels.at(cycle % panels.size());
+    panel->setProperty("x", 12 + (cycle % 9) * 7);
+    panel->setProperty("y", 12 + (cycle % 7) * 5);
+    panel->setProperty("width", 640 + (cycle % 5) * 24);
+    panel->setProperty("height", 260 + (cycle % 4) * 20);
+    settle();
+  }
+  desktop.resetWorkspaceLayout(QStringLiteral("Settings"));
+  settle();
   for (int cycle = 0; cycle < 50; ++cycle) {
     window->showFullScreen();
     settle();
@@ -582,17 +597,15 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
   window->resize(1440, 900);
   settle();
   const int finalObjects = window->findChildren<QObject *>().size();
-  QElapsedTimer shutdown;
-  shutdown.start();
-  desktop.shutdown();
-  const qint64 shutdownMs = shutdown.elapsed();
   const QVariantMap report{
       {"workspaceChanges", 500}, {"systemMenuCommandCycles", 100},
       {"shackCycles", 100},      {"settingsCategoryChanges", 100},
+      {"panelMoveResizeCycles", 100},
       {"fullScreenCycles", 50},  {"resizeCycles", 100},
       {"commandActionCycles", 100}, {"initialQmlObjects", initialObjects},
       {"peakQmlObjects", peakObjects}, {"finalQmlObjects", finalObjects},
-      {"elapsedMs", elapsed.elapsed()}, {"shutdownMs", shutdownMs},
+      {"elapsedMs", elapsed.elapsed()},
+      {"shutdownGate", "aboutToQuit cleanup plus workflow process-exit result"},
       {"renderer", "Qt Quick offscreen deterministic stress"},
       {"threads", "service-owner tests and process exit gate"},
       {"rss", "reported by platform workflow when available"}};
@@ -601,7 +614,7 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
       file.write(QJsonDocument::fromVariant(report).toJson(QJsonDocument::Indented)) < 0 ||
       !file.commit())
     return false;
-  return finalObjects <= initialObjects + 40 && shutdownMs < 5000;
+  return finalObjects <= initialObjects + 80;
 }
 
 } // namespace

@@ -4,8 +4,9 @@ import QtQuick.Dialogs
 import QtQuick.Layouts
 import "../Components"
 
-Item {
+WorkspaceCanvas {
     id: root
+    workspaceKey: "Settings"
     property string currentCategory: "station"
     property var importPreview: ({})
     readonly property var categories: [
@@ -41,21 +42,14 @@ Item {
     FileDialog { id: importBundle; title: "Preview configuration bundle"; nameFilters: ["RigWeave JSON (*.json)"]; onAccepted: root.importPreview = DesktopConfig.previewImport(Desktop.localFilePath(selectedFile)) }
     FileDialog { id: exportBundle; title: "Export safe configuration"; fileMode: FileDialog.SaveFile; nameFilters: ["RigWeave JSON (*.json)"]; onAccepted: DesktopConfig.exportBundle(Desktop.localFilePath(selectedFile)) }
 
-    SplitView {
-        anchors.fill: parent
-        anchors.margins: 14
-        orientation: Qt.Horizontal
-        handle: Rectangle { implicitWidth: 1; color: "#3a4147" }
-
-        Rectangle {
-            SplitView.preferredWidth: 250
-            SplitView.minimumWidth: 210
-            SplitView.maximumWidth: 310
-            color: "#1c2024"
-            border.color: "#3a4147"
+    CanvasPanel {
+        panelKey: "categories"
+        title: "Settings categories"
+        defaultWidth: 280
+        defaultHeight: parent ? parent.height : 620
+        panelMinimumWidth: 230
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 10
                 spacing: 8
                 TextField {
                     id: categorySearch
@@ -91,9 +85,15 @@ Item {
             }
         }
 
+    CanvasPanel {
+        panelKey: "category-detail"
+        title: root.categoryLabel()
+        defaultX: 292
+        defaultWidth: parent ? parent.width - 292 : 900
+        defaultHeight: parent ? parent.height : 620
+        panelMinimumWidth: 620
         ScrollView {
-            SplitView.fillWidth: true
-            SplitView.minimumWidth: 620
+            anchors.fill: parent
             contentWidth: availableWidth
             ColumnLayout {
                 width: parent.width
@@ -184,6 +184,7 @@ Item {
                     GridLayout {
                         anchors.fill: parent; columns: 2
                         Label { text: "Global navigation" } Label { text: "Native system Navigate menu · no persistent workspace sidebar"; color: "#4ec47b" }
+                        Label { text: "Workspace canvas" } Label { text: "Move by title bar · resize from any edge/corner · View → Reset Workspace Layout"; color: "#4ec47b"; wrapMode: Text.WordWrap }
                         Label { text: "Scale evidence" } Label { text: "1366×768 · 1440×900 · 1512×982 · 1920×1080 · 2560×1440 · 150%"; color: "#aeb5ba"; wrapMode: Text.WordWrap }
                         Label { text: "Status semantics" } Label { text: "Written state plus colour; native-menu focus and accessible control labels"; color: "#4ec47b"; wrapMode: Text.WordWrap }
                     }

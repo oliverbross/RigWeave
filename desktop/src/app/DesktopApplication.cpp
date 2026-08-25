@@ -11,6 +11,9 @@
 #include <QTimer>
 #include <QUuid>
 
+#include <algorithm>
+#include <cmath>
+
 #ifndef RIGWEAVE_BUILD_SHA
 #define RIGWEAVE_BUILD_SHA "local-uncommitted-build"
 #endif
@@ -214,6 +217,47 @@ QVariantList DesktopApplication::commands() const {
   return result;
 }
 
+QVariantMap DesktopApplication::panelGeometry(
+    const QString &workspace, const QString &panel,
+    const QVariantMap &fallback) const {
+  if (!m_configuration || workspace.isEmpty() || panel.isEmpty())
+    return fallback;
+  const QVariantMap layouts = m_configuration->section("desktopLayouts");
+  const QVariantMap workspaceLayout = layouts.value(workspace).toMap();
+  const QVariantMap saved = workspaceLayout.value(panel).toMap();
+  return saved.isEmpty() ? fallback : saved;
+}
+
+void DesktopApplication::savePanelGeometry(const QString &workspace,
+                                           const QString &panel,
+                                           const QVariantMap &geometry) {
+  if (!m_configuration || workspace.isEmpty() || panel.isEmpty())
+    return;
+  QVariantMap bounded;
+  for (const QString &key : {QStringLiteral("x"), QStringLiteral("y"),
+                             QStringLiteral("width"), QStringLiteral("height")}) {
+    bool ok = false;
+    const double value = geometry.value(key).toDouble(&ok);
+    if (!ok || !std::isfinite(value))
+      return;
+    bounded.insert(key, std::clamp(value, 0.0, 8192.0));
+  }
+  auto layouts = m_configuration->section("desktopLayouts");
+  auto workspaceLayout = layouts.value(workspace).toMap();
+  workspaceLayout[panel] = bounded;
+  layouts[workspace] = workspaceLayout;
+  m_configuration->setSection("desktopLayouts", layouts);
+}
+
+void DesktopApplication::resetWorkspaceLayout(const QString &workspace) {
+  if (!m_configuration || workspace.isEmpty())
+    return;
+  auto layouts = m_configuration->section("desktopLayouts");
+  layouts.remove(workspace);
+  m_configuration->setSection("desktopLayouts", layouts);
+  emit workspaceLayoutReset(workspace);
+}
+
 void DesktopApplication::invokeCommand(const QString &commandId) {
   for (const QVariant &value : commands()) {
     const QVariantMap command = value.toMap();
@@ -228,6 +272,8 @@ void DesktopApplication::invokeCommand(const QString &commandId) {
       globalStop();
     else if (commandId == "radio.disconnect")
       m_radio.disconnectRadio();
+    else if (commandId == "view.resetLayout")
+      resetWorkspaceLayout(m_currentDestination);
     else if (commandId == "edit.delete") {
       if (QObject *focus = QGuiApplication::focusObject()) {
         QKeyEvent press(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
