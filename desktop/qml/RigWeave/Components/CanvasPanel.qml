@@ -127,6 +127,16 @@ Item {
         function onResetRequested() { root.restoreDefaults() }
     }
 
+    Connections {
+        target: root.parent
+        function onWidthChanged() {
+            root.applyGeometry(root.x, root.y, root.width, root.height)
+        }
+        function onHeightChanged() {
+            root.applyGeometry(root.x, root.y, root.width, root.height)
+        }
+    }
+
     Timer {
         id: persistTimer
         interval: 240

@@ -14,7 +14,12 @@ WorkspaceCanvas {
     CanvasPanel { panelKey:"connection"; title:"Rotator connection"; defaultY:108; defaultWidth:parent?parent.width:1200; defaultHeight:104
         RowLayout { anchors.fill:parent
             ComboBox { id:protocol; model:["Embedded Hamlib","rotctld","GS-232","DCU / Rotor-EZ","EasyComm","SPID","serial-over-TCP","ARCO compatibility"] }
-            TextField { id:modelId; placeholderText:"Hamlib model ID"; validator:IntValidator{bottom:1}; visible:protocol.currentIndex===0 }
+            TextField {
+                id:modelId
+                placeholderText:"Hamlib model ID"
+                validator:IntValidator{bottom:1}
+                visible:protocol.currentIndex===0
+            }
             TextField { id:route; Layout.fillWidth:true; placeholderText:"COM port or network route" }
             SpinBox { id:baud; from:1200; to:921600; value:9600; editable:true }
             Button { text:"Connect"; enabled:protocol.currentIndex===0; onClicked:Rotator.connectRotator(Number(modelId.text),route.text,baud.value) }
