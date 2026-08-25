@@ -16,8 +16,9 @@
 #include <cstdio>
 
 #ifdef Q_OS_WIN
-#include <wincred.h>
+// MinGW's wincred.h requires the base Windows types and import macros first.
 #include <windows.h>
+#include <wincred.h>
 #endif
 
 namespace rigweave::desktop {
