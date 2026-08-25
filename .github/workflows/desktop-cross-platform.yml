@@ -4,7 +4,7 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
-    branches: [feature/windows-desktop-alpha-v1]
+    branches: [feature/windows-desktop-alpha-v1, feature/windows-desktop-full-parity-v1]
     paths:
       - 'desktop/**'
       - 'core/**'
@@ -41,9 +41,21 @@ jobs:
           macdeployqt artifacts/macos/RigWeaveDesktop.app -qmldir=desktop/qml
           ditto -c -k --sequesterRsrc artifacts/macos/RigWeaveDesktop.app artifacts/macos/RigWeave-macOS-unsigned.zip
           shasum -a 256 artifacts/macos/RigWeave-macOS-unsigned.zip > artifacts/macos/SHA256SUMS.txt
+      - name: Deterministic macOS UI gallery
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          build/macos/RigWeaveDesktop.app/Contents/MacOS/RigWeaveDesktop --gallery-dir artifacts/ui-gallery/1920x1080 --gallery-width 1920 --gallery-height 1080
+          build/macos/RigWeaveDesktop.app/Contents/MacOS/RigWeaveDesktop --gallery-dir artifacts/ui-gallery/2560x1440 --gallery-width 2560 --gallery-height 1440
+          QT_SCALE_FACTOR=1.5 build/macos/RigWeaveDesktop.app/Contents/MacOS/RigWeaveDesktop --gallery-dir artifacts/ui-gallery/150pct --gallery-width 1920 --gallery-height 1080
+          test "$(find artifacts/ui-gallery/1920x1080 -name '*.png' | wc -l | tr -d ' ')" = 25
+          test "$(find artifacts/ui-gallery/2560x1440 -name '*.png' | wc -l | tr -d ' ')" = 25
+          test "$(find artifacts/ui-gallery/150pct -name '*.png' | wc -l | tr -d ' ')" = 25
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: RigWeave-macOS-unsigned-${{ github.sha }}
-          path: artifacts/macos
+          path: |
+            artifacts/macos
+            artifacts/ui-gallery
           if-no-files-found: error
           retention-days: 14

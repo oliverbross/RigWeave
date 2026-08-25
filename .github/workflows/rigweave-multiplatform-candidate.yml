@@ -3,7 +3,9 @@ name: RigWeave Multiplatform Candidate
 on:
   workflow_dispatch:
   push:
-    branches: [integration/android-hardened-windows-alpha-v1]
+    branches:
+      - integration/android-hardened-windows-alpha-v1
+      - feature/windows-desktop-full-parity-v1
 
 permissions:
   contents: read
@@ -17,3 +19,25 @@ jobs:
 
   macos-desktop:
     uses: ./.github/workflows/desktop-cross-platform.yml
+
+  parity-audits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact checked-out SHA
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Contract, provenance, watcher and privacy gates
+        run: |
+          python3 scripts/check_release_candidate.py
+          python3 scripts/check_hamlib_upstream.py
+          python3 -m unittest scripts/test_check_openhamclock_upstream.py
+          test -s NOTICE
+          test -s core/third_party/iturhfprop/SOURCE_MANIFEST.json
+      - name: Repository conflict and credential audit
+        run: |
+          test -z "$(git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- ':!core/third_party' ':!.github/workflows' || true)"
+          test -z "$(git grep -n -I -E '(password|token|api[_-]?key)[[:space:]]*=[[:space:]]*[^$<{[:space:]]+' -- desktop ':!desktop/tests' || true)"
