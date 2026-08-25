@@ -1,0 +1,130 @@
+name: Windows Desktop Alpha
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/windows-desktop-alpha-v1]
+    paths:
+      - 'desktop/**'
+      - 'core/**'
+      - 'cmake/desktop/**'
+      - 'CMakePresets.json'
+      - '.github/workflows/windows-desktop.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64-mingw:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    env:
+      QT_VERSION: '6.11.2'
+      HAMLIB_VERSION: '4.7.2'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact checked-out SHA
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD) -ne '${{ github.sha }}') { throw 'Checkout SHA mismatch' }
+      - name: Install Qt 6.11.2 and MinGW-w64 13.1
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check "aqtinstall==3.3.0"
+          python desktop/ci/install_qt_windows.py --output "$env:GITHUB_WORKSPACE/Qt" --cache "$env:RUNNER_TEMP/qt-archives"
+          python -m aqt install-tool windows desktop tools_mingw1310 qt.tools.win64_mingw1310 -O "$env:GITHUB_WORKSPACE/Qt"
+          $qtRoot = "$env:GITHUB_WORKSPACE/Qt/6.11.2/mingw_64"
+          $mingwRoot = "$env:GITHUB_WORKSPACE/Qt/Tools/mingw1310_64"
+          "$qtRoot/bin" | Out-File $env:GITHUB_PATH -Append
+          "$mingwRoot/bin" | Out-File $env:GITHUB_PATH -Append
+          "CMAKE_PREFIX_PATH=$qtRoot" | Out-File $env:GITHUB_ENV -Append
+          "QT_ROOT_DIR=$qtRoot" | Out-File $env:GITHUB_ENV -Append
+          "RIGWEAVE_MINGW_BIN=$mingwRoot/bin" | Out-File $env:GITHUB_ENV -Append
+          & "$mingwRoot/bin/gcc.exe" --version
+      - name: Install pinned open-source build and installer tools
+        shell: pwsh
+        run: |
+          choco install ninja --version 1.13.2 -y --no-progress
+          choco install nsis --version 3.11 -y --no-progress
+          & "$env:RIGWEAVE_MINGW_BIN/gcc.exe" --version
+          $nsis = "${env:ProgramFiles(x86)}/NSIS/makensis.exe"
+          if (!(Test-Path $nsis)) { throw 'Pinned NSIS executable was not installed' }
+          ([IO.Path]::GetDirectoryName($nsis)) | Out-File $env:GITHUB_PATH -Append
+          & $nsis /VERSION
+      - name: Install MSYS2 autotools shell
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
+        with:
+          msystem: MSYS
+          update: false
+          install: autoconf automake libtool make
+      - name: Verify pinned Hamlib provenance
+        shell: pwsh
+        run: python scripts/check_hamlib_upstream.py
+      - name: Restore pinned Hamlib static library
+        id: hamlib-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/hamlib
+          key: windows-hamlib-4.7.2-mingw1310-${{ hashFiles('core/third_party/hamlib/SOURCE_MANIFEST.json') }}
+      - name: Build pinned Hamlib static library and supported backends
+        if: steps.hamlib-cache.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          tool_bin="$(cygpath -u "$RIGWEAVE_MINGW_BIN")"
+          source_root="$(cygpath -u "$GITHUB_WORKSPACE")"
+          install_root="$(cygpath -u "$RUNNER_TEMP")/hamlib"
+          build_root="$(cygpath -u "$RUNNER_TEMP")/hamlib-build"
+          mkdir -p "$build_root" "$install_root/include/hamlib" "$install_root/lib"
+          cd "$build_root"
+          PATH="$tool_bin:$PATH" \
+          CC="$tool_bin/gcc.exe" CXX="$tool_bin/g++.exe" AR="$tool_bin/ar.exe" \
+          RANLIB="$tool_bin/ranlib.exe" NM="$tool_bin/nm.exe" STRIP="$tool_bin/strip.exe" \
+          "$source_root/core/third_party/hamlib/configure" \
+            --host=x86_64-w64-mingw32 --disable-shared --enable-static --with-pic \
+            --without-libusb --without-indi --without-readline --without-cxx-binding \
+            --disable-parallel --disable-html-matrix --disable-pytest --disable-dependency-tracking
+          PATH="$tool_bin:$PATH" make -C src -j2 libhamlib.la ACLOCAL=: AUTOCONF=: AUTOHEADER=: AUTOMAKE=:
+          cp src/.libs/libhamlib.a "$install_root/lib/libhamlib.a"
+          cp include/hamlib/config.h "$install_root/include/hamlib/config.h"
+          cp -R "$source_root/core/third_party/hamlib/include/hamlib/." "$install_root/include/hamlib/"
+      - name: Save pinned Hamlib static library
+        if: steps.hamlib-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/hamlib
+          key: windows-hamlib-4.7.2-mingw1310-${{ hashFiles('core/third_party/hamlib/SOURCE_MANIFEST.json') }}
+      - name: Configure Release
+        shell: pwsh
+        run: cmake -S desktop -B build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DRIGWEAVE_BUILD_TESTS=ON -DRIGWEAVE_REQUIRE_HAMLIB=ON "-DRIGWEAVE_HAMLIB_ROOT=$env:RUNNER_TEMP/hamlib"
+      - name: Build Release
+        shell: pwsh
+        run: cmake --build build/windows --config Release --parallel 2
+      - name: CTest, database, fake Wavelog, cluster, dummy safety and QML
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build/windows -C Release --output-on-failure
+      - name: Launch smoke test
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: build/windows/RigWeaveDesktop.exe --smoke-test
+      - name: Package portable ZIP and per-user NSIS installer
+        shell: pwsh
+        run: desktop/packaging/windows/package.ps1 -BuildDirectory build/windows -OutputDirectory artifacts/windows
+      - name: Enforce measured size ceilings
+        shell: pwsh
+        run: |
+          $m = Get-Content artifacts/windows/artifact-measurements.json | ConvertFrom-Json
+          if ($m.portable.bytes -gt 125829120) { throw 'Portable ZIP exceeds 120 MiB' }
+          if ($m.installer.bytes -gt 125829120) { throw 'Installer exceeds 120 MiB' }
+          if ($m.unpackedBytes -gt 367001600) { throw 'Unpacked package exceeds 350 MiB' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: RigWeave-Windows-x64-${{ github.sha }}
+          path: artifacts/windows
+          if-no-files-found: error
+          retention-days: 14

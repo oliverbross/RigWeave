@@ -1,0 +1,48 @@
+name: Desktop Cross-Platform Proof
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/windows-desktop-alpha-v1]
+    paths:
+      - 'desktop/**'
+      - 'core/**'
+      - '.github/workflows/desktop-cross-platform.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  macos-arm64:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: '6.11.2'
+          host: mac
+          target: desktop
+          arch: clang_64
+          modules: 'qtmultimedia qtserialport qtwebsockets qtlocation qtpositioning'
+          cache: true
+      - name: Configure same desktop source
+        run: cmake -S desktop -B build/macos -G Ninja -DCMAKE_BUILD_TYPE=Release -DRIGWEAVE_BUILD_TESTS=ON
+      - name: Build and test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cmake --build build/macos --parallel 2
+          ctest --test-dir build/macos --output-on-failure
+      - name: Unsigned app packaging proof
+        run: |
+          cmake --install build/macos --prefix artifacts/macos
+          macdeployqt artifacts/macos/RigWeaveDesktop.app -qmldir=desktop/qml
+          ditto -c -k --sequesterRsrc artifacts/macos/RigWeaveDesktop.app artifacts/macos/RigWeave-macOS-unsigned.zip
+          shasum -a 256 artifacts/macos/RigWeave-macOS-unsigned.zip > artifacts/macos/SHA256SUMS.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: RigWeave-macOS-unsigned-${{ github.sha }}
+          path: artifacts/macos
+          if-no-files-found: error
+          retention-days: 14

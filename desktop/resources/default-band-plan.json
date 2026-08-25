@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "regions": [{"name": "IARU Region 1", "source": "https://www.iaru-r1.org/on-the-air/band-plans/"}],
+  "note": "Visual guidance only; operator licence and national rules remain authoritative."
+}

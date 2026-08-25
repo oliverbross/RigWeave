@@ -1,0 +1,17 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {"major": 3, "minor": 28, "patch": 0},
+  "configurePresets": [
+    {
+      "name": "release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../build/desktop/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "RIGWEAVE_BUILD_TESTS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [{"name": "release", "configurePreset": "release"}],
+  "testPresets": [{"name": "release", "configurePreset": "release", "output": {"outputOnFailure": true}}]
+}

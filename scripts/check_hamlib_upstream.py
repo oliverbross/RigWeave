@@ -39,7 +39,13 @@ def digest(path: pathlib.Path) -> str:
 
 
 def source_files() -> list[pathlib.Path]:
-    return sorted(path for path in SOURCE.rglob("*") if path.is_file())
+    # pathlib orders WindowsPath values case-insensitively, while PosixPath is
+    # case-sensitive. Sort by the recorded portable path so one manifest is
+    # stable across both host families.
+    return sorted(
+        (path for path in SOURCE.rglob("*") if path.is_file()),
+        key=lambda path: path.relative_to(SOURCE).as_posix(),
+    )
 
 
 def document() -> dict[str, object]:
