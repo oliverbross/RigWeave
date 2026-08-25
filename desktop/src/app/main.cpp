@@ -4,6 +4,8 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QFont>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
@@ -14,6 +16,28 @@
 using namespace rigweave::desktop;
 
 namespace {
+
+bool installPlatformUiFont(QGuiApplication &app) {
+#ifdef Q_OS_WIN
+    const QString fonts = qEnvironmentVariable("WINDIR", QStringLiteral("C:/Windows"))
+                          + QStringLiteral("/Fonts/");
+    const QStringList candidates{fonts + QStringLiteral("segoeui.ttf"),
+                                 fonts + QStringLiteral("arial.ttf")};
+    for (const QString &path : candidates) {
+        const int id = QFontDatabase::addApplicationFont(path);
+        if (id < 0) continue;
+        const QStringList families = QFontDatabase::applicationFontFamilies(id);
+        if (families.isEmpty()) continue;
+        app.setFont(QFont(families.first()));
+        return true;
+    }
+    qWarning("Windows UI font could not be loaded; glyph evidence may be incomplete");
+    return false;
+#else
+    Q_UNUSED(app)
+    return true;
+#endif
+}
 
 struct GalleryFrame {
     QString destination;
@@ -82,6 +106,7 @@ void captureGallery(QGuiApplication &app, DesktopApplication &desktop, QQuickWin
 
 int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
+    const bool platformFontReady = installPlatformUiFont(app);
     QCoreApplication::setOrganizationName(QStringLiteral("RigWeave"));
     QCoreApplication::setOrganizationDomain(QStringLiteral("rigweave.app"));
     QCoreApplication::setApplicationName(QStringLiteral("RigWeave Desktop"));
@@ -95,6 +120,7 @@ int main(int argc, char *argv[]) {
     parser.addOption({"gallery-height", "Gallery height in pixels.", "height", "1080"});
     parser.process(app);
     const bool gallery = parser.isSet("gallery-dir");
+    if (gallery && !platformFontReady) return 4;
     if (gallery) qputenv("RIGWEAVE_DESKTOP_DEMO", "1");
     const bool demo = qEnvironmentVariableIntValue("RIGWEAVE_DESKTOP_DEMO") == 1;
 
