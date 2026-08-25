@@ -127,11 +127,12 @@ jobs:
             if ($process.ExitCode -ne 0) { throw "$Directory gallery exited with code $($process.ExitCode)" }
           }
           Invoke-Gallery 'artifacts/ui-gallery/1920x1080' 1920 1080 '1'
+          Invoke-Gallery 'artifacts/ui-gallery/1366x768' 1366 768 '1'
           Invoke-Gallery 'artifacts/ui-gallery/2560x1440' 2560 1440 '1'
           Invoke-Gallery 'artifacts/ui-gallery/150pct' 1920 1080 '1.5'
-          foreach ($profile in @('1920x1080', '2560x1440', '150pct')) {
+          foreach ($profile in @('1366x768', '1920x1080', '2560x1440', '150pct')) {
             $count = (Get-ChildItem "artifacts/ui-gallery/$profile" -Filter '*.png').Count
-            if ($count -ne 38) { throw "$profile gallery has $count frames; expected 38" }
+            if ($count -ne 39) { throw "$profile gallery has $count frames; expected 39" }
           }
       - name: Package portable ZIP and per-user NSIS installer
         shell: pwsh

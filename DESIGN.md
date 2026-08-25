@@ -66,3 +66,9 @@ The desktop uses a resizable split navigation rail, 19 routed workspaces, a sear
 - RF geography is derived evidence beneath canonical QSO, spot, Neural DX, Band Health, and provider owners. LIVE, HISTORICAL, and OUTLOOK remain visually and textually distinct; COARSE is never presented as exact.
 - Flat and globe projections share one selected observation and provide action-free exploration. Any QSY, Logbook, DX, or Band Maps transition remains an explicit operator handoff.
 - No runtime tile service, commercial key, WebView, private Qt API, or copied SDRoxide asset is part of the desktop map/globe.
+
+## Desktop Flightline convergence
+
+The desktop shell uses the same operational hierarchy as the tablet without copying tablet pixels. One canonical command registry owns destination, menu, shortcut and command-palette routing. Navigation groups are OPERATE, LOG & INTELLIGENCE, FIELD & CONNECTED and SYSTEM; the rail is 238 px expanded, 64 px compact, and auto-collapses below 1420 logical px. Original 24×24 Flightline SVGs provide a coherent offline icon family.
+
+macOS uses the native global menu and the title “RigWeave”. Windows uses an Alt-accessible File/Edit/View/Radio/Tools/Window/Help bar within native window chrome. Graphite/amber surfaces, system UI fonts, 8/12/16 px spacing, 34 px table rows, 36 px controls, written status, focus borders and a persistent Global Stop define the shared desktop system. UI convergence never changes a service owner or promotes a foundation to functional parity.

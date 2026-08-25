@@ -129,3 +129,7 @@ Public Apple distribution presents an unresolved GPLv3/platform risk. No App Sto
 ## Windows full-parity branch
 
 `feature/windows-desktop-full-parity-v1` provides the complete Windows navigation shell, bounded provider/data platform, deterministic gallery, scale gates and same-source macOS packaging proof. Its audited verdict is PARTIAL: 14 of 31 rows are source-complete and 17 remain wired foundations without Android-equivalent production controllers. See [`docs/desktop/WINDOWS_FULL_PARITY_V1.md`](docs/desktop/WINDOWS_FULL_PARITY_V1.md) and the [parity matrix](docs/desktop/WINDOWS_FULL_PARITY_MATRIX.md). No physical, authenticated-service, transmit, RF, movement, signing or deployment claim is implied.
+
+## Desktop Flightline UI convergence
+
+`feature/desktop-flightline-ui-convergence-v1` adds the grouped icon rail, native macOS menu, Windows command menu, canonical command/shortcut palette, responsive/high-DPI galleries and full UI evidence set. Start with [`docs/desktop/DESKTOP_FLIGHTLINE_UI_CONVERGENCE_V1.md`](docs/desktop/DESKTOP_FLIGHTLINE_UI_CONVERGENCE_V1.md) and the [`docs/ui`](docs/ui) reports. The 40 SVG icons are original RigWeave work and carry no additional dependency. All existing physical/live/release boundaries remain unchanged.

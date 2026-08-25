@@ -8,6 +8,8 @@ Rectangle {
     ColumnLayout { anchors.fill: parent; anchors.margins: 12; spacing: 4
         Label { text: label.toUpperCase(); color: "#d38b22"; font.pixelSize: 11; font.weight: Font.Bold }
         Label { text: value; color: "#f2efe7"; font.pixelSize: 25 }
-        Label { text: truth; color: "#98a0a6"; font.pixelSize: 10; elide: Text.ElideRight; Layout.fillWidth: true }
+        Label { text: truth; color: "#aeb5ba"; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true }
     }
+    Accessible.name: label + ": " + value + ". " + truth
+    Accessible.role: Accessible.StaticText
 }

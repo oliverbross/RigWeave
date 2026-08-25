@@ -83,3 +83,7 @@ The Sweep 3 source now has a complete JNI/long-lived-resource ownership audit an
 ## Windows desktop full-parity v1 candidate
 
 Local candidate gates pass for Qt desktop (6/6), Rust (98 passed, one ignored), normal and ASan/UBSan native CTest (3/3 each), Android (713 JVM tests, lint, APK/AAB and Android-test sources), arm64 package audit, both unsigned iOS targets, 75-frame gallery and unsigned macOS packaging. The Windows verdict remains PARTIAL because 17/31 parity rows lack production-equivalent controllers. Windows artifacts, hosted exact-SHA results and physical/live acceptance must be recorded at the final pushed SHA before any stronger release claim.
+
+## Desktop Flightline UI convergence v1
+
+Source now includes a canonical command/menu model, 40 original packaged SVGs, responsive grouped navigation, platform-correct macOS/Windows menus and 39 deterministic frames per profile. Release readiness remains pending until the final pushed SHA passes the hosted Windows/macOS, shared-core/sanitizer, Android, Apple and audit gates. No signing, notarization, publishing, deployment or physical/live acceptance is authorized by this UI work.

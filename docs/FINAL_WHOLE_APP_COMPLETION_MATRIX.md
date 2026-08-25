@@ -61,3 +61,13 @@ Sweep 3 makes Radio, Hamlib, QMX/QMX+, RGO ONE, Rotator and WWFF operator-reacha
 | Local desktop/gallery/scale | PASS | 6/6 tests; 75 distinct frames; 100k QSO and feature scale fixtures. |
 | Windows package | HOSTED_PENDING | Exact-SHA Windows ZIP/NSIS workflow added; local macOS host cannot produce acceptance-grade Windows artifacts. |
 | Live hardware/services | PENDING | No authenticated service, audio, CAT/PTT/TUNE, RF or movement acceptance performed. |
+
+## Desktop Flightline UI convergence addendum
+
+| Area | Status | Evidence boundary |
+|---|---|---|
+| Tablet visual source | PASS | 41 new unlocked, non-blank 2944×1840 captures; private raw images remain ignored. |
+| Desktop shell/menu/icons | SOURCE_COMPLETE | 48 canonical commands, 19 destinations, 40 packaged SVGs, native macOS/global and Windows/Alt menu structures. |
+| Responsive visual gallery | HOSTED_PENDING | Final exact-SHA Windows four-profile and macOS five-profile 39-frame artifacts required. |
+| Functional parity | UNCHANGED | UI convergence does not promote the existing 14/31 source-complete total. |
+| Physical/live/release | PENDING | No authenticated service, audio, CAT/PTT/TUNE, RF, movement, signing, notarization, publication or deployment claim. |

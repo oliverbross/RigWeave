@@ -59,17 +59,19 @@ void DesktopUiContractTests::shellUsesCanonicalCommandsAndResponsiveRail() {
 
 void DesktopUiContractTests::originalIconFamilyCoversEveryRailDestination() {
   DesktopApplication desktop;
-  QFile file(QStringLiteral(RIGWEAVE_DESKTOP_QML_DIR "/Components/FlightlineIcon.qml"));
-  QVERIFY(file.open(QIODevice::ReadOnly));
-  const QByteArray icons = file.readAll();
   for (const QVariant &value : desktop.commands()) {
     const QVariantMap command = value.toMap();
     if (!command.value("rail").toBool())
       continue;
-    const QByteArray needle = QByteArray("case \"") + command.value("icon").toString().toUtf8() + "\":";
-    QVERIFY2(icons.contains(needle), needle.constData());
+    const QString path = QStringLiteral(RIGWEAVE_DESKTOP_ICON_DIR "/") +
+                         command.value("icon").toString() + QStringLiteral(".svg");
+    QFile file(path);
+    QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(path));
+    const QByteArray svg = file.readAll();
+    QVERIFY(svg.contains("<svg"));
+    QVERIFY(svg.contains("viewBox=\"0 0 24 24\""));
+    QVERIFY(!svg.contains("emoji"));
   }
-  QVERIFY(!icons.contains("emoji"));
 }
 
 QTEST_GUILESS_MAIN(DesktopUiContractTests)

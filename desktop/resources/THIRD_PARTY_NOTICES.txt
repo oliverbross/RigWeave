@@ -6,3 +6,5 @@ SDRoxide was a review-only behavioral reference at commit
 312b27ec4303d3fe0ef3a70d3aa99ff615e460a4; no source or assets are incorporated.
 The simplified desktop coastline is derived from Natural Earth ne_110m_land 5.1.2,
 public-domain data; provenance and source hash are recorded in repository NOTICE.
+The packaged Flightline SVG icon family is original RigWeave artwork and is not
+a third-party dependency.

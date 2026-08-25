@@ -5,11 +5,12 @@ import "Components"
 
 ApplicationWindow {
     id: window
+    FlightlinePalette { id: flightline }
     property bool shackMode: false
     property bool sidebarShown: true
     property int galleryRadioBackend: 0
     readonly property bool isMac: Qt.platform.os === "osx"
-    readonly property bool compactShell: width < 1420
+    readonly property bool compactShell: width < flightline.navBreakpoint
     readonly property bool railExpanded: sidebarShown && Desktop.sidebarExpanded && !compactShell
     width: 1440
     height: 900
@@ -17,7 +18,7 @@ ApplicationWindow {
     minimumHeight: 720
     visible: true
     title: isMac ? "RigWeave" : "RigWeave Desktop — " + Desktop.currentDestination
-    color: "#15181b"
+    color: flightline.graphiteDeep
 
     menuBar: MenuBar {
         visible: !window.isMac
@@ -135,7 +136,7 @@ ApplicationWindow {
             SplitView.preferredWidth: visible ? (window.railExpanded ? 238 : 64) : 0
             SplitView.minimumWidth: visible ? (window.railExpanded ? 220 : 64) : 0
             SplitView.maximumWidth: visible ? (window.railExpanded ? 264 : 64) : 0
-            color: "#1c2024"
+            color: flightline.graphiteRail
             border.color: "#30363c"
             Accessible.name: "Workspace navigation"
 
@@ -148,7 +149,7 @@ ApplicationWindow {
                     Layout.leftMargin: window.railExpanded ? 16 : 0
                     Layout.rightMargin: window.railExpanded ? 8 : 0
                     spacing: 10
-                    FlightlineIcon { name: "radio"; color: "#d89631"; Layout.preferredWidth: 24; Layout.preferredHeight: 24; Layout.alignment: Qt.AlignHCenter }
+                    FlightlineIcon { name: "radio"; color: flightline.amberBright; Layout.preferredWidth: 24; Layout.preferredHeight: 24; Layout.alignment: Qt.AlignHCenter }
                     Label { visible: window.railExpanded; text: "RIGWEAVE"; color: "#f2efe7"; font.pixelSize: 17; font.weight: Font.DemiBold; font.letterSpacing: 1.1; Layout.fillWidth: true }
                     ToolButton {
                         visible: window.railExpanded
@@ -179,7 +180,7 @@ ApplicationWindow {
                             anchors.bottom: parent.bottom
                             anchors.bottomMargin: 5
                             text: parent.section
-                            color: "#737d85"
+                            color: flightline.subdued
                             font.pixelSize: 10
                             font.weight: Font.DemiBold
                             font.letterSpacing: 0.9
@@ -195,7 +196,7 @@ ApplicationWindow {
                         Accessible.description: Desktop.currentDestination === modelData.destination ? "Current workspace" : "Open workspace"
                         onClicked: Desktop.invokeCommand(modelData.id)
                         background: Rectangle {
-                            color: parent.highlighted ? "#4a351d" : parent.hovered ? "#292f34" : "transparent"
+                            color: parent.highlighted ? flightline.amberDark : parent.hovered ? flightline.graphiteHover : "transparent"
                             border.width: parent.activeFocus ? 2 : 0
                             border.color: "#e3c765"
                         }
@@ -260,7 +261,7 @@ ApplicationWindow {
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         Accessible.name: "Command palette"
-        background: Rectangle { color: "#20252a"; border.color: "#d89631"; border.width: 1; radius: 6 }
+        background: Rectangle { color: "#20252a"; border.color: flightline.amberBright; border.width: 1; radius: 6 }
         contentItem: ColumnLayout {
             spacing: 8
             TextField { id: commandSearch; Layout.fillWidth: true; placeholderText: "Find a workspace or command"; Accessible.name: "Command search" }
@@ -277,9 +278,9 @@ ApplicationWindow {
                     height: 44
                     onClicked: { Desktop.invokeCommand(modelData.id); commandPalette.close() }
                     contentItem: RowLayout {
-                        FlightlineIcon { name: modelData.icon; color: "#d89631"; Layout.preferredWidth: 20; Layout.preferredHeight: 20 }
+                        FlightlineIcon { name: modelData.icon; color: flightline.amberBright; Layout.preferredWidth: 20; Layout.preferredHeight: 20 }
                         Label { text: modelData.label; color: "#f2efe7"; Layout.fillWidth: true }
-                        Label { text: modelData.category; color: "#737d85"; font.pixelSize: 11 }
+                        Label { text: modelData.category; color: flightline.subdued; font.pixelSize: 11 }
                         Label { text: modelData.shortcut || ""; color: "#b7bec3"; font.pixelSize: 11 }
                     }
                 }

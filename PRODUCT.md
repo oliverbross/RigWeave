@@ -73,3 +73,7 @@ Public distribution through Apple-controlled channels remains an unresolved lega
 ## Windows full-parity candidate contract
 
 The Qt 6.11.2 desktop candidate now has the full Windows workspace shell and one-owner provider/data/safety platform. Feature labels remain truthful: native radio/rotator, Digi, Contest/N1MM, Groups.io, Portable, Operations, Satellite/QO-100, awards and several HamClock modules are `FOUNDATION_WIRED` until their production controllers are integrated and tested. The product must display disabled, receive-review, `PROVIDER_BLOCKED` or `LICENCE_BLOCKED` state rather than presenting fixture-backed UI as complete behavior.
+
+## Desktop Flightline UI
+
+Windows and macOS now share a Flightline desktop shell derived from a new unlocked 41-screen tablet reference atlas. All 19 workspaces, Shack Display, menus, shortcuts and the command palette resolve through one action model. Platform conventions remain native: global menus and Command shortcuts on macOS; Alt menus and Ctrl shortcuts on Windows. This is a usability and presentation convergence; it does not convert any `FOUNDATION_WIRED`, provider-blocked, licence-blocked or live-acceptance-pending capability into a completed service.

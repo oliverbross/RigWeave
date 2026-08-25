@@ -77,6 +77,7 @@ if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 file(GLOB_RECURSE RIGWEAVE_QML_FILES CONFIGURE_DEPENDS "qml/*.qml")
+file(GLOB RIGWEAVE_ICON_FILES CONFIGURE_DEPENDS "resources/icons/*.svg")
 foreach(qml_file IN LISTS RIGWEAVE_QML_FILES)
     if(qml_file MATCHES "/qml/RigWeave/App/Main\\.qml$")
         set_source_files_properties(${qml_file} PROPERTIES QT_RESOURCE_ALIAS "Main.qml")
@@ -85,11 +86,16 @@ foreach(qml_file IN LISTS RIGWEAVE_QML_FILES)
         set_source_files_properties(${qml_file} PROPERTIES QT_RESOURCE_ALIAS "${qml_alias}")
     endif()
 endforeach()
+foreach(icon_file IN LISTS RIGWEAVE_ICON_FILES)
+    get_filename_component(icon_name "${icon_file}" NAME)
+    set_source_files_properties(${icon_file} PROPERTIES QT_RESOURCE_ALIAS "Icons/${icon_name}")
+endforeach()
 qt_add_qml_module(RigWeaveDesktop
     URI RigWeave.App
     VERSION 1.0
     QML_FILES ${RIGWEAVE_QML_FILES}
-    RESOURCES resources/default-band-plan.json resources/THIRD_PARTY_NOTICES.txt)
+    RESOURCES resources/default-band-plan.json resources/THIRD_PARTY_NOTICES.txt
+              ${RIGWEAVE_ICON_FILES})
 
 install(TARGETS RigWeaveDesktop
     BUNDLE DESTINATION .

@@ -155,3 +155,7 @@ The audited source ZIP SHA-256 is
 9e0729ee253ca7d7a5c4ae9395fb1902264c5377c52e224d13dd85010e2835d9 and its
 size is 138,160 bytes. No runtime tile service, commercial key, or map texture is
 packaged.
+
+RigWeave Desktop Flightline icons under desktop/resources/icons are original
+RigWeave project artwork. They do not incorporate a third-party icon library,
+font, emoji set, or tablet APK asset and add no separate attribution obligation.

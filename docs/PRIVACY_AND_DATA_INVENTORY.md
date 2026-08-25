@@ -59,3 +59,7 @@ The lifecycle repair adds no persisted operator data. `NativeHandleOwner` and li
 ## Windows parity data boundary
 
 The desktop adds five feature stores under the application database directory and validated provider cache files under the application cache directory. Stores contain Neural evidence/outlook, Digi decodes/drafts, Groups.io offline archive/index, Contest staging state and DX Chaser state; credentials remain alias-only in the platform vault. Deterministic demo/gallery mode uses an isolated temporary root. Support bundles and logs must not include database rows, provider response bodies, credentials, raw CAT frames or private fixtures.
+
+## Desktop Flightline visual evidence boundary
+
+The tablet reference directory can contain callsigns, configured provider labels and other operator-visible data. It remains under ignored `build/evidence` storage; documentation records only filenames, dimensions, navigation and sanitized layout observations. Desktop galleries use the existing isolated demo root and fake loopback TCI server. The command registry, SVG icons, menu definitions and UI tests add no operator data, credential, provider body, audio, CAT frame or hardware identifier.

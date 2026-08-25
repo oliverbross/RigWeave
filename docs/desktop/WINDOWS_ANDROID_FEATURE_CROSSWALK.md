@@ -25,3 +25,7 @@ Android remains the behavior inventory. Sharing a C++ core or displaying the sam
 | Presets/settings/alerts | routed QML and desktop configuration | Partial configuration crosswalk |
 
 Windows does not import Android private databases or credentials. Cross-platform compatibility is maintained through schemas, fixtures, shared core contracts, and regression builds—not by copying protected data.
+
+## Flightline presentation crosswalk
+
+The unlocked 41-screen tablet atlas now has a desktop adaptation record for every captured path. Desktop uses the tablet hierarchy and status semantics while replacing fixed columns with panes, adding compact/expanded icon navigation, keyboard/pointer access, platform menus and high-DPI profiles. Raw private tablet screenshots are not committed. UI correspondence is not evidence of Android-equivalent backend behavior.

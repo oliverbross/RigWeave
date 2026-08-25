@@ -42,3 +42,7 @@ Status vocabulary:
 | EQ Studio | FOUNDATION_WIRED | desktop EQ page | native radio capability/readback integration incomplete |
 
 Totals: **14 `SOURCE_COMPLETE`; 17 `FOUNDATION_WIRED`; 31 audited rows**. Provider and licence blockers are annotations rather than inflated completion statuses. Because 17 core rows remain foundations, the programme's PASS rule is not met.
+
+## Flightline UI addendum
+
+All 19 destinations now have canonical command IDs, original SVG icons, expanded/compact navigation, menu and command-palette reachability, and deterministic gallery coverage. This closes presentation/reachability gaps only. The totals and every functional status above remain unchanged; see `docs/ui/DESKTOP_WORKSPACE_CONVERGENCE_MATRIX.md` for the UI-only matrix.
