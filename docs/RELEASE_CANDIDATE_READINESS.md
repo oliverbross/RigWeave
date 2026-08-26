@@ -86,4 +86,4 @@ Local candidate gates pass for Qt desktop (6/6), Rust (98 passed, one ignored), 
 
 ## Desktop Flightline UI convergence v1
 
-Source now includes a canonical command/menu model, 40 original packaged SVGs, responsive grouped navigation, platform-correct macOS/Windows menus and 39 deterministic frames per profile. Release readiness remains pending until the final pushed SHA passes the hosted Windows/macOS, shared-core/sanitizer, Android, Apple and audit gates. No signing, notarization, publishing, deployment or physical/live acceptance is authorized by this UI work.
+Source now includes a canonical command/menu model, 40 original packaged SVGs, responsive grouped sidebar navigation, platform-correct macOS/Windows menus and 58 deterministic frames per profile: 39 operating plus 19 Edit Layout frames. Release readiness remains pending until the final pushed SHA passes the hosted Windows/macOS, shared-core/sanitizer, Android, Apple and audit gates. No signing, notarization, publishing, deployment or physical/live acceptance is authorized by this UI work.

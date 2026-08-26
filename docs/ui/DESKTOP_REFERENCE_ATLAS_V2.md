@@ -44,4 +44,3 @@ navigation or capture occurred.
 - Windows v1: sibling v1 worktree `build/evidence/windows-ui-before-ce1b99f/`
 - macOS v2: `build/evidence/v2-gallery/`
 - Comparison sheets: `build/evidence/v2-comparisons/`
-

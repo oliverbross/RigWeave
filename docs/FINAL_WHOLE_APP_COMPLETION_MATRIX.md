@@ -68,6 +68,6 @@ Sweep 3 makes Radio, Hamlib, QMX/QMX+, RGO ONE, Rotator and WWFF operator-reacha
 |---|---|---|
 | Tablet visual source | PASS | 41 new unlocked, non-blank 2944×1840 captures; private raw images remain ignored. |
 | Desktop shell/menu/icons | SOURCE_COMPLETE | 48 canonical commands, 19 destinations, 40 packaged SVGs, native macOS/global and Windows/Alt menu structures. |
-| Responsive visual gallery | HOSTED_PENDING | Final exact-SHA Windows four-profile and macOS five-profile 39-frame artifacts required. |
+| Responsive visual gallery | HOSTED_PENDING | Final exact-SHA Windows four-profile and macOS five-profile 58-frame artifacts required: 39 operating and 19 Edit Layout frames per profile. |
 | Functional parity | UNCHANGED | UI convergence does not promote the existing 14/31 source-complete total. |
 | Physical/live/release | PENDING | No authenticated service, audio, CAT/PTT/TUNE, RF, movement, signing, notarization, publication or deployment claim. |

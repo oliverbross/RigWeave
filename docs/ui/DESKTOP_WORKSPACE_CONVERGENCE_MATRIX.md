@@ -25,4 +25,4 @@ UI convergence does not upgrade functional parity. “Converged” below means t
 | About | 40 | Identity, build/schema, licences and sources | Desktop build info | Informational | Converged |
 | Shack Display | 14 | Full-window glance status | Desktop, Radio, Cluster | Read-only plus Global Stop | Converged |
 
-All destinations remain reachable without a persistent global rail through the native Navigate menu, keyboard shortcuts and command palette. Every major module, including the Settings category navigator and detail surface, participates in the movable/resizable desktop canvas. The fixed tablet composition is unchanged.
+All destinations remain reachable through the grouped collapsible sidebar, native Navigate menu, keyboard shortcuts and command palette. In Operate mode every workspace uses its locked official layout. Major canvas modules become movable/resizable only in explicit Edit Layout mode, and Reset restores authored defaults. The fixed tablet composition is unchanged.

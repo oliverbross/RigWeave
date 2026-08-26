@@ -27,4 +27,3 @@ Geometry is persisted proportionally under `desktopLayouts` with
 non-finite/corrupt values, and future versions clamp or fall back safely.
 Changing destination exits Edit Layout. Layout state never restores radio,
 audio, transmit, provider, or rotator authority.
-

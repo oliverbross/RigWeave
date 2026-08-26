@@ -32,4 +32,3 @@ Official layout geometry is expressed against the current workspace bounds.
 Custom v2 geometry is stored with layout version 2 and x/y/width/height ratios;
 raw pixels remain only for migration from v1. Unknown future versions fall back
 to official defaults.
-

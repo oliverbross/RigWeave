@@ -14,4 +14,4 @@ Commands without a completed service are visible where the programme requires di
 
 Escape, the visible header/Shack actions, both platform menus, and the command palette resolve to `radio.stop`. Text editing keeps standard Undo/Redo/Cut/Copy/Paste/Delete/Select All actions through the current focus object; Find remains disabled until a real workspace search owner exists.
 
-`desktop_ui_contract_tests` proves stable unique IDs, 19 unique navigation destinations, required safety/navigation commands, SVG coverage, native platform shell markers and the absence of an in-window menu or global sidebar.
+`desktop_ui_contract_tests` proves stable unique IDs, 19 unique navigation destinations, required safety/navigation commands, SVG coverage, native platform shell markers and the absence of an in-window application menu. Deep Convergence v2 adds the grouped workspace sidebar as a command-registry consumer; it does not replace the native menu or command palette.

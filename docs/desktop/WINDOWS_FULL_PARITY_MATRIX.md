@@ -1,5 +1,7 @@
 # Windows Full Parity Matrix
 
+> Deep Convergence v2 changes desktop navigation, official-layout policy and visual hierarchy only. It does not change any service-owner or capability verdict below; see `docs/ui/DESKTOP_SCREEN_CONTENT_PARITY_V2.md` for the v2 screen/content audit.
+
 Status vocabulary:
 
 - `SOURCE_COMPLETE`: production desktop owner/service is present and locally tested.

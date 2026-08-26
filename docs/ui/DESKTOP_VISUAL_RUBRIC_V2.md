@@ -34,4 +34,3 @@ pending and does not inherit these scores.
 Presets scores 20→25 and Shack scores 21→26; they are reported with their
 paired response sections. No score upgrades an underlying service, physical
 device, radio, audio, RF, rotator, authenticated-provider, or Windows result.
-

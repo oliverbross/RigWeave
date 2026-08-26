@@ -76,4 +76,8 @@ The Qt 6.11.2 desktop candidate now has the full Windows workspace shell and one
 
 ## Desktop Flightline UI
 
-Windows and macOS now share a Flightline desktop shell derived from a new unlocked 41-screen tablet reference atlas. All 19 workspaces, Shack Display, native system menus, shortcuts and the command palette resolve through one action model. Platform conventions remain native: global menus and Command shortcuts on macOS; a Win32 menu in window chrome with Alt access and Ctrl shortcuts on Windows. No global side rail consumes operating width. This is a usability and presentation convergence; it does not convert any `FOUNDATION_WIRED`, provider-blocked, licence-blocked or live-acceptance-pending capability into a completed service.
+Windows and macOS share a Flightline desktop shell derived from the unlocked 41-screen tablet reference atlas. All 19 workspaces, Shack Display, the grouped collapsible sidebar, native system menus, shortcuts and the command palette resolve through one action model. Platform conventions remain native: global menus and Command shortcuts on macOS; a Win32 menu in window chrome with Alt access and Ctrl shortcuts on Windows. The sidebar collapses to icons at compact widths or by explicit operator preference. This is a usability and presentation convergence; it does not convert any `FOUNDATION_WIRED`, provider-blocked, licence-blocked or live-acceptance-pending capability into a completed service.
+
+### Desktop Deep Convergence v2 candidate
+
+The v2 candidate defines a locked official operating layout for every workspace and isolates freeform panel manipulation behind explicit Edit Layout mode. Home, Radio, Digi, EQ and Panadapter receive screen-specific hierarchy and density improvements while preserving fail-closed capability, provider, readback and transmit states. The candidate remains isolated until exact-SHA hosted Windows/macOS, package and live acceptance evidence exists.

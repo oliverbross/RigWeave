@@ -41,4 +41,3 @@ one batch. The confirmation gallery is the second and final polishing round.
 macOS deterministic source/visual acceptance passes. Overall programme verdict
 cannot be PASS until Windows v2 build/interaction evidence and the remaining
 cross-platform final gates complete.
-

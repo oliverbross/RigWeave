@@ -28,4 +28,3 @@ Classifications are UI/content parity only:
 available from a desktop owner, not applicable to a desktop adaptation, or
 explicitly blocked. This table does not convert Android-only service logic
 into a desktop claim.
-
