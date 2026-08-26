@@ -63,6 +63,10 @@ bool DesktopApplication::initialize(QString *error) {
       m_paths.configuration() + "/desktop-config.json", this);
   if (!m_configuration->load(error))
     return false;
+  m_sidebarCollapsed =
+      m_configuration->section("desktopUi")
+          .value(QStringLiteral("sidebarCollapsed"), false)
+          .toBool();
   if (!m_radio.restoreConfiguration(m_configuration->section("radioProfiles"),
                                     error))
     return false;
@@ -146,6 +150,7 @@ void DesktopApplication::setCurrentDestination(const QString &destination) {
       "Rotator", "Settings",     "Health",   "About"};
   if (!allowed.contains(destination) || m_currentDestination == destination)
     return;
+  setEditLayoutMode(false);
   m_currentDestination = destination;
   if (m_configuration)
     m_configuration->setLastDestination(destination);
@@ -162,11 +167,15 @@ QVariantList DesktopApplication::commands() const {
   const auto add = [&result](const char *id, const char *label,
                              const char *category, const char *icon,
                              const QString &key = {}, const char *destination = "",
-                             bool workspace = false, bool enabled = true) {
+                             bool workspace = false, bool enabled = true,
+                             bool checkable = false, bool checked = false,
+                             const char *description = "") {
     result.push_back(QVariantMap{{"id", id}, {"label", label},
                                  {"category", category}, {"icon", icon},
                                  {"shortcut", key}, {"destination", destination},
-                                 {"workspace", workspace}, {"enabled", enabled}});
+                                 {"workspace", workspace}, {"enabled", enabled},
+                                 {"checkable", checkable}, {"checked", checked},
+                                 {"description", description[0] ? description : label}});
   };
   add("nav.home", "Home", "OPERATE", "home", shortcut("Meta+1", "Ctrl+1"), "Home", true);
   add("nav.radio", "Radio", "OPERATE", "radio", shortcut("Meta+2", "Ctrl+2"), "Radio", true);
@@ -204,6 +213,10 @@ QVariantList DesktopApplication::commands() const {
   add("edit.find", "Find", "EDIT", "search", shortcut("Meta+F", "Ctrl+F"), "", false, false);
   add("view.fullScreen", "Full Screen", "VIEW", "fullscreen", shortcut("Meta+Ctrl+F", "F11"));
   add("view.shack", "Shack Display", "VIEW", "shack", shortcut("Meta+Shift+S", "Ctrl+Shift+D"));
+  add("view.editLayout", "Edit Layout", "VIEW", "sidebar",
+      shortcut("Meta+Shift+L", "Ctrl+Shift+L"), "", false, true, true,
+      m_editLayoutMode,
+      "Unlock the current official workspace layout for bounded panel editing");
   add("view.resetLayout", "Reset Workspace Layout", "VIEW", "reset");
   add("radio.connect", "Connect…", "RADIO", "connect", {}, "", false, false);
   add("radio.disconnect", "Disconnect", "RADIO", "disconnect");
@@ -229,6 +242,8 @@ QVariantMap DesktopApplication::panelGeometry(
   QVariantMap saved = workspaceLayout.value(panel).toMap();
   if (saved.isEmpty())
     return result;
+  if (saved.value(QStringLiteral("layoutVersion"), 1).toInt() > 2)
+    return result;
   saved[QStringLiteral("stored")] = true;
   return saved;
 }
@@ -247,6 +262,21 @@ void DesktopApplication::savePanelGeometry(const QString &workspace,
       return;
     bounded.insert(key, std::clamp(value, 0.0, 8192.0));
   }
+  const int layoutVersion =
+      geometry.value(QStringLiteral("layoutVersion"), 1).toInt();
+  if (layoutVersion == 2) {
+    bounded.insert(QStringLiteral("layoutVersion"), 2);
+    for (const QString &key : {QStringLiteral("xRatio"),
+                               QStringLiteral("yRatio"),
+                               QStringLiteral("widthRatio"),
+                               QStringLiteral("heightRatio")}) {
+      bool ok = false;
+      const double value = geometry.value(key).toDouble(&ok);
+      if (!ok || !std::isfinite(value))
+        return;
+      bounded.insert(key, std::clamp(value, 0.0, 1.0));
+    }
+  }
   auto layouts = m_configuration->section("desktopLayouts");
   auto workspaceLayout = layouts.value(workspace).toMap();
   workspaceLayout[panel] = bounded;
@@ -260,7 +290,28 @@ void DesktopApplication::resetWorkspaceLayout(const QString &workspace) {
   auto layouts = m_configuration->section("desktopLayouts");
   layouts.remove(workspace);
   m_configuration->setSection("desktopLayouts", layouts);
+  setEditLayoutMode(false);
   emit workspaceLayoutReset(workspace);
+}
+
+void DesktopApplication::setEditLayoutMode(bool enabled) {
+  if (m_editLayoutMode == enabled)
+    return;
+  m_editLayoutMode = enabled;
+  emit editLayoutModeChanged();
+  emit commandStateChanged();
+}
+
+void DesktopApplication::setSidebarCollapsed(bool collapsed) {
+  if (m_sidebarCollapsed == collapsed)
+    return;
+  m_sidebarCollapsed = collapsed;
+  if (m_configuration) {
+    auto desktopUi = m_configuration->section("desktopUi");
+    desktopUi[QStringLiteral("sidebarCollapsed")] = collapsed;
+    m_configuration->setSection("desktopUi", desktopUi);
+  }
+  emit sidebarCollapsedChanged();
 }
 
 void DesktopApplication::invokeCommand(const QString &commandId) {
@@ -279,6 +330,8 @@ void DesktopApplication::invokeCommand(const QString &commandId) {
       m_radio.disconnectRadio();
     else if (commandId == "view.resetLayout")
       resetWorkspaceLayout(m_currentDestination);
+    else if (commandId == "view.editLayout")
+      setEditLayoutMode(!m_editLayoutMode);
     else if (commandId == "edit.delete") {
       if (QObject *focus = QGuiApplication::focusObject()) {
         QKeyEvent press(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);

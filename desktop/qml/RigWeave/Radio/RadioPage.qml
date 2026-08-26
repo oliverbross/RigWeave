@@ -7,117 +7,229 @@ WorkspaceCanvas {
     id: root
     workspaceKey: "Radio"
     property int selectedModel: -1
-
-    CanvasPanel {
-        panelKey: "backend"
-        title: "Radio backend"
-        defaultWidth: 360
-        defaultHeight: parent ? parent.height : 620
-        ColumnLayout {
-            anchors.fill: parent
-            ComboBox { id: backend; objectName: "radioBackend"; Layout.fillWidth: true; currentIndex: ApplicationWindow.window ? ApplicationWindow.window.galleryRadioBackend : 0; model: ["Native Elecraft KX3","Native Elecraft KX2","Native FlexRadio","Native QMX","Native QMX+","Native RGO ONE V6","Conservative RGO legacy","Embedded Hamlib 4.7.2","Hamlib network","TCI receive-only SDR"] }
-            Label { Layout.fillWidth: true; text: backend.currentIndex < 7 ? "Native adapter source present · physical readback acceptance pending" : (backend.currentIndex === 9 ? "TCI WebSocket · bounded multi-receiver IQ · transmit locked" : "Capability-driven Hamlib catalogue"); color: "#e3c765"; wrapMode: Text.WordWrap }
-            Label { text: "HAMLIB 4.7.2 MODEL REGISTRY"; color: "#d38b22"; font.bold: true; visible: backend.currentIndex >= 7 && backend.currentIndex < 9 }
-            TextField { Layout.fillWidth: true; visible: backend.currentIndex >= 7 && backend.currentIndex < 9; placeholderText: "Manufacturer, model, backend"; onTextChanged: RadioModels.setSearch(text) }
-            ListView { Layout.fillWidth: true; Layout.fillHeight: true; visible: backend.currentIndex >= 7 && backend.currentIndex < 9; model: RadioModels; clip: true
-                delegate: ItemDelegate { required property int modelId; required property string manufacturer; required property string model; required property string backend; required property string transport; width: ListView.view.width; text: manufacturer + "  " + model + "\n" + backend + " • " + transport; highlighted: root.selectedModel === modelId; onClicked: root.selectedModel = modelId }
-            }
-            Label { text: "TCI PROFILES"; color: "#d38b22"; font.bold: true; visible: backend.currentIndex === 9 }
-            TextField { id: tciId; Layout.fillWidth: true; visible: backend.currentIndex === 9; placeholderText: "Stable profile ID" }
-            TextField { id: tciName; Layout.fillWidth: true; visible: backend.currentIndex === 9; placeholderText: "Display name" }
-            TextField { id: tciEndpoint; Layout.fillWidth: true; visible: backend.currentIndex === 9; placeholderText: "ws://127.0.0.1:40001" }
-            Button { visible: backend.currentIndex === 9; text: "Save profile"; enabled: tciId.text.length > 0 && tciName.text.length > 0 && tciEndpoint.text.length > 0; onClicked: Radio.saveTciProfile({id:tciId.text, displayName:tciName.text, endpoint:tciEndpoint.text, preferredIqSampleRate:96000, preferredReceiver:0, autoConnect:false, rxAudioOutputRoute:""}) }
-            ListView { Layout.fillWidth: true; Layout.fillHeight: true; visible: backend.currentIndex === 9; model: Radio.tciProfiles; clip: true
-                delegate: ItemDelegate { width: ListView.view.width; text: modelData.displayName + "\n" + modelData.endpoint; onClicked: Radio.connectTciProfile(modelData.id) }
-            }
-        }
-    }
+    property var snapshot: Radio.receiverSnapshot(Radio.activeReceiverId)
+    Connections { target: Radio; function onSnapshotChanged() { root.snapshot = Radio.receiverSnapshot(Radio.activeReceiverId) } }
 
     CanvasPanel {
         panelKey: "connection"
-        title: "Connection and safety"
-        defaultX: 372
-        defaultWidth: parent ? parent.width - 372 : 820
-        defaultHeight: 132
+        title: "Radio identity · connection · safety"
+        defaultWidth: parent ? parent.width : 1200
+        defaultHeight: 94
+        panelMinimumHeight: 90
+        RowLayout {
+            anchors.fill: parent
+            StatusChip { text: Radio.state; kind: Radio.state.startsWith("Connected") ? "healthy" : "neutral" }
+            Label { text: "Explicit connect only · capability and readback are authoritative · PTT/TUNE unavailable"; color: "#e3c765"; Layout.fillWidth: true; elide: Text.ElideRight }
+            Button { text: "Disconnect"; enabled: Radio.state.startsWith("Connected"); onClicked: Radio.disconnectRadio() }
+            Button { text: "EMERGENCY RX"; palette.button: "#8f1d24"; palette.buttonText: "white"; font.weight: Font.Bold; onClicked: Desktop.globalStop() }
+        }
+    }
+
+    CanvasPanel {
+        id: backendPanel
+        panelKey: "backend"
+        title: "Backend · profile · receivers"
+        defaultY: 106
+        defaultWidth: 316
+        defaultHeight: parent ? parent.height - 106 : 620
+        panelMinimumWidth: 292
         ColumnLayout {
             anchors.fill: parent
-            SafetyBanner { Layout.fillWidth: true; text: "Explicit connect only. Native profiles require proven Windows transport identity and readback. PTT/TUNE remain acceptance pending; no physical transmit test is authorized." }
-            RowLayout { Layout.fillWidth: true
-                TextField { id: route; Layout.fillWidth: true; placeholderText: "COM port or Hamlib network route" }
-                SpinBox { id: baud; from: 1200; to: 921600; value: 38400; editable: true }
-                Button { text: "Connect"; enabled: backend.currentIndex >= 7 && backend.currentIndex < 9 && root.selectedModel >= 0 && route.text.length > 0; onClicked: Radio.connectRadio(root.selectedModel, route.text, baud.value) }
-                Button { text: "Disconnect"; onClicked: Radio.disconnectRadio() }
+            spacing: 8
+            ComboBox {
+                id: backend
+                objectName: "radioBackend"
+                Layout.fillWidth: true
+                currentIndex: ApplicationWindow.window ? ApplicationWindow.window.galleryRadioBackend : 0
+                model: ["Native Elecraft KX3","Native Elecraft KX2","Native FlexRadio","Native QMX","Native QMX+","Native RGO ONE V6","Conservative RGO legacy","Embedded Hamlib 4.7.2","Hamlib network","TCI receive-only SDR"]
+            }
+            Label {
+                Layout.fillWidth: true
+                text: backend.currentIndex < 7 ? "Native adapter · physical readback acceptance pending" : backend.currentIndex === 9 ? "TCI · bounded multi-receiver I/Q · TX locked" : "Capability-driven Hamlib catalogue"
+                color: "#f4c94e"
+                wrapMode: Text.WordWrap
+            }
+            TextField { visible: backend.currentIndex >= 7 && backend.currentIndex < 9; Layout.fillWidth: true; placeholderText: "Find manufacturer or model"; onTextChanged: RadioModels.setSearch(text) }
+            ListView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: backend.currentIndex >= 7 && backend.currentIndex < 9
+                model: RadioModels
+                clip: true
+                delegate: ItemDelegate {
+                    required property int modelId
+                    required property string manufacturer
+                    required property string model
+                    required property string backend
+                    required property string transport
+                    width: ListView.view.width
+                    text: manufacturer + "  " + model + "\n" + backend + " · " + transport
+                    highlighted: root.selectedModel === modelId
+                    onClicked: root.selectedModel = modelId
+                }
+            }
+            TextField { id: route; visible: backend.currentIndex >= 7 && backend.currentIndex < 9; Layout.fillWidth: true; placeholderText: "COM port or Hamlib network route" }
+            RowLayout {
+                visible: backend.currentIndex >= 7 && backend.currentIndex < 9
+                SpinBox { id: baud; from: 1200; to: 921600; value: 38400; editable: true; Layout.fillWidth: true }
+                Button { text: "Connect"; enabled: root.selectedModel >= 0 && route.text.length > 0; onClicked: Radio.connectRadio(root.selectedModel, route.text, baud.value) }
+            }
+            Label { visible: backend.currentIndex === 9; text: "TCI PROFILES"; color: "#e9a72b"; font.weight: Font.Bold }
+            ListView {
+                visible: backend.currentIndex === 9
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                model: Radio.tciProfiles
+                clip: true
+                delegate: ItemDelegate { width: ListView.view.width; text: modelData.displayName + "\n" + modelData.endpoint; onClicked: Radio.connectTciProfile(modelData.id) }
+            }
+            Label { visible: Radio.receiverCount > 0; text: "RECEIVERS"; color: "#e9a72b"; font.weight: Font.Bold }
+            ListView {
+                visible: Radio.receiverCount > 0
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(150, contentHeight)
+                model: Radio.receivers
+                clip: true
+                delegate: ItemDelegate {
+                    required property string receiverId
+                    required property string displayLabel
+                    required property bool activeControl
+                    required property bool activeListening
+                    required property real effectiveReceiveHz
+                    required property string mode
+                    width: ListView.view.width
+                    text: (activeControl ? "CONTROL · " : activeListening ? "LISTEN · " : "") + displayLabel + "\n" + (effectiveReceiveHz ? (effectiveReceiveHz / 1000).toFixed(3) + " kHz" : "—") + " · " + (mode || "—")
+                    onClicked: Radio.selectActiveReceiver(receiverId)
+                }
             }
         }
     }
 
     CanvasPanel {
-        panelKey: "receivers"
-        title: "Receivers · explicit control and listening"
-        defaultX: 372
-        defaultY: 144
-        defaultWidth: parent ? parent.width - 372 : 820
-        defaultHeight: 170
-        visible: Radio.receiverCount > 0
-        ListView { anchors.fill: parent; model: Radio.receivers; clip: true
-            delegate: RowLayout { required property string receiverId; required property string displayLabel; required property bool activeControl; required property bool activeListening; required property real effectiveReceiveHz; required property string mode; width: ListView.view.width; height: 38
-                Label { Layout.fillWidth: true; text: displayLabel + "  " + (effectiveReceiveHz ? (effectiveReceiveHz / 1000).toFixed(3) + " kHz" : "—") + "  " + (mode || "—") }
-                Button { text: activeControl ? "CONTROL" : "Control"; onClicked: Radio.selectActiveReceiver(receiverId) }
-                Button { text: activeListening ? "LISTENING" : "Listen"; onClicked: Radio.selectListeningReceiver(receiverId) }
+        id: consolePanel
+        panelKey: "radio-console"
+        title: "Observed VFO and receive console"
+        defaultX: 328
+        defaultY: 106
+        defaultWidth: parent ? parent.width - 328 : 872
+        defaultHeight: 332
+        panelMinimumWidth: 620
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: "#e9a72b"
+                border.color: "#f4c94e"
+                radius: 5
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 16
+                    ColumnLayout {
+                        Layout.preferredWidth: 190
+                        Label { text: "S / CWT"; color: "#201708"; font.weight: Font.Bold }
+                        Label { text: "READBACK " + (root.snapshot.sMeter !== undefined ? root.snapshot.sMeter : "UNAVAILABLE"); color: "#201708"; font.family: "monospace" }
+                        ProgressBar { Layout.fillWidth: true; value: root.snapshot.sMeter !== undefined ? Number(root.snapshot.sMeter) / 9 : 0; enabled: root.snapshot.sMeter !== undefined }
+                        Label { text: "SWR / RF"; color: "#201708"; font.weight: Font.Bold }
+                        Label { text: "No fabricated meter"; color: "#5a410e"; font.pixelSize: 11 }
+                    }
+                    Rectangle { Layout.preferredWidth: 1; Layout.fillHeight: true; color: "#7b5612" }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label { text: "VFO A"; color: "#201708"; font.weight: Font.Bold }
+                            Item { Layout.fillWidth: true }
+                            Label { text: Radio.state.startsWith("Connected") ? "OBSERVED" : "NO LIVE STATE"; color: "#5a410e"; font.weight: Font.Bold }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: Radio.frequencyHz ? (Radio.frequencyHz / 1000).toFixed(3) : "— — — — . — — —"
+                            color: "#201708"
+                            font.family: "monospace"
+                            font.pixelSize: Math.max(34, Math.min(62, consolePanel.width / 14))
+                            font.weight: Font.Bold
+                            horizontalAlignment: Text.AlignRight
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label { text: "MODE  " + (Radio.mode || "—"); color: "#201708"; font.family: "monospace"; font.pixelSize: 16 }
+                            Label { text: "FILTER  " + (root.snapshot.filterHz || "—"); color: "#201708"; font.family: "monospace" }
+                            Item { Layout.fillWidth: true }
+                            Label { text: "SAFE / RX"; color: "#1f5f36"; font.weight: Font.Bold; font.pixelSize: 16 }
+                        }
+                        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: "#7b5612" }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label { text: "VFO B"; color: "#201708"; font.weight: Font.Bold }
+                            Label { text: root.snapshot.vfoBHz ? (Number(root.snapshot.vfoBHz) / 1000).toFixed(3) + " kHz" : "—"; color: "#201708"; font.family: "monospace"; font.pixelSize: 21; Layout.fillWidth: true; horizontalAlignment: Text.AlignRight }
+                        }
+                        Label { text: "AGC " + (root.snapshot.agc || "—") + "   PRE " + (root.snapshot.preamp || "—") + "   ATT " + (root.snapshot.attenuator || "—") + "   BW " + (root.snapshot.filterHz || "—"); color: "#5a410e"; font.family: "monospace" }
+                    }
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Repeater {
+                    model: ["CW","USB","LSB","AM","FM","DIGU","DIGL"]
+                    Button { required property string modelData; text: modelData; enabled: Radio.state.startsWith("Connected"); onClicked: Radio.requestMode(modelData) }
+                }
+                Item { Layout.fillWidth: true }
+                Button { text: "Band Maps"; onClicked: Desktop.currentDestination = "Band Maps" }
             }
         }
     }
 
     CanvasPanel {
-        panelKey: "state"
-        title: "Observed radio state"
-        defaultX: 372
-        defaultY: Radio.receiverCount > 0 ? 326 : 144
-        defaultWidth: parent ? parent.width - 372 : 820
-        defaultHeight: 150
-        Flow { anchors.fill: parent; spacing: 12
-            MetricTile { label: "State"; value: Radio.state.startsWith("Connected") ? "CONNECTED" : "DISCONNECTED"; truth: Radio.state }
-            MetricTile { label: "Frequency"; value: Radio.frequencyHz ? (Radio.frequencyHz / 1000).toFixed(3) : "—"; truth: "kHz observed from Hamlib" }
-            MetricTile { label: "Mode"; value: Radio.mode || "—"; truth: "Capability-gated snapshot" }
-            MetricTile { label: "Transmit"; value: "DISABLED"; truth: "PTT and TUNE unavailable" }
+        panelKey: "operating-strip"
+        title: "Receive review · spots · keyer safety"
+        defaultX: 328
+        defaultY: 450
+        defaultWidth: parent ? parent.width - 328 : 872
+        defaultHeight: parent ? parent.height - 450 : 276
+        panelMinimumWidth: 620
+        RowLayout {
+            anchors.fill: parent
+            spacing: 12
+            ColumnLayout {
+                Layout.preferredWidth: 300
+                Label { text: "EXPLICIT RX CHANGE"; color: "#e9a72b"; font.weight: Font.Bold }
+                TextField { id: frequency; Layout.fillWidth: true; placeholderText: "Frequency Hz"; validator: DoubleValidator { bottom: 100000; top: 10500000000 } }
+                ComboBox { id: mode; Layout.fillWidth: true; model: ["CW","USB","LSB","AM","FM","DIGU","DIGL"] }
+                Button { text: "Apply observed RX"; enabled: Radio.state.startsWith("Connected") && acceptableInput; onClicked: { Radio.requestFrequency(Number(frequency.text)); Radio.requestMode(mode.currentText) } }
+                Label { text: "No write is retried without readback."; color: "#aeb5ba"; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            }
+            Rectangle { Layout.preferredWidth: 1; Layout.fillHeight: true; color: "#3a4147" }
+            ColumnLayout {
+                Layout.fillWidth: true
+                Label { text: "LIVE DX SPOTS"; color: "#e9a72b"; font.weight: Font.Bold }
+                ListView {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    model: Spots
+                    clip: true
+                    delegate: RowLayout {
+                        required property string callsign
+                        required property double frequencyHz
+                        required property string mode
+                        width: ListView.view.width
+                        height: 34
+                        Label { text: callsign; color: "#59cddd"; font.weight: Font.Bold; Layout.preferredWidth: 90 }
+                        Label { text: (frequencyHz / 1000).toFixed(1); color: "#f4c94e"; font.family: "monospace"; Layout.preferredWidth: 110 }
+                        Label { text: mode; color: "#aeb5ba"; Layout.fillWidth: true }
+                    }
+                }
+            }
+            Rectangle { Layout.preferredWidth: 1; Layout.fillHeight: true; color: "#3a4147" }
+            ColumnLayout {
+                Layout.preferredWidth: 210
+                Label { text: "KEYER"; color: "#e9a72b"; font.weight: Font.Bold }
+                Repeater { model: Parity.keyerMacros; Button { required property var item; Layout.fillWidth: true; text: item.title; enabled: false; ToolTip.visible: hovered; ToolTip.text: "Foreground TX acceptance required" } }
+                Item { Layout.fillHeight: true }
+                Button { Layout.fillWidth: true; text: "STOP"; onClicked: Desktop.globalStop() }
+            }
         }
-    }
-
-    CanvasPanel {
-        panelKey: "receive-review"
-        title: "Explicit receive-review action"
-        defaultX: 372
-        defaultY: 488
-        defaultWidth: parent ? (parent.width - 384) * 0.56 : 460
-        defaultHeight: 126
-        RowLayout { anchors.fill: parent
-            TextField { id: frequency; Layout.fillWidth: true; placeholderText: "Frequency Hz"; validator: DoubleValidator { bottom: 100000; top: 10500000000 } }
-            ComboBox { id: mode; model: ["CW","USB","LSB","AM","FM","DIGU","DIGL"] }
-            Button { text: "Apply RX"; enabled: Radio.state.startsWith("Connected"); onClicked: { Radio.requestFrequency(Number(frequency.text)); Radio.requestMode(mode.currentText) } }
-        }
-    }
-
-    CanvasPanel {
-        panelKey: "keyer"
-        title: "CW / voice keyer"
-        defaultX: parent ? 384 + (parent.width - 384) * 0.56 : 844
-        defaultY: 488
-        defaultWidth: parent ? (parent.width - 384) * 0.44 : 360
-        defaultHeight: 126
-        RowLayout { anchors.fill: parent
-            Repeater { model: Parity.keyerMacros; Button { required property var item; text: item.title; enabled: false; ToolTip.text: "Keyer stopped; foreground shortcut and TX acceptance required"; ToolTip.visible: hovered } }
-            Item { Layout.fillWidth: true }
-            Button { text: "Stop"; onClicked: Desktop.globalStop() }
-        }
-    }
-
-    CanvasPanel {
-        panelKey: "capability-gate"
-        title: "Capability-gated controls"
-        defaultX: 372
-        defaultY: 626
-        defaultWidth: parent ? parent.width - 372 : 820
-        defaultHeight: 180
-        EmptyState { anchors.fill: parent; title: "Capability controls are hidden until connected"; detail: "VFO A/B, filter, split, RIT/XIT, meters, AF/RF gain, power, preamp/attenuator, ATU, macros, EQ and presets appear only after the selected backend proves capability/readback." }
     }
 }

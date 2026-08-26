@@ -24,7 +24,11 @@ class DesktopApplication final : public QObject {
   Q_PROPERTY(bool demoMode READ demoMode CONSTANT)
   Q_PROPERTY(
       int galleryVariant READ galleryVariant NOTIFY galleryVariantChanged)
-  Q_PROPERTY(QVariantList commands READ commands CONSTANT)
+  Q_PROPERTY(QVariantList commands READ commands NOTIFY commandStateChanged)
+  Q_PROPERTY(bool editLayoutMode READ editLayoutMode WRITE setEditLayoutMode
+                 NOTIFY editLayoutModeChanged)
+  Q_PROPERTY(bool sidebarCollapsed READ sidebarCollapsed WRITE
+                 setSidebarCollapsed NOTIFY sidebarCollapsedChanged)
 public:
   explicit DesktopApplication(QObject *parent = nullptr);
   ~DesktopApplication() override;
@@ -37,6 +41,10 @@ public:
   bool shuttingDown() const { return m_shuttingDown; }
   bool demoMode() const { return m_demoMode; }
   int galleryVariant() const { return m_galleryVariant; }
+  bool editLayoutMode() const { return m_editLayoutMode; }
+  void setEditLayoutMode(bool enabled);
+  bool sidebarCollapsed() const { return m_sidebarCollapsed; }
+  void setSidebarCollapsed(bool collapsed);
   QVariantList commands() const;
   Q_INVOKABLE QVariantMap health() const;
   Q_INVOKABLE QVariantMap intelligence() const;
@@ -58,6 +66,9 @@ signals:
   void currentDestinationChanged();
   void shuttingDownChanged();
   void galleryVariantChanged();
+  void editLayoutModeChanged();
+  void sidebarCollapsedChanged();
+  void commandStateChanged();
   void workspaceLayoutReset(QString workspace);
   void commandInvoked(QString commandId);
   void quitRequested();
@@ -84,6 +95,8 @@ private:
   QString m_currentDestination{"Home"};
   bool m_shuttingDown{};
   bool m_demoMode{};
+  bool m_editLayoutMode{};
+  bool m_sidebarCollapsed{};
   int m_galleryVariant{-1};
 };
 

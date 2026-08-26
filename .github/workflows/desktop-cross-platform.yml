@@ -47,6 +47,9 @@ jobs:
         run: |
           cmake --install build/macos --prefix artifacts/macos
           macdeployqt artifacts/macos/RigWeaveDesktop.app -qmldir=desktop/qml
+          rm -f artifacts/macos/RigWeaveDesktop.app/Contents/PlugIns/sqldrivers/libqsqlodbc.dylib \
+                artifacts/macos/RigWeaveDesktop.app/Contents/PlugIns/sqldrivers/libqsqlpsql.dylib \
+                artifacts/macos/RigWeaveDesktop.app/Contents/PlugIns/sqldrivers/libqsqlmimer.dylib
           ditto -c -k --sequesterRsrc artifacts/macos/RigWeaveDesktop.app artifacts/macos/RigWeave-macOS-unsigned.zip
           shasum -a 256 artifacts/macos/RigWeave-macOS-unsigned.zip > artifacts/macos/SHA256SUMS.txt
       - name: Deterministic macOS UI gallery
@@ -59,7 +62,7 @@ jobs:
           build/macos/RigWeaveDesktop.app/Contents/MacOS/RigWeaveDesktop --gallery-dir artifacts/ui-gallery/2560x1440 --gallery-width 2560 --gallery-height 1440
           QT_SCALE_FACTOR=1.5 build/macos/RigWeaveDesktop.app/Contents/MacOS/RigWeaveDesktop --gallery-dir artifacts/ui-gallery/150pct --gallery-width 1280 --gallery-height 720
           for profile in 1440x900 1512x982 1920x1080 2560x1440 150pct; do
-            test "$(find "artifacts/ui-gallery/$profile" -name '*.png' | wc -l | tr -d ' ')" = 39
+            test "$(find "artifacts/ui-gallery/$profile" -name '*.png' | wc -l | tr -d ' ')" = 58
           done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

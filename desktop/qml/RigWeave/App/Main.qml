@@ -50,6 +50,7 @@ ApplicationWindow {
         context: Qt.ApplicationShortcut
         onActivated: {
             Desktop.invokeCommand("radio.stop")
+            Desktop.editLayoutMode = false
             window.shackMode = false
             commandPalette.close()
             workspaceLoader.forceActiveFocus()
@@ -66,6 +67,7 @@ ApplicationWindow {
             } else if (commandId === "view.fullScreen") {
                 window.visibility = window.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen
             } else if (commandId === "view.shack") {
+                Desktop.editLayoutMode = false
                 window.shackMode = !window.shackMode
             } else if (commandId === "view.resetLayout") {
                 window.shackMode = false
@@ -88,25 +90,52 @@ ApplicationWindow {
 
     Item {
         anchors.fill: parent
-        ColumnLayout {
+        RowLayout {
             anchors.fill: parent
             spacing: 0
-            WorkspaceHeader {
+            WorkspaceSidebar {
+                id: workspaceSidebar
                 visible: !window.shackMode
-                Layout.fillWidth: true
-                compact: window.width < 1360
-                title: Desktop.currentDestination
-                subtitle: "Local-first • restore disconnected and disarmed • UTC"
+                Layout.fillHeight: true
+                Layout.preferredWidth: implicitWidth
+                autoCompact: window.width < 1320
             }
-            Loader {
-                id: workspaceLoader
-                objectName: "workspaceLoader"
+            ColumnLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                source: {
-                    if (window.shackMode) return "Home/ShackDisplay.qml"
-                    const map = {"Home":"Home/HomePage.qml","Radio":"Radio/RadioPage.qml","Digi":"Digi/DigiPage.qml","Panadapter":"Panadapter/PanadapterPage.qml","EQ":"EQ/EqPage.qml","Logbook":"Logbook/LogbookPage.qml","Intelligence":"Intelligence/IntelligencePage.qml","Sync":"Sync/SyncPage.qml","Contest":"Contest/ContestPage.qml","Band Maps":"qrc:/RigWeave/App/BandMaps/BandMapsPage.qml","Presets":"Presets/PresetsPage.qml","DX":"DX/DxPage.qml","Portable":"Portable/PortablePage.qml","Operations":"Operations/OperationsPage.qml","Groups.io":"Groups/GroupsPage.qml","Rotator":"Rotator/RotatorPage.qml","Settings":"Settings/SettingsPage.qml","Health":"Health/HealthPage.qml","About":"Settings/AboutPage.qml"}
-                    return map[Desktop.currentDestination]
+                spacing: 0
+                WorkspaceHeader {
+                    visible: !window.shackMode
+                    Layout.fillWidth: true
+                    compact: window.width - workspaceSidebar.implicitWidth < 1120
+                    workspace: Desktop.currentDestination
+                }
+                Rectangle {
+                    visible: Desktop.editLayoutMode && !window.shackMode
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: visible ? 42 : 0
+                    color: "#4b351c"
+                    border.color: "#e9a72b"
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 12
+                        anchors.rightMargin: 8
+                        Label { text: "EDIT LAYOUT"; color: "#f4c94e"; font.weight: Font.Bold }
+                        Label { text: "8 px grid · overlap blocked · resize handles active · custom geometry saves proportionally"; color: "#f4f0e7"; Layout.fillWidth: true }
+                        Button { text: "Reset Official Layout"; onClicked: Desktop.invokeCommand("view.resetLayout") }
+                        Button { text: "Done Editing"; highlighted: true; onClicked: Desktop.editLayoutMode = false }
+                    }
+                }
+                Loader {
+                    id: workspaceLoader
+                    objectName: "workspaceLoader"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    source: {
+                        if (window.shackMode) return "Home/ShackDisplay.qml"
+                        const map = {"Home":"Home/HomePage.qml","Radio":"Radio/RadioPage.qml","Digi":"Digi/DigiPage.qml","Panadapter":"Panadapter/PanadapterPage.qml","EQ":"EQ/EqPage.qml","Logbook":"Logbook/LogbookPage.qml","Intelligence":"Intelligence/IntelligencePage.qml","Sync":"Sync/SyncPage.qml","Contest":"Contest/ContestPage.qml","Band Maps":"qrc:/RigWeave/App/BandMaps/BandMapsPage.qml","Presets":"Presets/PresetsPage.qml","DX":"DX/DxPage.qml","Portable":"Portable/PortablePage.qml","Operations":"Operations/OperationsPage.qml","Groups.io":"Groups/GroupsPage.qml","Rotator":"Rotator/RotatorPage.qml","Settings":"Settings/SettingsPage.qml","Health":"Health/HealthPage.qml","About":"Settings/AboutPage.qml"}
+                        return map[Desktop.currentDestination]
+                    }
                 }
             }
         }

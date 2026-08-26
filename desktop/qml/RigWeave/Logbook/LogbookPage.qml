@@ -50,9 +50,16 @@ WorkspaceCanvas {
         defaultHeight:parent?parent.height-218:390
         ColumnLayout { anchors.fill:parent; spacing:0
             Rectangle { Layout.fillWidth:true; implicitHeight:34; color:"#4b351c"; Row { anchors.fill:parent; Repeater { model:["UTC","Callsign","Frequency","Band","Mode","RST S","RST R","Grid","Source"]; Label{required property int index;required property string modelData;width:index===0?180:index===2?140:100;height:34;verticalAlignment:Text.AlignVCenter;leftPadding:8;text:modelData;color:"#f2efe7";font.bold:true} } } }
-            TableView { Layout.fillWidth:true; Layout.fillHeight:true; model:LogbookModel; clip:true; columnSpacing:1; rowSpacing:1; boundsBehavior:Flickable.StopAtBounds
+            TableView { visible:LogbookModel.total>0; Layout.fillWidth:true; Layout.fillHeight:true; model:LogbookModel; clip:true; columnSpacing:1; rowSpacing:1; boundsBehavior:Flickable.StopAtBounds
                 columnWidthProvider:function(column){return column===0?180:column===2?140:100}
                 delegate:Rectangle{implicitHeight:34;color:row%2?"#1c2024":"#22272b";required property var display;Label{anchors.fill:parent;leftPadding:8;verticalAlignment:Text.AlignVCenter;text:display;color:"#f2efe7";elide:Text.ElideRight}}
+            }
+            EmptyState {
+                visible: LogbookModel.total === 0
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                title: "No QSOs in the current view"
+                detail: "Import ADIF, use Fast Entry, or clear filters to populate the authoritative local log. No remote QSO is fabricated."
             }
         }
     }

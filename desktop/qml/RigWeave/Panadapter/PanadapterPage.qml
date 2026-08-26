@@ -15,10 +15,10 @@ WorkspaceCanvas {
     property string secondaryReceiver:{const ids=Panadapter.receiverIds;for(let i=0;i<ids.length;i++)if(ids[i]!==Panadapter.currentReceiverId)return ids[i];return ""}
     Connections{target:Radio;function onSnapshotChanged(){root.activeSnapshot=Radio.receiverSnapshot(Radio.activeReceiverId)}}
 
-    CanvasPanel { panelKey:"safety"; title:"Panadapter safety state"; defaultWidth:parent?parent.width:1200; defaultHeight:96
+    CanvasPanel { panelKey:"safety"; title:"Panadapter safety state"; defaultWidth:parent?parent.width:1200; defaultHeight:88; panelMinimumHeight:84
         SafetyBanner{anchors.fill:parent;text:"Receive-only. Sources are exact local stereo I/Q or observed TCI float32 I/Q. Display pause does not claim capture stopped; no microphone fallback and no generated production spectrum."}
     }
-    CanvasPanel { panelKey:"source"; title:"I/Q source"; defaultY:108; defaultWidth:parent?parent.width:1200; defaultHeight:100; panelMinimumHeight:94
+    CanvasPanel { panelKey:"source"; title:"I/Q source"; defaultY:100; defaultWidth:parent?parent.width:1200; defaultHeight:84; panelMinimumHeight:80
         RowLayout{anchors.fill:parent
             ComboBox{id:source;Layout.preferredWidth:220;model:Panadapter.receiverIds;onActivated:Panadapter.currentReceiverId=currentText}
             ComboBox{id:device;Layout.fillWidth:true;model:Panadapter.devices();textRole:"description";valueRole:"id";onActivated:Panadapter.selectedDeviceId=currentValue}
@@ -28,7 +28,7 @@ WorkspaceCanvas {
             Button{text:"Stop local";onClicked:Panadapter.stop()}
         }
     }
-    CanvasPanel { panelKey:"display-controls"; title:"Spectrum and waterfall controls"; defaultY:220; defaultWidth:parent?parent.width:1200; defaultHeight:176
+    CanvasPanel { panelKey:"display-controls"; title:"Display inspector"; defaultY:196; defaultWidth:parent?parent.width:1200; defaultHeight:156; panelMinimumHeight:148
         ColumnLayout{anchors.fill:parent
             RowLayout{Layout.fillWidth:true
                 ComboBox{model:[1024,2048,4096,8192];currentIndex:2;onActivated:Panadapter.fftSize=currentValue}
@@ -58,7 +58,7 @@ WorkspaceCanvas {
             }
         }
     }
-    CanvasPanel { panelKey:"spectrum"; title:"Spectrum and waterfall"; defaultY:408; defaultWidth:parent?parent.width:1200; defaultHeight:parent?parent.height-408:300; panelMinimumHeight:220
+    CanvasPanel { panelKey:"spectrum"; title:"Spectrum and waterfall"; defaultY:364; defaultWidth:parent?parent.width:1200; defaultHeight:parent?parent.height-364:390; panelMinimumHeight:260
         ColumnLayout{anchors.fill:parent;spacing:6
             Rectangle{Layout.fillWidth:true;implicitHeight:28;color:"#171b1e";border.color:"#3a4147"
                 Row{anchors.fill:parent;Repeater{model:scene.zoom<4?["LOW","MID","HIGH","SAT"]:["CW","DIGITAL","PHONE","BEACONS"];Rectangle{required property string modelData;required property int index;width:parent.width/4;height:parent.height;color:index%2?"#23292d":"#1c2226";Label{anchors.centerIn:parent;text:modelData;color:"#98a0a6";font.pixelSize:11}}}}

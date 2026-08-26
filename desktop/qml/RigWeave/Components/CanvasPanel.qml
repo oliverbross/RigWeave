@@ -18,8 +18,11 @@ Item {
     property rect intendedGeometry: Qt.rect(defaultX, defaultY, defaultWidth, defaultHeight)
     property point dragOrigin
     property rect dragGeometry
+    property rect savedRatios: Qt.rect(0, 0, 1, 1)
+    property bool usingRatioGeometry: false
     readonly property var canvas: parent
     readonly property string workspaceKey: canvas ? canvas.workspaceKey : ""
+    readonly property bool editable: canvas ? canvas.editLayoutMode : false
     default property alias contentData: contentHost.data
 
     objectName: "canvasPanel-" + panelKey
@@ -29,8 +32,8 @@ Item {
     height: defaultHeight
     z: 1
     Accessible.role: Accessible.Pane
-    Accessible.name: title + " movable panel"
-    Accessible.description: "Drag the title bar to move. Drag an edge or corner to resize."
+    Accessible.name: title + (editable ? " editable panel" : " panel")
+    Accessible.description: editable ? "Drag the title bar to move. Drag an edge or corner to resize. Press Escape or Done Editing to lock the workspace." : "Locked operational region. Use Edit Layout to customise its bounded geometry."
 
     function bounded(value, lower, upper) {
         return Math.max(lower, Math.min(value, upper))
@@ -50,13 +53,28 @@ Item {
     }
 
     function applyUserGeometry(nextX, nextY, nextWidth, nextHeight) {
-        applyGeometry(nextX, nextY, nextWidth, nextHeight)
+        if (!editable)
+            return
+        const grid = canvas ? canvas.gridSize : 8
+        const proposed = Qt.rect(Math.round(nextX / grid) * grid,
+                                 Math.round(nextY / grid) * grid,
+                                 Math.max(panelMinimumWidth, Math.round(nextWidth / grid) * grid),
+                                 Math.max(panelMinimumHeight, Math.round(nextHeight / grid) * grid))
+        if (canvas && canvas.panelOverlaps(root, proposed))
+            return
+        applyGeometry(proposed.x, proposed.y, proposed.width, proposed.height)
         intendedGeometry = Qt.rect(x, y, width, height)
+        usingRatioGeometry = true
+        savedRatios = Qt.rect(parent && parent.width ? x / parent.width : 0,
+                              parent && parent.height ? y / parent.height : 0,
+                              parent && parent.width ? width / parent.width : 1,
+                              parent && parent.height ? height / parent.height : 1)
     }
 
     function restoreDefaults() {
         geometryReady = false
         usingSavedGeometry = false
+        usingRatioGeometry = false
         intendedGeometry = Qt.rect(defaultX, defaultY, defaultWidth, defaultHeight)
         applyGeometry(intendedGeometry.x, intendedGeometry.y,
                       intendedGeometry.width, intendedGeometry.height)
@@ -69,9 +87,16 @@ Item {
         const saved = Desktop.panelGeometry(workspaceKey, panelKey, fallback)
         geometryReady = false
         usingSavedGeometry = saved.stored === true
-        intendedGeometry = usingSavedGeometry
-                ? Qt.rect(saved.x, saved.y, saved.width, saved.height)
-                : Qt.rect(defaultX, defaultY, defaultWidth, defaultHeight)
+        usingRatioGeometry = usingSavedGeometry && saved.layoutVersion === 2
+        savedRatios = usingRatioGeometry
+                ? Qt.rect(saved.xRatio, saved.yRatio, saved.widthRatio, saved.heightRatio)
+                : Qt.rect(0, 0, 1, 1)
+        intendedGeometry = usingRatioGeometry && parent
+                ? Qt.rect(savedRatios.x * parent.width, savedRatios.y * parent.height,
+                          savedRatios.width * parent.width, savedRatios.height * parent.height)
+                : usingSavedGeometry
+                  ? Qt.rect(saved.x, saved.y, saved.width, saved.height)
+                  : Qt.rect(defaultX, defaultY, defaultWidth, defaultHeight)
         applyGeometry(intendedGeometry.x, intendedGeometry.y,
                       intendedGeometry.width, intendedGeometry.height)
         geometryReady = true
@@ -92,12 +117,22 @@ Item {
         if (!geometryReady || !usingSavedGeometry || workspaceKey.length === 0)
             return
         intendedGeometry = Qt.rect(x, y, width, height)
+        savedRatios = Qt.rect(parent && parent.width ? x / parent.width : 0,
+                              parent && parent.height ? y / parent.height : 0,
+                              parent && parent.width ? width / parent.width : 1,
+                              parent && parent.height ? height / parent.height : 1)
         Desktop.savePanelGeometry(workspaceKey, panelKey,
                                   {"x": Math.round(x), "y": Math.round(y),
-                                   "width": Math.round(width), "height": Math.round(height)})
+                                   "width": Math.round(width), "height": Math.round(height),
+                                   "layoutVersion": 2,
+                                   "xRatio": savedRatios.x, "yRatio": savedRatios.y,
+                                   "widthRatio": savedRatios.width,
+                                   "heightRatio": savedRatios.height})
     }
 
     function beginPointer(handle, mouse) {
+        if (!editable)
+            return
         usingSavedGeometry = true
         const scenePoint = handle.mapToItem(root.parent, mouse.x, mouse.y)
         dragOrigin = Qt.point(scenePoint.x, scenePoint.y)
@@ -154,14 +189,24 @@ Item {
     Connections {
         target: root.parent
         function onWidthChanged() {
-            if (root.usingSavedGeometry)
+            if (root.usingRatioGeometry)
+                root.applyGeometry(root.savedRatios.x * root.parent.width,
+                                   root.savedRatios.y * root.parent.height,
+                                   root.savedRatios.width * root.parent.width,
+                                   root.savedRatios.height * root.parent.height)
+            else if (root.usingSavedGeometry)
                 root.applyGeometry(root.intendedGeometry.x, root.intendedGeometry.y,
                                    root.intendedGeometry.width, root.intendedGeometry.height)
             else
                 root.restoreDefaults()
         }
         function onHeightChanged() {
-            if (root.usingSavedGeometry)
+            if (root.usingRatioGeometry)
+                root.applyGeometry(root.savedRatios.x * root.parent.width,
+                                   root.savedRatios.y * root.parent.height,
+                                   root.savedRatios.width * root.parent.width,
+                                   root.savedRatios.height * root.parent.height)
+            else if (root.usingSavedGeometry)
                 root.applyGeometry(root.intendedGeometry.x, root.intendedGeometry.y,
                                    root.intendedGeometry.width, root.intendedGeometry.height)
             else
@@ -180,8 +225,8 @@ Item {
         anchors.fill: parent
         radius: 5
         color: "#22272b"
-        border.width: root.activeFocus ? 2 : 1
-        border.color: root.activeFocus ? "#e3c765" : "#3a4147"
+        border.width: root.editable && root.activeFocus ? 2 : 1
+        border.color: root.editable && root.activeFocus ? "#e3c765" : "#3a4147"
     }
 
     Rectangle {
@@ -191,8 +236,8 @@ Item {
         anchors.top: parent.top
         height: 34
         radius: 5
-        color: headerDrag.containsMouse || root.activeFocus ? "#34302a" : "#292f34"
-        border.color: root.activeFocus ? "#d38b22" : "#3a4147"
+        color: root.editable && (headerDrag.containsMouse || root.activeFocus) ? "#34302a" : "#292f34"
+        border.color: root.editable && root.activeFocus ? "#d38b22" : "#3a4147"
 
         Label {
             anchors.left: parent.left
@@ -210,7 +255,9 @@ Item {
         MouseArea {
             id: headerDrag
             anchors.fill: parent
-            cursorShape: Qt.SizeAllCursor
+            enabled: root.editable
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
+            cursorShape: root.editable ? Qt.SizeAllCursor : Qt.ArrowCursor
             hoverEnabled: true
             onPressed: root.beginPointer(headerDrag, mouse)
             onPositionChanged: {
@@ -222,10 +269,15 @@ Item {
                                        root.dragGeometry.width, root.dragGeometry.height)
             }
             onReleased: root.persistGeometry()
+            onClicked: function(mouse) {
+                if (root.editable && mouse.button === Qt.RightButton)
+                    panelMenu.popup()
+            }
         }
 
         ToolButton {
             id: resetButton
+            visible: root.editable
             anchors.right: parent.right
             anchors.rightMargin: 4
             anchors.verticalCenter: parent.verticalCenter
@@ -254,6 +306,13 @@ Item {
         }
     }
 
+    Menu {
+        id: panelMenu
+        MenuItem { text: "Restore official panel position"; onTriggered: { root.restoreDefaults(); root.usingSavedGeometry = true; root.persistGeometry() } }
+        MenuItem { text: "Bring Forward"; onTriggered: root.raisePanel() }
+        MenuItem { text: "Send Back"; onTriggered: root.z = 1 }
+    }
+
     Item {
         id: contentHost
         anchors.left: parent.left
@@ -265,7 +324,7 @@ Item {
     }
 
     Repeater {
-        model: [
+        model: root.editable ? [
             {"left": true,  "top": false, "right": false, "bottom": false, "cursor": Qt.SizeHorCursor},
             {"left": false, "top": false, "right": true,  "bottom": false, "cursor": Qt.SizeHorCursor},
             {"left": false, "top": true,  "right": false, "bottom": false, "cursor": Qt.SizeVerCursor},
@@ -274,7 +333,7 @@ Item {
             {"left": false, "top": true,  "right": true,  "bottom": false, "cursor": Qt.SizeBDiagCursor},
             {"left": true,  "top": false, "right": false, "bottom": true,  "cursor": Qt.SizeBDiagCursor},
             {"left": false, "top": false, "right": true,  "bottom": true,  "cursor": Qt.SizeFDiagCursor}
-        ]
+        ] : []
         delegate: MouseArea {
             required property var modelData
             z: 30

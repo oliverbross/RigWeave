@@ -183,8 +183,8 @@ WorkspaceCanvas {
                     Layout.fillWidth: true
                     GridLayout {
                         anchors.fill: parent; columns: 2
-                        Label { text: "Global navigation" } Label { text: "Native system Navigate menu · no persistent workspace sidebar"; color: "#4ec47b" }
-                        Label { text: "Workspace canvas" } Label { text: "Move by title bar · resize from any edge/corner · View → Reset Workspace Layout"; color: "#4ec47b"; wrapMode: Text.WordWrap }
+                        Label { text: "Global navigation" } Label { text: "Grouped Flightline sidebar plus native Navigate menu and command palette"; color: "#4ec47b" }
+                        Label { text: "Official layouts" } Label { text: "Locked by default · View → Edit Layout unlocks bounded grid editing · Reset restores official geometry"; color: "#4ec47b"; wrapMode: Text.WordWrap }
                         Label { text: "Scale evidence" } Label { text: "1366×768 · 1440×900 · 1512×982 · 1920×1080 · 2560×1440 · 150%"; color: "#aeb5ba"; wrapMode: Text.WordWrap }
                         Label { text: "Status semantics" } Label { text: "Written state plus colour; native-menu focus and accessible control labels"; color: "#4ec47b"; wrapMode: Text.WordWrap }
                     }

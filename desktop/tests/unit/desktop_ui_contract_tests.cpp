@@ -5,6 +5,8 @@
 #include <QSet>
 #include <QtTest>
 
+#include <algorithm>
+
 using namespace rigweave::desktop;
 
 class DesktopUiContractTests final : public QObject {
@@ -12,7 +14,7 @@ class DesktopUiContractTests final : public QObject {
 private slots:
   void commandRegistryIsCompleteAndUnique();
   void shellUsesCanonicalCommandsAndNativeMenus();
-  void routedWorkspacesUsePersistedFreeformCanvasPanels();
+  void routedWorkspacesUseOfficialLayoutsWithExplicitEditing();
   void originalIconFamilyCoversEveryWorkspaceDestination();
 };
 
@@ -30,6 +32,7 @@ void DesktopUiContractTests::commandRegistryIsCompleteAndUnique() {
     ids.insert(id);
     QVERIFY(!command.value("label").toString().isEmpty());
     QVERIFY(!command.value("icon").toString().isEmpty());
+    QVERIFY(!command.value("description").toString().isEmpty());
     if (command.value("workspace").toBool()) {
       ++workspaceCount;
       destinations.insert(command.value("destination").toString());
@@ -42,8 +45,19 @@ void DesktopUiContractTests::commandRegistryIsCompleteAndUnique() {
                                   QStringLiteral("tools.palette"),
                                   QStringLiteral("file.fastEntry"),
                                   QStringLiteral("view.fullScreen"),
+                                  QStringLiteral("view.editLayout"),
                                   QStringLiteral("view.resetLayout")})
     QVERIFY2(ids.contains(required), qPrintable(required));
+  const auto edit = std::find_if(commands.cbegin(), commands.cend(),
+                                 [](const QVariant &value) {
+    return value.toMap().value("id").toString() == "view.editLayout";
+  });
+  QVERIFY(edit != commands.cend());
+  QVERIFY(edit->toMap().value("checkable").toBool());
+  QVERIFY(!edit->toMap().value("checked").toBool());
+  desktop.invokeCommand("view.editLayout");
+  QVERIFY(desktop.editLayoutMode());
+  desktop.setEditLayoutMode(false);
 }
 
 void DesktopUiContractTests::shellUsesCanonicalCommandsAndNativeMenus() {
@@ -53,7 +67,9 @@ void DesktopUiContractTests::shellUsesCanonicalCommandsAndNativeMenus() {
   QVERIFY(qml.contains("Desktop.invokeCommand"));
   QVERIFY(qml.contains("Qt.platform.os === \"osx\""));
   QVERIFY(!qml.contains("menuBar: MenuBar"));
-  QVERIFY(!qml.contains("sidebar"));
+  QVERIFY(qml.contains("WorkspaceSidebar"));
+  QVERIFY(qml.contains("EDIT LAYOUT"));
+  QVERIFY(qml.contains("Done Editing"));
   QVERIFY(!qml.contains("SplitView"));
   QFile appSource(QStringLiteral(RIGWEAVE_DESKTOP_APP_DIR "/main.cpp"));
   QVERIFY(appSource.open(QIODevice::ReadOnly));
@@ -62,11 +78,12 @@ void DesktopUiContractTests::shellUsesCanonicalCommandsAndNativeMenus() {
   QVERIFY(nativeMenus.contains("WindowsNativeMenu"));
   QVERIFY(nativeMenus.contains("addMenu(L\"&File\")"));
   QVERIFY(nativeMenus.contains("addMenu(L\"&Navigate\")"));
+  QVERIFY(nativeMenus.contains("view.editLayout"));
   QVERIFY(qml.contains("Accessible.name"));
   QVERIFY(!qml.contains("RigWeave Windows Desktop"));
 }
 
-void DesktopUiContractTests::routedWorkspacesUsePersistedFreeformCanvasPanels() {
+void DesktopUiContractTests::routedWorkspacesUseOfficialLayoutsWithExplicitEditing() {
   QFile canvas(QStringLiteral(RIGWEAVE_DESKTOP_QML_DIR
                               "/Components/WorkspaceCanvas.qml"));
   QFile panel(QStringLiteral(RIGWEAVE_DESKTOP_QML_DIR
@@ -77,7 +94,13 @@ void DesktopUiContractTests::routedWorkspacesUsePersistedFreeformCanvasPanels() 
   const QByteArray panelQml = panel.readAll();
   QVERIFY(canvasQml.contains("workspaceKey"));
   QVERIFY(canvasQml.contains("onWorkspaceLayoutReset"));
-  QVERIFY(panelQml.contains("Drag the title bar"));
+  QVERIFY(canvasQml.contains("official workspace layout"));
+  QVERIFY(canvasQml.contains("panelOverlaps"));
+  QVERIFY(canvasQml.contains("gridSize: 8"));
+  QVERIFY(panelQml.contains("readonly property bool editable"));
+  QVERIFY(panelQml.contains("root.editable ? ["));
+  QVERIFY(panelQml.contains("layoutVersion"));
+  QVERIFY(panelQml.contains("widthRatio"));
   QVERIFY(panelQml.contains("Desktop.savePanelGeometry"));
   QVERIFY(panelQml.contains("usingSavedGeometry"));
   QVERIFY(panelQml.contains("intendedGeometry"));
@@ -114,6 +137,8 @@ void DesktopUiContractTests::routedWorkspacesUsePersistedFreeformCanvasPanels() 
   QVERIFY(applicationSource.contains("savePanelGeometry"));
   QVERIFY(applicationSource.contains("resetWorkspaceLayout"));
   QVERIFY(applicationSource.contains("desktopLayouts"));
+  QVERIFY(applicationSource.contains("layoutVersion"));
+  QVERIFY(applicationSource.contains("setEditLayoutMode"));
   QVERIFY(applicationSource.contains(
       "saved[QStringLiteral(\"stored\")] = true"));
 }

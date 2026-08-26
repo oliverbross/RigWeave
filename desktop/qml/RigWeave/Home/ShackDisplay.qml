@@ -58,7 +58,7 @@ WorkspaceCanvas {
         defaultY:476
         defaultWidth:parent?(parent.width-12)*0.68:800
         defaultHeight:parent?parent.height-476:190
-        WorkspaceList{anchors.fill:parent;sourceModel:Parity.neuralOpportunities;actionsEnabled:false}
+        WorkspaceList{anchors.fill:parent;sourceModel:Parity.neuralOpportunities;actionsVisible:false}
     }
     CanvasPanel {
         panelKey:"alerts"

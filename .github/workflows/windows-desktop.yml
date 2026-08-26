@@ -140,7 +140,7 @@ jobs:
           Invoke-Gallery 'artifacts/ui-gallery/150pct' 1280 720 '1.5'
           foreach ($profile in @('1366x768', '1920x1080', '2560x1440', '150pct')) {
             $count = (Get-ChildItem "artifacts/ui-gallery/$profile" -Filter '*.png').Count
-            if ($count -ne 39) { throw "$profile gallery has $count frames; expected 39" }
+            if ($count -ne 58) { throw "$profile gallery has $count frames; expected 58" }
           }
       - name: Package portable ZIP and per-user NSIS installer
         shell: pwsh

@@ -171,12 +171,25 @@ std::unique_ptr<QMenuBar> buildNativeMenuBar(DesktopApplication &desktop) {
         continue;
       auto *action = menu->addAction(item.value("label").toString());
       action->setEnabled(item.value("enabled").toBool());
+      action->setCheckable(item.value("checkable").toBool());
+      action->setChecked(item.value("checked").toBool());
       action->setMenuRole(role);
       const QString key = item.value("shortcut").toString();
       if (!key.isEmpty())
         action->setShortcut(QKeySequence(key));
       QObject::connect(action, &QAction::triggered, &desktop,
                        [&desktop, commandId] { desktop.invokeCommand(commandId); });
+      QObject::connect(&desktop, &DesktopApplication::commandStateChanged, action,
+                       [&desktop, action, commandId] {
+                         for (const QVariant &current : desktop.commands()) {
+                           const QVariantMap state = current.toMap();
+                           if (state.value("id").toString() == commandId) {
+                             action->setEnabled(state.value("enabled").toBool());
+                             action->setChecked(state.value("checked").toBool());
+                             break;
+                           }
+                         }
+                       });
       return action;
     }
     return static_cast<QAction *>(nullptr);
@@ -213,6 +226,7 @@ std::unique_ptr<QMenuBar> buildNativeMenuBar(DesktopApplication &desktop) {
   QMenu *view = menuBar->addMenu(QStringLiteral("View"));
   command(view, "view.fullScreen");
   command(view, "view.shack");
+  command(view, "view.editLayout");
   command(view, "view.resetLayout");
 
   QMenu *radio = menuBar->addMenu(QStringLiteral("Radio"));
@@ -298,6 +312,7 @@ public:
     HMENU view = addMenu(L"&View");
     addCommand(view, "view.fullScreen");
     addCommand(view, "view.shack");
+    addCommand(view, "view.editLayout");
     addCommand(view, "view.resetLayout");
 
     HMENU radio = addMenu(L"&Radio");
@@ -332,6 +347,8 @@ public:
     addSeparator(help);
     addCommand(help, "nav.about", "About RigWeave");
     addCommand(help, "help.licences");
+    QObject::connect(&m_desktop, &DesktopApplication::commandStateChanged,
+                     &m_desktop, [this] { refreshCommandState(); });
   }
 
   ~WindowsNativeMenu() override {
@@ -386,12 +403,31 @@ private:
       const UINT id = m_nextId++;
       const UINT flags = MF_STRING |
                          (item.value("enabled").toBool() ? MF_ENABLED
-                                                         : MF_GRAYED);
+                                                         : MF_GRAYED) |
+                         (item.value("checked").toBool() ? MF_CHECKED
+                                                        : MF_UNCHECKED);
       AppendMenuW(menu, flags, id,
                   reinterpret_cast<LPCWSTR>(label.utf16()));
       m_commands.insert(id, commandId);
       return;
     }
+  }
+
+  void refreshCommandState() {
+    for (auto it = m_commands.constBegin(); it != m_commands.constEnd(); ++it) {
+      for (const QVariant &value : m_desktop.commands()) {
+        const QVariantMap item = value.toMap();
+        if (item.value("id").toString() != it.value())
+          continue;
+        EnableMenuItem(m_root, it.key(), MF_BYCOMMAND |
+                       (item.value("enabled").toBool() ? MF_ENABLED : MF_GRAYED));
+        CheckMenuItem(m_root, it.key(), MF_BYCOMMAND |
+                      (item.value("checked").toBool() ? MF_CHECKED : MF_UNCHECKED));
+        break;
+      }
+    }
+    if (m_window)
+      DrawMenuBar(m_window);
   }
 
   DesktopApplication &m_desktop;
@@ -406,12 +442,13 @@ struct GalleryFrame {
   QString destination;
   QString fileName;
   int variant{-1};
+  bool editMode{};
 };
 
 void captureGallery(QGuiApplication &app, DesktopApplication &desktop,
                     QQuickWindow *window, const QString &directory, int width,
                     int height) {
-  const QList<GalleryFrame> frames = {
+  QList<GalleryFrame> frames = {
       {"Home", "Home"},
       {"Home", "Shack"},
       {"Radio", "Radio-native"},
@@ -451,6 +488,16 @@ void captureGallery(QGuiApplication &app, DesktopApplication &desktop,
       {"Settings", "Settings"},
       {"Health", "Health"},
       {"About", "About"}};
+  const QStringList editDestinations{
+      "Home", "Radio", "Digi", "Panadapter", "EQ", "Logbook",
+      "Intelligence", "Sync", "Contest", "Band Maps", "Presets", "DX",
+      "Portable", "Operations", "Groups.io", "Rotator", "Settings", "Health",
+      "About"};
+  for (const QString &destination : editDestinations) {
+    QString slug = destination;
+    slug.replace(' ', '-').replace('.', '-');
+    frames.push_back({destination, QStringLiteral("Edit-") + slug, -1, true});
+  }
   if (!QDir().mkpath(directory)) {
     qCritical("Cannot create UI gallery directory");
     app.exit(4);
@@ -479,8 +526,10 @@ void captureGallery(QGuiApplication &app, DesktopApplication &desktop,
     window->setProperty("galleryRadioBackend", radioBackend);
     desktop.setGalleryVariant(frame.destination, frame.variant);
     desktop.setCurrentDestination(frame.destination);
+    desktop.setEditLayoutMode(frame.editMode);
     QTimer::singleShot(
         350, window, [window, directory, frame, index, step, &app, &desktop] {
+          desktop.setEditLayoutMode(frame.editMode);
           desktop.setGalleryVariant(frame.destination, frame.variant);
           if (QObject *backend = window->findChild<QObject *>("radioBackend"))
             backend->setProperty(
@@ -546,12 +595,27 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
   elapsed.start();
   const int initialObjects = window->findChildren<QObject *>().size();
   int peakObjects = initialObjects;
-  for (int cycle = 0; cycle < 500; ++cycle) {
+  for (int cycle = 0; cycle < 1000; ++cycle) {
     desktop.setCurrentDestination(destinations.at(cycle % destinations.size()));
     settle();
     if (cycle % 25 == 0)
       peakObjects =
           std::max(peakObjects, int(window->findChildren<QObject *>().size()));
+  }
+  for (int cycle = 0; cycle < 250; ++cycle) {
+    desktop.setSidebarCollapsed(cycle % 2 == 0);
+    settle();
+  }
+  desktop.setSidebarCollapsed(false);
+  for (int cycle = 0; cycle < 200; ++cycle) {
+    desktop.setEditLayoutMode(true);
+    settle();
+    desktop.setEditLayoutMode(false);
+    settle();
+  }
+  for (int cycle = 0; cycle < 200; ++cycle) {
+    desktop.resetWorkspaceLayout(destinations.at(cycle % destinations.size()));
+    settle();
   }
   for (int cycle = 0; cycle < 100; ++cycle) {
     window->setProperty("shackMode", cycle % 2 == 0);
@@ -575,23 +639,30 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
     if (candidate->objectName().startsWith(QStringLiteral("canvasPanel-")))
       panels.push_back(candidate);
   }
-  for (int cycle = 0; cycle < 100 && !panels.isEmpty(); ++cycle) {
+  desktop.setEditLayoutMode(true);
+  for (int cycle = 0; cycle < 500 && !panels.isEmpty(); ++cycle) {
     QObject *panel = panels.at(cycle % panels.size());
-    panel->setProperty("x", 12 + (cycle % 9) * 7);
-    panel->setProperty("y", 12 + (cycle % 7) * 5);
+    QMetaObject::invokeMethod(panel, "raisePanel");
+    settle();
+  }
+  for (int cycle = 0; cycle < 500 && !panels.isEmpty(); ++cycle) {
+    QObject *panel = panels.at(cycle % panels.size());
+    panel->setProperty("x", 12 + (cycle % 9) * 8);
+    panel->setProperty("y", 12 + (cycle % 7) * 8);
     panel->setProperty("width", 640 + (cycle % 5) * 24);
     panel->setProperty("height", 260 + (cycle % 4) * 20);
     settle();
   }
+  desktop.setEditLayoutMode(false);
   desktop.resetWorkspaceLayout(QStringLiteral("Settings"));
   settle();
-  for (int cycle = 0; cycle < 50; ++cycle) {
+  for (int cycle = 0; cycle < 100; ++cycle) {
     window->showFullScreen();
     settle();
     window->showNormal();
     settle();
   }
-  for (int cycle = 0; cycle < 100; ++cycle) {
+  for (int cycle = 0; cycle < 200; ++cycle) {
     window->resize(1180 + (cycle % 7) * 120, 720 + (cycle % 5) * 70);
     settle();
   }
@@ -604,10 +675,12 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
   settle();
   const int finalObjects = window->findChildren<QObject *>().size();
   const QVariantMap report{
-      {"workspaceChanges", 500}, {"systemMenuCommandCycles", 100},
+      {"workspaceChanges", 1000}, {"systemMenuCommandCycles", 100},
+      {"sidebarCollapseExpandCycles", 250},
+      {"editLayoutEnterExitCycles", 200}, {"resetLayoutCycles", 200},
       {"shackCycles", 100},      {"settingsCategoryChanges", 100},
-      {"panelMoveResizeCycles", 100},
-      {"fullScreenCycles", 50},  {"resizeCycles", 100},
+      {"panelFocusRaiseCycles", 500}, {"panelMoveResizeCycles", 500},
+      {"fullScreenCycles", 100},  {"resizeCycles", 200},
       {"commandActionCycles", 100}, {"initialQmlObjects", initialObjects},
       {"peakQmlObjects", peakObjects}, {"finalQmlObjects", finalObjects},
       {"elapsedMs", elapsed.elapsed()},
