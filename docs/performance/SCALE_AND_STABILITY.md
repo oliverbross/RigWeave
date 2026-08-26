@@ -139,3 +139,5 @@ Only eligible global forecasts persist on 15-minute station/window/band slots. V
 ## Windows desktop parity scale probe
 
 The desktop integration suite creates 100,000 canonical QSOs and verifies keyset paging through the existing data contract. The new feature probe inserts 2,880 Neural rows over 180 days, 20,000 Digi rows, 30,000 Groups.io rows with FTS5 indexing, 10,000 Contest staging rows and 20,000 DX Chaser rows. The scale test completes inside the bounded CTest target and all stores close cleanly. This is deterministic storage/lookup evidence, not a multi-hour physical Windows soak.
+
+Functional closure also bounds Groups.io pages to 1,000 rows/2 MiB, provider bodies by policy, Digi audio to 16 million float samples and native protocol buffers by controller limits. Route loss/global Stop cancel active work. Hosted scale/soak remains exact-SHA evidence, distinct from physical multi-hour operation.

@@ -1,6 +1,6 @@
 # Windows Full Parity Matrix
 
-> Deep Convergence v2 changes desktop navigation, official-layout policy and visual hierarchy only. It does not change any service-owner or capability verdict below; see `docs/ui/DESKTOP_SCREEN_CONTENT_PARITY_V2.md` for the v2 screen/content audit.
+> Functional Parity Closure v1 supersedes the Deep Convergence v2 foundation verdicts below. The authoritative 31-row result is `DESKTOP_FUNCTIONAL_PARITY_MATRIX.md`; live and physical acceptance remain separate.
 
 Status vocabulary:
 
@@ -25,25 +25,25 @@ Status vocabulary:
 | Provider/cache platform | SOURCE_COMPLETE | bounded policy and fake-response tests | individual providers disabled by default |
 | Domain databases/migrations | SOURCE_COMPLETE | five isolated versioned stores | Android-to-desktop data import not required |
 | Gallery/Health/About | SOURCE_COMPLETE | 75 distinct frames, health and build truth | Windows hosted frames pending |
-| Home/HamClock | FOUNDATION_WIRED | 17-module registry and Shack layout | production module controllers incomplete |
-| Neural DX/Empirical Outlook | FOUNDATION_WIRED | schema-5 store, fixture model, scale data | live empirical pipeline incomplete |
-| Native radio profiles | FOUNDATION_WIRED | KX3/KX2, Flex, QMX, RGO ONE surfaces | native protocol owners not bound |
-| Native rotator protocols | FOUNDATION_WIRED | GS-232/EasyComm/DCU/SPID/rotctld surfaces | protocol controllers not bound |
-| Digi engines | FOUNDATION_WIRED | mode registry, schema-2 store | modem/audio session integration incomplete |
-| DX Chaser | FOUNDATION_WIRED | schema-1 store and receive review | timing/TX engine intentionally unavailable |
-| CW/Voice Keyer | FOUNDATION_WIRED | macro registry and safe UI | audio/CAT/PTT execution incomplete |
-| Intelligence/Awards/Contact Map | FOUNDATION_WIRED | summary/filter surfaces | award engines and full map incomplete |
-| Contest/N1MM | FOUNDATION_WIRED | schema-2 staging and merge review | scoring/N1MM production controller incomplete |
-| Intelligent Band Maps | FOUNDATION_WIRED | four layouts and shared spots | Android evaluator/controller incomplete |
-| DX workspace | FOUNDATION_WIRED | shared spots and Neural view | full multi-tab Android behavior incomplete |
-| Portable | FOUNDATION_WIRED | activity model and review UI | activation/chase service incomplete |
-| Operations planner | FOUNDATION_WIRED | routed planner/calendar view | provider/calendar integration incomplete |
-| Satellite/QO-100 | FOUNDATION_WIRED | local fixture passes and RX preview | live TLE/SGP4 controller and Doppler incomplete |
-| Groups.io | FOUNDATION_WIRED | schema-2/FTS5 archive and draft review | PROVIDER_BLOCKED; delivery ambiguity engine incomplete |
-| Presets/alerts/notifications | FOUNDATION_WIRED | routed configuration surfaces | production actions and Windows notifications incomplete |
-| EQ Studio | FOUNDATION_WIRED | desktop EQ page | native radio capability/readback integration incomplete |
+| Home/HamClock | SOURCE_COMPLETE | typed module/cache owners and Shack layout | live provider acceptance pending |
+| Neural DX/Empirical Outlook | SOURCE_COMPLETE | schema-5 empirical evidence/calibration pipeline | live evidence acceptance pending |
+| Native radio profiles | SOURCE_COMPLETE | KX/KX2, Flex, QMX/QMX+, proven RGO V6 adapters | physical CAT acceptance pending |
+| Native rotator protocols | SOURCE_COMPLETE | GS-232/EasyComm/rotctld serial/TCP owners | physical movement acceptance pending |
+| Digi engines | SOURCE_COMPLETE | linked Rust modem, exact-route audio session and schema-2 store | physical audio/TX acceptance pending |
+| DX Chaser | SOURCE_COMPLETE | eligibility reducer, dry run and attempt journal | TX locked pending acceptance |
+| CW/Voice Keyer | SOURCE_COMPLETE | typed tokens, local preview and stopped queue | send locked pending acceptance |
+| Intelligence/Awards/Contact Map | SOURCE_COMPLETE | paged canonical-QSO and RF projections | none in source |
+| Contest/N1MM | SOURCE_COMPLETE | schema-2 staging/scoring and typed bounded packet policy | live trusted peer pending |
+| Intelligent Band Maps | SOURCE_COMPLETE | four layouts over shared canonical evaluator | none in source |
+| DX workspace | SOURCE_COMPLETE | spot/provider/outlook projections | live providers pending |
+| Portable | SOURCE_COMPLETE | cached catalogues and reviewed activity handoff | live providers pending |
+| Operations planner | SOURCE_COMPLETE | cached calendar/catalogue and spatial query owner | live providers pending |
+| Satellite/QO-100 | SOURCE_COMPLETE | local SGP4 pass controller and receive-only handoff | live TLE/physical acceptance pending |
+| Groups.io | SOURCE_COMPLETE | vault-bound client, schema-2 archive/outbox/reconciliation | authenticated account pending |
+| Presets/alerts/notifications | SOURCE_COMPLETE | CRUD/review owners and quiet native/in-app policy | native hosted acceptance pending |
+| EQ Studio | SOURCE_COMPLETE | eight-band draft/review transaction boundary | physical readback/apply pending |
 
-Totals: **14 `SOURCE_COMPLETE`; 17 `FOUNDATION_WIRED`; 31 audited rows**. Provider and licence blockers are annotations rather than inflated completion statuses. Because 17 core rows remain foundations, the programme's PASS rule is not met.
+Totals: **31 source-complete; 0 `FOUNDATION_WIRED`; 0 `MISSING`; 31 audited rows**. Provider, hosted and physical blockers remain explicit annotations.
 
 ## Flightline UI addendum
 

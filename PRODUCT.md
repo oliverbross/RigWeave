@@ -81,3 +81,7 @@ Windows and macOS share a Flightline desktop shell derived from the unlocked 41-
 ### Desktop Deep Convergence v2 candidate
 
 The v2 candidate defines a locked official operating layout for every workspace and isolates freeform panel manipulation behind explicit Edit Layout mode. Home, Radio, Digi, EQ and Panadapter receive screen-specific hierarchy and density improvements while preserving fail-closed capability, provider, readback and transmit states. The candidate remains isolated until exact-SHA hosted Windows/macOS, package and live acceptance evidence exists.
+
+### Desktop Functional Parity Closure v1
+
+Windows and macOS now share real owners for native radio/rotator profiles, presets/EQ/keyer review, receive-only Digi, Chaser, Contest, Band Maps, empirical outlook, planning/Satellite, Groups.io and notifications. Source completion never converts missing credentials, capability readback or physical proof into authority: TX, automatic Doppler and rotator movement remain locked.

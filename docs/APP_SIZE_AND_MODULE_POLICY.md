@@ -62,3 +62,5 @@ The hardening adds a small C++ host-only lifecycle test target, Kotlin ownership
 ## Windows parity candidate measurements
 
 The desktop source adds no bundled dataset or third-party payload. The local unsigned macOS ZIP is 79,173,790 bytes with SHA-256 `ff65aa017af44f13c0c8e576f503eee351de1d17020863c54109333e604ca6fe`. The Windows exact-SHA workflow enforces 120 MiB ceilings for both portable ZIP and NSIS installer and 350 MiB unpacked. Current regression artifacts: arm64 APK 58,425,796 bytes; four-ABI AAB 55,730,956 bytes. Final Windows byte counts/hashes remain hosted evidence.
+
+The closure links one existing Rust static library and adds no model, map, audio or catalogue payload. The 120 MiB Windows ZIP/installer and 350 MiB unpacked ceilings remain enforced; exact-candidate measurements supersede older example hashes and are reported only from hosted artifacts.

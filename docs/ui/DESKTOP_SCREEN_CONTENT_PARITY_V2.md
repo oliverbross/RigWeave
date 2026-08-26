@@ -28,3 +28,5 @@ Classifications are UI/content parity only:
 available from a desktop owner, not applicable to a desktop adaptation, or
 explicitly blocked. This table does not convert Android-only service logic
 into a desktop claim.
+
+Functional Parity Closure v1 preserves the accepted screen hierarchy and adds bindings/actions only. The deterministic gallery frame count remains 58 per profile and visual comparison continues against the frozen Deep Convergence v2 baseline.

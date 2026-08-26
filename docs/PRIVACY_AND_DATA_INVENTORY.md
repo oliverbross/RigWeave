@@ -63,3 +63,7 @@ The desktop adds five feature stores under the application database directory an
 ## Desktop Flightline visual evidence boundary
 
 The tablet reference directory can contain callsigns, configured provider labels and other operator-visible data. It remains under ignored `build/evidence` storage; documentation records only filenames, dimensions, navigation and sanitized layout observations. Desktop galleries use the existing isolated demo root and fake loopback TCI server. The command registry, SVG icons, menu definitions and UI tests add no operator data, credential, provider body, audio, CAT frame or hardware identifier.
+
+## Desktop functional-owner additions
+
+The Groups.io database stores bounded offline membership/topic/message/draft/outbox records but never bearer tokens; config stores only a credential alias. Digi audio is bounded in memory and not included in support bundles. Native CAT/rotator frames, provider response bodies, operator location, TLE source text and voice clips are excluded from diagnostics/support export. Demo and fake-service evidence is synthetic.

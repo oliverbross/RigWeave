@@ -71,3 +71,7 @@ Sweep 3 makes Radio, Hamlib, QMX/QMX+, RGO ONE, Rotator and WWFF operator-reacha
 | Responsive visual gallery | HOSTED_PENDING | Final exact-SHA Windows four-profile and macOS five-profile 58-frame artifacts required: 39 operating and 19 Edit Layout frames per profile. |
 | Functional parity | UNCHANGED | UI convergence does not promote the existing 14/31 source-complete total. |
 | Physical/live/release | PENDING | No authenticated service, audio, CAT/PTT/TUNE, RF, movement, signing, notarization, publication or deployment claim. |
+
+## Desktop Functional Parity Closure v1
+
+The desktop source matrix is now 31/31 source-complete with zero foundation or missing rows. This does not change the `PENDING` physical/authenticated/release boundary; exact-SHA hosted results and package hashes are recorded separately for the candidate SHA.

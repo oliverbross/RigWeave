@@ -30,3 +30,7 @@ permitted.
 Totals: 71 control groups — 47 functional, 16 read-only functional, 5
 live-acceptance pending, and 3 blocked/disabled. Enabled decorative controls:
 0. Every blocked control names the missing owner or acceptance gate.
+
+## Functional Parity Closure v1 addendum
+
+All 17 former foundation workspaces now bind to typed production owners or explicit reviewed actions. The five live-acceptance and three disabled groups remain intentionally blocked for credentials, hardware readback, transmission or movement; they are not decorative controls.

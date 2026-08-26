@@ -159,3 +159,7 @@ packaged.
 RigWeave Desktop Flightline icons under desktop/resources/icons are original
 RigWeave project artwork. They do not incorporate a third-party icon library,
 font, emoji set, or tablet APK asset and add no separate attribution obligation.
+
+Desktop Functional Parity Closure v1 reuses the existing in-tree RigWeave core,
+rigweave-flex, Qt and pinned Hamlib components. It adds no third-party source,
+binary, provider dataset, model, font, icon family or media asset.

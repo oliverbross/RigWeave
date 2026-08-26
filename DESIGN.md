@@ -78,3 +78,5 @@ macOS uses the native global menu and the title “RigWeave”. Windows attaches
 Operate mode presents one locked official layout per workspace. Panel movement, resizing, stacking and ratio persistence are available only after the operator enters explicit **Edit Layout** mode. Reset restores the active workspace's official layout; Done or Escape returns it to safe operation.
 
 Home, Radio, Digi, EQ and Panadapter use dedicated desktop cockpit compositions rather than generic equal-card grids. All remaining destinations retain their service-owner and capability boundaries inside the same official-layout contract. Unknown capabilities, absent providers and unavailable readback remain written, disabled and non-transmitting.
+
+Functional owners are rooted in `DesktopApplication`: one radio, rotator, canonical QSO, shared spot, configuration/vault, provider/cache and feature-domain authority. QML consumes typed models and invokes reviewed actions; it owns no socket, database, device, audio session or worker. Global Stop is the single idempotent fan-out and invalidates active generations.
