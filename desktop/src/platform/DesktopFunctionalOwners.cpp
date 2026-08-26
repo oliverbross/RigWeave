@@ -805,7 +805,8 @@ bool DesktopParityPlatform::importScpPayloadForTest(const QByteArray &payload, c
 bool DesktopParityPlatform::importScpPayload(const QByteArray &payload, const QUrl &source,
                                              qint64 sourceDate, QString *error) {
     if (payload.isEmpty() || payload.size() > 8 * 1024 * 1024 || !source.isValid()) {
-        if (error) *error = "SCP payload/source invalid"; return false;
+        if (error) *error = "SCP payload/source invalid";
+        return false;
     }
     QSet<QString> unique;
     for (QByteArray token : payload.split('\n')) {
@@ -814,28 +815,45 @@ bool DesktopParityPlatform::importScpPayload(const QByteArray &payload, const QU
         if (token.isEmpty()) continue;
         const QString call = normalizedCallsign(QString::fromLatin1(token));
         if (call.isEmpty() || call.toLatin1() != token || unique.size() >= 1000000) {
-            if (error) *error = "SCP contains an invalid or excessive callsign set"; return false;
+            if (error) *error = "SCP contains an invalid or excessive callsign set";
+            return false;
         }
         unique.insert(call);
     }
-    if (unique.isEmpty()) { if (error) *error = "SCP has no callsigns"; return false; }
+    if (unique.isEmpty()) {
+        if (error) *error = "SCP has no callsigns";
+        return false;
+    }
     StoreSpec *contest = store("Contest");
-    if (!contest || !contest->database.transaction()) { if (error) *error = "Contest store unavailable"; return false; }
+    if (!contest || !contest->database.transaction()) {
+        if (error) *error = "Contest store unavailable";
+        return false;
+    }
     QSqlQuery query(contest->database);
     if (!query.exec("DELETE FROM scp_callsign_next")) { contest->database.rollback(); return false; }
     query.prepare("INSERT INTO scp_callsign_next(callsign) VALUES(?)");
     for (const QString &call : std::as_const(unique)) {
         query.bindValue(0, call);
-        if (!query.exec()) { if (error) *error = query.lastError().text(); contest->database.rollback(); return false; }
+        if (!query.exec()) {
+            if (error) *error = query.lastError().text();
+            contest->database.rollback();
+            return false;
+        }
     }
     if (!query.exec("DELETE FROM scp_callsign") || !query.exec("INSERT INTO scp_callsign SELECT callsign FROM scp_callsign_next")) {
-        if (error) *error = query.lastError().text(); contest->database.rollback(); return false;
+        if (error) *error = query.lastError().text();
+        contest->database.rollback();
+        return false;
     }
     query.prepare("INSERT INTO scp_manifest(id,source_url,source_date,digest,row_count,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET source_url=excluded.source_url,source_date=excluded.source_date,digest=excluded.digest,row_count=excluded.row_count,updated_at=excluded.updated_at");
     query.addBindValue(source.toString()); query.addBindValue(sourceDate);
     query.addBindValue(QString::fromLatin1(QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex()));
     query.addBindValue(unique.size()); query.addBindValue(QDateTime::currentSecsSinceEpoch());
-    if (!query.exec() || !contest->database.commit()) { if (error) *error = query.lastError().text(); contest->database.rollback(); return false; }
+    if (!query.exec() || !contest->database.commit()) {
+        if (error) *error = query.lastError().text();
+        contest->database.rollback();
+        return false;
+    }
     m_scpState = QStringLiteral("READY / %1 calls / %2").arg(unique.size()).arg(QDateTime::fromSecsSinceEpoch(sourceDate, QTimeZone::UTC).date().toString(Qt::ISODate));
     emit workflowStateChanged();
     return true;
