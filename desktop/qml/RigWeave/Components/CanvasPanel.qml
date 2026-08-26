@@ -13,6 +13,9 @@ Item {
     property real panelMinimumWidth: 240
     property real panelMinimumHeight: 150
     property bool geometryReady: false
+    property bool usingSavedGeometry: false
+    property bool applyingGeometry: false
+    property rect intendedGeometry: Qt.rect(defaultX, defaultY, defaultWidth, defaultHeight)
     property point dragOrigin
     property rect dragGeometry
     readonly property var canvas: parent
@@ -36,17 +39,27 @@ Item {
     function applyGeometry(nextX, nextY, nextWidth, nextHeight) {
         if (!parent)
             return
+        applyingGeometry = true
         const availableWidth = Math.max(panelMinimumWidth, parent.width)
         const availableHeight = Math.max(panelMinimumHeight, parent.height)
         width = bounded(nextWidth, Math.min(panelMinimumWidth, availableWidth), availableWidth)
         height = bounded(nextHeight, Math.min(panelMinimumHeight, availableHeight), availableHeight)
         x = bounded(nextX, 0, Math.max(0, parent.width - width))
         y = bounded(nextY, 0, Math.max(0, parent.height - height))
+        applyingGeometry = false
+    }
+
+    function applyUserGeometry(nextX, nextY, nextWidth, nextHeight) {
+        applyGeometry(nextX, nextY, nextWidth, nextHeight)
+        intendedGeometry = Qt.rect(x, y, width, height)
     }
 
     function restoreDefaults() {
         geometryReady = false
-        applyGeometry(defaultX, defaultY, defaultWidth, defaultHeight)
+        usingSavedGeometry = false
+        intendedGeometry = Qt.rect(defaultX, defaultY, defaultWidth, defaultHeight)
+        applyGeometry(intendedGeometry.x, intendedGeometry.y,
+                      intendedGeometry.width, intendedGeometry.height)
         geometryReady = true
     }
 
@@ -55,7 +68,12 @@ Item {
                           "width": defaultWidth, "height": defaultHeight}
         const saved = Desktop.panelGeometry(workspaceKey, panelKey, fallback)
         geometryReady = false
-        applyGeometry(saved.x, saved.y, saved.width, saved.height)
+        usingSavedGeometry = saved.stored === true
+        intendedGeometry = usingSavedGeometry
+                ? Qt.rect(saved.x, saved.y, saved.width, saved.height)
+                : Qt.rect(defaultX, defaultY, defaultWidth, defaultHeight)
+        applyGeometry(intendedGeometry.x, intendedGeometry.y,
+                      intendedGeometry.width, intendedGeometry.height)
         geometryReady = true
     }
 
@@ -66,19 +84,21 @@ Item {
     }
 
     function schedulePersist() {
-        if (geometryReady)
+        if (geometryReady && usingSavedGeometry && !applyingGeometry)
             persistTimer.restart()
     }
 
     function persistGeometry() {
-        if (!geometryReady || workspaceKey.length === 0)
+        if (!geometryReady || !usingSavedGeometry || workspaceKey.length === 0)
             return
+        intendedGeometry = Qt.rect(x, y, width, height)
         Desktop.savePanelGeometry(workspaceKey, panelKey,
                                   {"x": Math.round(x), "y": Math.round(y),
                                    "width": Math.round(width), "height": Math.round(height)})
     }
 
     function beginPointer(handle, mouse) {
+        usingSavedGeometry = true
         const scenePoint = handle.mapToItem(root.parent, mouse.x, mouse.y)
         dragOrigin = Qt.point(scenePoint.x, scenePoint.y)
         dragGeometry = Qt.rect(x, y, width, height)
@@ -113,7 +133,7 @@ Item {
         }
         if (edges.bottom)
             nextHeight += dy
-        applyGeometry(nextX, nextY, nextWidth, nextHeight)
+        applyUserGeometry(nextX, nextY, nextWidth, nextHeight)
     }
 
     Component.onCompleted: restoreSavedGeometry()
@@ -121,6 +141,10 @@ Item {
     onYChanged: schedulePersist()
     onWidthChanged: schedulePersist()
     onHeightChanged: schedulePersist()
+    onDefaultXChanged: if (geometryReady && !usingSavedGeometry) restoreDefaults()
+    onDefaultYChanged: if (geometryReady && !usingSavedGeometry) restoreDefaults()
+    onDefaultWidthChanged: if (geometryReady && !usingSavedGeometry) restoreDefaults()
+    onDefaultHeightChanged: if (geometryReady && !usingSavedGeometry) restoreDefaults()
 
     Connections {
         target: root.canvas
@@ -130,10 +154,18 @@ Item {
     Connections {
         target: root.parent
         function onWidthChanged() {
-            root.applyGeometry(root.x, root.y, root.width, root.height)
+            if (root.usingSavedGeometry)
+                root.applyGeometry(root.intendedGeometry.x, root.intendedGeometry.y,
+                                   root.intendedGeometry.width, root.intendedGeometry.height)
+            else
+                root.restoreDefaults()
         }
         function onHeightChanged() {
-            root.applyGeometry(root.x, root.y, root.width, root.height)
+            if (root.usingSavedGeometry)
+                root.applyGeometry(root.intendedGeometry.x, root.intendedGeometry.y,
+                                   root.intendedGeometry.width, root.intendedGeometry.height)
+            else
+                root.restoreDefaults()
         }
     }
 
@@ -185,9 +217,9 @@ Item {
                 if (!pressed)
                     return
                 const point = mapToItem(root.parent, mouse.x, mouse.y)
-                root.applyGeometry(root.dragGeometry.x + point.x - root.dragOrigin.x,
-                                   root.dragGeometry.y + point.y - root.dragOrigin.y,
-                                   root.dragGeometry.width, root.dragGeometry.height)
+                root.applyUserGeometry(root.dragGeometry.x + point.x - root.dragOrigin.x,
+                                       root.dragGeometry.y + point.y - root.dragOrigin.y,
+                                       root.dragGeometry.width, root.dragGeometry.height)
             }
             onReleased: root.persistGeometry()
         }
@@ -206,7 +238,14 @@ Item {
             onClicked: {
                 root.raisePanel()
                 root.restoreDefaults()
+                root.usingSavedGeometry = true
                 root.persistGeometry()
+            }
+            background: Rectangle {
+                radius: 4
+                color: resetButton.down ? "#4b351c" : resetButton.hovered ? "#34302a" : "transparent"
+                border.width: resetButton.activeFocus ? 1 : 0
+                border.color: "#f0ce68"
             }
             contentItem: FlightlineIcon {
                 name: "reset"

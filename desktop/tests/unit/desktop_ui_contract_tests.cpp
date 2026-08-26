@@ -79,6 +79,10 @@ void DesktopUiContractTests::routedWorkspacesUsePersistedFreeformCanvasPanels() 
   QVERIFY(canvasQml.contains("onWorkspaceLayoutReset"));
   QVERIFY(panelQml.contains("Drag the title bar"));
   QVERIFY(panelQml.contains("Desktop.savePanelGeometry"));
+  QVERIFY(panelQml.contains("usingSavedGeometry"));
+  QVERIFY(panelQml.contains("intendedGeometry"));
+  QVERIFY(panelQml.contains("applyUserGeometry"));
+  QVERIFY(panelQml.contains("saved.stored === true"));
   QVERIFY(panelQml.contains("edges.left"));
   QVERIFY(panelQml.contains("edges.right"));
   QVERIFY(panelQml.contains("edges.top"));
@@ -110,6 +114,8 @@ void DesktopUiContractTests::routedWorkspacesUsePersistedFreeformCanvasPanels() 
   QVERIFY(applicationSource.contains("savePanelGeometry"));
   QVERIFY(applicationSource.contains("resetWorkspaceLayout"));
   QVERIFY(applicationSource.contains("desktopLayouts"));
+  QVERIFY(applicationSource.contains(
+      "saved[QStringLiteral(\"stored\")] = true"));
 }
 
 void DesktopUiContractTests::originalIconFamilyCoversEveryWorkspaceDestination() {

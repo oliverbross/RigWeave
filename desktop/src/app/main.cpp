@@ -24,12 +24,12 @@
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
 #include <QSaveFile>
+#include <QSet>
 #include <QTimer>
 #include <QWebSocket>
 #include <QWebSocketServer>
 #include <cmath>
 #include <algorithm>
-#include <cstdio>
 #include <functional>
 #include <memory>
 #include <qqml.h>
@@ -459,6 +459,11 @@ void captureGallery(QGuiApplication &app, DesktopApplication &desktop,
   window->setWidth(width);
   window->setHeight(height);
   window->show();
+  QSet<QString> resetWorkspaces{QStringLiteral("Shack")};
+  for (const GalleryFrame &frame : frames)
+    resetWorkspaces.insert(frame.destination);
+  for (const QString &workspace : resetWorkspaces)
+    desktop.resetWorkspaceLayout(workspace);
   auto index = std::make_shared<int>(0);
   auto step = std::make_shared<std::function<void()>>();
   *step = [&app, &desktop, window, directory, frames, index, step] {
@@ -467,9 +472,6 @@ void captureGallery(QGuiApplication &app, DesktopApplication &desktop,
       return;
     }
     const GalleryFrame frame = frames.at(*index);
-    std::fprintf(stderr, "ui-gallery frame: %d %s begin\n", *index,
-                 qPrintable(frame.fileName));
-    std::fflush(stderr);
     window->setProperty("shackMode", frame.fileName == "Shack");
     const int radioBackend = frame.fileName.startsWith("TCI-")
                                  ? 9
@@ -517,9 +519,6 @@ void captureGallery(QGuiApplication &app, DesktopApplication &desktop,
                   app.exit(4);
                   return;
                 }
-                std::fprintf(stderr, "ui-gallery frame: %d %s complete\n",
-                             *index, qPrintable(frame.fileName));
-                std::fflush(stderr);
                 ++*index;
                 (*step)();
               });
@@ -530,10 +529,6 @@ void captureGallery(QGuiApplication &app, DesktopApplication &desktop,
 
 bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
                  const QString &reportPath) {
-  const auto checkpoint = [](const char *phase) {
-    std::fprintf(stderr, "ui-stress checkpoint: %s\n", phase);
-    std::fflush(stderr);
-  };
   const QStringList destinations{
       "Home", "Radio", "Digi", "Panadapter", "EQ", "Logbook",
       "Intelligence", "Sync", "Contest", "Band Maps", "Presets", "DX",
@@ -549,33 +544,20 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
   };
   QElapsedTimer elapsed;
   elapsed.start();
-  checkpoint("start");
   const int initialObjects = window->findChildren<QObject *>().size();
   int peakObjects = initialObjects;
   for (int cycle = 0; cycle < 500; ++cycle) {
-    if (cycle < destinations.size() * 2) {
-      std::fprintf(stderr, "ui-stress workspace: %d %s begin\n", cycle,
-                   qPrintable(destinations.at(cycle % destinations.size())));
-      std::fflush(stderr);
-    }
     desktop.setCurrentDestination(destinations.at(cycle % destinations.size()));
     settle();
-    if (cycle < destinations.size() * 2) {
-      std::fprintf(stderr, "ui-stress workspace: %d %s complete\n", cycle,
-                   qPrintable(destinations.at(cycle % destinations.size())));
-      std::fflush(stderr);
-    }
     if (cycle % 25 == 0)
       peakObjects =
           std::max(peakObjects, int(window->findChildren<QObject *>().size()));
   }
-  checkpoint("workspace cycles complete");
   for (int cycle = 0; cycle < 100; ++cycle) {
     window->setProperty("shackMode", cycle % 2 == 0);
     settle();
   }
   window->setProperty("shackMode", false);
-  checkpoint("shack cycles complete");
   desktop.setCurrentDestination("Settings");
   settle();
   if (QObject *loader = window->findChild<QObject *>("workspaceLoader")) {
@@ -588,7 +570,6 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
       }
     }
   }
-  checkpoint("settings cycles complete");
   QList<QObject *> panels;
   for (QObject *candidate : window->findChildren<QObject *>()) {
     if (candidate->objectName().startsWith(QStringLiteral("canvasPanel-")))
@@ -604,24 +585,20 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
   }
   desktop.resetWorkspaceLayout(QStringLiteral("Settings"));
   settle();
-  checkpoint("panel cycles complete");
   for (int cycle = 0; cycle < 50; ++cycle) {
     window->showFullScreen();
     settle();
     window->showNormal();
     settle();
   }
-  checkpoint("full-screen cycles complete");
   for (int cycle = 0; cycle < 100; ++cycle) {
     window->resize(1180 + (cycle % 7) * 120, 720 + (cycle % 5) * 70);
     settle();
   }
-  checkpoint("resize cycles complete");
   for (int cycle = 0; cycle < 100; ++cycle) {
     desktop.invokeCommand(cycle % 2 == 0 ? "nav.home" : "nav.health");
     settle();
   }
-  checkpoint("command cycles complete");
   desktop.setCurrentDestination("Home");
   window->resize(1440, 900);
   settle();
@@ -643,7 +620,6 @@ bool runUiStress(DesktopApplication &desktop, QQuickWindow *window,
       file.write(QJsonDocument::fromVariant(report).toJson(QJsonDocument::Indented)) < 0 ||
       !file.commit())
     return false;
-  checkpoint("report committed");
   return finalObjects <= initialObjects + 80;
 }
 
@@ -763,7 +739,7 @@ int main(int argc, char *argv[]) {
     if (!window ||
         !runUiStress(desktop, window, parser.value("ui-stress-report")))
       return 4;
-    QTimer::singleShot(0, &app, &QCoreApplication::quit);
+    QTimer::singleShot(250, &app, &QCoreApplication::quit);
   }
   return app.exec();
 }

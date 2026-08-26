@@ -16,6 +16,24 @@ ApplicationWindow {
     visible: true
     title: isMac ? "RigWeave" : "RigWeave Desktop — " + Desktop.currentDestination
     color: flightline.graphiteDeep
+    palette.window: flightline.graphiteDeep
+    palette.windowText: flightline.primary
+    palette.base: flightline.graphite
+    palette.alternateBase: flightline.graphiteRaised
+    palette.text: flightline.primary
+    palette.button: flightline.graphiteRaised
+    palette.buttonText: flightline.primary
+    palette.brightText: flightline.primary
+    palette.highlight: flightline.amberDark
+    palette.highlightedText: flightline.primary
+    palette.placeholderText: flightline.muted
+    palette.toolTipBase: flightline.graphiteRaised
+    palette.toolTipText: flightline.primary
+    palette.light: flightline.divider
+    palette.midlight: flightline.divider
+    palette.mid: flightline.divider
+    palette.dark: flightline.graphiteDeep
+    palette.shadow: "#000000"
 
     Instantiator {
         model: Desktop.commands

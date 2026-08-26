@@ -5,7 +5,7 @@
 #include <QQuickWindow>
 #include <QSGFlatColorMaterial>
 #include <QSGGeometryNode>
-#include <QSGSimpleTextureNode>
+#include <QSGImageNode>
 #include <algorithm>
 #include <utility>
 
@@ -38,18 +38,11 @@ public:
     peak->setMaterial(peakMaterial);
     appendChildNode(peak);
   }
-  ~PanadapterNode() override {
-    if (waterfall)
-      waterfall->setTexture(nullptr);
-    delete texture;
-  }
-
-  QSGSimpleTextureNode *waterfall{};
+  QSGImageNode *waterfall{};
   QSGGeometry *spectrumGeometry{};
   QSGGeometryNode *spectrum{};
   QSGGeometry *peakGeometry{};
   QSGGeometryNode *peak{};
-  QSGTexture *texture{};
   quint64 sequence{};
 };
 
@@ -82,6 +75,7 @@ void updateLine(QSGGeometry &geometry, const QVector<float> &values,
 PanadapterSceneItem::PanadapterSceneItem(QQuickItem *parent)
     : QQuickItem(parent) {
   setFlag(ItemHasContents, true);
+  setClip(true);
 }
 QObject *PanadapterSceneItem::source() const { return m_source; }
 void PanadapterSceneItem::setSource(QObject *value) {
@@ -196,23 +190,29 @@ QSGNode *PanadapterSceneItem::updatePaintNode(QSGNode *oldNode,
       node->sequence != frame.sequence) {
     if (QSGTexture *replacement =
             window()->createTextureFromImage(frame.waterfall)) {
-      if (!node->waterfall) {
-        node->waterfall = new QSGSimpleTextureNode;
-        node->prependChildNode(node->waterfall);
+      replacement->setFiltering(QSGTexture::Linear);
+      auto *replacementNode = window()->createImageNode();
+      if (!replacementNode) {
+        delete replacement;
+        return node;
       }
-      node->waterfall->setTexture(nullptr);
-      delete node->texture;
-      node->texture = replacement;
-      node->texture->setFiltering(QSGTexture::Linear);
-      node->waterfall->setTexture(node->texture);
-      node->waterfall->setRect(waterfallBounds);
-      node->waterfall->setSourceRect(
-          QRectF(first, 0, visible, frame.waterfall.height()));
+      replacementNode->setTexture(replacement);
+      replacementNode->setOwnsTexture(true);
+      if (node->waterfall) {
+        node->removeChildNode(node->waterfall);
+        delete node->waterfall;
+      }
+      node->waterfall = replacementNode;
+      node->prependChildNode(node->waterfall);
       node->sequence = frame.sequence;
     }
   }
-  if (!waterfallVisible && node->waterfall)
-    node->waterfall->setRect({});
+  if (node->waterfall) {
+    node->waterfall->setRect(waterfallVisible ? waterfallBounds : QRectF{});
+    if (waterfallVisible)
+      node->waterfall->setSourceRect(
+          QRectF(first, 0, visible, frame.waterfall.height()));
+  }
   queueRendererHealth(
       QStringLiteral("Healthy · scene graph · %1 bins · DPR %2")
           .arg(visible)

@@ -6,6 +6,13 @@ import "../Components"
 WorkspaceCanvas {
     workspaceKey: "Home"
 
+    component HomeMetricTile: MetricTile {
+        Layout.fillWidth: true
+        Layout.minimumWidth: 128
+        Layout.preferredWidth: 190
+        Layout.maximumWidth: 220
+    }
+
     CanvasPanel {
         panelKey: "safety"
         title: "Startup safety state"
@@ -24,17 +31,17 @@ WorkspaceCanvas {
         defaultY: 108
         defaultWidth: parent ? parent.width : 1200
         defaultHeight: 178
-        Flow {
+        RowLayout {
             anchors.fill: parent
             spacing: 12
-            MetricTile { label: "Station"; value: "OM0RX"; truth: "Configured operator default" }
-            MetricTile { label: "Local QSOs"; value: Desktop.intelligence().qsos ?? 0; truth: "Canonical desktop database" }
-            MetricTile { label: "Radio"; value: Radio.state.startsWith("Connected") ? "ON LINE" : "OFF LINE"; truth: Radio.state }
-            MetricTile { label: "Cluster"; value: Spots.count; truth: Cluster.state + " / shared repository" }
-            MetricTile { label: "Wavelog"; value: Wavelog.pendingCount; truth: Wavelog.state + " / pending" }
-            MetricTile { label: "Next satellite"; value: Parity.satellitePasses.count > 0 ? Parity.satellitePasses.item(0).title : "—"; truth: "Local SGP4 / no automatic action" }
-            MetricTile { label: "RF paths"; value: RfObservations.count; truth: RfObservations.filterSummary }
-            Button { text: "Open Live RF / Outlook"; onClicked: Desktop.currentDestination = "Intelligence" }
+            HomeMetricTile { label: "Station"; value: "OM0RX"; truth: "Configured operator default" }
+            HomeMetricTile { label: "Local QSOs"; value: Desktop.intelligence().qsos ?? 0; truth: "Canonical desktop database" }
+            HomeMetricTile { label: "Radio"; value: Radio.state.startsWith("Connected") ? "ON LINE" : "OFF LINE"; truth: Radio.state }
+            HomeMetricTile { label: "Cluster"; value: Spots.count; truth: Cluster.state + " / shared repository" }
+            HomeMetricTile { label: "Wavelog"; value: Wavelog.pendingCount; truth: Wavelog.state + " / pending" }
+            HomeMetricTile { label: "Next satellite"; value: Parity.satellitePasses.count > 0 ? Parity.satellitePasses.item(0).title : "—"; truth: "Local SGP4 / no automatic action" }
+            HomeMetricTile { label: "RF paths"; value: RfObservations.count; truth: RfObservations.filterSummary }
+            Button { text: "Open Live RF / Outlook"; Layout.minimumWidth: 154; onClicked: Desktop.currentDestination = "Intelligence" }
         }
     }
 

@@ -220,12 +220,17 @@ QVariantList DesktopApplication::commands() const {
 QVariantMap DesktopApplication::panelGeometry(
     const QString &workspace, const QString &panel,
     const QVariantMap &fallback) const {
+  QVariantMap result = fallback;
+  result[QStringLiteral("stored")] = false;
   if (!m_configuration || workspace.isEmpty() || panel.isEmpty())
-    return fallback;
+    return result;
   const QVariantMap layouts = m_configuration->section("desktopLayouts");
   const QVariantMap workspaceLayout = layouts.value(workspace).toMap();
-  const QVariantMap saved = workspaceLayout.value(panel).toMap();
-  return saved.isEmpty() ? fallback : saved;
+  QVariantMap saved = workspaceLayout.value(panel).toMap();
+  if (saved.isEmpty())
+    return result;
+  saved[QStringLiteral("stored")] = true;
+  return saved;
 }
 
 void DesktopApplication::savePanelGeometry(const QString &workspace,
