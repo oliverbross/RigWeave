@@ -126,6 +126,21 @@ ApplicationWindow {
                         Button { text: "Done Editing"; highlighted: true; onClicked: Desktop.editLayoutMode = false }
                     }
                 }
+                Rectangle {
+                    visible: Notifications.bannerVisible
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: visible ? 52 : 0
+                    color: "#4b351c"
+                    border.color: "#e9a72b"
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 12
+                        anchors.rightMargin: 8
+                        Label { text: Notifications.bannerTitle; color: "#f4c94e"; font.weight: Font.Bold }
+                        Label { text: Notifications.bannerBody; color: "#f4f0e7"; Layout.fillWidth: true; elide: Text.ElideRight }
+                        Button { text: "Dismiss"; flat: true; onClicked: Notifications.clearBanner() }
+                    }
+                }
                 Loader {
                     id: workspaceLoader
                     objectName: "workspaceLoader"

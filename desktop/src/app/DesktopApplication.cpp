@@ -22,7 +22,8 @@ namespace rigweave::desktop {
 
 DesktopApplication::DesktopApplication(QObject *parent)
     : QObject(parent), m_rfObservations(this), m_cluster(&m_spots, this),
-      m_parity(this), m_supportBundle(&m_paths, this) {
+      m_parity(this), m_keyer(this), m_notifications(this),
+      m_supportBundle(&m_paths, this) {
   connect(
       &m_radio, &DesktopRadioController::iqFrame, &m_panadapter,
       [this](const QString &id, quint32 rate, const QVector<float> &values) {
@@ -35,6 +36,11 @@ DesktopApplication::DesktopApplication(QObject *parent)
                 m_panadapter.currentReceiverId()))
           m_panadapter.setCurrentReceiverId(id);
       });
+  connect(&m_radio, &DesktopRadioController::rxAudioFrame, &m_parity,
+          [this](const QString &id, quint32 rate,
+                 const QVector<float> &values) {
+            m_parity.feedDigiAudio(id, rate, values);
+          });
 }
 DesktopApplication::~DesktopApplication() { shutdown(); }
 
@@ -71,6 +77,17 @@ bool DesktopApplication::initialize(QString *error) {
                                     error))
     return false;
   m_configuration->setSection("radioProfiles", m_radio.configuration());
+  if (!m_rotator.restoreConfiguration(
+          m_configuration->section("rotatorProfiles"), error))
+    return false;
+  m_configuration->setSection("rotatorProfiles", m_rotator.configuration());
+  if (!m_keyer.restoreConfiguration(m_configuration->section("keyer"), error))
+    return false;
+  m_configuration->setSection("keyer", m_keyer.configuration());
+  if (!m_notifications.restoreConfiguration(
+          m_configuration->section("alerts"), error))
+    return false;
+  m_configuration->setSection("alerts", m_notifications.configuration());
   if (!m_panadapter.restoreConfiguration(m_configuration->section("panadapter"),
                                          error))
     return false;
@@ -83,6 +100,17 @@ bool DesktopApplication::initialize(QString *error) {
     if (m_configuration)
       m_configuration->setSection("radioProfiles", m_radio.configuration());
   });
+  connect(&m_rotator, &DesktopRotatorController::snapshotChanged, this, [this] {
+    if (m_configuration)
+      m_configuration->setSection("rotatorProfiles",
+                                  m_rotator.configuration());
+  });
+  connect(&m_notifications, &DesktopNotificationController::profileChanged,
+          this, [this] {
+            if (m_configuration)
+              m_configuration->setSection("alerts",
+                                          m_notifications.configuration());
+          });
   connect(&m_panadapter, &DesktopPanadapter::settingsChanged, this, [this] {
     if (m_configuration)
       m_configuration->setSection("panadapter", m_panadapter.configuration());
@@ -107,8 +135,34 @@ bool DesktopApplication::initialize(QString *error) {
   m_wavelog->setCredentialResolver([this](const QString &alias) {
     return m_credentials.read(alias).value_or(QString{});
   });
+  m_parity.setCredentialResolver([this](const QString &alias) {
+    return m_credentials.read(alias).value_or(QString{});
+  });
   if (!m_parity.open(m_paths.databases(), m_paths.cache(), m_demoMode, error))
     return false;
+  if (!m_parity.restoreGroupsConfiguration(
+          m_configuration->section("groupsio"), error))
+    return false;
+  m_configuration->setSection("groupsio", m_parity.groupsConfiguration());
+  connect(&m_parity, &DesktopParityPlatform::groupsConfigurationChanged, this,
+          [this] {
+            if (m_configuration)
+              m_configuration->setSection("groupsio",
+                                          m_parity.groupsConfiguration());
+          });
+  const auto refreshSpotProjections = [this] {
+    QVariantList spots;
+    spots.reserve(m_spots.rowCount());
+    for (int index = 0; index < m_spots.rowCount(); ++index)
+      spots << m_spots.exact(index);
+    m_parity.refreshSpotProjections(spots);
+  };
+  connect(&m_spots, &SpotRepository::countChanged, &m_parity,
+          refreshSpotProjections);
+  refreshSpotProjections();
+  connect(&m_parity, &DesktopParityPlatform::notificationRequested,
+          &m_notifications, &DesktopNotificationController::deliver,
+          Qt::UniqueConnection);
   if (m_demoMode) {
     m_rfObservations.loadDeterministicDemo();
     const qint64 now = QDateTime::currentSecsSinceEpoch();
@@ -138,6 +192,8 @@ void DesktopApplication::expose(QQmlApplicationEngine &engine) {
   context->setContextProperty("Rotator", &m_rotator);
   context->setContextProperty("Panadapter", &m_panadapter);
   context->setContextProperty("Parity", &m_parity);
+  context->setContextProperty("Keyer", &m_keyer);
+  context->setContextProperty("Notifications", &m_notifications);
   context->setContextProperty("CredentialVault", &m_credentials);
   context->setContextProperty("SupportBundle", &m_supportBundle);
 }
@@ -431,6 +487,12 @@ QVariantMap DesktopApplication::health() const {
                   : 0},
       {"projection", projection ? "Verified" : projectionError},
       {"domainStores", m_parity.databaseHealth()},
+      {"functionalOwners",
+       QVariantMap{{"closure", m_parity.closureSummary()},
+                   {"safety", m_parity.safetyState()},
+                   {"digi", m_parity.digiState()},
+                   {"contest", m_parity.contestState()},
+                   {"n1mm", m_parity.n1mmState()}}},
       {"wavelog", m_wavelog ? m_wavelog->state() : "Unavailable"},
       {"cluster", m_cluster.state()},
       {"radio", m_radio.health()},
@@ -448,7 +510,11 @@ QVariantMap DesktopApplication::health() const {
            {"selectedId", m_rfObservations.selectedId()}}},
       {"configuration", m_configuration ? "Loaded" : "Unavailable"},
       {"providers", QStringLiteral("%1 registered; disabled by default")
-                        .arg(m_parity.providers()->rowCount())}};
+                        .arg(m_parity.providers()->rowCount())},
+      {"keyer", m_keyer.state()},
+      {"notifications",
+       QVariantMap{{"profile", m_notifications.profile()},
+                   {"backend", m_notifications.backend()}}}};
 }
 QVariantMap DesktopApplication::buildInformation() const {
   return {{"buildSha", QString::fromLatin1(RIGWEAVE_BUILD_SHA).isEmpty()
@@ -505,6 +571,7 @@ bool DesktopApplication::saveFastEntry(const QVariantMap &values) {
 
 void DesktopApplication::globalStop() {
   m_parity.globalStop();
+  m_keyer.stop();
   m_radio.globalStop();
   m_rotator.stop();
   m_panadapter.stop();
@@ -522,6 +589,8 @@ void DesktopApplication::shutdown() {
     m_wavelog->close();
   m_cluster.disconnectProfile();
   m_parity.close();
+  m_keyer.stop();
+  m_notifications.clearBanner();
   m_panadapter.stop();
   m_rotator.stop();
   m_rotator.disconnectRotator();

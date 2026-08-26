@@ -4,7 +4,11 @@ import QtQuick.Layouts
 import "../Components"
 
 WorkspaceCanvas {
+    id: root
     workspaceKey: "EQ"
+    property var rxDraft: [0,0,0,0,0,0,0,0]
+    property var txDraft: [0,0,0,0,0,0,0,0]
+    property bool txDirection: false
 
     CanvasPanel {
         panelKey: "safety"
@@ -26,7 +30,7 @@ WorkspaceCanvas {
             spacing: 10
             RowLayout {
                 Layout.fillWidth: true
-                ComboBox { model: ["RX EQ", "TX EQ"]; Accessible.name: "Equalizer direction" }
+                ComboBox { model: ["RX EQ", "TX EQ"]; Accessible.name: "Equalizer direction"; onCurrentIndexChanged: root.txDirection = currentIndex === 1 }
                 ComboBox { model: ["Current profile", "Speech", "Field", "Flat"]; Accessible.name: "Equalizer profile" }
                 StatusChip { text: Radio.state; kind: Radio.state.startsWith("Connected") ? "healthy" : "hold" }
                 Label { text: "READBACK  UNAVAILABLE"; color: "#42c77b"; font.family: "monospace"; font.weight: Font.Bold }
@@ -76,6 +80,7 @@ WorkspaceCanvas {
                 Layout.minimumHeight: 260
                 spacing: 12
                 Repeater {
+                    id: bandControls
                     model: ["50", "100", "200", "400", "800", "1.6k", "3.2k", "6.4k"]
                     Rectangle {
                         required property int index
@@ -87,13 +92,14 @@ WorkspaceCanvas {
                         ColumnLayout {
                             anchors.fill: parent
                             anchors.margins: 8
-                            Label { text: "0 dB"; color: "#f4c94e"; font.family: "monospace"; Layout.alignment: Qt.AlignHCenter }
+                            Label { text: gain.value.toFixed(0) + " dB"; color: "#f4c94e"; font.family: "monospace"; Layout.alignment: Qt.AlignHCenter }
                             Slider {
+                                id: gain
                                 from: -12
                                 to: 12
-                                value: 0
+                                value: root.txDirection ? root.txDraft[index] : root.rxDraft[index]
                                 orientation: Qt.Vertical
-                                enabled: false
+                                onMoved: { const values=(root.txDirection ? root.txDraft : root.rxDraft).slice(); values[index]=Math.round(value); if (root.txDirection) root.txDraft=values; else root.rxDraft=values }
                                 Layout.fillHeight: true
                                 Layout.preferredWidth: 28
                                 Layout.alignment: Qt.AlignHCenter
@@ -128,8 +134,8 @@ WorkspaceCanvas {
                 Label { text: "Source: no accepted capture route"; color: "#aeb5ba" }
                 Label { text: "Baseline: radio readback unavailable"; color: "#aeb5ba" }
                 Item { Layout.fillWidth: true }
-                Button { text: "Reset draft"; enabled: false }
-                Button { text: "Apply and verify"; enabled: false; highlighted: true; ToolTip.visible: hovered; ToolTip.text: "Capability/readback gate is closed" }
+                Button { text: "Reset draft"; onClicked: { root.rxDraft=[0,0,0,0,0,0,0,0]; root.txDraft=[0,0,0,0,0,0,0,0] } }
+                Button { text: "Review apply"; highlighted: true; onClicked: { if (Parity.saveEqDraft(root.rxDraft,root.txDraft)) Parity.reviewEqApply() } ToolTip.visible: hovered; ToolTip.text: "Opens a capability/readback review; no command is sent" }
             }
         }
     }

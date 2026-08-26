@@ -35,7 +35,12 @@ WorkspaceCanvas {
         defaultY:206
         defaultWidth:parent?(parent.width-24)/3:380
         defaultHeight:parent?parent.height-206:410
-        Label { anchors.fill:parent; text:"Last-good provider cache · global / map-centre / bounds scopes"; color:"#98a0a6"; wrapMode:Text.WordWrap }
+        ColumnLayout { anchors.fill:parent
+            Label { text:Parity.operationsRows.item(0).state; color:"#f4c94e"; font.weight:Font.Bold }
+            Label { Layout.fillWidth:true; text:Parity.operationsRows.item(0).detail; color:"#98a0a6"; wrapMode:Text.WordWrap }
+            Item { Layout.fillHeight:true }
+            Button { text:"Review provider scope"; onClicked:Parity.prepareReceiveReview("DX Calendar",Parity.operationsRows.item(0)) }
+        }
     }
     CanvasPanel {
         panelKey:"contest-calendar"
@@ -45,7 +50,12 @@ WorkspaceCanvas {
         defaultY:206
         defaultWidth:parent?(parent.width-24)/3:380
         defaultHeight:parent?parent.height-206:410
-        Label { anchors.fill:parent; text:"Versioned contest definitions and official rules links"; color:"#98a0a6"; wrapMode:Text.WordWrap }
+        ColumnLayout { anchors.fill:parent
+            Label { text:Parity.operationsRows.item(1).state; color:"#42c77b"; font.weight:Font.Bold }
+            Label { Layout.fillWidth:true; text:Parity.operationsRows.item(1).detail; color:"#98a0a6"; wrapMode:Text.WordWrap }
+            Item { Layout.fillHeight:true }
+            Button { text:"Review definitions"; onClicked:Parity.prepareReceiveReview("Contest Calendar",Parity.operationsRows.item(1)) }
+        }
     }
     CanvasPanel {
         panelKey:"activation-planner"
@@ -55,7 +65,12 @@ WorkspaceCanvas {
         defaultY:206
         defaultWidth:parent?(parent.width-24)/3:380
         defaultHeight:parent?parent.height-206:410
-        Label { anchors.fill:parent; text:"Provider truth, offline cache and logger review only"; color:"#98a0a6"; wrapMode:Text.WordWrap }
+        ColumnLayout { anchors.fill:parent
+            Label { text:Parity.operationsRows.item(2).state; color:"#f4c94e"; font.weight:Font.Bold }
+            Label { Layout.fillWidth:true; text:Parity.operationsRows.item(2).detail; color:"#98a0a6"; wrapMode:Text.WordWrap }
+            Item { Layout.fillHeight:true }
+            Button { text:"Planner review"; onClicked:Parity.prepareReceiveReview("Activation Planner",Parity.operationsRows.item(2)) }
+        }
     }
 
     CanvasPanel {
@@ -65,7 +80,13 @@ WorkspaceCanvas {
         defaultY:206
         defaultWidth:parent?parent.width:1200
         defaultHeight:parent?parent.height-206:410
-        WorkspaceList { anchors.fill:parent; sourceModel:Parity.satellitePasses; actionText:"RX preview"; emptyTitle:"No current element catalogue"; emptyDetail:"Refresh CelesTrak/SatNOGS/AMSAT explicitly; local SGP4 remains the prediction authority."; onActionRequested:item=>Parity.selectSatellitePass(item) }
+        ColumnLayout { anchors.fill:parent
+            RowLayout { Layout.fillWidth:true
+                Label { text:"Local SGP4 · supplied element set"; color:"#98a0a6"; Layout.fillWidth:true }
+                Button { text:"Calculate passes…"; onClicked:passCalculator.open() }
+            }
+            WorkspaceList { Layout.fillWidth:true; Layout.fillHeight:true; sourceModel:Parity.satellitePasses; actionText:"RX preview"; emptyTitle:"No current element catalogue"; emptyDetail:"Supply a reviewed TLE and observer position; local SGP4 remains the prediction authority."; onActionRequested:item=>Parity.selectSatellitePass(item) }
+        }
     }
 
     CanvasPanel {
@@ -81,5 +102,20 @@ WorkspaceCanvas {
             Button { text:"Open receive guidance"; onClicked:Parity.prepareReceiveReview("QO-100",{title:"Fixed pointing guidance"}) }
             Item { Layout.fillHeight:true }
         }
+    }
+
+    Dialog { id:passCalculator; title:"Calculate local satellite passes"; modal:true; standardButtons:Dialog.Cancel|Dialog.Ok; width:720
+        ColumnLayout { anchors.fill:parent
+            TextField { id:satName; placeholderText:"Satellite name"; Layout.fillWidth:true }
+            TextField { id:tle1; placeholderText:"TLE line 1"; Layout.fillWidth:true; font.family:"monospace" }
+            TextField { id:tle2; placeholderText:"TLE line 2"; Layout.fillWidth:true; font.family:"monospace" }
+            RowLayout { Layout.fillWidth:true
+                TextField { id:observerLat; placeholderText:"Latitude"; validator:DoubleValidator{bottom:-90;top:90} Layout.fillWidth:true }
+                TextField { id:observerLon; placeholderText:"Longitude"; validator:DoubleValidator{bottom:-180;top:180} Layout.fillWidth:true }
+                TextField { id:observerAlt; placeholderText:"Altitude km"; text:"0"; validator:DoubleValidator{bottom:-1;top:20} Layout.fillWidth:true }
+            }
+            Label { text:"Calculation is receive-only. It cannot enable Doppler control, TX or rotator movement."; color:"#98a0a6"; Layout.fillWidth:true; wrapMode:Text.WordWrap }
+        }
+        onAccepted:{ const now=Math.floor(Date.now()/1000); Parity.calculateSatellitePasses(satName.text,tle1.text,tle2.text,Number(observerLat.text),Number(observerLon.text),Number(observerAlt.text),now,now+86400) }
     }
 }

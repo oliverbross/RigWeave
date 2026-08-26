@@ -1,8 +1,16 @@
 #include "rigweave/desktop/DesktopRadioController.hpp"
 
 #include <algorithm>
+#include <array>
 #include <iterator>
+#include <QRegularExpression>
+#include <QSet>
+#include <QUrl>
 #include <tuple>
+
+#ifdef RIGWEAVE_HAVE_NATIVE_DIGI
+#include "rigweave_flex.h"
+#endif
 
 #ifdef RIGWEAVE_HAVE_HAMLIB
 #include <hamlib/rig.h>
@@ -126,6 +134,19 @@ DesktopRadioController::DesktopRadioController(QObject *parent)
     : QObject(parent), m_tci(this), m_receivers(this) {
   m_poll.setInterval(250);
   connect(&m_poll, &QTimer::timeout, this, &DesktopRadioController::poll);
+  connect(&m_nativeSerial, &QSerialPort::readyRead, this, [this] {
+    consumeNative(m_nativeSerial.readAll());
+  });
+  connect(&m_nativeTcp, &QTcpSocket::readyRead, this, [this] {
+    consumeNative(m_nativeTcp.readAll());
+  });
+  connect(&m_nativeTcp, &QTcpSocket::errorOccurred, this,
+          [this](QAbstractSocket::SocketError) {
+            if (m_backend != "native")
+              return;
+            m_lastError = m_nativeTcp.errorString().left(300);
+            emit error(m_lastError);
+          });
   connect(&m_tci, &TciClient::stateChanged, this,
           &DesktopRadioController::syncTci);
   connect(&m_tci, &TciClient::receiversChanged, this,
@@ -203,6 +224,74 @@ bool DesktopRadioController::connectRadio(int modelId, const QString &port,
   emit error("This build was compiled without pinned Hamlib 4.7.2");
   return false;
 #endif
+}
+
+bool DesktopRadioController::connectNativeProfile(const QString &profileId,
+                                                  const QString &route,
+                                                  int baudRate) {
+  disconnectRadio();
+  const QString id = profileId.trimmed().toUpper();
+  const QSet<QString> supported{"KX3", "KX2", "FLEX", "QMX", "QMX+",
+                                "RGO-V6"};
+  if (!supported.contains(id) || route.trimmed().isEmpty()) {
+    emit error(id == "RGO-UNKNOWN"
+                   ? "Unknown RGO generation remains disconnected; framing is not guessed"
+                   : "A supported native profile and explicit route are required");
+    return false;
+  }
+  bool opened = false;
+  const QUrl endpoint(route);
+  if (endpoint.isValid() &&
+      (endpoint.scheme() == "tcp" || endpoint.scheme() == "flex")) {
+    const int port = endpoint.port();
+    if (endpoint.host().isEmpty() || port < 1 || port > 65535) {
+      emit error("Native TCP route must be tcp://host:port");
+      return false;
+    }
+    m_nativeTcp.connectToHost(endpoint.host(), quint16(port));
+    opened = m_nativeTcp.waitForConnected(1500);
+    if (!opened)
+      m_lastError = m_nativeTcp.errorString().left(300);
+  } else {
+    if (id == "FLEX") {
+      emit error("FlexRadio native command channel requires tcp://host:port");
+      return false;
+    }
+    m_nativeSerial.setPortName(route.trimmed());
+    m_nativeSerial.setBaudRate(std::clamp(baudRate, 1200, 921600));
+    m_nativeSerial.setDataBits(QSerialPort::Data8);
+    m_nativeSerial.setParity(QSerialPort::NoParity);
+    m_nativeSerial.setStopBits(QSerialPort::OneStop);
+    m_nativeSerial.setFlowControl(QSerialPort::NoFlowControl);
+    opened = m_nativeSerial.open(QIODevice::ReadWrite);
+    if (!opened)
+      m_lastError = m_nativeSerial.errorString().left(300);
+  }
+  if (!opened) {
+    emit error(QStringLiteral("Native radio connect failed: %1").arg(m_lastError));
+    disconnectRadio();
+    return false;
+  }
+  m_backend = "native";
+  m_nativeProfileId = id;
+  m_model = id;
+  m_generation++;
+  m_activeReceiverId = m_listeningReceiverId = m_transmitReceiverId =
+      "native:0";
+  m_state = id == "RGO-V6"
+                ? "Connecting — proving RGO ONE V6 identity"
+                : "Connected — native receive/read controls; PTT/TUNE disabled";
+  m_backendCapabilities = {{"receiverCount", 1},
+                           {"iqStreaming", id == "FLEX"},
+                           {"rxAudioStreaming", false},
+                           {"readbackRequired", true},
+                           {"ptt", false},
+                           {"tune", false},
+                           {"profile", id}};
+  m_poll.start();
+  pollNative();
+  emit snapshotChanged();
+  return true;
 }
 
 bool DesktopRadioController::connectTciProfile(const QString &profileId) {
@@ -300,6 +389,12 @@ void DesktopRadioController::startConfiguredAutoConnect() {
 void DesktopRadioController::disconnectRadio() {
   m_poll.stop();
   m_tci.disconnectFromServer();
+  if (m_nativeSerial.isOpen())
+    m_nativeSerial.close();
+  if (m_nativeTcp.state() != QAbstractSocket::UnconnectedState)
+    m_nativeTcp.abort();
+  m_nativeBuffer.clear();
+  m_nativeProfileId.clear();
 #ifdef RIGWEAVE_HAVE_HAMLIB
   if (m_rig) {
     auto *rig = static_cast<RIG *>(m_rig);
@@ -428,6 +523,12 @@ bool DesktopRadioController::requestFrequency(qulonglong hz) {
                                       .value("selectedChannel")
                                       .toInt(),
                                   hz);
+  if (m_backend == "native") {
+    if (!m_state.startsWith("Connected"))
+      return false;
+    const QByteArray setter = nativeFrame("setFrequency", hz);
+    return !setter.isEmpty() && writeNative(setter);
+  }
 #ifdef RIGWEAVE_HAVE_HAMLIB
   if (!m_rig || hz < 100000 || hz > 10500000000ULL)
     return false;
@@ -447,6 +548,12 @@ bool DesktopRadioController::requestFrequency(qulonglong hz) {
 bool DesktopRadioController::requestMode(const QString &value) {
   if (m_backend == "tci")
     return m_tci.requestMode(activeTciIndex(), value);
+  if (m_backend == "native") {
+    if (!m_state.startsWith("Connected"))
+      return false;
+    const QByteArray setter = nativeFrame("setMode", value);
+    return !setter.isEmpty() && writeNative(setter);
+  }
 #ifdef RIGWEAVE_HAVE_HAMLIB
   if (!m_rig)
     return false;
@@ -468,6 +575,10 @@ bool DesktopRadioController::requestMode(const QString &value) {
 }
 
 void DesktopRadioController::poll() {
+  if (m_backend == "native") {
+    pollNative();
+    return;
+  }
 #ifdef RIGWEAVE_HAVE_HAMLIB
   if (!m_rig)
     return;
@@ -484,6 +595,120 @@ void DesktopRadioController::poll() {
                       m_transmitReceiverId);
   emit snapshotChanged();
 #endif
+}
+
+QByteArray DesktopRadioController::nativeFrame(const QString &operation,
+                                               const QVariant &value) const {
+  const QString op = operation.trimmed().toLower();
+  if (m_nativeProfileId == "FLEX") {
+#ifdef RIGWEAVE_HAVE_NATIVE_DIGI
+    std::array<char, 256> output{};
+    int count = -1;
+    if (op == "keepalive")
+      count = rw_flex_keepalive(output.data(), output.size());
+    else if (op == "setfrequency")
+      count = rw_flex_frequency(0, value.toULongLong(), output.data(),
+                                output.size());
+    else if (op == "setmode")
+      count = rw_flex_mode(0, value.toString().toUtf8().constData(),
+                           output.data(), output.size());
+    return count > 0 ? QByteArray(output.data(), count) : QByteArray{};
+#else
+    return {};
+#endif
+  }
+  if (op == "identity")
+    return m_nativeProfileId == "RGO-V6" ? QByteArray("ID;") : QByteArray{};
+  if (op == "frequency")
+    return "FA;";
+  if (op == "mode")
+    return "MD;";
+  if (op == "setfrequency") {
+    const quint64 hz = value.toULongLong();
+    if (hz < 100000 || hz > 60000000)
+      return {};
+    return QStringLiteral("FA%1;")
+        .arg(hz, 11, 10, QLatin1Char('0'))
+        .toLatin1();
+  }
+  if (op == "setmode") {
+    static const QHash<QString, char> modes{{"LSB", '1'}, {"USB", '2'},
+                                            {"CW", '3'},  {"FM", '4'},
+                                            {"AM", '5'},  {"DIGU", '6'},
+                                            {"CWR", '7'}, {"DIGL", '9'}};
+    const auto it = modes.constFind(value.toString().trimmed().toUpper());
+    return it == modes.cend() ? QByteArray{}
+                              : QByteArray("MD") + QByteArray(1, it.value()) + ";";
+  }
+  return {};
+}
+
+bool DesktopRadioController::writeNative(const QByteArray &frame) {
+  if (frame.isEmpty() || frame.size() > 256 ||
+      frame.contains("TX") || frame.contains("RX") || frame.contains("TQ"))
+    return false;
+  if (m_nativeSerial.isOpen())
+    return m_nativeSerial.write(frame) == frame.size();
+  if (m_nativeTcp.state() == QAbstractSocket::ConnectedState)
+    return m_nativeTcp.write(frame) == frame.size();
+  return false;
+}
+
+void DesktopRadioController::pollNative() {
+  if (m_nativeProfileId.isEmpty())
+    return;
+  if (m_nativeProfileId == "FLEX") {
+    writeNative(nativeFrame("keepalive"));
+    return;
+  }
+  if (m_nativeProfileId == "RGO-V6" && !m_state.startsWith("Connected")) {
+    writeNative(nativeFrame("identity"));
+    return;
+  }
+  writeNative(nativeFrame("frequency"));
+  writeNative(nativeFrame("mode"));
+}
+
+void DesktopRadioController::consumeNative(const QByteArray &bytes) {
+  for (const char byte : bytes) {
+    const uchar value = uchar(byte);
+    if (value < 0x20 || value > 0x7e)
+      continue;
+    if (m_nativeBuffer.size() >= 4096) {
+      m_nativeBuffer.clear();
+      m_lastError = "Native radio response exceeded 4096-byte bound";
+      emit error(m_lastError);
+      return;
+    }
+    m_nativeBuffer.append(byte);
+    if (byte != ';' && byte != '\n')
+      continue;
+    const QByteArray frame = m_nativeBuffer.trimmed();
+    m_nativeBuffer.clear();
+    if (frame.size() > 128)
+      continue;
+    if (m_nativeProfileId == "RGO-V6" && frame == "ID006;") {
+      m_state = "Connected — proven RGO ONE V6 receive/read controls; PTT/TUNE disabled";
+    }
+    const QRegularExpression frequency(QStringLiteral("^FA(\\d{11});$"));
+    const auto frequencyMatch =
+        frequency.match(QString::fromLatin1(frame));
+    if (frequencyMatch.hasMatch())
+      m_frequencyHz = frequencyMatch.captured(1).toULongLong();
+    const QRegularExpression mode(QStringLiteral("^MD([1-9]);$"));
+    const auto modeMatch = mode.match(QString::fromLatin1(frame));
+    if (modeMatch.hasMatch()) {
+      static const QHash<QChar, QString> modes{{'1', "LSB"}, {'2', "USB"},
+                                               {'3', "CW"},  {'4', "FM"},
+                                               {'5', "AM"},  {'6', "DIGU"},
+                                               {'7', "CWR"}, {'9', "DIGL"}};
+      m_mode = modes.value(modeMatch.captured(1).at(0));
+    }
+    const QVariantMap row = hamlibSnapshot(m_model, m_frequencyHz, m_mode);
+    m_receivers.replace({row}, m_activeReceiverId, m_listeningReceiverId,
+                        m_transmitReceiverId);
+    emit snapshotChanged();
+  }
 }
 
 QVariantMap DesktopRadioController::configuration() const {

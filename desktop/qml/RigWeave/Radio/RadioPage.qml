@@ -49,6 +49,22 @@ WorkspaceCanvas {
                 color: "#f4c94e"
                 wrapMode: Text.WordWrap
             }
+            ComboBox {
+                id: nativeProfile
+                visible: backend.currentIndex < 7
+                Layout.fillWidth: true
+                model: Parity.nativeRadioProfiles
+                textRole: "title"
+                valueRole: "key"
+                Accessible.name: "Native radio profile"
+            }
+            TextField { id: nativeRoute; visible: backend.currentIndex < 7; Layout.fillWidth: true; placeholderText: nativeProfile.currentValue === "FLEX" ? "tcp://radio:4992" : "Exact serial port identity" }
+            RowLayout {
+                visible: backend.currentIndex < 7
+                SpinBox { id: nativeBaud; from: 1200; to: 921600; value: 38400; editable: true; Layout.fillWidth: true }
+                Button { text: "Connect"; enabled: nativeRoute.text.trim().length > 0 && nativeProfile.currentValue !== "RGO-UNKNOWN"; onClicked: Radio.connectNativeProfile(nativeProfile.currentValue, nativeRoute.text, nativeBaud.value) }
+            }
+            Label { visible: backend.currentIndex < 7; Layout.fillWidth: true; text: nativeProfile.currentValue === "RGO-UNKNOWN" ? "Unknown generation remains disconnected; no framing is guessed." : "Explicit route only. Readback proves state; transmit commands are rejected."; color: "#aeb5ba"; wrapMode: Text.WordWrap }
             TextField { visible: backend.currentIndex >= 7 && backend.currentIndex < 9; Layout.fillWidth: true; placeholderText: "Find manufacturer or model"; onTextChanged: RadioModels.setSearch(text) }
             ListView {
                 Layout.fillWidth: true
@@ -226,7 +242,7 @@ WorkspaceCanvas {
             ColumnLayout {
                 Layout.preferredWidth: 210
                 Label { text: "KEYER"; color: "#e9a72b"; font.weight: Font.Bold }
-                Repeater { model: Parity.keyerMacros; Button { required property var item; Layout.fillWidth: true; text: item.title; enabled: false; ToolTip.visible: hovered; ToolTip.text: "Foreground TX acceptance required" } }
+                Repeater { model: Parity.keyerMacros; Button { required property var item; Layout.fillWidth: true; text: item.title; onClicked: Keyer.previewMacro(item.key,{MYCALL:"OM0RX"}); ToolTip.visible: hovered; ToolTip.text: "Local preview only; foreground TX acceptance remains pending" } }
                 Item { Layout.fillHeight: true }
                 Button { Layout.fillWidth: true; text: "STOP"; onClicked: Desktop.globalStop() }
             }

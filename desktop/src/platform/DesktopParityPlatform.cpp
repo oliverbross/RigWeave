@@ -152,7 +152,12 @@ DesktopParityPlatform::DesktopParityPlatform(QObject *parent)
     : QObject(parent), m_homeModules(this), m_providers(this), m_digiModes(this),
       m_neuralOpportunities(this), m_contestDefinitions(this), m_contestLog(this),
       m_groupsMessages(this), m_portableActivity(this), m_satellitePasses(this),
-      m_keyerMacros(this), m_network(this) {}
+      m_keyerMacros(this), m_closureLedger(this), m_nativeRadioProfiles(this),
+      m_nativeRotatorProtocols(this), m_presets(this), m_eqBands(this),
+      m_digiDecodes(this), m_bandMapRows(this), m_dxWorkspaceRows(this),
+      m_intelligenceRows(this), m_operationsRows(this), m_alerts(this),
+      m_groupsOutbox(this), m_groupsMemberships(this), m_groupsTopics(this),
+      m_ownerHealth(this), m_network(this) {}
 
 DesktopParityPlatform::~DesktopParityPlatform() { close(); }
 
@@ -180,6 +185,10 @@ bool DesktopParityPlatform::open(const QString &databaseDirectory, const QString
         }
     }
     loadRegistries();
+    if (!loadFunctionalOwners(error)) {
+        close();
+        return false;
+    }
     if (m_demoMode) seedDemo();
     m_closed = false;
     return true;
@@ -369,16 +378,20 @@ void DesktopParityPlatform::seedDemo() {
 }
 
 QVariantMap DesktopParityPlatform::workspaceSummary(const QString &workspace) const {
-    const QHash<QString, QVariantMap> summaries = {
-        {"Home", {{"status", "WINDOWS_NATIVE_PARITY"}, {"detail", "Configurable modules and one provider graph"}}},
-        {"Digi", {{"status", "LIVE_ACCEPTANCE_PENDING"}, {"detail", "Mode truth, exact-route ownership and reviewed TX drafts"}}},
-        {"Contest", {{"status", "WINDOWS_NATIVE_PARITY"}, {"detail", "Schema-2 staging, scoring definitions and idempotent merge ledger"}}},
-        {"Groups.io", {{"status", "LIVE_ACCEPTANCE_PENDING"}, {"detail", "Separate schema-2 store, drafts, outbox and ambiguity states"}}},
-        {"Portable", {{"status", "LIVE_ACCEPTANCE_PENDING"}, {"detail", "Provider truth with receive-review logger handoff"}}},
-        {"Operations", {{"status", "SHARED_CORE_PARITY"}, {"detail", "Calendars, local SGP4 passes and QO-100 guidance"}}},
-        {"Neural", {{"status", "SHARED_CORE_PARITY"}, {"detail", "Schema-5 semantic evidence and 30/60/120 minute outlook"}}}
-    };
-    return summaries.value(workspace, {{"status", "DESKTOP_EQUIVALENT"}, {"detail", "Single desktop authority"}});
+    static const QHash<QString, QString> foundations{
+        {"Home", "Home/HamClock"}, {"Digi", "Digi engines"},
+        {"Contest", "Contest/N1MM"}, {"Groups.io", "Groups.io"},
+        {"Portable", "Portable"}, {"Operations", "Operations planner"},
+        {"Neural", "Neural DX/Empirical Outlook"}, {"Radio", "Native radio profiles"},
+        {"Rotator", "Native rotator protocols"}, {"EQ", "EQ Studio"},
+        {"Presets", "Presets/alerts/notifications"}, {"Band Maps", "Intelligent Band Maps"},
+        {"DX", "DX workspace"}, {"Intelligence", "Intelligence/Awards/Contact Map"}};
+    const QVariantMap closure = closureStatus(foundations.value(workspace, workspace));
+    if (!closure.isEmpty())
+        return {{"status", closure.value("state")},
+                {"detail", closure.value("detail")}};
+    return {{"status", "SOURCE_COMPLETE"},
+            {"detail", "Existing single desktop authority"}};
 }
 
 QVariantMap DesktopParityPlatform::databaseHealth() const {
@@ -598,7 +611,9 @@ void DesktopParityPlatform::globalStop() {
     for (auto it = m_providerSpecs.begin(); it != m_providerSpecs.end(); ++it) {
         if (it->reply) it->reply->abort();
     }
+    if (m_groupsReply) m_groupsReply->abort();
     clearReview();
+    functionalStop();
     m_safetyState = "STOPPED / disconnected / TX off / automation disarmed";
     emit safetyStateChanged();
 }
@@ -607,6 +622,8 @@ void DesktopParityPlatform::close() {
     if (m_closed && m_stores.isEmpty()) return;
     for (auto it = m_providerSpecs.begin(); it != m_providerSpecs.end(); ++it)
         if (it->reply) it->reply->abort();
+    if (m_groupsReply) m_groupsReply->abort();
+    m_groupsReply.clear();
     for (StoreSpec &store : m_stores) {
         const QString connection = store.connection;
         store.database.close();

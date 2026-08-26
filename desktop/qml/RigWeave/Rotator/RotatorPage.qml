@@ -13,16 +13,16 @@ WorkspaceCanvas {
     }
     CanvasPanel { panelKey:"connection"; title:"Rotator connection"; defaultY:108; defaultWidth:parent?parent.width:1200; defaultHeight:104
         RowLayout { anchors.fill:parent
-            ComboBox { id:protocol; model:["Embedded Hamlib","rotctld","GS-232","DCU / Rotor-EZ","EasyComm","SPID","serial-over-TCP","ARCO compatibility"] }
+            ComboBox { id:protocol; model:Parity.nativeRotatorProtocols; textRole:"title"; valueRole:"key"; Layout.preferredWidth:230 }
             TextField {
                 id:modelId
                 placeholderText:"Hamlib model ID"
                 validator:IntValidator{bottom:1}
-                visible:protocol.currentIndex===0
+                visible:protocol.currentValue && protocol.currentValue.toString().startsWith("HAMLIB")
             }
             TextField { id:route; Layout.fillWidth:true; placeholderText:"COM port or network route" }
             SpinBox { id:baud; from:1200; to:921600; value:9600; editable:true }
-            Button { text:"Connect"; enabled:protocol.currentIndex===0; onClicked:Rotator.connectRotator(Number(modelId.text),route.text,baud.value) }
+            Button { text:"Connect"; enabled:protocol.currentValue && route.text.trim().length>0 && protocol.currentValue!=="ARCO" && (!protocol.currentValue.toString().startsWith("HAMLIB") || Number(modelId.text)>0); onClicked:protocol.currentValue.toString().startsWith("HAMLIB")?Rotator.connectRotator(Number(modelId.text),route.text,baud.value):Rotator.connectNative(protocol.currentValue,route.text,baud.value) }
             Button { text:"Disconnect"; onClicked:Rotator.disconnectRotator() }
             Button { text:"STOP"; palette.button:"#8c2525"; palette.buttonText:"white"; onClicked:Rotator.stop() }
         }

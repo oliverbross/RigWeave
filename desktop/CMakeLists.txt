@@ -11,6 +11,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 option(RIGWEAVE_BUILD_TESTS "Build focused desktop tests" ON)
 option(RIGWEAVE_REQUIRE_HAMLIB "Fail configuration when the pinned Hamlib build is unavailable" OFF)
+option(RIGWEAVE_BUILD_NATIVE_DIGI "Build and link the existing native Rust modem engine" ON)
 
 find_package(Qt6 6.11.2 EXACT REQUIRED COMPONENTS
     Core Gui Quick QuickControls2 Qml Network Sql SerialPort Multimedia WebSockets
@@ -36,7 +37,9 @@ set(RIGWEAVE_DESKTOP_SERVICE_SOURCES
     src/network/WavelogSync.cpp
     src/network/ClusterController.cpp
     src/platform/DesktopPlatform.cpp
+    src/platform/DesktopEngagementControllers.cpp
     src/platform/DesktopParityPlatform.cpp
+    src/platform/DesktopFunctionalOwners.cpp
     src/radio/DesktopRadioController.cpp
     src/radio/ReceiverListModel.cpp
     src/radio/TciClient.cpp
@@ -66,6 +69,49 @@ rigweave_target_warnings(rigweave_desktop_services)
 target_compile_definitions(rigweave_desktop_services PRIVATE
     RIGWEAVE_BUILD_SHA="$ENV{GITHUB_SHA}"
     RIGWEAVE_DESKTOP_SCHEMA=16)
+
+if(RIGWEAVE_BUILD_NATIVE_DIGI)
+    find_program(RIGWEAVE_CARGO_EXECUTABLE cargo REQUIRED)
+    get_filename_component(RIGWEAVE_RUST_BIN_DIRECTORY "${RIGWEAVE_CARGO_EXECUTABLE}" DIRECTORY)
+    if(WIN32)
+        set(RIGWEAVE_RUST_TARGET x86_64-pc-windows-gnu)
+        set(RIGWEAVE_RUST_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/../rust/rigweave-flex/target/${RIGWEAVE_RUST_TARGET}/release/librigweave_flex.a")
+    elseif(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+        set(RIGWEAVE_RUST_TARGET aarch64-apple-darwin)
+        set(RIGWEAVE_RUST_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/../rust/rigweave-flex/target/${RIGWEAVE_RUST_TARGET}/release/librigweave_flex.a")
+    elseif(APPLE)
+        set(RIGWEAVE_RUST_TARGET x86_64-apple-darwin)
+        set(RIGWEAVE_RUST_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/../rust/rigweave-flex/target/${RIGWEAVE_RUST_TARGET}/release/librigweave_flex.a")
+    else()
+        set(RIGWEAVE_RUST_TARGET x86_64-unknown-linux-gnu)
+        set(RIGWEAVE_RUST_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/../rust/rigweave-flex/target/${RIGWEAVE_RUST_TARGET}/release/librigweave_flex.a")
+    endif()
+    add_custom_command(
+        OUTPUT "${RIGWEAVE_RUST_LIBRARY}"
+        COMMAND "${CMAKE_COMMAND}" -E env
+                "RUSTC=${RIGWEAVE_RUST_BIN_DIRECTORY}/rustc${CMAKE_EXECUTABLE_SUFFIX}"
+                "${RIGWEAVE_CARGO_EXECUTABLE}" build --manifest-path
+                "${CMAKE_CURRENT_SOURCE_DIR}/../rust/rigweave-flex/Cargo.toml"
+                --release --target "${RIGWEAVE_RUST_TARGET}" --locked
+        DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/../rust/rigweave-flex/Cargo.toml"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../rust/rigweave-flex/Cargo.lock"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../rust/rigweave-flex"
+        COMMENT "Building the existing RigWeave native Digi/Flex engine")
+    add_custom_target(rigweave_desktop_native_digi DEPENDS "${RIGWEAVE_RUST_LIBRARY}")
+    add_dependencies(rigweave_desktop_services rigweave_desktop_native_digi)
+    target_include_directories(rigweave_desktop_services PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../rust/rigweave-flex/include")
+    target_link_libraries(rigweave_desktop_services PUBLIC "${RIGWEAVE_RUST_LIBRARY}")
+    target_compile_definitions(rigweave_desktop_services PRIVATE RIGWEAVE_HAVE_NATIVE_DIGI=1)
+    if(WIN32)
+        target_link_libraries(rigweave_desktop_services PUBLIC bcrypt ntdll userenv ws2_32)
+    elseif(APPLE)
+        target_link_libraries(rigweave_desktop_services PUBLIC "-framework Security" "-framework CoreFoundation")
+    else()
+        target_link_libraries(rigweave_desktop_services PUBLIC dl pthread)
+    endif()
+endif()
 
 qt_add_executable(RigWeaveDesktop WIN32 MACOSX_BUNDLE src/app/main.cpp)
 if(WIN32)

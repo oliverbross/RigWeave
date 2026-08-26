@@ -5,6 +5,8 @@
 
 #include <QAbstractListModel>
 #include <QObject>
+#include <QSerialPort>
+#include <QTcpSocket>
 #include <QTimer>
 
 namespace rigweave::desktop {
@@ -92,6 +94,8 @@ public:
   QVariantMap health() const;
 
   Q_INVOKABLE bool connectRadio(int modelId, const QString &port, int baudRate);
+  Q_INVOKABLE bool connectNativeProfile(const QString &profileId,
+                                        const QString &route, int baudRate);
   Q_INVOKABLE bool connectTciProfile(const QString &profileId);
   Q_INVOKABLE bool saveTciProfile(const QVariantMap &profile);
   Q_INVOKABLE bool removeTciProfile(const QString &profileId);
@@ -118,6 +122,11 @@ signals:
 
 private:
   void poll();
+  void pollNative();
+  void consumeNative(const QByteArray &bytes);
+  bool writeNative(const QByteArray &frame);
+  QByteArray nativeFrame(const QString &operation,
+                         const QVariant &value = {}) const;
   void syncTci();
   void syncSelection();
   void syncTciAttachments();
@@ -127,6 +136,10 @@ private:
   static QVariantMap encodeTciProfile(const TciProfile &profile);
 
   void *m_rig{};
+  QSerialPort m_nativeSerial;
+  QTcpSocket m_nativeTcp;
+  QByteArray m_nativeBuffer;
+  QString m_nativeProfileId;
   QTimer m_poll;
   TciClient m_tci;
   ReceiverListModel m_receivers;

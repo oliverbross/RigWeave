@@ -7,6 +7,7 @@ WorkspaceCanvas {
     id: root
     workspaceKey: "Digi"
     property int cockpitMode: 0
+    property string selectedMode: "FT8"
 
     CanvasPanel {
         panelKey: "safety"
@@ -43,8 +44,8 @@ WorkspaceCanvas {
             }
             Label { text: "MODE FAMILY"; color: "#e9a72b"; font.weight: Font.Bold }
             Repeater {
-                model: ["FT / JS8","CW","RTTY","PSK","SSTV"]
-                Button { required property string modelData; Layout.fillWidth: true; text: modelData; enabled: false; checkable: true; checked: index === 0; Accessible.description: "Mode review only; no validated receive route" }
+                model: [{title:"FT / JS8",mode:"FT8"},{title:"CW",mode:"CW"},{title:"RTTY",mode:"RTTY"},{title:"PSK",mode:"PSK31"},{title:"SSTV",mode:"SSTV"}]
+                Button { required property var modelData; Layout.fillWidth: true; text: modelData.title; checkable: true; checked: root.selectedMode === modelData.mode; onClicked: root.selectedMode = modelData.mode; Accessible.description: "Select receive decoder; transmit remains locked" }
             }
             Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: "#3a4147" }
             Label { text: "SESSION TRUTH"; color: "#e9a72b"; font.weight: Font.Bold }
@@ -54,15 +55,16 @@ WorkspaceCanvas {
                 Label { text: "RADIO"; color: "#929ba2" }
                 Label { text: Radio.state.startsWith("Connected") ? "RX ONLY" : Radio.state; color: Radio.state.startsWith("Connected") ? "#42c77b" : "#f4c94e"; Layout.alignment: Qt.AlignRight }
                 Label { text: "RX"; color: "#929ba2" }
-                Label { text: "STOPPED"; color: "#f4f0e7"; Layout.alignment: Qt.AlignRight }
+                Label { text: Parity.digiState; color: Parity.digiState.startsWith("RX_RUNNING") ? "#42c77b" : "#f4f0e7"; Layout.alignment: Qt.AlignRight; elide: Text.ElideRight; Layout.maximumWidth: 160 }
                 Label { text: "AUDIO"; color: "#929ba2" }
-                Label { text: "NO ROUTE"; color: "#f4c94e"; Layout.alignment: Qt.AlignRight }
+                Label { text: audioRoute.text.length > 0 ? audioRoute.text : "NO ROUTE"; color: audioRoute.text.length > 0 ? "#42c77b" : "#f4c94e"; Layout.alignment: Qt.AlignRight; elide: Text.ElideMiddle; Layout.maximumWidth: 150 }
                 Label { text: "TX"; color: "#929ba2" }
                 Label { text: "SAFE"; color: "#42c77b"; Layout.alignment: Qt.AlignRight }
             }
             Item { Layout.fillHeight: true }
-            Button { Layout.fillWidth: true; text: "Setup reviewed route"; enabled: false; ToolTip.visible: hovered; ToolTip.text: "A desktop route owner is not yet exposed" }
-            Label { Layout.fillWidth: true; text: "Unavailable controls stay restrained until the owning service exposes a validated route."; color: "#aeb5ba"; wrapMode: Text.WordWrap; font.pixelSize: 11 }
+            TextField { id: audioRoute; Layout.fillWidth: true; placeholderText: "Exact audio route identity"; Accessible.description: "Required explicit capture route identity" }
+            ComboBox { id: sampleRate; Layout.fillWidth: true; model: [12000, 48000, 96000]; currentIndex: 1; Accessible.name: "Receive sample rate" }
+            Label { Layout.fillWidth: true; text: "A route starts receive only. TX remains locked and external spots never become decoder evidence."; color: "#aeb5ba"; wrapMode: Text.WordWrap; font.pixelSize: 11 }
         }
     }
 
@@ -99,7 +101,7 @@ WorkspaceCanvas {
                 WorkspaceList {
                     sourceModel: Parity.digiModes
                     actionText: "Review route"
-                    actionsEnabled: Parity.workspaceSummary("Digi").status === "SOURCE_COMPLETE"
+                    actionsEnabled: Parity.closureStatus("Digi").status.toString().startsWith("SOURCE_COMPLETE")
                     stateOverride: "REVIEW ONLY"
                     emptyTitle: "No digital modes"
                     emptyDetail: "No production decode is fabricated."
@@ -108,7 +110,7 @@ WorkspaceCanvas {
                 WorkspaceList {
                     sourceModel: Parity.neuralOpportunities
                     actionText: "Dry run"
-                    actionsEnabled: Parity.workspaceSummary("Digi").status === "SOURCE_COMPLETE"
+                    actionsEnabled: Parity.closureStatus("DX Chaser").status.toString().startsWith("SOURCE_COMPLETE")
                     stateOverride: "EVIDENCE ONLY"
                     emptyTitle: "No eligible local decode"
                     emptyDetail: "An external spot cannot create eligibility."
@@ -157,7 +159,7 @@ WorkspaceCanvas {
                 }
             }
             Item { Layout.fillHeight: true }
-            Button { Layout.fillWidth: true; text: "Start RX"; enabled: false; ToolTip.visible: hovered; ToolTip.text: "Exact audio route acceptance pending" }
+            Button { Layout.fillWidth: true; text: Parity.digiState.startsWith("RX_RUNNING") ? "Stop RX" : "Start RX"; enabled: Parity.digiState.startsWith("RX_RUNNING") || audioRoute.text.trim().length > 0; onClicked: Parity.digiState.startsWith("RX_RUNNING") ? Parity.stopDigi() : Parity.startDigiReceive(root.selectedMode, audioRoute.text, sampleRate.currentValue) }
             Button { Layout.fillWidth: true; text: "Clear review"; onClicked: Parity.globalStop() }
         }
     }
@@ -172,7 +174,7 @@ WorkspaceCanvas {
         panelMinimumHeight: 94
         RowLayout {
             anchors.fill: parent
-            Repeater { model: Parity.keyerMacros; Button { required property var item; text: item.title; enabled: false; ToolTip.visible: hovered; ToolTip.text: "TX acceptance required" } }
+            Repeater { model: Parity.keyerMacros; Button { required property var item; text: item.title; onClicked: Keyer.previewMacro(item.key,{MYCALL:"OM0RX"}); ToolTip.visible: hovered; ToolTip.text: "Local preview only; sending remains unavailable" } }
             Item { Layout.fillWidth: true }
             Label { text: Parity.activeReview.length > 0 ? Parity.activeReview : "No active review"; color: "#f4c94e"; elide: Text.ElideRight; Layout.maximumWidth: 260 }
         }

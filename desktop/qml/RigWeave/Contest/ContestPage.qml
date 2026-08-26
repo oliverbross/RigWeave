@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import "../Components"
 
 WorkspaceCanvas {
+    id: root
     workspaceKey: "Contest"
 
     CanvasPanel {
@@ -22,15 +23,17 @@ WorkspaceCanvas {
         defaultHeight: 142
         ColumnLayout { anchors.fill: parent
             RowLayout { Layout.fillWidth: true
-                ComboBox { model: Parity.contestDefinitions; textRole: "title"; Layout.preferredWidth: 280 }
-                TextField { placeholderText: "Single-line QSO entry"; Layout.fillWidth: true }
-                Button { text: "Stage QSO"; enabled: false; ToolTip.text: "Start an explicit contest session first"; ToolTip.visible: hovered }
+                ComboBox { id: contestDefinition; model: Parity.contestDefinitions; textRole: "title"; valueRole: "key"; Layout.preferredWidth: 230 }
+                TextField { id: stationProfile; placeholderText: "Station profile ID"; text: "desktop-default"; Layout.preferredWidth: 160 }
+                TextField { id: qsoEntry; placeholderText: "CALL BAND MODE"; Layout.fillWidth: true }
+                Button { text: Parity.contestState.startsWith("ACTIVE") ? "Session active" : "Start session"; enabled: !Parity.contestState.startsWith("ACTIVE"); onClicked: Parity.startContest(contestDefinition.currentValue, stationProfile.text) }
+                Button { text: "Stage QSO"; enabled: Parity.contestState.startsWith("ACTIVE") && qsoEntry.text.trim().split(/\s+/).length >= 3; onClicked: { const fields=qsoEntry.text.trim().split(/\s+/); if (Parity.stageContestQso({callsign:fields[0],band:fields[1],mode:fields[2],points:1})) qsoEntry.clear() } }
                 Button { text: "Global STOP"; onClicked: Desktop.globalStop() }
             }
             RowLayout { Layout.fillWidth: true
-                Repeater { model: Parity.keyerMacros; Button { required property var item; text: item.title; enabled: false; ToolTip.text: "Foreground keyer is stopped; transmit acceptance pending"; ToolTip.visible: hovered } }
+                Repeater { model: Parity.keyerMacros; Button { required property var item; text: item.title; onClicked: Keyer.previewMacro(item.key,{MYCALL:"OM0RX"}); ToolTip.text: "Local preview only; transmit acceptance remains pending"; ToolTip.visible: hovered } }
                 Item { Layout.fillWidth: true }
-                StatusChip { text: "N1MM UNARMED"; kind: "hold" }
+                StatusChip { text: Parity.n1mmState; kind: "hold" }
             }
         }
     }
@@ -52,8 +55,8 @@ WorkspaceCanvas {
         defaultWidth: 310
         defaultHeight: parent ? parent.height - 262 : 360
         ColumnLayout { anchors.fill: parent
-            MetricTile { label: "QSOs"; value: Parity.contestLog.count; truth: "Temporary schema-2 staging log" }
-            MetricTile { label: "Merge"; value: "REVIEW"; truth: "Idempotent ledger → canonical QSO owner" }
+            MetricTile { label: "QSOs"; value: Parity.contestScore().qsos; truth: "Temporary schema-2 staging log" }
+            MetricTile { label: "Score"; value: Parity.contestScore().score; truth: "Session score from staged QSO owner" }
             Label { text: "SCP is downloaded at runtime only. Cabrillo and ADIF export remain session-scoped."; color: "#98a0a6"; wrapMode: Text.WordWrap; Layout.fillWidth: true }
             Item { Layout.fillHeight: true }
         }

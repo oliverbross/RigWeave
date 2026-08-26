@@ -3,6 +3,7 @@
 #include "rigweave/desktop/AdifService.hpp"
 #include "rigweave/desktop/ClusterController.hpp"
 #include "rigweave/desktop/DesktopPanadapter.hpp"
+#include "rigweave/desktop/DesktopEngagementControllers.hpp"
 #include "rigweave/desktop/DesktopParityPlatform.hpp"
 #include "rigweave/desktop/DesktopPlatform.hpp"
 #include "rigweave/desktop/DesktopRadioController.hpp"
@@ -90,6 +91,8 @@ private:
   DesktopRotatorController m_rotator;
   DesktopPanadapter m_panadapter;
   DesktopParityPlatform m_parity;
+  DesktopKeyerController m_keyer;
+  DesktopNotificationController m_notifications;
   SupportBundle m_supportBundle;
   std::unique_ptr<QTemporaryDir> m_demoDirectory;
   QString m_currentDestination{"Home"};
