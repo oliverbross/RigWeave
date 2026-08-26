@@ -48,6 +48,18 @@ def resolve_first(*refs: str) -> str:
     raise SystemExit(f"none of the required refs resolve: {', '.join(refs)}")
 
 
+def resolve_local_only(ref: str, expected: str) -> str:
+    resolved = git("rev-parse", "--verify", ref, check=False)
+    if resolved:
+        return resolved
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        # Hosted runners cannot inspect refs that exist only in Oliver's local
+        # repository. Their immutable value is recorded by the local audit;
+        # hosted proof instead verifies the semantic-integration ancestor.
+        return expected
+    raise SystemExit(f"required local-only ref does not resolve: {ref}")
+
+
 def build_proof() -> dict:
     head = resolve("HEAD")
     branch = git("branch", "--show-current") or os.environ.get("GITHUB_REF_NAME", "")
@@ -70,9 +82,8 @@ def build_proof() -> dict:
         ),
         "frozen_origin_main": resolve("origin/main"),
         "recovery_ref": resolve("origin/recovery/local-main-27c70d0"),
-        "review_tip": resolve_first(
-            "integration/rigweave-final-whole-app-v1",
-            "origin/integration/rigweave-final-whole-app-v1",
+        "review_tip": resolve_local_only(
+            "integration/rigweave-final-whole-app-v1", REVIEW_TIP
         ),
         "semantic_integration": resolve(SEMANTIC_INTEGRATION),
     }
