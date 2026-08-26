@@ -18,6 +18,8 @@ import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.util.Locale
 import java.util.UUID
+import org.json.JSONArray
+import org.json.JSONObject
 
 data class ContestReadOnlySnapshot(
     val activeSession: ContestSession? = null,
@@ -179,13 +181,16 @@ class ContestRuntime(
     private val scp = SuperCheckPartialStore(context)
     private val keyerAdapter = ContestKeyerAdapter(keyer, profiles, operatingContext)
     private val mutationAdapter = ContestQsoMutationAdapter(mutations, store, serials)
+    private val n1mmBridge = N1mmQsoBridge(N1mmContestStagingPort { session, draft, revision ->
+        store.stageQso(session, draft, networkRevision = revision)
+    })
     private val scoreScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var scoreGeneration = 0L
     private var scpGeneration = 0L
     private var closed = false
     private var foreground = true
     private var networkArmed = false
-    private val trustedPeers = linkedMapOf<String, N1mmPeerTrust>()
+    private val trustedPeers = loadTrusts().associateByTo(linkedMapOf(), N1mmPeerTrust::station)
     private var peerCache = emptyList<N1mmPeerSnapshot>()
 
     var activeSession by mutableStateOf(loadOrCreateSession(initialDefinition)); private set
@@ -230,15 +235,52 @@ class ContestRuntime(
         lanBroadcastOptIn = prefs.getBoolean("n1mm_lan_opt_in", false),
     )
 
-    private fun newN1mmController() = N1mmNetworkController(n1mmConfig, trusts = trustedPeers.values.toList(), onCommand = { _, decision ->
-        lastMessage = "N1MM ${decision.name}; no radio, keyer, Digi, or silent logging authority"
-    })
+    private fun newN1mmController() = N1mmNetworkController(
+        n1mmConfig,
+        trusts = trustedPeers.values.toList(),
+        onCommand = { station, command, policy, decision ->
+            val result = when (command.command) {
+                N1mmCommand.QSO, N1mmCommand.RESYNCQSO ->
+                    n1mmBridge.receiveAdd(command, station, policy, activeSession, definition, "n1mm:$station")
+                N1mmCommand.REEDITQSO, N1mmCommand.QSODELETE, N1mmCommand.DELETEQS ->
+                    n1mmBridge.receiveEditOrDelete(command)
+                else -> null
+            }
+            lastMessage = result?.let { "N1MM ${it.state.name}: ${it.reason}" }
+                ?: "N1MM ${command.command.name} ${decision.name}; no radio, keyer, Digi, time, file, or arbitrary payload authority"
+        },
+    )
 
     private fun rebuildN1mmController() {
         peerCache = (n1mm.peerSnapshots() + peerCache).distinctBy(N1mmPeerSnapshot::station)
         n1mm.close()
         networkArmed = false
         n1mm = newN1mmController()
+    }
+
+    private fun loadTrusts(): List<N1mmPeerTrust> = runCatching {
+        val rows = JSONArray(prefs.getString("n1mm_trusts_v1", "[]"))
+        List(rows.length()) { index -> rows.getJSONObject(index) }.map { row ->
+            N1mmPeerTrust(
+                row.getString("station"), row.getString("operator"), row.getString("interface"),
+                row.getString("subnet"), row.optString("pinned").ifBlank { null },
+                row.getString("contest"), row.getString("rule"),
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    private fun persistTrusts() {
+        val rows = JSONArray()
+        trustedPeers.values.forEach { trust -> rows.put(JSONObject().apply {
+            put("station", trust.station)
+            put("operator", trust.expectedOperatorCall)
+            put("interface", trust.interfaceName)
+            put("subnet", trust.subnet)
+            put("pinned", trust.pinnedAddress.orEmpty())
+            put("contest", trust.contestName)
+            put("rule", trust.ruleVersion)
+        }) }
+        prefs.edit().putString("n1mm_trusts_v1", rows.toString()).apply()
     }
 
     private fun loadPanelLayout(): ContestPanelLayout {
@@ -411,6 +453,7 @@ class ContestRuntime(
         if (trusted) trustedPeers[station] = N1mmPeerTrust(peer.station, peer.operatorCall, n1mmConfig.interfaceName,
             peer.address, peer.address, definition.cabrilloContestName, definition.version.value)
         else trustedPeers.remove(station)
+        persistTrusts()
         rebuildN1mmController()
         lastMessage = "Peer $station ${if (trusted) "trusted for this exact contest/address contract" else "trust removed"}; network remains unarmed"
     }

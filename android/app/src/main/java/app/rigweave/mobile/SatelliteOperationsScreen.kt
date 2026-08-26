@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,7 +31,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -193,7 +194,7 @@ private fun Qo100Panel(stationGrid: String) {
                     Text("Beacons · 10489.500 · 10489.750 · 10489.9935 · 10490.000 MHz", color = SatMuted)
                     Text("Receive reference only. Converter/SDR IF depends on the operator's LNB; RigWeave does not infer or transmit an uplink frequency.", color = SatMuted)
                     TextButton({ inAppBrowser?.open("https://amsat-dl.org/en/p4-a-nb-transponder-bandplan-and-operating-guidelines/") }) {
-                        Icon(Icons.Outlined.OpenInNew, null); Spacer(Modifier.width(5.dp)); Text("OFFICIAL NARROWBAND PLAN")
+                        Icon(Icons.AutoMirrored.Outlined.OpenInNew, null); Spacer(Modifier.width(5.dp)); Text("OFFICIAL NARROWBAND PLAN")
                     }
                 }
             }
@@ -205,7 +206,7 @@ private fun Qo100Panel(stationGrid: String) {
                     Text("Uplink 2401.0–2410.0 MHz RHCP · downlink 10490.5–10499.5 MHz horizontal", color = SatInk)
                     Text("Use the current AMSAT-DL wideband plan for symbol-rate channels and maintenance notices.", color = SatMuted)
                     TextButton({ inAppBrowser?.open("https://amsat-dl.org/wp-content/uploads/2021/02/QO-100-WB-Bandplan-V3.pdf") }) {
-                        Icon(Icons.Outlined.OpenInNew, null); Spacer(Modifier.width(5.dp)); Text("OFFICIAL WIDEBAND PLAN")
+                        Icon(Icons.AutoMirrored.Outlined.OpenInNew, null); Spacer(Modifier.width(5.dp)); Text("OFFICIAL WIDEBAND PLAN")
                     }
                 }
             }

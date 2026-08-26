@@ -146,6 +146,7 @@ final class RadioModel: ObservableObject {
     @Published private(set) var snapshot: RadioSnapshot
     @Published private(set) var serialPorts: [String] = []
     @Published private(set) var transportStatus = "Driver ready; no serial port scanned"
+    @Published var pendingTransmitCommand: String?
     @Published var selectedPort: String {
         didSet { defaults.set(selectedPort, forKey: "selectedSerialPort") }
     }
@@ -168,7 +169,7 @@ final class RadioModel: ObservableObject {
         refreshPorts()
     }
 
-    deinit { transport.disconnect() }
+    deinit { if transport.isConnected { try? transport.send("RX;") }; transport.disconnect() }
 
     func acceptCAT(_ data: Data) {
         if core.feed(data) > 0 {
@@ -214,6 +215,8 @@ final class RadioModel: ObservableObject {
     func disconnect() {
         wantsConnection = false
         defaults.set(false, forKey: "radioAutoConnect")
+        if transport.isConnected { try? transport.send("RX;") }
+        pendingTransmitCommand = nil
         transport.disconnect()
         connectedAt = nil
         lastCATResponseAt = nil
@@ -226,6 +229,7 @@ final class RadioModel: ObservableObject {
             let reference = lastCATResponseAt ?? connectedAt ?? Date()
             if Date().timeIntervalSince(reference) <= 5 { return }
             transportStatus = "KX3 did not answer CAT; reopening the physical connection…"
+            try? transport.send("RX;")
             transport.disconnect()
             connectedAt = nil
             lastCATResponseAt = nil
@@ -249,9 +253,32 @@ final class RadioModel: ObservableObject {
 
     func sendCAT(_ command: String) {
         let normalized = command.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let framed = normalized.hasSuffix(";") ? normalized : normalized + ";"
+        let commandClass = framed.withCString { rw_classify_command($0) }
+        guard commandClass != RW_COMMAND_TRANSMIT else {
+            pendingTransmitCommand = framed
+            transportStatus = "Transmit-capable CAT command requires explicit one-shot confirmation."
+            return
+        }
+        sendFramedCAT(framed)
+    }
+
+    func resolvePendingTransmit(accept: Bool) {
+        guard let framed = pendingTransmitCommand else { return }
+        pendingTransmitCommand = nil
+        guard accept else { transportStatus = "Transmit-capable CAT command cancelled"; return }
+        let commandClass = framed.withCString { rw_classify_command($0) }
+        guard commandClass == RW_COMMAND_TRANSMIT else {
+            transportStatus = "CAT command changed classification and was not sent"
+            return
+        }
+        sendFramedCAT(framed)
+    }
+
+    private func sendFramedCAT(_ framed: String) {
         do {
-            try transport.send(normalized.hasSuffix(";") ? normalized : normalized + ";")
-            transportStatus = "Sent: \(normalized.hasSuffix(";") ? normalized : normalized + ";")"
+            try transport.send(framed)
+            transportStatus = "Sent: \(framed)"
         } catch {
             transportStatus = error.localizedDescription
         }

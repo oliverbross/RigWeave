@@ -255,6 +255,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
             activationSessionId = remote.activationSessionId.ifBlank { existing.activationSessionId },
             activationProgram = remote.activationProgram.ifBlank { existing.activationProgram },
             myPotaRefs = remote.myPotaRefs.ifEmpty { existing.myPotaRefs }, potaRefs = remote.potaRefs.ifEmpty { existing.potaRefs },
+            extraAdifFields = existing.extraAdifFields + remote.extraAdifFields,
             syncState = "synced",
             remoteId = remote.remoteId.ifBlank { existing.remoteId })
         update(merged); return false
@@ -727,7 +728,8 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
                 .toEpochSecond(ZoneOffset.UTC)
         }.getOrNull() }
         return Qso(
-            id = field("APP_KX3TOUCH_UUID").ifBlank { if (remoteId.isBlank()) UUID.randomUUID().toString() else "wavelog-$stationProfileId-$remoteId" },
+            id = field("APP_KX3TOUCH_UUID").ifBlank { field("APP_RIGWEAVE_UUID") }
+                .ifBlank { if (remoteId.isBlank()) UUID.randomUUID().toString() else "wavelog-$stationProfileId-$remoteId" },
             callsign = call, frequencyHz = frequencyHz, mode = mode, rstSent = field("RST_SENT"),
             rstReceived = field("RST_RCVD"), createdAt = epoch, name = field("NAME"), qth = field("QTH"),
             notes = field("NOTES"), country = field("COUNTRY"), band = field("BAND").ifBlank { bandForFrequency(frequencyHz) },

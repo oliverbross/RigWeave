@@ -56,6 +56,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.List
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ArrowForward
+import androidx.compose.material.icons.automirrored.outlined.EventNote
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -100,6 +103,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -320,6 +324,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     var pendingRisk by remember { mutableStateOf<String?>(null) }
     var pendingHomeReceiveTune by remember { mutableStateOf<HomeReceiveTuneReview?>(null) }
     var pendingHomeQsoId by remember { mutableStateOf<String?>(null) }
+    var pendingCallbookRecord by remember { mutableStateOf<AndroidCallbookRecord?>(null) }
     var pendingVoiceSlot by remember { mutableStateOf<Int?>(null) }
     var voiceArmedMode by remember { mutableStateOf<String?>(null) }
     fun dispatchWorkspaceAction(action: WorkspaceAction) {
@@ -348,7 +353,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         }
         if (action.destination == WorkspaceDestination.DX_CHASER) integratedDigiPage = IntegratedDigiPage.DX_CHASER
         if (action.destination == WorkspaceDestination.BAND_MAPS) bandMaps.prepare(action)
-        if (action.destination == WorkspaceDestination.CALLBOOK && action.callsign.isNotBlank()) callbook.lookup(action.callsign) {}
+        if (action.destination == WorkspaceDestination.CALLBOOK && action.callsign.isNotBlank())
+            pendingCallbookRecord = callbookFallbackRecord(action.callsign, cty)
         action.qsoId.takeIf(String::isNotBlank)?.let { pendingHomeQsoId = it }
         action.groupsIoGroupId?.let(groupsIo::selectGroup)
         action.groupsIoTopicId?.let(groupsIo::selectTopic)
@@ -371,8 +377,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                     source = "Digi decode", reason = "Open exact callsign history")) },
             onOpenDx = { dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.DX,
                 source = "Digi decode", reason = "Open DX details")) },
-            onOpenCallbook = { call -> callbook.lookup(call) {};
-                dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.RADIO, callsign = call,
+            onOpenCallbook = { call ->
+                dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.CALLBOOK, callsign = call,
                     source = "Digi decode", reason = "Open exact callbook identity")) },
             nextIssPass = {
                 operations.satellites.passes.firstOrNull { row -> row.satellite.name.contains("ISS", true) }?.let { row ->
@@ -674,7 +680,14 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     }
     DisposableEffect(Unit) { onDispose {
         app.disarmAll(); bandMaps.close(); chaser.close(); contest.close(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close(); groupsIo.close()
-        scope.launch { transport.disconnect(); radioPlatform.close(); platformTransport.disconnect(); rotator.stopAndDisarm(); rotator.disconnect() }; hamlibRegistry.close()
+        runBlocking {
+            transport.disconnect()
+            radioPlatform.close()
+            platformTransport.disconnect()
+            rotator.stopAndDisarm()
+            rotator.disconnect()
+        }
+        hamlibRegistry.close()
         neuralDx.close(); features.close(); wavelogNative.close(); wavelog.close(); callbook.close(); cty.close()
         portable.close(); progress.close(); operations.close(); syncHub.close(); core.close()
     } }
@@ -863,6 +876,9 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         GroupsIoNewMessageAlert(groupsIo, onOpen = { destination = Destination.GROUPS_IO },
             modifier = Modifier.align(Alignment.TopEnd).padding(top = keyerStripInset))
     }
+    pendingCallbookRecord?.let { record ->
+        PreviousQsosDialog(record, database, wavelog, callbook) { pendingCallbookRecord = null }
+    }
     InAppBrowserDialog(inAppBrowser)
     }
 }
@@ -882,7 +898,7 @@ private fun navIcon(item: Destination) = when (item) {
     Destination.DX -> Icons.Outlined.Public
     Destination.PORTABLE -> Icons.Outlined.Hiking
     Destination.GROUPS_IO -> Icons.Outlined.Forum
-    Destination.OPERATIONS -> Icons.Outlined.EventNote
+    Destination.OPERATIONS -> Icons.AutoMirrored.Outlined.EventNote
     Destination.ROTATOR -> Icons.Outlined.Explore
     Destination.SETTINGS -> Icons.Outlined.Settings
 }
@@ -2294,7 +2310,7 @@ private enum class RadioActivityTab(val label: String) {
         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF444B4E)), modifier = modifier) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().height(44.dp).background(Color(0xFF171D20)), verticalAlignment = Alignment.CenterVertically) {
-                TabRow(selected.ordinal, modifier = Modifier.width(510.dp).fillMaxHeight(), containerColor = Color.Transparent,
+                PrimaryTabRow(selected.ordinal, modifier = Modifier.width(510.dp).fillMaxHeight(), containerColor = Color.Transparent,
                     contentColor = Amber, divider = {}) {
                     RadioActivityTab.entries.forEach { tab -> Tab(selected == tab, { selected = tab },
                         text = { Text(tab.label, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelMedium) }) }
@@ -2504,6 +2520,17 @@ private fun AndroidDXSpot.previousQsoRecord(cty: CtyController): AndroidCallbook
         region = entity?.region.orEmpty(), cqZone = entity?.cqZone.orEmpty().ifBlank { cqZone.takeIf { it > 0 }?.toString().orEmpty() },
         ituZone = entity?.ituZone.orEmpty(), state = "", email = "", latitude = "", longitude = "",
         source = if (entity == null) "DX CLUSTER" else "CTY.DAT",
+    )
+}
+
+private fun callbookFallbackRecord(callsign: String, cty: CtyController): AndroidCallbookRecord {
+    val call = callsign.trim().uppercase(java.util.Locale.US)
+    val entity = cty.lookup(call)
+    return AndroidCallbookRecord(
+        callsign = call, name = "", qth = "", country = entity?.country.orEmpty(), grid = "",
+        dxcc = entity?.dxcc.orEmpty(), continent = entity?.continent.orEmpty(), region = entity?.region.orEmpty(),
+        cqZone = entity?.cqZone.orEmpty(), ituZone = entity?.ituZone.orEmpty(), state = "", email = "",
+        latitude = "", longitude = "", source = if (entity == null) "CALLBOOK" else "CTY.DAT",
     )
 }
 
@@ -3185,7 +3212,7 @@ private fun formatSpotFrequency(frequencyHz: Long): String = "%d.%03d.%02d".form
                 Text("LOG QSO", color = Amber, fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleSmall)
                 Text(status, color = if (status.startsWith("SAVED")) Healthy else Muted, style = MaterialTheme.typography.labelSmall)
             }
-            ScrollableTabRow(tab.ordinal, containerColor = Color(0xFF202526), edgePadding = 0.dp, divider = {}) {
+            PrimaryScrollableTabRow(tab.ordinal, containerColor = Color(0xFF202526), edgePadding = 0.dp, divider = {}) {
                 QsoEditorTab.entries.forEach { item -> Tab(tab == item, { tab = item }, text = { Text(item.label, fontWeight = FontWeight.Bold) }) }
             }
             Column(Modifier.weight(1f).padding(11.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -3587,8 +3614,8 @@ private fun qslMethodLabel(code: String) = qslMethodChoices.firstOrNull { it.fir
                                 style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                         }
                         if (reordering) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            IconButton({ app.movePreset(preset.slot, -1) }, enabled = index > 0) { Icon(Icons.Outlined.ArrowBack, "Move left", tint = Ink) }
-                            IconButton({ app.movePreset(preset.slot, 1) }, enabled = index < ordered.lastIndex) { Icon(Icons.Outlined.ArrowForward, "Move right", tint = Ink) }
+                            IconButton({ app.movePreset(preset.slot, -1) }, enabled = index > 0) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Move left", tint = Ink) }
+                            IconButton({ app.movePreset(preset.slot, 1) }, enabled = index < ordered.lastIndex) { Icon(Icons.AutoMirrored.Outlined.ArrowForward, "Move right", tint = Ink) }
                         }
                     }
                 }

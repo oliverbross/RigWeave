@@ -83,6 +83,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Run Apple fast-entry golden tests
+        run: swiftc ios/RigWeave/FastEntry.swift ios/Tests/FastEntryGoldenTests.swift -o /tmp/rigweave-fast-entry-tests && /tmp/rigweave-fast-entry-tests
       - run: xcodebuild -project ios/RigWeave.xcodeproj -scheme RigWeave -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
       - run: xcodebuild -project ios/RigWeave.xcodeproj -scheme RigWeave -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
 

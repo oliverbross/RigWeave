@@ -313,6 +313,11 @@ class FeatureController internal constructor(private val context: Context, priva
         fallback2Host: String = "", fallback2Port: Int = 7300) {
         if (clusterConnection.state in setOf(ClusterConnectionState.CONNECTING, ClusterConnectionState.RETRYING,
                 ClusterConnectionState.CONNECTED)) return
+        val normalizedCallsign = callsign.trim().uppercase()
+        if (!normalizedCallsign.matches(Regex("[A-Z0-9/]{3,20}"))) {
+            scope.launch { publishCluster("Enter a valid operator callsign", ClusterConnectionState.DISCONNECTED) }
+            return
+        }
         saveClusterConfiguration(host, port, callsign, fallbackHost, fallbackPort, fallback2Host, fallback2Port)
         disconnectCluster(); val generation = ++clusterGeneration
         val endpoints = listOf(clusterHost to clusterPort, this.fallbackHost to this.fallbackPort,

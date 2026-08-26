@@ -66,14 +66,17 @@ fun FlexRadioScreen(controller: FlexRadioController, openLog: () -> Unit) {
     controller.pendingCertificateChange?.let { change ->
         AlertDialog(
             onDismissRequest = { controller.resolveCertificateChange(false) },
-            title = { Text("SMARTLINK CERTIFICATE CHANGED") },
+            title = { Text(if (change.expectedFingerprint.isBlank()) "TRUST SMARTLINK RADIO" else "SMARTLINK CERTIFICATE CHANGED") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("The radio certificate no longer matches the fingerprint previously trusted for this radio. Accept only if you expect the radio certificate to have changed.")
-                    Text("Previous\n${change.expectedFingerprint}\n\nObserved\n${change.observedFingerprint}", fontFamily = FontFamily.Monospace)
+                    Text(if (change.expectedFingerprint.isBlank())
+                        "This is the first certificate seen for this radio. Verify the fingerprint through a trusted path before accepting it."
+                    else "The radio certificate no longer matches the fingerprint previously trusted for this radio. Accept only if you expect the radio certificate to have changed.")
+                    Text(if (change.expectedFingerprint.isBlank()) "Observed\n${change.observedFingerprint}"
+                        else "Previous\n${change.expectedFingerprint}\n\nObserved\n${change.observedFingerprint}", fontFamily = FontFamily.Monospace)
                 }
             },
-            confirmButton = { TextButton({ controller.resolveCertificateChange(true) }) { Text("TRUST NEW CERTIFICATE") } },
+            confirmButton = { TextButton({ controller.resolveCertificateChange(true) }) { Text(if (change.expectedFingerprint.isBlank()) "TRUST CERTIFICATE" else "TRUST NEW CERTIFICATE") } },
             dismissButton = { TextButton({ controller.resolveCertificateChange(false) }) { Text("REJECT") } },
         )
     }

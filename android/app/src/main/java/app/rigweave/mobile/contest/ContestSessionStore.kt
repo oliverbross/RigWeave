@@ -75,13 +75,18 @@ class ContestSessionStore(context: Context, name: String = "rigweave-contest.sql
     }
 
     fun saveSession(session: ContestSession) {
-        writableDatabase.insertWithOnConflict("contest_session", null, ContentValues().apply {
+        val values = ContentValues().apply {
             put("id", session.id.value); put("definition_id", session.definitionId.value); put("rule_version", session.ruleVersion.value)
             put("name", session.name); put("utc_start", session.utcStart); put("utc_end", session.utcEnd)
             put("station_callsign", session.stationCallsign); put("station_grid", session.stationGrid); put("state", session.state.name)
             put("role", session.role.name); put("initial_serial", session.initialSerial); put("network_armed", 0); put("keyer_armed", 0); put("session_json",encodeSession(session))
             put("updated_at", System.currentTimeMillis() / 1_000)
-        }, SQLiteDatabase.CONFLICT_REPLACE)
+        }
+        writableDatabase.run {
+            if (insertWithOnConflict("contest_session", null, values, SQLiteDatabase.CONFLICT_IGNORE) == -1L) {
+                update("contest_session", values, "id=?", arrayOf(session.id.value))
+            }
+        }
     }
 
     fun loadSession(id: ContestSessionId): ContestSession? = readableDatabase.rawQuery("SELECT session_json FROM contest_session WHERE id=?",arrayOf(id.value)).use { c -> if(c.moveToFirst())decodeSession(JSONObject(c.getString(0))) else null }

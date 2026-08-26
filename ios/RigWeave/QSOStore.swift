@@ -1,6 +1,8 @@
 import Foundation
 import SQLite3
 
+private let qsoSQLiteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
 struct QSO: Identifiable, Equatable {
     let id: String
     let callsign: String
@@ -97,7 +99,11 @@ final class QSOStore: ObservableObject {
 
     func importFastEntry(_ rows: [FastEntryCanonical], wavelog: WavelogSync, serialize: (QSO) -> String) -> AppleFastEntryImportReceipt {
         guard database != nil else { return .init(qsoIDs: [], skipped: rows.count, revision: revision) }
-        sqlite3_exec(database, "BEGIN IMMEDIATE", nil, nil, nil)
+        guard sqlite3_exec(database, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else {
+            message = "Fast Entry could not start a database transaction"
+            return .init(qsoIDs: [], skipped: rows.count, revision: revision)
+        }
+        let startingRevision = revision
         var inserted: [QSO] = []; var skipped = 0
         for row in rows {
             let qso = QSO(id: row.id, callsign: row.callsign, frequencyHz: row.frequencyHz, mode: row.mode,
@@ -106,7 +112,12 @@ final class QSOStore: ObservableObject {
                 fields: row.fields.merging(["BAND": row.band, "SUBMODE": row.submode, "GRIDSQUARE": row.grid]) { current, _ in current })
             if save(qso, reload: false) { inserted.append(qso) } else { skipped += 1 }
         }
-        sqlite3_exec(database, "COMMIT", nil, nil, nil)
+        guard sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else {
+            sqlite3_exec(database, "ROLLBACK", nil, nil, nil)
+            revision = startingRevision
+            reload(); message = "Fast Entry transaction failed; no QSOs were queued"
+            return .init(qsoIDs: [], skipped: rows.count, revision: revision)
+        }
         wavelog.enqueueBatch(inserted.map { ($0.id, serialize($0)) })
         reload(); message = "Fast Entry imported \(inserted.count) · skipped \(skipped)"
         return .init(qsoIDs: inserted.map(\.id), skipped: skipped, revision: revision)
@@ -115,10 +126,20 @@ final class QSOStore: ObservableObject {
     func undoFastEntry(_ receipt: AppleFastEntryImportReceipt, wavelog: WavelogSync) -> Bool {
         guard revision == receipt.revision, database != nil else { message = "Undo expired after a later log mutation"; return false }
         guard wavelog.canCancelUnsent(ids: Set(receipt.qsoIDs)) else { message = "Undo expired because Wavelog delivery was attempted"; return false }
-        sqlite3_exec(database, "BEGIN IMMEDIATE", nil, nil, nil)
+        guard sqlite3_exec(database, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else {
+            message = "Undo could not start a database transaction"; return false
+        }
         var statement: OpaquePointer?; sqlite3_prepare_v2(database, "DELETE FROM qso WHERE id=?", -1, &statement, nil)
-        for id in receipt.qsoIDs { sqlite3_reset(statement); bind(id, to: statement, at: 1); sqlite3_step(statement) }
-        sqlite3_finalize(statement); sqlite3_exec(database, "COMMIT", nil, nil, nil)
+        var deleted = true
+        for id in receipt.qsoIDs {
+            sqlite3_reset(statement); sqlite3_clear_bindings(statement); bind(id, to: statement, at: 1)
+            if sqlite3_step(statement) != SQLITE_DONE { deleted = false; break }
+        }
+        sqlite3_finalize(statement)
+        guard deleted, sqlite3_exec(database, "COMMIT", nil, nil, nil) == SQLITE_OK else {
+            sqlite3_exec(database, "ROLLBACK", nil, nil, nil)
+            message = "Undo failed; local QSOs and Wavelog queue were preserved"; return false
+        }
         wavelog.cancelUnsent(ids: Set(receipt.qsoIDs)); revision += 1; reload(); message = "Fast Entry import undone"
         return true
     }
@@ -171,20 +192,11 @@ final class QSOStore: ObservableObject {
             }
         }
         do {
-            let text = try String(contentsOf: url, encoding: .utf8)
-            let folded = text.uppercased(); var cursor = folded.range(of: "<EOH>")?.upperBound ?? folded.startIndex
+            let data = try Data(contentsOf: url)
+            let records = parseAdifRecords(data)
             var imported = 0; var skipped = 0
-            while let end = folded.range(of: "<EOR>", range: cursor..<folded.endIndex) {
-                let record = String(text[cursor..<end.upperBound]); cursor = end.upperBound
-                func field(_ name: String) -> String {
-                    let upper = record.uppercased(); guard let tag = upper.range(of: "<\(name.uppercased()):") else { return "" }
-                    guard let close = upper[tag.upperBound...].firstIndex(of: ">") else { return "" }
-                    let descriptor = upper[tag.upperBound..<close].split(separator: ":").first ?? ""
-                    guard let length = Int(descriptor) else { return "" }
-                    let start = record.index(record.startIndex, offsetBy: upper.distance(from: upper.startIndex, to: upper.index(after: close)))
-                    guard let valueEnd = record.index(start, offsetBy: length, limitedBy: record.endIndex) else { return "" }
-                    return String(record[start..<valueEnd])
-                }
+            for fields in records {
+                func field(_ name: String) -> String { fields[name.uppercased()] ?? "" }
                 let call = field("CALL").uppercased(), mode = field("MODE").uppercased()
                 let day = field("QSO_DATE"), clock = field("TIME_ON")
                 guard !call.isEmpty, !mode.isEmpty, day.count == 8, clock.count >= 4,
@@ -192,10 +204,16 @@ final class QSOStore: ObservableObject {
                 let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
                 formatter.timeZone = .gmt; formatter.dateFormat = clock.count >= 6 ? "yyyyMMddHHmmss" : "yyyyMMddHHmm"
                 guard let date = formatter.date(from: day + String(clock.prefix(6))) else { skipped += 1; continue }
-                let identity = field("APP_KX3TOUCH_UUID").isEmpty ? UUID().uuidString.lowercased() : field("APP_KX3TOUCH_UUID")
+                let canonicalIdentity = field("APP_KX3TOUCH_UUID")
+                let legacyIdentity = field("APP_RIGWEAVE_UUID")
+                let identity = canonicalIdentity.isEmpty ? (legacyIdentity.isEmpty ? UUID().uuidString.lowercased() : legacyIdentity) : canonicalIdentity
+                let reserved = Set(["APP_KX3TOUCH_UUID", "APP_RIGWEAVE_UUID", "CALL", "QSO_DATE", "TIME_ON", "FREQ", "MODE",
+                                    "RST_SENT", "RST_RCVD", "NAME", "QTH", "COUNTRY", "COMMENT", "NOTES"])
+                let extra = fields.filter { !reserved.contains($0.key) }
                 let qso = QSO(id: identity, callsign: call, frequencyHz: UInt64((mhz * 1_000_000).rounded()),
                     mode: mode, rstSent: field("RST_SENT"), rstReceived: field("RST_RCVD"), createdAt: date,
-                    name: field("NAME"), qth: field("QTH"), country: field("COUNTRY"), notes: field("COMMENT"))
+                    name: field("NAME"), qth: field("QTH"), country: field("COUNTRY"),
+                    notes: field("NOTES").isEmpty ? field("COMMENT") : field("NOTES"), fields: extra)
                 if save(qso) { imported += 1; databaseChanged = true } else { skipped += 1 }
             }
             message = "ADIF import complete · \(imported) added · \(skipped) skipped"
@@ -220,8 +238,37 @@ final class QSOStore: ObservableObject {
 
     func workedLogRecords() -> [QSO] { allRecords() }
 
+    private func parseAdifRecords(_ data: Data) -> [[String: String]] {
+        let bytes = [UInt8](data)
+        var records: [[String: String]] = []
+        var record: [String: String] = [:]
+        var cursor = 0
+        while cursor < bytes.count {
+            guard bytes[cursor] == 0x3c else { cursor += 1; continue }
+            guard let close = bytes[(cursor + 1)...].firstIndex(of: 0x3e) else { break }
+            guard let descriptor = String(bytes: bytes[(cursor + 1)..<close], encoding: .ascii) else {
+                cursor = close + 1; continue
+            }
+            let parts = descriptor.split(separator: ":", omittingEmptySubsequences: false)
+            let name = parts[0].trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            cursor = close + 1
+            if name == "EOH" { record.removeAll(keepingCapacity: true); continue }
+            if name == "EOR" {
+                if !record.isEmpty { records.append(record) }
+                record.removeAll(keepingCapacity: true)
+                continue
+            }
+            guard parts.count >= 2, let length = Int(parts[1]), length >= 0,
+                  length <= bytes.count - cursor else { continue }
+            let end = cursor + length
+            record[name] = String(bytes: bytes[cursor..<end], encoding: .utf8) ?? ""
+            cursor = end
+        }
+        return records
+    }
+
     private func bind(_ value: String, to statement: OpaquePointer?, at index: Int32) {
-        sqlite3_bind_text(statement, index, (value as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, index, (value as NSString).utf8String, -1, qsoSQLiteTransient)
     }
     private func text(_ statement: OpaquePointer?, _ index: Int32) -> String {
         guard let value = sqlite3_column_text(statement, index) else { return "" }

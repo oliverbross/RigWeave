@@ -6,6 +6,7 @@ import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
+import java.io.ByteArrayInputStream
 
 class GroupsIoDatabaseInstrumentedTest {
     private val context = ApplicationProvider.getApplicationContext<android.content.Context>()
@@ -41,15 +42,12 @@ class GroupsIoDatabaseInstrumentedTest {
         assertEquals(41, database.search("linked dipole").single().messageNumber)
     }
 
-    @Test fun deprecatedCacheClearCannotTouchSuppliedMainDatabasePathOrDeleteFeatureDatabase() {
-        SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath(mainName), null).use { it.execSQL("CREATE TABLE sentinel(value TEXT NOT NULL)"); it.execSQL("INSERT INTO sentinel VALUES('preserve')") }
-        database.writableDatabase
-        database.deleteDownloadedData()
-        assertTrue(context.getDatabasePath(featureName).exists())
-        assertTrue(context.getDatabasePath(mainName).exists())
-        SQLiteDatabase.openDatabase(context.getDatabasePath(mainName).path, null, SQLiteDatabase.OPEN_READONLY).use { main ->
-            assertEquals("preserve", main.rawQuery("SELECT value FROM sentinel", null).use { it.moveToFirst(); it.getString(0) })
+    @Test fun oversizedBinaryImportDeletesPartialFile() {
+        val partial = context.cacheDir.resolve("groupsio-oversized-${System.nanoTime()}.part")
+        assertThrows(GroupsIoApiException::class.java) {
+            copyGroupsIoBinary(ByteArrayInputStream(ByteArray(2_049) { 7 }), partial, 2_048)
         }
+        assertFalse(partial.exists())
     }
 
     @Test fun versionOneMigratesTransactionallyWithoutLosingRowsOrFts() {

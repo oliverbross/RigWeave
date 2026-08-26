@@ -309,6 +309,15 @@ struct RadioView: View {
                 }
             }
         }.padding() }.navigationTitle("Radio")
+            .alert("Confirm radio action", isPresented: Binding(
+                get: { radio.pendingTransmitCommand != nil },
+                set: { if !$0 { radio.resolvePendingTransmit(accept: false) } }
+            )) {
+                Button("Send once", role: .destructive) { radio.resolvePendingTransmit(accept: true) }
+                Button("Cancel", role: .cancel) { radio.resolvePendingTransmit(accept: false) }
+            } message: {
+                Text("This CAT command can key or otherwise control transmission. Send only if the radio, antenna, frequency, and station are ready.\n\n\(radio.pendingTransmitCommand ?? "")")
+            }
     }
 }
 

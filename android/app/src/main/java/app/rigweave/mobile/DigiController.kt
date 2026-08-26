@@ -45,6 +45,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 import kotlin.math.roundToInt
 
+private const val MAX_REFERENCE_WAV_BYTES = 128 * 1024 * 1024
+
 enum class DigiMode(
     val label: String,
     val slotDecoder: Int? = null,
@@ -147,6 +149,7 @@ class DigiController(
     private val prefs = context.getSharedPreferences("rigweave-digi", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val receiving = AtomicBoolean(false)
+    private val txStarting = AtomicBoolean(false)
     private var rxJob: Job? = null
     private var txJob: Job? = null
     private var slotDecodeJob: Job? = null
@@ -289,7 +292,7 @@ class DigiController(
     }
 
     fun arm() {
-        if (txActive) return
+        if (txActive || txStarting.get() || txPhase == DigiTxPhase.RX_UNCONFIRMED) return
         if (!transmitEligible()) {
             txArmed = false
             status = "Digi TX is unavailable for the selected radio backend"
@@ -300,6 +303,12 @@ class DigiController(
     }
 
     fun updateTxEnabled(value: Boolean) {
+        if (value && txPhase == DigiTxPhase.RX_UNCONFIRMED) {
+            txEnabled = false
+            disarm()
+            status = "Confirm receive state before re-enabling digital TX"
+            return
+        }
         if (value && !transmitEligible()) {
             txEnabled = false
             disarm()
@@ -602,8 +611,13 @@ class DigiController(
 
     fun toggleRawRecording() {
         rawRecordingActive = if (rawRecorder.active) {
-            rawRecorder.stop()
-            status = "Bounded raw recording saved in app-private storage"
+            val saved = rawRecorder.stop()
+            val dropped = rawRecorder.droppedFrames
+            status = when {
+                saved == null -> "Raw recording could not be finalized"
+                dropped > 0 -> "Raw recording saved · $dropped frame(s) dropped under storage backpressure"
+                else -> "Bounded raw recording saved in app-private storage"
+            }
             false
         } else {
             val started = rawRecorder.start()
@@ -1258,7 +1272,9 @@ class DigiController(
             status = "Reading ${mode.label} reference recording"
             val recording = withContext(Dispatchers.IO) {
                 runCatching {
-                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    val bytes = context.contentResolver.openInputStream(uri)?.use {
+                        it.readBoundedBytesOrThrow(MAX_REFERENCE_WAV_BYTES)
+                    }
                         ?: error("Recording could not be opened")
                     decodePcmWav(bytes)
                 }
@@ -1423,7 +1439,7 @@ class DigiController(
     }
 
     fun send() {
-        if (!txEnabled || !txArmed || txActive || settings.companionMode) {
+        if (!txEnabled || !txArmed || txActive || txStarting.get() || settings.companionMode) {
             status = "Enable TX and arm one explicit transmission first"
             return
         }
@@ -1443,13 +1459,19 @@ class DigiController(
             disarm()
             return
         }
+        if (!txStarting.compareAndSet(false, true)) {
+            status = "A digital transmission is already being prepared"
+            return
+        }
         txArmed = false
         lastTxText = if (mode == DigiMode.SSTV) "${sstvChoice.label} image" else text
-        txJob = scope.launch { transmit(text) }
+        txJob = scope.launch {
+            try { transmit(text) }
+            finally { txStarting.set(false) }
+        }
     }
 
     fun haltTx() {
-        val recoveryLatched = txPhase == DigiTxPhase.RX_UNCONFIRMED
         disarm()
         txEnabled = false
         cancelFtAutomation("Stopped by operator")
@@ -1457,12 +1479,24 @@ class DigiController(
         txJob = null
         txSlotCountdownMillis = 0L
         txActive = false
-        if (!recoveryLatched) txPhase = DigiTxPhase.SAFE
-        status = if (recoveryLatched) "RX UNCONFIRMED · use REQUEST RX & RECHECK" else "Digital transmission stopped by operator · RX requested"
+        txPhase = DigiTxPhase.RX_UNCONFIRMED
+        status = "Digital transmission stopped · requesting and verifying RX"
         scope.launch {
-            flex.stopTransmit("operator stopped digital transmission")
-            transport.send("RX;")
+            val confirmed = if (radioFamily() == RadioFamily.FLEXRADIO) {
+                runCatching { flex.stopTransmit("operator stopped digital transmission") }.isSuccess &&
+                    waitForFlexReceive(2_000L)
+            } else {
+                transport.send("RX;") is UsbResult.Connected &&
+                    runCatching { transport.confirmTq(false).transmitting == false }.getOrDefault(false)
+            }
             routes.releaseAudio(AudioOwners.DIGI_TX)
+            if (confirmed) {
+                txPhase = DigiTxPhase.SAFE
+                status = "Digital transmission stopped · RX confirmed"
+            } else {
+                latchRxUnconfirmed("RX UNCONFIRMED · verify the radio, then use REQUEST RX & RECHECK")
+            }
+            publishInteropStatus()
         }
         publishInteropStatus()
     }
