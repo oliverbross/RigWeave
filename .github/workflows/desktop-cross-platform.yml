@@ -4,7 +4,7 @@ on:
   workflow_call:
   workflow_dispatch:
   push:
-    branches: [feature/windows-desktop-alpha-v1, feature/tci-multirx-waterfall-globe-v1, feature/desktop-flightline-ui-convergence-v1, feature/desktop-ui-ux-deep-convergence-v2]
+    branches: [feature/windows-desktop-alpha-v1, feature/tci-multirx-waterfall-globe-v1, feature/desktop-flightline-ui-convergence-v1, feature/desktop-ui-ux-deep-convergence-v2, feature/desktop-functional-parity-closure-v1]
     paths:
       - 'desktop/**'
       - 'core/**'
@@ -29,6 +29,8 @@ jobs:
           arch: clang_64
           modules: 'qtmultimedia qtserialport qtwebsockets qtlocation qtpositioning'
           cache: true
+      - name: Install the native Rust target
+        run: rustup target add aarch64-apple-darwin
       - name: Configure same desktop source
         run: cmake -S desktop -B build/macos -G Ninja -DCMAKE_BUILD_TYPE=Release -DRIGWEAVE_BUILD_TESTS=ON
       - name: Build and test

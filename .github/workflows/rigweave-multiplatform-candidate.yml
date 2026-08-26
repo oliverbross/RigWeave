@@ -6,6 +6,7 @@ on:
     branches:
       - integration/android-hardened-windows-alpha-v1
       - feature/windows-desktop-full-parity-v1
+      - feature/desktop-functional-parity-closure-v1
 
 permissions:
   contents: read
@@ -63,3 +64,20 @@ jobs:
           if findings:
               raise SystemExit("possible literal credential in: " + ", ".join(findings))
           PY
+
+  functional-closure-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify exact checked-out SHA and closure matrix
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test -s docs/desktop/DESKTOP_FUNCTIONAL_PARITY_MATRIX.md
+          test "$(grep -c '^|' docs/desktop/DESKTOP_FUNCTIONAL_PARITY_MATRIX.md)" -ge 33
+          ! grep -E '\| (FOUNDATION_WIRED|MISSING) \|' docs/desktop/DESKTOP_FUNCTIONAL_PARITY_MATRIX.md
+      - name: Verify deterministic fake protocol and safety suites are registered
+        run: |
+          grep -q 'groupsClientUsesVaultAliasAndReconcilesFakeService' desktop/tests/unit/desktop_functional_owner_tests.cpp
+          grep -q 'nativeRadioTcpFixtureRequiresReadbackAndRejectsTransmitAuthority' desktop/tests/unit/desktop_platform_safety_tests.cpp
+          grep -q 'nativeRotatorFixturePollsAndEnforcesForbiddenPath' desktop/tests/unit/desktop_platform_safety_tests.cpp
+          grep -q 'desktop_scale_soak_tests' desktop/tests/CMakeLists.txt
