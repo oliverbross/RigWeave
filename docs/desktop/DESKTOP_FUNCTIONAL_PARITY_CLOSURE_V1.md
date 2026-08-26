@@ -26,7 +26,10 @@ The baseline already has one canonical QSO owner, Wavelog sync owner, cluster/sp
 
 See `DESKTOP_FUNCTIONAL_GAP_LEDGER_V1.md` for the 17-row source audit and `DESKTOP_OWNER_GRAPH_V1.md` for ownership boundaries.
 
-## Evidence ledger
+## Closure result
 
-Implementation, local validation, hosted exact-SHA results, artifact hashes, visual scores and the final 31-row matrix are appended milestone by milestone. A row is not promoted solely because its layout or fixture is complete.
+The authoritative matrix is `DESKTOP_FUNCTIONAL_PARITY_MATRIX.md`: 31 audited rows, 31 source-complete, zero `FOUNDATION_WIRED` and zero `MISSING`. Source-complete rows with credentials, hardware, audio, RF, transmission or movement requirements retain `LIVE_ACCEPTANCE_PENDING` boundaries.
 
+Implementation evidence includes native serial/TCP radio and rotator fixtures, linked Rust modem/audio sessions, Groups.io fake authentication/delivery, migration/reopen checks, application/QML contracts and the 100k-QSO/domain scale probe. `DESKTOP_FUNCTIONAL_VISUAL_REGRESSION_V1.md` records the protected UI result. Hardware and provider procedures are deliberately separate in `DESKTOP_HARDWARE_ACCEPTANCE.md` and `DESKTOP_PROVIDER_ACCEPTANCE.md`.
+
+Hosted workflow/package results and hashes are attached to the exact candidate SHA. No row is promoted solely because its layout, fixture or hosted build exists.
