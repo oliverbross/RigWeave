@@ -25,13 +25,14 @@ jobs:
 
   rust-native:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
       - run: cargo test --manifest-path rust/rigweave-flex/Cargo.toml --locked
-      - run: cargo test --manifest-path third_party/mfsk-core/Cargo.toml --locked
-      - run: cargo test --manifest-path rust/tempo-sstv/Cargo.toml --locked
+      - run: cargo test --manifest-path third_party/mfsk-core/Cargo.toml --locked --lib --all-features
+      - run: cargo test --manifest-path rust/tempo-sstv/Cargo.toml --locked --lib
       - run: cmake -S core -B build/core && cmake --build build/core && ctest --test-dir build/core --output-on-failure
       - name: Native lifecycle ASan
         run: >-
