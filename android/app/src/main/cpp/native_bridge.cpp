@@ -8,6 +8,7 @@
 #include <vector>
 #include "rigweave/core.h"
 #include "rigweave/satellite.h"
+#include "rigweave/tci.hpp"
 #include "rigweave_flex.h"
 
 namespace {
@@ -517,6 +518,79 @@ Java_app_rigweave_mobile_NativePanadapter_push(JNIEnv *env, jobject, jlong handl
         2U, sizeof(jshort), 16U, discontinuity ? 1 : 0);
     env->ReleaseShortArrayElements(samples, values, JNI_ABORT);
     return ready ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_app_rigweave_mobile_NativePanadapter_pushFloat(JNIEnv *env, jobject, jlong handle,
+                                                     jfloatArray data, jint count, jboolean discontinuity) {
+    if (!handle || !data || count <= 0 || count > kMaximumJniInput || count > env->GetArrayLength(data)) return JNI_FALSE;
+    jfloat *samples = env->GetFloatArrayElements(data, nullptr);
+    if (!samples) return JNI_FALSE;
+    const int ready = rw_panadapter_push_float_iq(panadapter(handle), samples, static_cast<size_t>(count), discontinuity == JNI_TRUE ? 1 : 0);
+    env->ReleaseFloatArrayElements(data, samples, JNI_ABORT);
+    return ready == 1 ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_app_rigweave_mobile_NativeTci_parseStatus(JNIEnv *env, jobject, jstring value) {
+    const auto commands = rigweave::tci::parse_status(utf(env, value));
+    jclass string_class = env->FindClass("java/lang/String");
+    jobjectArray output = env->NewObjectArray(static_cast<jsize>(commands.size()), string_class, nullptr);
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        const std::string row = commands[index].name + '|' + commands[index].arguments;
+        env->SetObjectArrayElement(output, static_cast<jsize>(index), env->NewStringUTF(row.c_str()));
+    }
+    return output;
+}
+
+extern "C" JNIEXPORT jfloatArray JNICALL
+Java_app_rigweave_mobile_NativeTci_decodeBinary(JNIEnv *env, jobject, jbyteArray data, jintArray metadata) {
+    if (!data || !metadata || env->GetArrayLength(metadata) < 6) return env->NewFloatArray(0);
+    const jsize length = env->GetArrayLength(data);
+    if (length <= 0 || length > kMaximumJniInput) return env->NewFloatArray(0);
+    jbyte *bytes = env->GetByteArrayElements(data, nullptr);
+    if (!bytes) return env->NewFloatArray(0);
+    rigweave::tci::BinaryError error{};
+    const auto frame = rigweave::tci::decode_binary(reinterpret_cast<const std::uint8_t *>(bytes),
+        static_cast<std::size_t>(length), &error);
+    env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
+    jint meta[6]{};
+    if (!frame) {
+        meta[5] = static_cast<jint>(error);
+        env->SetIntArrayRegion(metadata, 0, 6, meta);
+        return env->NewFloatArray(0);
+    }
+    meta[0] = static_cast<jint>(frame->header.receiver);
+    meta[1] = static_cast<jint>(frame->header.sample_rate);
+    meta[2] = static_cast<jint>(frame->header.format);
+    meta[3] = static_cast<jint>(frame->header.data_type);
+    meta[4] = static_cast<jint>(frame->header.channels);
+    env->SetIntArrayRegion(metadata, 0, 6, meta);
+    jfloatArray output = env->NewFloatArray(static_cast<jsize>(frame->values.size()));
+    if (output && !frame->values.empty()) env->SetFloatArrayRegion(output, 0,
+        static_cast<jsize>(frame->values.size()), frame->values.data());
+    return output ? output : env->NewFloatArray(0);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_app_rigweave_mobile_NativeTci_buildCommand(JNIEnv *env, jobject, jint kind, jint receiver,
+                                                 jint channel, jlong number, jstring text) {
+    using namespace rigweave::tci;
+    std::optional<std::string> command;
+    switch (kind) {
+    case 0: command = build_vfo(static_cast<std::uint32_t>(receiver), static_cast<std::uint32_t>(channel), static_cast<std::uint64_t>(number)); break;
+    case 1: command = build_mode(static_cast<std::uint32_t>(receiver), utf(env, text)); break;
+    case 2: command = build_iq_sample_rate(static_cast<std::uint32_t>(number)); break;
+    case 3: command = build_iq_start(static_cast<std::uint32_t>(receiver)); break;
+    case 4: command = build_iq_stop(static_cast<std::uint32_t>(receiver)); break;
+    case 5: command = build_audio_start(static_cast<std::uint32_t>(receiver)); break;
+    case 6: command = build_audio_stop(static_cast<std::uint32_t>(receiver)); break;
+    case 7: command = build_rx_enable(static_cast<std::uint32_t>(receiver), number != 0); break;
+    case 8: command = build_mute(static_cast<std::uint32_t>(receiver), number != 0); break;
+    case 9: command = build_safe_stop(static_cast<std::uint32_t>(receiver)); break;
+    default: break;
+    }
+    return env->NewStringUTF(command ? command->c_str() : "");
 }
 
 extern "C" JNIEXPORT jint JNICALL

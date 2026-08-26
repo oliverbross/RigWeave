@@ -22,6 +22,7 @@ enum class RadioBackendKind {
     NATIVE_RGO_ONE,
     HAMLIB_EMBEDDED,
     HAMLIB_NETWORK,
+    NATIVE_TCI,
 }
 
 enum class RadioTransportType { USB_SERIAL, LAN, RIGCTLD, FLRIG, TCI }
@@ -70,6 +71,10 @@ data class RadioConnectionProfile(
     val readOnly: Boolean = false,
     val pollCadenceMillis: Long = 500,
     val automaticSafeReconnect: Boolean = false,
+    val secureWebSocket: Boolean = false,
+    val preferredIqSampleRate: Int = 96_000,
+    val preferredInitialReceiver: Int = 0,
+    val rxAudioRoute: String = "SYSTEM",
 ) {
     init {
         require(name.isNotBlank() && name.length <= 80)
@@ -79,6 +84,9 @@ data class RadioConnectionProfile(
         require(port == null || port in 1..65_535)
         require(baud in 300..3_000_000 && dataBits in 5..8 && stopBits in 1..2 && parity in setOf("N", "E", "O"))
         require(pollCadenceMillis in 100..60_000)
+        require(preferredIqSampleRate in setOf(48_000, 96_000, 192_000))
+        require(preferredInitialReceiver in 0..7)
+        require(rxAudioRoute in setOf("SYSTEM", "RECEIVER_0", "RECEIVER_1", "STEREO_SPLIT", "BALANCED_MIX"))
         require((backendKind == RadioBackendKind.HAMLIB_EMBEDDED || backendKind == RadioBackendKind.HAMLIB_NETWORK) == (hamlibModelId != null))
         require(transport == RadioTransportType.USB_SERIAL || host != null)
     }
@@ -278,6 +286,7 @@ object RadioProfileCatalog {
                 RadioBackendKind.NATIVE_ELECRAFT -> "Elecraft"
                 RadioBackendKind.NATIVE_QMX -> "QRP Labs"
                 RadioBackendKind.NATIVE_RGO_ONE -> "RGO ONE"
+                RadioBackendKind.NATIVE_TCI -> "TCI"
                 else -> name
             }, name, RadioTransportType.USB_SERIAL, baud = baud)
 }

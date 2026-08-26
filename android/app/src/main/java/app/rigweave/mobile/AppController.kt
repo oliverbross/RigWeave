@@ -98,7 +98,8 @@ class AppController(private val context: Context) {
     private val configurationRecovery = ConfigurationRecovery(context.applicationContext)
     private val needsDxccCountryColumnMigration = !prefs.getBoolean("logbook_dxcc_country_v1", false)
     var fieldProfile by mutableStateOf(runCatching { FieldProfile.valueOf(prefs.getString("profile", "DAY")!!) }.getOrDefault(FieldProfile.DAY)); private set
-    var selectedRadioProfileId by mutableStateOf(RadioProfileCatalog.migrate(
+    val tciProfiles = mutableStateListOf<RadioConnectionProfile>().apply { addAll(loadTciProfiles()) }
+    var selectedRadioProfileId by mutableStateOf(migrateSelectedRadioProfile(
         prefs.getString("radio_profile_id", null), prefs.getString("radio_family", null))); private set
     val selectedRadioProfile: RadioConnectionProfile get() = selectedProfile(selectedRadioProfileId)
     var radioFamily by mutableStateOf(legacyRadioFamily(selectedRadioProfile)); private set
@@ -186,6 +187,24 @@ class AppController(private val context: Context) {
         prefs.edit().putString("radio_profile_id", value.id.value)
             .putString("radio_family", radioFamily.name)
             .apply()
+    }
+
+    fun upsertTciProfile(value: RadioConnectionProfile) {
+        require(value.backendKind == RadioBackendKind.NATIVE_TCI && value.transport == RadioTransportType.TCI)
+        val index = tciProfiles.indexOfFirst { it.id == value.id }
+        if (index >= 0) tciProfiles[index] = value else {
+            require(tciProfiles.size < 32) { "At most 32 TCI profiles are supported" }
+            tciProfiles += value
+        }
+        persistTciProfiles()
+        selectRadioProfile(value)
+    }
+
+    fun deleteTciProfile(id: RadioProfileId): Boolean {
+        if (selectedRadioProfileId == id) return false
+        val removed = tciProfiles.removeAll { it.id == id }
+        if (removed) persistTciProfiles()
+        return removed
     }
 
     fun selectHamlibModel(modelId: Int, manufacturer: String, model: String, network: Boolean = false) {
@@ -442,6 +461,7 @@ class AppController(private val context: Context) {
 
     private fun selectedProfile(id: RadioProfileId): RadioConnectionProfile {
         RadioProfileCatalog.find(id)?.let { return it }
+        tciProfiles.firstOrNull { it.id == id }?.let { return it }
         val modelId = prefs.getInt("hamlib_model_id", 0)
         if (id.value.startsWith("hamlib.") && modelId > 0) {
             val network = id.value.startsWith("hamlib.network.")
@@ -456,10 +476,51 @@ class AppController(private val context: Context) {
                 host = if (network) "127.0.0.1" else null,
                 port = if (network) 4_532 else null,
                 hamlibModelId = modelId,
-                readOnly = true,
+                readOnly = false,
             )
         }
         return RadioProfileCatalog.UNKNOWN
+    }
+
+    private fun migrateSelectedRadioProfile(storedProfileId: String?, legacyFamily: String?): RadioProfileId {
+        val stored = storedProfileId?.let { runCatching { RadioProfileId(it) }.getOrNull() }
+        if (stored != null && tciProfiles.any { it.id == stored }) return stored
+        return RadioProfileCatalog.migrate(storedProfileId, legacyFamily)
+    }
+
+    private fun loadTciProfiles(): List<RadioConnectionProfile> = runCatching {
+        val rows = JSONArray(prefs.getString("tci_profiles_v1", "[]"))
+        List(rows.length().coerceAtMost(32)) { index ->
+            val row = rows.getJSONObject(index)
+            val id = row.getString("id")
+            RadioConnectionProfile(
+                id = RadioProfileId(id),
+                name = row.getString("name").take(80),
+                backendKind = RadioBackendKind.NATIVE_TCI,
+                modelId = RadioModelId("TCI:${id.take(80)}"),
+                manufacturer = "TCI",
+                model = "TCI receive-only server",
+                transport = RadioTransportType.TCI,
+                host = row.getString("host"),
+                port = row.getInt("port"),
+                readOnly = true,
+                automaticSafeReconnect = row.optBoolean("reconnect", false),
+                secureWebSocket = row.optBoolean("secure", false),
+                preferredIqSampleRate = row.optInt("iq_rate", 96_000),
+                preferredInitialReceiver = row.optInt("receiver", 0),
+                rxAudioRoute = row.optString("audio_route", "SYSTEM"),
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    private fun persistTciProfiles() {
+        val rows = JSONArray(tciProfiles.map { profile -> JSONObject()
+            .put("id", profile.id.value).put("name", profile.name)
+            .put("host", profile.host).put("port", profile.port)
+            .put("secure", profile.secureWebSocket).put("iq_rate", profile.preferredIqSampleRate)
+            .put("receiver", profile.preferredInitialReceiver).put("audio_route", profile.rxAudioRoute)
+            .put("reconnect", profile.automaticSafeReconnect) })
+        prefs.edit().putString("tci_profiles_v1", rows.toString()).apply()
     }
 
     private fun loadPresets(): List<RadioPreset> = runCatching {

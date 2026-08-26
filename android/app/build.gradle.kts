@@ -106,6 +106,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("com.squareup.okhttp3:okhttp:5.3.0")
     implementation("com.github.mik3y:usb-serial-for-android:3.11.0")
     implementation("org.maplibre.gl:android-sdk:13.0.2")
     testImplementation("junit:junit:4.13.2")

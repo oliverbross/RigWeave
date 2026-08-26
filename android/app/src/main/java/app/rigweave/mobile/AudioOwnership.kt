@@ -8,6 +8,7 @@ object AudioOwners {
     const val VOICE = "VOICE"
     const val VOICE_TX = "VOICE_TX"
     const val FLEX_RX_AUDIO = "FLEX_RX_AUDIO"
+    const val TCI_RX_AUDIO = "TCI_RX_AUDIO"
     const val FLEX_MIC_TX = "FLEX_MIC_TX"
     const val FLEX_VOICE_TX = "FLEX_VOICE_TX"
     const val FLEX_CW_TX = "FLEX_CW_TX"

@@ -10,6 +10,7 @@ class AudioOwnershipRulesTest {
         AudioOwners.EQ,
         AudioOwners.VOICE,
         AudioOwners.VOICE_TX,
+        AudioOwners.TCI_RX_AUDIO,
     )
 
     @Test fun idleRouteAcceptsOneExclusiveOwner() {

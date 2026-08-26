@@ -31,6 +31,7 @@ import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.ln
 import kotlin.math.abs
 import kotlin.math.max
@@ -40,12 +41,27 @@ import kotlin.math.asin
 import kotlin.math.log10
 import kotlin.math.PI
 
+data class TciPanadapterDisplay(
+    val receiverIndex: Int,
+    val sampleRate: Int,
+    val frame: PanadapterFrame,
+    val waterfallRows: List<FloatArray>,
+    val droppedFrames: Long = 0,
+)
+
 class PanadapterController(
     private val context: Context,
     private val audio: AudioMonitorController,
     private val radioState: () -> RadioState,
     private val sendCat: (String) -> Unit,
 ) {
+    private data class TciNativeContext(
+        val owner: NativeHandleOwner,
+        val sampleRate: Int,
+        val buffer: NativeBuffer,
+        var lastPublishNanos: Long = 0,
+        var droppedFrames: Long = 0,
+    )
     private data class ProvenCapture(
         val record: AudioRecord,
         val proof: PanadapterRouteProof,
@@ -85,6 +101,7 @@ class PanadapterController(
     private var performanceWaterfallRows = 0
     private var waterfallSmoothedPower = FloatArray(0)
     private val displayAnalyzer = PanadapterDisplayAnalyzer()
+    private val tciContexts = ConcurrentHashMap<Int, TciNativeContext>()
     private var palette = IntArray(256)
     private var wantedLive = false
     private var pendingQsy: PanadapterQsy? = null
@@ -155,6 +172,8 @@ class PanadapterController(
     var waterfallFps by mutableStateOf(0f); private set
     var latencyEstimateMs by mutableStateOf(0f); private set
     var displayMetrics by mutableStateOf(PanadapterDisplayMetrics()); private set
+    var tciDisplays by mutableStateOf<Map<Int, TciPanadapterDisplay>>(emptyMap()); private set
+    var selectedTciReceiver by mutableIntStateOf(0); private set
     val inputCandidates: List<AudioRouteDescriptor> get() = audio.inputCandidates
     val selectedInput: AudioRouteDescriptor? get() = audio.selectedRx
 
@@ -416,6 +435,93 @@ class PanadapterController(
         captureThread = Thread({ captureLoop(record, samples) }, "RigWeave-IQ-Capture").apply { start() }
     }
 
+    /** Receives validated float32 I/Q from the single TCI radio owner; at most two DSP contexts are retained. */
+    fun pushTciIq(receiverIndex: Int, sampleRate: Int, samples: FloatArray) {
+        if (closed || receiverIndex !in 0..7 || sampleRate !in setOf(48_000, 96_000, 192_000) || samples.isEmpty() || samples.size % 2 != 0) return
+        var source = tciContexts[receiverIndex]
+        if (source == null) synchronized(tciContexts) {
+            source = tciContexts[receiverIndex]
+            if (source == null) {
+                if (tciContexts.size >= 2) return
+                val owner = NativeHandleOwner(NativePanadapter.create().also { if (it == 0L) return }, NativePanadapter::destroy)
+                val configured = settings.copy(requestedRate = sampleRate)
+                val ok = owner.withHandle { NativePanadapter.configure(it, sampleRate, configured.fftSize, configured.overlapPercent,
+                    configured.window.nativeValue, configured.displayFloorDb, configured.displayTopDb, configured.attack, configured.release,
+                    configured.averageFrames, configured.peakHold, configured.peakDecayDbPerSecond, false, configured.swapIq,
+                    configured.invertI, configured.invertQ, configured.conjugate, configured.iTrim, configured.qTrim,
+                    configured.zoomDecimation, configured.zoomOffsetHz) } == true
+                if (!ok) { owner.close(); return }
+                source = TciNativeContext(owner, sampleRate, NativeBuffer(LongArray(9), FloatArray(14),
+                    FloatArray(configured.fftSize), FloatArray(configured.fftSize), FloatArray(configured.fftSize),
+                    IntArray(waterfallWidth(configured.fftSize))))
+                tciContexts[receiverIndex] = source!!
+            }
+        }
+        val context = source ?: return
+        val ready = context.owner.withHandle { NativePanadapter.pushFloat(it, samples, samples.size, false) } == true
+        if (!ready) return
+        val now = System.nanoTime()
+        synchronized(context) {
+            if (context.lastPublishNanos != 0L && now - context.lastPublishNanos < 33_000_000L) {
+                context.droppedFrames++
+                return
+            }
+            context.lastPublishNanos = now
+            val buffer = context.buffer
+            val copied = context.owner.withHandle { NativePanadapter.snapshot(it, buffer.meta, buffer.metrics,
+                buffer.trace, buffer.waterfall, buffer.peak) } ?: 0
+            if (copied <= 0) return
+            val next = PanadapterFrame(
+                buffer.meta[0], buffer.meta[1], buffer.meta[2], buffer.meta[3], buffer.meta[4].toInt(), buffer.meta[5].toInt(),
+                copied, buffer.meta[7].toInt(), buffer.meta[8].toInt(), buffer.metrics[0], buffer.metrics[1], buffer.metrics[2],
+                buffer.metrics[3], buffer.metrics[4], buffer.metrics[5], buffer.metrics[6], buffer.metrics[7], buffer.metrics[8],
+                buffer.metrics[9], buffer.metrics[7].isFinite() && buffer.metrics[9].isFinite(), buffer.trace.copyOf(copied),
+                buffer.waterfall.copyOf(copied), buffer.peak.copyOf(copied), BooleanArray(copied) { true })
+            val row = downsampleWaterfall(buffer.waterfall, copied, 1024)
+            main.post {
+                val previous = tciDisplays[receiverIndex]
+                val rows = ((previous?.waterfallRows.orEmpty()) + listOf(row)).takeLast(180)
+                tciDisplays = tciDisplays + (receiverIndex to TciPanadapterDisplay(receiverIndex, sampleRate, next, rows, context.droppedFrames))
+                if (receiverIndex == selectedTciReceiver) {
+                    frame = next
+                    lifecycle = PanadapterLifecycle.LIVE
+                    status = "LIVE · TCI RX ${receiverIndex + 1} · float32 ${sampleRate / 1000} kHz · ${next.fftSize} FFT"
+                }
+            }
+        }
+    }
+
+    fun selectTciReceiver(receiverIndex: Int) {
+        if (receiverIndex !in tciDisplays.keys && receiverIndex !in tciContexts.keys) return
+        selectedTciReceiver = receiverIndex
+        tciDisplays[receiverIndex]?.let { frame = it.frame }
+    }
+
+    fun detachTciSources(reason: String = "TCI I/Q stopped") {
+        synchronized(tciContexts) {
+            tciContexts.values.forEach { it.owner.close() }
+            tciContexts.clear()
+        }
+        tciDisplays = emptyMap()
+        if (lifecycle == PanadapterLifecycle.LIVE && recorder == null) {
+            lifecycle = PanadapterLifecycle.STOPPED
+            status = reason
+        }
+    }
+
+    private fun downsampleWaterfall(values: FloatArray, count: Int, width: Int): FloatArray {
+        if (count <= width) return values.copyOf(count)
+        val output = FloatArray(width)
+        for (index in 0 until width) {
+            val start = index * count / width
+            val end = ((index + 1) * count / width).coerceAtMost(count)
+            var peak = -200f
+            for (source in start until end) peak = maxOf(peak, values[source])
+            output[index] = peak
+        }
+        return output
+    }
+
     fun stop(reason: String = "Panadapter stopped", keepWanted: Boolean = false) {
         wantedLive = keepWanted
         running.set(false)
@@ -434,6 +540,7 @@ class PanadapterController(
             stateOverride = if (lifecycle == PanadapterLifecycle.ROUTE_LOST) PanadapterFormatState.ROUTE_LOST else PanadapterFormatState.ROUTE_UNPROVEN)
         if (lifecycle != PanadapterLifecycle.ROUTE_LOST) lifecycle = PanadapterLifecycle.STOPPED
         status = reason
+        if (!keepWanted) detachTciSources(reason)
     }
 
     private fun failRoute(reason: String) {

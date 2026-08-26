@@ -1,0 +1,364 @@
+// SPDX-License-Identifier: GPL-3.0-only
+package app.rigweave.mobile
+
+import android.os.Handler
+import android.os.Looper
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okio.ByteString
+import java.util.Locale
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+
+enum class TciConnectionState { DISCONNECTED, CONNECTING, HANDSHAKE, READY, ERROR }
+
+data class TciReceiverSnapshot(
+    val id: String,
+    val backendIndex: Int,
+    val label: String = "RX",
+    val enabled: Boolean = true,
+    val muted: Boolean = false,
+    val active: Boolean = false,
+    val listening: Boolean = false,
+    val vfoAHz: Long = 0,
+    val vfoBHz: Long = 0,
+    val selectedChannel: Int = 0,
+    val mode: String = "UNKNOWN",
+    val passbandHz: Int? = null,
+    val sampleRate: Int = 0,
+    val iqRunning: Boolean = false,
+    val audioRunning: Boolean = false,
+    val meterDbm: Double? = null,
+    val sourceAgeMillis: Long? = null,
+    val droppedFrames: Long = 0,
+    val lastError: String? = null,
+) {
+    val effectiveRxHz: Long get() = if (selectedChannel == 1) vfoBHz else vfoAHz
+}
+
+data class TciRuntimeSnapshot(
+    val generation: Long = 0,
+    val state: TciConnectionState = TciConnectionState.DISCONNECTED,
+    val protocol: String = "UNKNOWN",
+    val protocolVersion: String = "UNKNOWN",
+    val device: String = "UNKNOWN",
+    val receiveOnly: Boolean = true,
+    val declaredReceiverCount: Int = 0,
+    val channelsCount: Int = 0,
+    val activeReceiverId: String? = null,
+    val listeningReceiverId: String? = null,
+    val receivers: List<TciReceiverSnapshot> = emptyList(),
+    val unknownCommands: Long = 0,
+    val malformedFrames: Long = 0,
+    val droppedFrames: Long = 0,
+    val blockedTxFrames: Long = 0,
+    val lastError: String? = null,
+) {
+    val ready: Boolean get() = state == TciConnectionState.READY
+}
+
+class TciRuntimeState {
+    private val main = Handler(Looper.getMainLooper())
+    var snapshot by mutableStateOf(TciRuntimeSnapshot()); private set
+    @Volatile var iqSink: (Int, Int, FloatArray) -> Unit = { _, _, _ -> }
+    @Volatile var rxAudioSink: (Int, Int, Int, FloatArray) -> Unit = { _, _, _, _ -> }
+
+    internal fun publish(value: TciRuntimeSnapshot) {
+        if (Looper.myLooper() == Looper.getMainLooper()) snapshot = value else main.post { snapshot = value }
+    }
+}
+
+class AndroidTciBackendFactory(private val runtime: TciRuntimeState) : RadioBackendFactory {
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .pingInterval(15, TimeUnit.SECONDS)
+        .build()
+
+    override suspend fun create(profile: RadioConnectionProfile): ManagedRadioBackend {
+        require(profile.backendKind == RadioBackendKind.NATIVE_TCI)
+        return AndroidTciBackend(profile, client, runtime)
+    }
+}
+
+private class AndroidTciBackend(
+    override val profile: RadioConnectionProfile,
+    private val client: OkHttpClient,
+    private val runtime: TciRuntimeState,
+) : ManagedRadioBackend {
+    private val lock = Any()
+    private val receivers = linkedMapOf<Int, TciReceiverSnapshot>()
+    private val generation = AtomicLong(System.nanoTime())
+    private val closed = AtomicBoolean(false)
+    private val decodeExecutor = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(8), { task -> Thread(task, "RigWeave-TCI-Decode").apply { isDaemon = true } }) { _, _ ->
+        synchronized(lock) { publishLocked(current.copy(droppedFrames = current.droppedFrames + 1)) }
+    }
+    @Volatile private var current = TciRuntimeSnapshot(generation = generation.get())
+    @Volatile private var socket: WebSocket? = null
+    @Volatile private var ready = CompletableDeferred<Boolean>()
+    private var fragment = ""
+    private var safeStopGeneration = Long.MIN_VALUE
+
+    override val snapshot: RadioRuntimeSnapshot
+        get() = synchronized(lock) {
+            val receiver = receivers.values.firstOrNull { it.id == current.activeReceiverId } ?: receivers.values.firstOrNull()
+            RadioRuntimeSnapshot(
+                generation = current.generation,
+                profileId = profile.id,
+                backendKind = RadioBackendKind.NATIVE_TCI,
+                modelId = profile.modelId,
+                connected = current.ready,
+                sourceAgeMillis = receiver?.sourceAgeMillis,
+                vfoAHz = available(receiver?.vfoAHz?.takeIf { it > 0 }),
+                vfoBHz = available(receiver?.vfoBHz?.takeIf { it > 0 }),
+                receiveVfo = available(receiver?.selectedChannel?.let { if (it == 1) "B" else "A" }),
+                transmitVfo = AvailableRadioValue(RadioAvailability.UNAVAILABLE),
+                mode = available(receiver?.mode?.takeUnless { it == "UNKNOWN" }),
+                passbandHz = available(receiver?.passbandHz),
+                sMeter = available(receiver?.meterDbm),
+                transmitting = AvailableRadioValue(RadioAvailability.UNAVAILABLE),
+                capabilities = RadioCapabilitySet(
+                    frequency = availability(receiver?.vfoAHz?.takeIf { it > 0 }),
+                    vfoB = availability(receiver?.vfoBHz?.takeIf { it > 0 }),
+                    mode = availability(receiver?.mode?.takeUnless { it == "UNKNOWN" }),
+                    filter = availability(receiver?.passbandHz),
+                    split = RadioAvailability.UNAVAILABLE,
+                    ritXit = RadioAvailability.UNAVAILABLE,
+                    meters = availability(receiver?.meterDbm),
+                    gains = RadioAvailability.UNKNOWN,
+                    panadapter = if (receiver?.iqRunning == true) RadioAvailability.AVAILABLE else RadioAvailability.UNKNOWN,
+                    iqAudio = RadioAvailability.AVAILABLE,
+                    ptt = RadioAvailability.UNAVAILABLE,
+                    tune = RadioAvailability.UNAVAILABLE,
+                    memoryWrite = RadioAvailability.UNAVAILABLE,
+                ),
+                firmware = "${current.protocol} ${current.protocolVersion}".trim(),
+                lastSanitizedError = current.lastError,
+            )
+        }
+
+    override suspend fun connect(): Boolean {
+        if (closed.getAndSet(false)) return false
+        synchronized(lock) {
+            receivers.clear()
+            current = TciRuntimeSnapshot(generation = generation.incrementAndGet(), state = TciConnectionState.CONNECTING)
+            publishLocked(current)
+            ready = CompletableDeferred()
+            fragment = ""
+        }
+        val scheme = if (profile.secureWebSocket) "wss" else "ws"
+        val request = runCatching { Request.Builder().url("$scheme://${profile.host}:${profile.port}").build() }.getOrElse {
+            fail("Invalid TCI endpoint")
+            return false
+        }
+        socket = client.newWebSocket(request, Listener())
+        return withTimeoutOrNull(8_000L) { ready.await() } ?: run {
+            fail("TCI ready timeout")
+            socket?.cancel()
+            false
+        }
+    }
+
+    override suspend fun disconnect() {
+        val ws = socket
+        synchronized(lock) {
+            receivers.values.filter { it.iqRunning }.forEach { receiver -> send(command(NativeTci.IQ_STOP, receiver.backendIndex)) }
+            receivers.values.filter { it.audioRunning }.forEach { receiver -> send(command(NativeTci.AUDIO_STOP, receiver.backendIndex)) }
+        }
+        ws?.close(1000, "Operator disconnect")
+        socket = null
+        disconnected()
+    }
+
+    override suspend fun requestReceive(): Boolean {
+        val ws = socket ?: return true
+        val value = synchronized(lock) {
+            if (safeStopGeneration == current.generation) return@synchronized ""
+            safeStopGeneration = current.generation
+            receivers.values.joinToString("") { command(NativeTci.SAFE_STOP, it.backendIndex) }
+        }
+        return value.isBlank() || ws.send(value)
+    }
+
+    override suspend fun execute(action: RadioPlatformAction): Boolean {
+        if (action.actionClass in setOf(RadioActionClass.TRANSMIT, RadioActionClass.TUNE, RadioActionClass.MEMORY_WRITE)) return false
+        val active = synchronized(lock) { receivers.values.firstOrNull { it.id == current.activeReceiverId } ?: receivers.values.firstOrNull() }
+            ?: return false
+        return when (action.name.lowercase(Locale.US)) {
+            "frequency" -> send(command(NativeTci.VFO, active.backendIndex, active.selectedChannel, action.longValue ?: return false))
+            "mode" -> send(command(NativeTci.MODE, active.backendIndex, text = action.textValue ?: return false))
+            "select_receiver" -> selectReceiver(action.longValue?.toInt() ?: return false, listening = false)
+            "listen_receiver" -> selectReceiver(action.longValue?.toInt() ?: return false, listening = true)
+            "iq_start" -> stream(active.backendIndex, iq = true, start = true)
+            "iq_stop" -> stream(active.backendIndex, iq = true, start = false)
+            "audio_start" -> stream(active.backendIndex, iq = false, start = true)
+            "audio_stop" -> stream(active.backendIndex, iq = false, start = false)
+            "mute" -> send(command(NativeTci.MUTE, active.backendIndex, number = if (action.longValue == 1L) 1 else 0))
+            "rx_enable" -> send(command(NativeTci.RX_ENABLE, active.backendIndex, number = if (action.longValue == 1L) 1 else 0))
+            else -> false
+        }
+    }
+
+    override fun close() {
+        closed.set(true)
+        socket?.cancel()
+        socket = null
+        decodeExecutor.shutdownNow()
+        disconnected()
+    }
+
+    private inner class Listener : WebSocketListener() {
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            synchronized(lock) { publishLocked(current.copy(state = TciConnectionState.HANDSHAKE, lastError = null)) }
+            webSocket.send("start;")
+        }
+
+        override fun onMessage(webSocket: WebSocket, text: String) {
+            synchronized(lock) {
+                fragment = (fragment + text).takeLast(65_536)
+                val end = fragment.lastIndexOf(';')
+                if (end < 0) return
+                val complete = fragment.substring(0, end + 1)
+                fragment = fragment.substring(end + 1)
+                NativeTci.parseStatus(complete).forEach(::applyStatusLocked)
+                publishReceiversLocked()
+            }
+        }
+
+        override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+            if (bytes.size > 8 * 1024 * 1024) {
+                synchronized(lock) { publishLocked(current.copy(malformedFrames = current.malformedFrames + 1, lastError = "TCI frame exceeds 8 MiB")) }
+                return
+            }
+            decodeExecutor.execute {
+                val metadata = IntArray(6)
+                val samples = NativeTci.decodeBinary(bytes.toByteArray(), metadata)
+                if (metadata[5] != 0) {
+                    synchronized(lock) { publishLocked(current.copy(malformedFrames = current.malformedFrames + 1, lastError = "Malformed TCI binary frame (${metadata[5]})")) }
+                    return@execute
+                }
+                val receiver = metadata[0]
+                when (metadata[3]) {
+                    NativeTci.DATA_IQ -> runtime.iqSink(receiver, metadata[1], samples)
+                    NativeTci.DATA_RX_AUDIO -> runtime.rxAudioSink(receiver, metadata[1], metadata[4].coerceAtLeast(1), samples)
+                    NativeTci.DATA_TX_AUDIO, NativeTci.DATA_TX_CHRONO -> synchronized(lock) {
+                        publishLocked(current.copy(blockedTxFrames = current.blockedTxFrames + 1,
+                            lastError = "Server TX stream ignored by receive-only Android profile"))
+                    }
+                }
+                synchronized(lock) {
+                    receivers[receiver]?.let { row -> receivers[receiver] = row.copy(sampleRate = metadata[1], sourceAgeMillis = 0) }
+                    publishReceiversLocked()
+                }
+            }
+        }
+
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { disconnected() }
+        override fun onFailure(webSocket: WebSocket, error: Throwable, response: Response?) {
+            fail(error.message?.replace(Regex("(wss?://)[^/\\s]+"), "$1<endpoint>")?.take(160) ?: "TCI transport failed")
+        }
+    }
+
+    private fun applyStatusLocked(row: String) {
+        val name = row.substringBefore('|')
+        val args = row.substringAfter('|', "")
+        val fields = args.split(',').map(String::trim)
+        fun receiver(): Pair<Int, TciReceiverSnapshot>? {
+            val index = fields.firstOrNull()?.toIntOrNull()?.takeIf { it in 0..7 } ?: return null
+            return index to receivers.getOrPut(index) { TciReceiverSnapshot("tci:$index", index, "RX ${index + 1}") }
+        }
+        when (name) {
+            "protocol" -> publishLocked(current.copy(protocol = fields.getOrNull(0).orEmpty().ifBlank { "TCI" }, protocolVersion = fields.getOrNull(1).orEmpty().ifBlank { "UNKNOWN" }))
+            "device" -> publishLocked(current.copy(device = args.take(96).ifBlank { "UNKNOWN" }))
+            "receive_only" -> publishLocked(current.copy(receiveOnly = fields.firstOrNull()?.equals("true", true) != false))
+            "trx_count" -> publishLocked(current.copy(declaredReceiverCount = fields.firstOrNull()?.toIntOrNull()?.coerceIn(0, 8) ?: 0))
+            "channels_count" -> publishLocked(current.copy(channelsCount = fields.lastOrNull()?.toIntOrNull()?.coerceIn(0, 2) ?: 0))
+            "vfo" -> receiver()?.let { (index, value) ->
+                val channel = fields.getOrNull(1)?.toIntOrNull() ?: 0
+                val hz = fields.getOrNull(2)?.toLongOrNull()?.takeIf { it in 100_000L..10_500_000_000L } ?: return@let
+                receivers[index] = if (channel == 1) value.copy(vfoBHz = hz, selectedChannel = channel, sourceAgeMillis = 0)
+                    else value.copy(vfoAHz = hz, selectedChannel = channel, sourceAgeMillis = 0)
+            }
+            "modulation" -> receiver()?.let { (index, value) -> receivers[index] = value.copy(mode = fields.getOrNull(1)?.uppercase(Locale.US).orEmpty().ifBlank { "UNKNOWN" }, sourceAgeMillis = 0) }
+            "rx_enable" -> receiver()?.let { (index, value) -> receivers[index] = value.copy(enabled = fields.getOrNull(1)?.equals("true", true) == true) }
+            "mute" -> receiver()?.let { (index, value) -> receivers[index] = value.copy(muted = fields.getOrNull(1)?.equals("true", true) == true) }
+            "iq_start" -> receiver()?.let { (index, value) -> receivers[index] = value.copy(iqRunning = true) }
+            "iq_stop" -> receiver()?.let { (index, value) -> receivers[index] = value.copy(iqRunning = false) }
+            "audio_start" -> receiver()?.let { (index, value) -> receivers[index] = value.copy(audioRunning = true) }
+            "audio_stop" -> receiver()?.let { (index, value) -> receivers[index] = value.copy(audioRunning = false) }
+            "ready" -> {
+                val count = current.declaredReceiverCount.coerceAtLeast(1)
+                repeat(count) { receivers.getOrPut(it) { TciReceiverSnapshot("tci:$it", it, "RX ${it + 1}") } }
+                val preferred = profile.preferredInitialReceiver.coerceAtMost(count - 1)
+                current = current.copy(state = TciConnectionState.READY, activeReceiverId = "tci:$preferred", listeningReceiverId = "tci:$preferred", receiveOnly = true)
+                ready.complete(true)
+                val rate = command(NativeTci.IQ_RATE, number = profile.preferredIqSampleRate.toLong())
+                send(rate + command(NativeTci.IQ_START, preferred))
+                receivers[preferred] = receivers.getValue(preferred).copy(iqRunning = true)
+            }
+            "start" -> Unit
+            else -> publishLocked(current.copy(unknownCommands = current.unknownCommands + 1))
+        }
+    }
+
+    private fun selectReceiver(index: Int, listening: Boolean): Boolean = synchronized(lock) {
+        val row = receivers[index] ?: return false
+        if (listening) current = current.copy(listeningReceiverId = row.id) else current = current.copy(activeReceiverId = row.id)
+        publishReceiversLocked()
+        true
+    }
+
+    private fun stream(index: Int, iq: Boolean, start: Boolean): Boolean {
+        val kind = if (iq) { if (start) NativeTci.IQ_START else NativeTci.IQ_STOP }
+            else if (start) NativeTci.AUDIO_START else NativeTci.AUDIO_STOP
+        val accepted = send(command(kind, index))
+        if (accepted) synchronized(lock) {
+            receivers[index]?.let { receivers[index] = if (iq) it.copy(iqRunning = start) else it.copy(audioRunning = start) }
+            publishReceiversLocked()
+        }
+        return accepted
+    }
+
+    private fun command(kind: Int, receiver: Int = 0, channel: Int = 0, number: Long = 0, text: String = ""): String =
+        NativeTci.buildCommand(kind, receiver, channel, number, text)
+
+    private fun send(value: String): Boolean = value.isNotBlank() && socket?.send(value) == true
+
+    private fun publishReceiversLocked() {
+        val active = current.activeReceiverId
+        val listening = current.listeningReceiverId
+        publishLocked(current.copy(receivers = receivers.values.map { it.copy(active = it.id == active, listening = it.id == listening) }))
+    }
+
+    private fun publishLocked(value: TciRuntimeSnapshot) {
+        current = value
+        runtime.publish(value)
+    }
+
+    private fun disconnected() = synchronized(lock) {
+        receivers.replaceAll { _, value -> value.copy(iqRunning = false, audioRunning = false) }
+        publishLocked(current.copy(state = TciConnectionState.DISCONNECTED, receivers = receivers.values.toList()))
+        if (!ready.isCompleted) ready.complete(false)
+    }
+
+    private fun fail(message: String) = synchronized(lock) {
+        publishLocked(current.copy(state = TciConnectionState.ERROR, lastError = message.take(180)))
+        if (!ready.isCompleted) ready.complete(false)
+    }
+
+    private fun availability(value: Any?): RadioAvailability = if (value == null) RadioAvailability.UNKNOWN else RadioAvailability.AVAILABLE
+    private fun <T> available(value: T?): AvailableRadioValue<T> = AvailableRadioValue(availability(value), value)
+}

@@ -31,6 +31,7 @@ object NativePanadapter {
     ): Boolean
 
     external fun push(handle: Long, samples: ShortArray, sampleCount: Int, discontinuity: Boolean): Boolean
+    external fun pushFloat(handle: Long, samples: FloatArray, sampleCount: Int, discontinuity: Boolean): Boolean
 
     /**
      * Fills every array while the native snapshot lock is held. Meta requires 9 longs,

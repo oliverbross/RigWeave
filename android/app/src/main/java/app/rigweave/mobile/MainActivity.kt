@@ -213,6 +213,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val activation = remember { PotaActivationController(context, database) }
     val features = remember { FeatureController(context) }
     val app = remember { AppController(context) }
+    val tciRuntime = remember { TciRuntimeState() }
+    val tciFactory = remember { AndroidTciBackendFactory(tciRuntime) }
     val physicalAuthority = remember { PhysicalDeviceAuthority() }
     val platformTransport = remember { UsbRadioTransport(context, "rigweave-radio-platform-usb") }
     val androidRadioFactory = remember { AndroidRadioBackendFactory(platformTransport) }
@@ -223,6 +225,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 RadioBackendKind.NATIVE_RGO_ONE to androidRadioFactory,
                 RadioBackendKind.HAMLIB_EMBEDDED to androidRadioFactory,
                 RadioBackendKind.HAMLIB_NETWORK to androidRadioFactory,
+                RadioBackendKind.NATIVE_TCI to tciFactory,
             ),
             devices = physicalAuthority,
             disarmTransmitWorkflows = app::disarmAll,
@@ -234,7 +237,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val selectedProfile = app.selectedRadioProfile
     val integratedRadioSelected = selectedProfile.backendKind in setOf(
         RadioBackendKind.NATIVE_QMX, RadioBackendKind.NATIVE_RGO_ONE,
-        RadioBackendKind.HAMLIB_EMBEDDED, RadioBackendKind.HAMLIB_NETWORK,
+        RadioBackendKind.HAMLIB_EMBEDDED, RadioBackendKind.HAMLIB_NETWORK, RadioBackendKind.NATIVE_TCI,
     )
     val bandMapStore = remember { BandMapStateStore(context) }
     val bandMaps = remember { BandMapController(bandMapStore.load(), bandMapStore::save) }
@@ -255,6 +258,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val callbook = remember { CallbookController(context) { app.stationCallsign } }
     val cty = remember { CtyController(context) }
     val audio = remember { AudioMonitorController(context) }
+    val tciRxAudio = remember { TciRxAudioController(context, audio) }
     flex.attachAudioRoutes(audio)
     val cwDecoder = remember { CwDecodeBuffer() }
     var kxRadio by remember {
@@ -521,10 +525,36 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             else -> dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.DX, callsign = intent.callsign,
                 source = "DX Chaser", reason = intent.reason.ifBlank { "Open exact DX details" }))
         } }) }
-    val operatorStop = remember { OperatorStopRouter(digi, keyer, repeatCq, contest, chaser) {
-        scope.launch { rotator.stopAndDisarm() }
-    } }
     val panadapter = remember { PanadapterController(context, audio, { radio }, direct) }
+    val scanner = remember { ReceiveOnlyScannerController { frequency, mode, _ ->
+        val tuned = radioPlatform.dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "frequency", longValue = frequency))
+        tuned && radioPlatform.dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "mode", textValue = mode))
+    } }
+    val rfObservations = remember { RfObservationController() }
+    val bandStacks = remember { BandStackStore(context) }
+    val announcements = remember { SpokenAnnouncementController(context, { radio.transmitting }, { voiceTx.isBusy }, { app.quietAlerts }) }
+    val debugSdrLab = remember { if (BuildConfig.DEBUG) DebugSdrLab(tciRuntime, panadapter, rfObservations) else null }
+    LaunchedEffect(radio.connected, radio.frequencyHz, radio.mode) {
+        if (radio.connected && radio.frequencyHz > 0) {
+            val band = radioPresetBandName(radio.frequencyHz)
+            announcements.announceTuning(radio.frequencyHz, band ?: "Outside amateur allocation", radio.mode)
+            if (band == null) announcements.announceAllocationWarning("Warning. Frequency is outside the configured amateur allocations")
+        }
+    }
+    LaunchedEffect(tciRxAudio.status) {
+        if (tciRxAudio.status.contains("route was lost", ignoreCase = true)) announcements.announceRouteLoss(tciRxAudio.status)
+    }
+    LaunchedEffect(radio.transmitting, radio.swrTenths) {
+        if (radio.transmitting && radio.swrTenths >= 30) announcements.announceHighSwr(radio.swrTenths / 10.0)
+    }
+    SideEffect {
+        tciRuntime.iqSink = panadapter::pushTciIq
+        tciRuntime.rxAudioSink = tciRxAudio::push
+    }
+    val operatorStop = remember { OperatorStopRouter(digi, keyer, repeatCq, contest, chaser) {
+        scanner.globalStop(); announcements.globalStop(); tciRxAudio.stop("Global Stop")
+        scope.launch { radioPlatform.stopAndDisarm(); rotator.stopAndDisarm() }
+    } }
     val sendKx: (String) -> Unit = { raw ->
         val command = raw.uppercase()
         val cwMacro = command.startsWith("KY ")
@@ -548,6 +578,11 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         }
     }
     LaunchedEffect(transport, selectedProfile.id) {
+        scanner.onProfileChange()
+        tciRxAudio.stop("Radio profile changed")
+        tciRxAudio.selectProfile(selectedProfile.id.value)
+        debugSdrLab?.takeIf { it.active }?.stop()
+        panadapter.detachTciSources("Radio profile changed")
         digi.stopRx("Radio selection changed · RX stopped")
         digi.disarm()
         radioPlatform.disconnect()
@@ -643,6 +678,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 digi.stopRx("App left foreground · RX stopped")
                 digi.disarm()
                 voiceTx.stop("App left foreground; defensive RX cleanup requested")
+                scanner.onBackground(); announcements.stop(); tciRxAudio.stop("App left foreground")
                 scope.launch { flex.onForegroundChanged(false) }
             }
             else -> Unit
@@ -679,7 +715,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         while (foreground) { chaser.poll(); delay(1_000) }
     }
     DisposableEffect(Unit) { onDispose {
-        app.disarmAll(); bandMaps.close(); chaser.close(); contest.close(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close(); groupsIo.close()
+        app.disarmAll(); bandMaps.close(); chaser.close(); contest.close(); scanner.close(); rfObservations.close(); debugSdrLab?.close(); announcements.close(); tciRxAudio.close(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close(); groupsIo.close()
         runBlocking {
             transport.disconnect()
             radioPlatform.close()
@@ -790,17 +826,21 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                     (item == Destination.GROUPS_IO && !groupsIoDestinationVisible(groupsIo.enabled, compact = false)) ||
                     (item == Destination.BAND_MAPS && (!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible)) ||
                     (item == Destination.ROTATOR && !app.rotatorEnabled) ||
-                    (item == Destination.PANADAPTER && (!app.panadapterEnabled || app.radioFamily == RadioFamily.FLEXRADIO)) ||
+                    (item == Destination.PANADAPTER &&
+                        ((app.selectedRadioProfile.backendKind != RadioBackendKind.NATIVE_TCI && !app.panadapterEnabled) ||
+                            app.radioFamily == RadioFamily.FLEXRADIO)) ||
                     (item == Destination.EQ && !eqVisible) ||
                     (item == Destination.CONTEST && !contestDestinationVisible(app.contestEnabled))
                 }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
-                panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app,
+                panadapter, tciRxAudio, tciRuntime, scanner, rfObservations, bandStacks, announcements, debugSdrLab,
+                portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app,
                 selectedProfile, platformSnapshot, hamlibModels, rotator,
-                { scope.launch { radioPlatform.disconnect(); platformSnapshot = radioPlatform.snapshot } },
+                { tciRxAudio.stop("Radio disconnected"); scope.launch { radioPlatform.disconnect(); platformSnapshot = radioPlatform.snapshot } },
                 { action -> scope.launch {
+                    if (action.name.equals("frequency", ignoreCase = true)) scanner.onManualTune()
                     val accepted = radioPlatform.dispatch(action)
                     platformSnapshot = radioPlatform.snapshot
                     if (!accepted) usbDetail = "Action unavailable or blocked by the selected profile"
@@ -837,10 +877,12 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
-                panadapter, portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app,
+                panadapter, tciRxAudio, tciRuntime, scanner, rfObservations, bandStacks, announcements, debugSdrLab,
+                portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app,
                 selectedProfile, platformSnapshot, hamlibModels, rotator,
-                { scope.launch { radioPlatform.disconnect(); platformSnapshot = radioPlatform.snapshot } },
+                { tciRxAudio.stop("Radio disconnected"); scope.launch { radioPlatform.disconnect(); platformSnapshot = radioPlatform.snapshot } },
                 { action -> scope.launch {
+                    if (action.name.equals("frequency", ignoreCase = true)) scanner.onManualTune()
                     val accepted = radioPlatform.dispatch(action)
                     platformSnapshot = radioPlatform.snapshot
                     if (!accepted) usbDetail = "Action unavailable or blocked by the selected profile"
@@ -909,6 +951,9 @@ private fun navIcon(item: Destination) = when (item) {
     hamClockSettings: HamClockSettingsCoordinator,
     features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, wavelogNative: WavelogNativeController,
     syncHub: SyncHubController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
+    tciRxAudio: TciRxAudioController,
+    tciRuntime: TciRuntimeState, scanner: ReceiveOnlyScannerController, rfObservations: RfObservationController,
+    bandStacks: BandStackStore, announcements: SpokenAnnouncementController, debugSdrLab: DebugSdrLab?,
     portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
     selectedProfile: RadioConnectionProfile, platformSnapshot: RadioRuntimeSnapshot, hamlibModels: List<HamlibModelDescriptor>,
     rotator: AndroidRotatorRuntime,
@@ -929,7 +974,7 @@ private fun navIcon(item: Destination) = when (item) {
     homeQsoId: String?, consumeHomeQso: () -> Unit, openHomeQso: (String) -> Unit) {
     val integratedRadioSelected = selectedProfile.id == RadioProfileCatalog.UNKNOWN.id || selectedProfile.backendKind in setOf(
         RadioBackendKind.NATIVE_QMX, RadioBackendKind.NATIVE_RGO_ONE,
-        RadioBackendKind.HAMLIB_EMBEDDED, RadioBackendKind.HAMLIB_NETWORK,
+        RadioBackendKind.HAMLIB_EMBEDDED, RadioBackendKind.HAMLIB_NETWORK, RadioBackendKind.NATIVE_TCI,
     )
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     val intelligencePortableSpots = portable.pota.spots.map(PotaSpot::toPortable) + portable.sotaSpots + portable.wwffSpots
@@ -963,6 +1008,36 @@ private fun navIcon(item: Destination) = when (item) {
                 BandMapSource.SOTA to portable.sotaSpots.isNotEmpty(),
                 BandMapSource.WWFF to portable.wwffSpots.isNotEmpty(),
             )))
+    }
+    LaunchedEffect(features.liveSpots, features.rbnObservations, neuralDx.mySignal.reports, neuralDx.wsprPersonal.reports,
+        operatingContext.stationGrid.value, debugSdrLab?.active) {
+        if (debugSdrLab?.active == true) return@LaunchedEffect
+        val station = maidenheadCenter(operatingContext.stationGrid.value) ?: return@LaunchedEffect
+        val clusterRows = features.liveSpots.mapNotNull { row ->
+            if (!row.latitude.isFinite() || !row.longitude.isFinite()) null else RfObservation(
+                "cluster:${row.id}", "CLUSTER", RfEvidenceClass.OBSERVED, row.receivedEpoch, row.callsign,
+                row.band, row.mode, station.latitude, station.longitude, row.latitude, row.longitude,
+                RfPrecision.COARSE, worked = row.workedCall, confirmed = null,
+                needed = buildSet { if (!row.workedCountry) add("DXCC"); if (!row.workedBandMode) add("BAND_MODE") },
+                contestDuplicate = row.recentDupe, continent = row.continent, entity = row.dxcc.ifBlank { row.country },
+                cqZone = row.cqZone.takeIf { it > 0 }, ituZone = row.ituZone.takeIf { it > 0 })
+        }
+        fun signalRows(rows: List<SignalReport>, source: String) = rows.mapNotNull { row ->
+            val latitude = row.latitude ?: maidenheadCenter(row.locator)?.latitude ?: return@mapNotNull null
+            val longitude = row.longitude ?: maidenheadCenter(row.locator)?.longitude ?: return@mapNotNull null
+            RfObservation("$source:${signalReportReference(row)}", source, RfEvidenceClass.OBSERVED, row.epoch,
+                row.callsign, row.band, row.mode, station.latitude, station.longitude, latitude, longitude,
+                if (row.locator.length >= 6) RfPrecision.GRID else RfPrecision.COARSE, row.snr)
+        }
+        val rbnRows = features.rbnObservations.mapNotNull { row ->
+            val from = row.skimmerPoint ?: return@mapNotNull null
+            val to = row.dxPoint ?: return@mapNotNull null
+            RfObservation("RBN:${row.id}", "RBN", RfEvidenceClass.OBSERVED, row.observedEpoch,
+                row.dxCall, row.band, row.mode, from.latitude, from.longitude, to.latitude, to.longitude,
+                if (row.dxGeometry == "EXACT") RfPrecision.EXACT else RfPrecision.COARSE, row.snr)
+        }
+        rfObservations.submit(clusterRows + rbnRows + signalRows(neuralDx.mySignal.reports, "PSK") +
+            signalRows(neuralDx.wsprPersonal.reports, "WSPR"))
     }
     val deliveredStates = setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED)
     val intelligenceAttention = syncHub.records.count { it.state !in deliveredStates }
@@ -1092,6 +1167,9 @@ private fun navIcon(item: Destination) = when (item) {
                             Modifier.fillMaxHeight().weight(.1f))
                         Box(Modifier.fillMaxHeight().weight(if (showCompactBandMap) .9f else 1f)) {
                         if (selectedProfile.backendKind == RadioBackendKind.NATIVE_FLEX) FlexRadioScreen(flex, openLogbook)
+                        else if (selectedProfile.backendKind == RadioBackendKind.NATIVE_TCI) TciRadioCockpit(
+                            tciRuntime, platformSnapshot, panadapter, tciRxAudio, scanner, app.presets, dispatchPlatform,
+                            connect, disconnectPlatform, debugSdrLab)
                         else if (integratedRadioSelected) IntegratedRadioPlatformScreen(
                             selectedProfile,
                             platformSnapshot,
@@ -1117,13 +1195,17 @@ private fun navIcon(item: Destination) = when (item) {
                 }
             }
         }
-        Destination.DIGI -> IntegratedDigiWorkspace(integratedDigiPage, setIntegratedDigiPage, digi, radio, compact, chaser)
+        Destination.DIGI -> DigiRfPathWrapper(rfObservations) {
+            IntegratedDigiWorkspace(integratedDigiPage, setIntegratedDigiPage, digi, radio, compact, chaser)
+        }
         Destination.CONTEST -> if (app.contestEnabled) IntegratedContestWorkspace(contest, keyer.snapshot(), bandMaps, features,
             onOpenLogbook = openLogbook,
             onOpenSettings = openSettings) else EqUnavailableScreen("Contest is hidden in Settings", openSettings)
         Destination.BAND_MAPS -> BandMapScreen(bandMaps, database, features, neuralDx, portable, cty, contest, chaser,
             operatingContext, bandMapKeyer, app, workspaceAction)
-        Destination.PANADAPTER -> if (app.panadapterEnabled && selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT)
+        Destination.PANADAPTER -> if (selectedProfile.backendKind == RadioBackendKind.NATIVE_TCI)
+            TciPanadapterPanel(tciRuntime.snapshot, panadapter, dispatchPlatform, scanner, app.presets)
+        else if (app.panadapterEnabled && selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT)
             PanadapterScreen(panadapter, radio, features.liveSpots, compact)
         else RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty, features, voiceStore, voiceTx,
             connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
@@ -1134,15 +1216,21 @@ private fun navIcon(item: Destination) = when (item) {
             Box(Modifier.weight(1f)) { LogbookScreen(radio, database, mutations, wavelog, wavelogNative, syncHub, callbook, app,
                 openSync, openProgress, progress.logbookRequest, progress::consumeLogbookRequest, homeQsoId, consumeHomeQso) }
         }
-        Destination.PROGRESS -> ProgressScreen(progress, features, portable, syncHub, cty, wavelog.logMode,
-            wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }.orEmpty(),
-            if (wavelog.logMode == LogMode.WAVELOG) wavelog.selectedStation?.callsign.orEmpty() else app.stationCallsign, compact,
-            outlook = neuralDx.outlook.snapshot, openDx = openDx,
-            openOutlook = { neuralDx.requestPage(NeuralDxPage.INSIGHT); openDx() },
-            openDxEvidence = { band -> neuralDx.requestBandEvidence(band); openDx() }, openPortable = openPortable,
-            openLogbook = openLogbook, openLogbookFilter = { filter -> progress.requestLogbook(filter); openLogbook() }, openSync = openSync)
+        Destination.PROGRESS -> RfIntelligenceWorkspace(rfObservations) {
+            ProgressScreen(progress, features, portable, syncHub, cty, wavelog.logMode,
+                wavelog.stationId.takeIf { wavelog.logMode == LogMode.WAVELOG }.orEmpty(),
+                if (wavelog.logMode == LogMode.WAVELOG) wavelog.selectedStation?.callsign.orEmpty() else app.stationCallsign, compact,
+                outlook = neuralDx.outlook.snapshot, openDx = openDx,
+                openOutlook = { neuralDx.requestPage(NeuralDxPage.INSIGHT); openDx() },
+                openDxEvidence = { band -> neuralDx.requestBandEvidence(band); openDx() }, openPortable = openPortable,
+                openLogbook = openLogbook, openLogbookFilter = { filter -> progress.requestLogbook(filter); openLogbook() }, openSync = openSync)
+        }
         Destination.SYNC -> SyncHubScreen(database, mutations, syncHub, wavelog, wavelogNative, openLogbook)
-        Destination.PRESETS -> PresetsScreen(radio, app, send)
+        Destination.PRESETS -> PresetsScreen(radio, app, send, bandStacks, scanner, panadapter.frame, tciRuntime.snapshot, dispatchPlatform) { entry ->
+            dispatchPlatform(RadioPlatformAction(RadioActionClass.SAFE_SET, "frequency", longValue = entry.frequencyHz))
+            dispatchPlatform(RadioPlatformAction(RadioActionClass.SAFE_SET, "mode", textValue = entry.mode))
+            dispatchPlatform(RadioPlatformAction(RadioActionClass.SAFE_SET, "bandwidth", longValue = entry.filterHz.toLong()))
+        }
         Destination.DX -> DXScreen(neuralDx, features, database, wavelog, callbook, cty, app,
             hamClockSettings.document.settings.cluster, hamClockSettings.document.settings.dxNews,
             hamClockSettings.document.settings.bandHealth, progress.bandHealthSnapshot,
@@ -1166,7 +1254,8 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.SETTINGS -> Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f)) { SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, syncHub, callbook, cty, audio, panadapter, app,
                 transport, flex, digi, voiceStore, voiceAudio, voiceTx, groupsIo, operatingContext, keyerProfiles, keyer, repeatCq,
-                bandMaps, contest, chaser, hamlibModels, rotator, openEq, openContest, openSync, openDigi, openGroupsIo, openRotator,
+                 bandMaps, contest, chaser, hamlibModels, rotator, tciRuntime, tciRxAudio, scanner, rfObservations, bandStacks, announcements, debugSdrLab,
+                openEq, openContest, openSync, openDigi, openGroupsIo, openRotator,
                 disconnectPlatform, connect, direct) }
         }
     }
@@ -3549,9 +3638,20 @@ private fun qslMethodLabel(code: String) = qslMethodChoices.firstOrNull { it.fir
     } }
 }
 
-@Composable private fun PresetsScreen(state: RadioState, app: AppController, send: (String) -> Unit) {
+@Composable private fun PresetsScreen(
+    state: RadioState,
+    app: AppController,
+    send: (String) -> Unit,
+    bandStacks: BandStackStore,
+    scanner: ReceiveOnlyScannerController,
+    panadapterFrame: PanadapterFrame?,
+    tci: TciRuntimeSnapshot,
+    dispatchPlatform: (RadioPlatformAction) -> Unit,
+    recallBandStack: (BandStackEntry) -> Unit,
+) {
     var editing by remember { mutableStateOf<RadioPreset?>(null) }; var adding by remember { mutableStateOf(false) }
     var reordering by remember { mutableStateOf(false) }
+    var scannerOpen by remember { mutableStateOf(false) }
     val ordered = app.presets.sortedBy { it.slot }
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -3564,6 +3664,7 @@ private fun qslMethodLabel(code: String) = qslMethodChoices.firstOrNull { it.fir
                 Button({ adding = true }, enabled = app.nextPresetSlot() != null, modifier = Modifier.heightIn(min = 48.dp)) {
                     Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(7.dp)); Text("ADD PRESET")
                 }
+                OutlinedButton({ scannerOpen = !scannerOpen }, modifier = Modifier.heightIn(min = 48.dp)) { Text("SCANNER") }
             }
             if (maxWidth >= 820.dp) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(18.dp),
                 verticalAlignment = Alignment.CenterVertically) {
@@ -3577,7 +3678,38 @@ private fun qslMethodLabel(code: String) = qslMethodChoices.firstOrNull { it.fir
                     verticalAlignment = Alignment.CenterVertically, content = actions)
             }
         }
-        if (app.presets.isEmpty()) Card(colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
+        val currentBand = radioPresetBandName(state.frequencyHz)
+        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Raised)) {
+            Row(
+                Modifier.fillMaxWidth().padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("BAND STACK", color = Amber, fontWeight = FontWeight.Bold)
+                    Text(
+                        currentBand?.let { band -> "$band · ${bandStacks.stacks[band].orEmpty().size}/${bandStacks.depth} saved" }
+                            ?: "Tune to an amateur band to record or cycle",
+                        color = Muted,
+                    )
+                }
+                OutlinedButton({
+                    currentBand?.let { band ->
+                        bandStacks.record(
+                            band,
+                            BandStackEntry(state.frequencyHz, normalizeRadioPresetMode(state.mode), state.bandwidthHz, "active", Instant.now().epochSecond),
+                        )
+                    }
+                }, enabled = state.connected && currentBand != null) { Text("RECORD") }
+                Button({
+                    currentBand?.let { band -> bandStacks.cycle(band, state.frequencyHz)?.let(recallBandStack) }
+                }, enabled = state.connected && currentBand != null && bandStacks.stacks[currentBand].orEmpty().isNotEmpty()) {
+                    Text("CYCLE")
+                }
+            }
+        }
+        if (scannerOpen) ScannerPanel(scanner, app.presets, panadapterFrame, tci, dispatchPlatform)
+        else if (app.presets.isEmpty()) Card(colors = CardDefaults.cardColors(containerColor = Panel), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.fillMaxWidth().padding(42.dp), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Icon(Icons.Outlined.Radio, null, tint = Amber, modifier = Modifier.size(38.dp))
@@ -4431,6 +4563,8 @@ private fun statusColourForeground(argb: Int): Color {
     operatingContext: OperatingContextSnapshot, keyerProfiles: KeyerProfileStore, keyer: KeyerController, repeatCq: RepeatCqController,
     bandMaps: BandMapController, contestRuntime: ContestRuntime, chaserRuntime: DxChaserRuntime,
     hamlibModels: List<HamlibModelDescriptor>, rotator: AndroidRotatorRuntime,
+    tciRuntime: TciRuntimeState, tciRxAudio: TciRxAudioController, scanner: ReceiveOnlyScannerController, rfObservations: RfObservationController,
+    bandStacks: BandStackStore, announcements: SpokenAnnouncementController, debugSdrLab: DebugSdrLab?,
     openEq: () -> Unit, openContest: () -> Unit, openSync: () -> Unit, openDigi: () -> Unit, openGroupsIo: () -> Unit,
     openRotator: () -> Unit, disconnectRadio: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
@@ -4438,6 +4572,7 @@ private fun statusColourForeground(argb: Int): Color {
     var section by remember { mutableStateOf(SettingsSection.RADIO) }
     var hamlibSearch by remember { mutableStateOf("") }
     var showRadioWizard by remember { mutableStateOf(false) }
+    var showTciWizard by remember { mutableStateOf(false) }
     var showRotatorWizard by remember { mutableStateOf(false) }
     var showAlertProfileHelp by remember { mutableStateOf(false) }
     var host by remember { mutableStateOf(features.clusterHost) }; var port by remember { mutableStateOf(features.clusterPort.toString()) }
@@ -4583,6 +4718,16 @@ private fun statusColourForeground(argb: Int): Color {
                 }
             }
             item {
+                OutlinedButton({ showRadioWizard = false; showTciWizard = true },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text("TCI radio", fontWeight = FontWeight.Bold)
+                        Text("Native WebSocket · multi-receiver · receive-only and TX locked · selection stays disconnected",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            item {
                 OutlinedButton({
                     hamlibModels.firstOrNull()?.let { app.selectHamlibModel(it.id, it.manufacturer, it.model) }
                     hamlibSearch = ""
@@ -4599,6 +4744,7 @@ private fun statusColourForeground(argb: Int): Color {
         confirmButton = {},
         dismissButton = { TextButton({ showRadioWizard = false }) { Text("CANCEL") } },
     )
+    if (showTciWizard) TciProfileDialog(app) { showTciWizard = false }
     if (showRotatorWizard) AlertDialog(
         onDismissRequest = { showRotatorWizard = false },
         title = { Text("Add rotator") },
@@ -4639,7 +4785,7 @@ private fun statusColourForeground(argb: Int): Color {
                 OutlinedButton({ showRadioWizard = true }) { Text("CHOOSE ACTIVE PROFILE") }
             }
             Text("Select the single active radio backend. Switching closes the previous connection before the next backend starts.", color = Muted)
-            RadioProfileCatalog.nativeProfiles.forEach { candidate ->
+            (RadioProfileCatalog.nativeProfiles + app.tciProfiles).forEach { candidate ->
                 val active = app.selectedRadioProfileId == candidate.id
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = if (active) Healthy.copy(alpha = .12f) else Panel)) {
                     Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -4651,21 +4797,27 @@ private fun statusColourForeground(argb: Int): Color {
                         Text("${candidate.backendKind} · ${candidate.model} · ${candidate.transport} · ${if (candidate.readOnly) "READ ONLY" else "operator controlled"}${if (active) " · DEFAULT" else ""}", color = Muted)
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             TextButton({ app.selectRadioProfile(candidate) }) { Text(if (active) "ACTIVE" else "CHOOSE") }
-                            TextButton({ systemMessage = "Edit ${candidate.name} · select transport parameters in the profile wizard" }) { Text("EDIT") }
+                            TextButton({
+                                if (candidate.backendKind == RadioBackendKind.NATIVE_TCI) showTciWizard = true
+                                else systemMessage = "Edit ${candidate.name} · select transport parameters in the profile wizard"
+                            }) { Text("EDIT") }
                             if (active && state.connected) TextButton({ settingsScope.launch {
                                 disconnectRadio(); transport.disconnect(); flex.disconnect()
                             } }) { Text("DISCONNECT") }
                             else TextButton(reconnect, enabled = active) { Text("CONNECT") }
-                            TextButton({}, enabled = false) { Text("DELETE") }
+                            TextButton({
+                                if (candidate.backendKind == RadioBackendKind.NATIVE_TCI) app.deleteTciProfile(candidate.id)
+                            }, enabled = candidate.backendKind == RadioBackendKind.NATIVE_TCI && !active) { Text("DELETE") }
                         }
                     }
                 }
             }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                RadioProfileCatalog.nativeProfiles.forEach { profile ->
+                (RadioProfileCatalog.nativeProfiles + app.tciProfiles).forEach { profile ->
                     FilterChip(app.selectedRadioProfileId == profile.id, { app.selectRadioProfile(profile) }, { Text(profile.name) })
                 }
             }
+            SdrSettingsPanel(tciRuntime, tciRxAudio, scanner, rfObservations, announcements, bandStacks, debugSdrLab)
             Text("Native profiles are preferred when RigWeave has a dedicated integration. Unknown or future stored identifiers restore disconnected.", color = Muted)
             OutlinedTextField(
                 hamlibSearch,
@@ -5289,6 +5441,7 @@ private fun statusColourForeground(argb: Int): Color {
             }
         }
         if (section == SettingsSection.HEALTH) SettingsCard("SYSTEM HEALTH") {
+            SdrHealthPanel(tciRuntime, tciRxAudio, panadapter, scanner, rfObservations, announcements)
             val health = buildSystemHealthSnapshot(context, operatingContext, stability, wavelog.status, wavelog.pendingCount,
                 syncHub.records.count { it.state !in setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED) },
                 features.clusterStatus, neuralDx.status, groupsIo.status, groupsIo.cacheStats.messages, groupsIo.homeSummary.needsAttention,
