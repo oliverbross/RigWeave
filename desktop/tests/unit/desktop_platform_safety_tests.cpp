@@ -1,9 +1,12 @@
 #include "rigweave/desktop/DesktopPanadapter.hpp"
+#include "rigweave/desktop/DesktopEngagementControllers.hpp"
 #include "rigweave/desktop/DesktopPlatform.hpp"
 #include "rigweave/desktop/DesktopRadioController.hpp"
 #include "rigweave/desktop/DesktopRotatorController.hpp"
 
 #include <QJsonDocument>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QtTest>
 #include <cmath>
@@ -113,6 +116,94 @@ private slots:
     QVERIFY(!radio.tuneAvailable());
     QCOMPARE(rotator.state(), QString("Disconnected / automation disarmed"));
     QVERIFY(!rotator.automationArmed());
+  }
+  void keyerPreviewWorksWhileSendAndRestoreAuthorityStayClosed() {
+    DesktopKeyerController keyer;
+    QString error;
+    QVERIFY(keyer.restoreConfiguration(
+        {{"schemaVersion", 1},
+         {"templates", QVariantMap{{"F1", "CQ {MYCALL}"}}},
+         {"queue", QStringList{"unsafe"}},
+         {"repeatCq", true},
+         {"armed", true}},
+        &error));
+    QCOMPARE(keyer.queueDepth(), 0);
+    QVERIFY(!keyer.sendAvailable());
+    QVERIFY(keyer.previewMacro("F1", {{"MYCALL", "N0TEST"}}));
+    QCOMPARE(keyer.lastPreview(), QString("CQ N0TEST"));
+    QVERIFY(!keyer.enqueueSend("F1", {{"MYCALL", "N0TEST"}}));
+    QCOMPARE(keyer.queueDepth(), 0);
+    keyer.stop();
+    QVERIFY(keyer.state().startsWith("STOPPED"));
+  }
+  void nativeRadioTcpFixtureRequiresReadbackAndRejectsTransmitAuthority() {
+    QTcpServer server;
+    QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+    DesktopRadioController radio;
+    const QString route =
+        QStringLiteral("tcp://127.0.0.1:%1").arg(server.serverPort());
+    QVERIFY(radio.connectNativeProfile("QMX", route, 38400));
+    QVERIFY(server.waitForNewConnection(1000));
+    QTcpSocket *peer = server.nextPendingConnection();
+    QVERIFY(peer);
+    QTRY_VERIFY_WITH_TIMEOUT(peer->bytesAvailable() > 0, 1000);
+    QVERIFY(peer->readAll().contains("FA;"));
+    peer->write("FA00014074000;MD6;");
+    peer->flush();
+    QTRY_COMPARE_WITH_TIMEOUT(radio.frequencyHz(), quint64(14074000), 1000);
+    QCOMPARE(radio.mode(), QString("DIGU"));
+    QVERIFY(radio.requestFrequency(14062000));
+    QTRY_VERIFY_WITH_TIMEOUT(peer->bytesAvailable() > 0, 1000);
+    QVERIFY(peer->readAll().contains("FA00014062000;"));
+    QVERIFY(!radio.pttAvailable());
+    QVERIFY(!radio.tuneAvailable());
+    radio.disconnectRadio();
+  }
+  void nativeRgoV6FixtureMustProveExactIdentity() {
+    QTcpServer server;
+    QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+    DesktopRadioController radio;
+    const QString route =
+        QStringLiteral("tcp://127.0.0.1:%1").arg(server.serverPort());
+    QVERIFY(radio.connectNativeProfile("RGO-V6", route, 38400));
+    QVERIFY(server.waitForNewConnection(1000));
+    QTcpSocket *peer = server.nextPendingConnection();
+    QVERIFY(peer);
+    QTRY_VERIFY_WITH_TIMEOUT(peer->bytesAvailable() > 0, 1000);
+    QVERIFY(peer->readAll().contains("ID;"));
+    QVERIFY(!radio.requestFrequency(14062000));
+    peer->write("ID006;");
+    peer->flush();
+    QTRY_VERIFY_WITH_TIMEOUT(radio.state().startsWith("Connected"), 1000);
+    QVERIFY(radio.requestFrequency(14062000));
+  }
+  void nativeRotatorFixturePollsAndEnforcesForbiddenPath() {
+    QTcpServer server;
+    QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+    DesktopRotatorController rotator;
+    QVERIFY(rotator.configureSafety(
+        0, 450, -10, 180,
+        {QVariantMap{{"startDeg", 200.0}, {"endDeg", 210.0},
+                     {"reason", "feedline"}}}));
+    const QString route =
+        QStringLiteral("tcp://127.0.0.1:%1").arg(server.serverPort());
+    QVERIFY(rotator.connectNative("GS232", route, 9600));
+    QVERIFY(server.waitForNewConnection(1000));
+    QTcpSocket *peer = server.nextPendingConnection();
+    QVERIFY(peer);
+    QTRY_VERIFY_WITH_TIMEOUT(peer->bytesAvailable() > 0, 1000);
+    QVERIFY(peer->readAll().contains("C2\r"));
+    peer->write("AZ180.0 EL25.0\r");
+    peer->flush();
+    QTRY_COMPARE_WITH_TIMEOUT(rotator.azimuth(), 180.0, 1000);
+    QVERIFY(!rotator.prepareTarget(250, 30));
+    QVERIFY(rotator.prepareTarget(190, 30));
+    QVERIFY(rotator.confirmMove());
+    QTRY_VERIFY_WITH_TIMEOUT(peer->bytesAvailable() > 0, 1000);
+    QVERIFY(peer->readAll().contains("W190 030\r"));
+    rotator.stop();
+    QTRY_VERIFY_WITH_TIMEOUT(peer->bytesAvailable() > 0, 1000);
+    QVERIFY(peer->readAll().contains("S\r"));
   }
   void panadapterRejectsMissingRouteAndAcceptsDeterministicStereoTone() {
     DesktopPanadapter pan;

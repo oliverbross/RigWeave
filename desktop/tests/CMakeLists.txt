@@ -33,6 +33,11 @@ target_link_libraries(desktop_parity_contract_tests PRIVATE ${RIGWEAVE_TEST_LIBS
 rigweave_target_warnings(desktop_parity_contract_tests)
 add_test(NAME desktop_parity_contract_tests COMMAND desktop_parity_contract_tests)
 
+qt_add_executable(desktop_functional_owner_tests unit/desktop_functional_owner_tests.cpp)
+target_link_libraries(desktop_functional_owner_tests PRIVATE ${RIGWEAVE_TEST_LIBS})
+rigweave_target_warnings(desktop_functional_owner_tests)
+add_test(NAME desktop_functional_owner_tests COMMAND desktop_functional_owner_tests)
+
 qt_add_executable(desktop_ui_contract_tests unit/desktop_ui_contract_tests.cpp)
 target_link_libraries(desktop_ui_contract_tests PRIVATE ${RIGWEAVE_TEST_LIBS})
 target_compile_definitions(desktop_ui_contract_tests PRIVATE
