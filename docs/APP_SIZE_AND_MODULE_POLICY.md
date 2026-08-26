@@ -68,3 +68,7 @@ The closure links one existing Rust static library and adds no model, map, audio
 ## Multiplatform RC1 package policy
 
 The final RC SHA must produce an arm64-only Android APK, a four-ABI AAB, a Windows x64 portable ZIP and per-user setup executable, and an unsigned macOS arm64 ZIP. Every filename carries the exact SHA and every file appears in `SHA256SUMS.txt`. Existing Android and Windows ceilings remain gates; source/SBOM/manifests are additional artifacts, not production payload. No package may contain private evidence, credentials, databases, rig control utilities or duplicate native runtimes.
+
+## Android SDR enhancement budget
+
+Hard gates remain 130 MB for the arm64 APK and 60 MB for the four-ABI AAB, with a preferred AAB delta of at most 3 MB from the 55,757,902-byte RC1 baseline. The enhancement may add OkHttp bytecode and one small native DSP translation unit; it must not package SDRoxide assets, map textures, neural voice/noise models, test I/Q, recordings, or private evidence.

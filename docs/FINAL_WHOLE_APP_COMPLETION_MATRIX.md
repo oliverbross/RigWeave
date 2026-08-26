@@ -79,3 +79,7 @@ The desktop source matrix is now 31/31 source-complete with zero foundation or m
 ## Multiplatform RC1
 
 The RC1 owner and platform matrices extend closure across Android, iOS, Windows and macOS: `FOUNDATION_WIRED = 0` and `MISSING = 0`. Source-complete rows that depend on providers, radio, audio, RF, motion or physical presentation are labelled `SOURCE_COMPLETE_LIVE_ACCEPTANCE_PENDING`; build evidence does not promote them.
+
+## Android SDRoxide Enhancement Pack v1 candidate
+
+Twelve Android-visible areas are source-complete: TCI, multi-receiver, I/Q, RX audio, Panadapter/waterfall, scanner, band stacks, RX DSP, RF map, RF globe, Digi paths, and spoken announcements. Deterministic tests do not promote physical TCI/RF/audio or protected-tablet acceptance; those rows remain `SOURCE_COMPLETE_LIVE_ACCEPTANCE_PENDING`.

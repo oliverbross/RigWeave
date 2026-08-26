@@ -89,3 +89,7 @@ Windows and macOS now share real owners for native radio/rotator profiles, prese
 ### Multiplatform RC1
 
 The whole product now has a single RC source contract across Android, iOS, Windows and macOS with zero `FOUNDATION_WIRED` and zero `MISSING` completion rows. Release identity is channel `RC`, exact SHA, UTC build time, schema set and platform. This is source/package readiness only: authenticated services, visual hardware, audio, CAT/PTT/TUNE, RF, rotator movement, signing and distribution retain explicit acceptance gates.
+
+## Android SDRoxide Enhancement Pack v1
+
+The tablet now exposes a receive-only TCI cockpit, two-receiver I/Q and audio, Panadapter/Waterfall v4, scanning and band stacks, native RX DSP, RF map/globe evidence, Digi path context, and system speech. These are additive Android surfaces under existing owners. Debug fixtures, physical radio evidence, tablet evidence, signing, and release remain distinct.

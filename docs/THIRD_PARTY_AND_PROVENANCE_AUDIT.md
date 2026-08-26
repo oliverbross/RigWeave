@@ -23,3 +23,7 @@ Functional Parity Closure v1 links the existing in-tree `rust/rigweave-flex` sta
 ## Multiplatform RC1 authority
 
 RC1 preserves one Hamlib 4.7.2 source authority, one TCI implementation contract, the audited SDRoxide provenance record, the checked-in `mfsk-core`/`tempo-sstv` Rust sources, one SGP4 authority, and the existing CTY/band-plan snapshots. No duplicate runtime, downloaded backend, model, geometry, firmware, font or media payload is introduced. Exact-SHA source distribution includes `NOTICE`, upstream manifests and an SPDX 2.3 SBOM.
+
+## Android SDRoxide Enhancement Pack v1
+
+The reviewed SDRoxide production pin is v1.5.3 / `a680935b10f33768a499435e8bd37f779fa640ae` / tree `4697195080495da4a727b14234b85af89c10ecda`, GPL version 3. No upstream source or asset is incorporated. OkHttp 5.3.0 is the sole new runtime dependency and supplies the Android WebSocket transport; TLS trust validation is not bypassed.

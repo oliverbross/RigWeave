@@ -18,3 +18,9 @@ Statuses describe source on the exact RC SHA. They do not convert simulator or f
 | DriverKit transport | PLATFORM_NOT_APPLICABLE | PLATFORM_NOT_APPLICABLE | PLATFORM_NOT_APPLICABLE | SOURCE_COMPLETE_LIVE_ACCEPTANCE_PENDING |
 
 The canonical desktop functional matrix also contains no `FOUNDATION_WIRED` or `MISSING` row.
+
+| Android SDR enhancement | Android | iOS | Windows | macOS | Acceptance |
+|---|---|---|---|---|---|
+| TCI/multi-receiver/Panadapter v4/scanner/RX DSP/RF views/TTS | SOURCE_COMPLETE candidate | UNCHANGED | UNCHANGED | UNCHANGED | Android exact-SHA hosted and protected-tablet gates required; physical TCI/RF/audio pending |
+
+Desktop UI and feature parity claims are unchanged. Shared native TCI and Panadapter compatibility is reused without adding a desktop surface.

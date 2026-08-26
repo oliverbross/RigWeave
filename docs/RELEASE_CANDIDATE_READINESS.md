@@ -95,3 +95,7 @@ Source closure is 31/31 with fail-closed external boundaries. Candidate readines
 ## Multiplatform RC1
 
 The whole-repository RC branch adds immutable ancestry proof, singular owner/platform matrices, converged schema/configuration contracts, privacy/provenance audits and deterministic exact-SHA source/SBOM/digest generation. Readiness is granted only after the final pushed SHA passes the authoritative workflow and every mandatory artifact is verified. Local builds, protected-device process evidence and hosted galleries remain distinct from physical/authenticated/signing acceptance.
+
+## Android SDR enhancement candidate gate
+
+This candidate adds no merge or release authorization. Readiness additionally requires the read-only SDRoxide watcher, Android unit/instrumentation/native gates, package-size/hash proof, exact-SHA hosted workflow, and protected-tablet in-place verification when the named device is available. Physical TCI/RF/TX remains pending without explicit operator authority.

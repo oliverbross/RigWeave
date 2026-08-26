@@ -80,3 +80,7 @@ Operate mode presents one locked official layout per workspace. Panel movement, 
 Home, Radio, Digi, EQ and Panadapter use dedicated desktop cockpit compositions rather than generic equal-card grids. All remaining destinations retain their service-owner and capability boundaries inside the same official-layout contract. Unknown capabilities, absent providers and unavailable readback remain written, disabled and non-transmitting.
 
 Functional owners are rooted in `DesktopApplication`: one radio, rotator, canonical QSO, shared spot, configuration/vault, provider/cache and feature-domain authority. QML consumes typed models and invokes reviewed actions; it owns no socket, database, device, audio session or worker. Global Stop is the single idempotent fan-out and invalidates active generations.
+
+## Android SDR enhancement ownership
+
+Android TCI is another managed radio backend, not a parallel radio owner. The existing Panadapter controller owns at most two TCI DSP contexts, and the existing audio-route controller grants one explicit `TCI_RX_AUDIO` output lease. Scanner, TCI streams, receiver audio, and speech all stop on the established lifecycle and Global Stop boundaries. RF map/globe views consume bounded evidence models and never own tuning.

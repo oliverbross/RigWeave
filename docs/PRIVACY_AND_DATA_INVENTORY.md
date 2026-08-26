@@ -71,3 +71,7 @@ The Groups.io database stores bounded offline membership/topic/message/draft/out
 ## Multiplatform RC1 privacy boundary
 
 RC1 source archives, SPDX SBOMs, manifests, SHA ledgers and hosted packages contain no private evidence directory, device backup, database, credential value, provider response body, raw CAT frame or operator audio. Configuration export resets all transmission, connection, motion, session and pending-command state. Android backup rules also exclude protected stores. Authenticated live acceptance uses separate, owner-controlled evidence.
+
+## Android SDR data
+
+TCI profiles store display name, host, port, TLS choice, preferred I/Q rate, initial receiver, and RX route preference in app-private settings; streams never restore active. Raw TCI frames, I/Q, and RX audio are processed in bounded memory and are neither logged nor persisted. RF observations are capped and support output excludes raw payloads, credentials, private endpoints, exact private coordinates, raw audio, and raw I/Q. TTS uses installed Android system voices and bundles no voice data.
