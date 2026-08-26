@@ -47,7 +47,12 @@ jobs:
         with:
           targets: armv7-linux-androideabi,aarch64-linux-android,i686-linux-android,x86_64-linux-android
       - run: cargo install cargo-ndk --version 4.1.2 --locked
-      - run: cd android && ./gradlew testDebugUnitTest lintDebug assembleDebug bundleDebug compileDebugAndroidTestSources --no-daemon --max-workers=4
+      - name: Android tests, packages and instrumentation-source compile
+        run: >-
+          cd android && ./gradlew testDebugUnitTest assembleDebug bundleDebug
+          compileDebugAndroidTestSources --no-daemon --max-workers=2
+      - name: Android lint in an isolated bounded worker
+        run: cd android && ./gradlew lintDebug --no-daemon --max-workers=1
       - run: python3 scripts/audit_android_package_size.py android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/bundle/debug/app-debug.aab
       - name: Verify four-ABI AAB size
         run: |
@@ -60,7 +65,7 @@ jobs:
               abis = {name.split("/")[2] for name in bundle.namelist() if name.startswith("base/lib/") and len(name.split("/")) > 3}
           assert abis == {"armeabi-v7a", "arm64-v8a", "x86", "x86_64"}, abis
           PY
-      - run: cd android && ./gradlew :app:assembleDebug -PrigweaveAbi=arm64-v8a --no-daemon --max-workers=4
+      - run: cd android && ./gradlew :app:assembleDebug -PrigweaveAbi=arm64-v8a --no-daemon --max-workers=2
       - name: Verify arm64 tablet APK
         run: |
           python3 scripts/audit_android_package_size.py android/app/build/outputs/apk/debug/app-debug.apk
