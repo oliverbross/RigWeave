@@ -1,4 +1,4 @@
-name: RigWeave Multiplatform Candidate
+name: RigWeave Multiplatform RC1
 
 on:
   workflow_dispatch:
@@ -7,6 +7,7 @@ on:
       - integration/android-hardened-windows-alpha-v1
       - feature/windows-desktop-full-parity-v1
       - feature/desktop-functional-parity-closure-v1
+      - integration/rigweave-multiplatform-rc1
 
 permissions:
   contents: read
@@ -33,7 +34,7 @@ jobs:
         with: {python-version: "3.12"}
       - name: Contract, provenance, watcher and privacy gates
         run: |
-          python3 scripts/check_release_candidate.py
+          python3 scripts/check_rc1_convergence.py
           python3 scripts/check_hamlib_upstream.py
           python3 -m unittest scripts/test_check_openhamclock_upstream.py
           test -s NOTICE
@@ -64,6 +65,14 @@ jobs:
           if findings:
               raise SystemExit("possible literal credential in: " + ", ".join(findings))
           PY
+      - name: Exact-SHA source, SBOM, manifests and digest ledger
+        run: python3 scripts/prepare_rc1_distribution.py --output build/rc1/distribution --channel RC
+      - name: Upload exact-SHA source distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: RigWeave-source-${{ github.sha }}
+          path: build/rc1/distribution
+          if-no-files-found: error
 
   functional-closure-audit:
     runs-on: ubuntu-latest
@@ -75,6 +84,7 @@ jobs:
           test -s docs/desktop/DESKTOP_FUNCTIONAL_PARITY_MATRIX.md
           test "$(grep -c '^|' docs/desktop/DESKTOP_FUNCTIONAL_PARITY_MATRIX.md)" -ge 33
           ! grep -E '\| (FOUNDATION_WIRED|MISSING) \|' docs/desktop/DESKTOP_FUNCTIONAL_PARITY_MATRIX.md
+          ! grep -E '\| (FOUNDATION_WIRED|MISSING) \|' docs/release/RC1_FEATURE_COMPLETION_MATRIX.md docs/release/RC1_PLATFORM_PARITY_MATRIX.md
       - name: Verify deterministic fake protocol and safety suites are registered
         run: |
           grep -q 'groupsClientUsesVaultAliasAndReconcilesFakeService' desktop/tests/unit/desktop_functional_owner_tests.cpp

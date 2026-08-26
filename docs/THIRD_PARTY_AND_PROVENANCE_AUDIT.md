@@ -19,3 +19,7 @@ Sweep 3 exposes a bounded in-product acknowledgement registry derived from `NOTI
 The candidate adds Qt/C++/QML source, tests, workflows and documentation only. It introduces no new vendored source, binary, firmware, map geometry, P.533 payload, `rigctl`/`rigctld` executable or duplicate Hamlib runtime. Windows and macOS builds continue from the single pinned Hamlib 4.7.2 source tree. Provider URLs and protocol names are compatibility metadata; live downloads are bounded, disabled by default and are not redistributed in source artifacts.
 
 Functional Parity Closure v1 links the existing in-tree `rust/rigweave-flex` static library for Flex, Digi and SGP4 behavior and reuses the existing core WSJT-X parser. It adds no vendored source or redistributable provider dataset. Qt Multimedia, SerialPort, Network and Widgets are already declared desktop dependencies.
+
+## Multiplatform RC1 authority
+
+RC1 preserves one Hamlib 4.7.2 source authority, one TCI implementation contract, the audited SDRoxide provenance record, the checked-in `mfsk-core`/`tempo-sstv` Rust sources, one SGP4 authority, and the existing CTY/band-plan snapshots. No duplicate runtime, downloaded backend, model, geometry, firmware, font or media payload is introduced. Exact-SHA source distribution includes `NOTICE`, upstream manifests and an SPDX 2.3 SBOM.

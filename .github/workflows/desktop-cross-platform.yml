@@ -52,8 +52,8 @@ jobs:
           rm -f artifacts/macos/RigWeaveDesktop.app/Contents/PlugIns/sqldrivers/libqsqlodbc.dylib \
                 artifacts/macos/RigWeaveDesktop.app/Contents/PlugIns/sqldrivers/libqsqlpsql.dylib \
                 artifacts/macos/RigWeaveDesktop.app/Contents/PlugIns/sqldrivers/libqsqlmimer.dylib
-          ditto -c -k --sequesterRsrc artifacts/macos/RigWeaveDesktop.app artifacts/macos/RigWeave-macOS-unsigned.zip
-          shasum -a 256 artifacts/macos/RigWeave-macOS-unsigned.zip > artifacts/macos/SHA256SUMS.txt
+          ditto -c -k --sequesterRsrc artifacts/macos/RigWeaveDesktop.app "artifacts/macos/RigWeave-macOS-arm64-unsigned-${GITHUB_SHA}.zip"
+          shasum -a 256 "artifacts/macos/RigWeave-macOS-arm64-unsigned-${GITHUB_SHA}.zip" > artifacts/macos/SHA256SUMS.txt
       - name: Deterministic macOS UI gallery
         env:
           QT_QPA_PLATFORM: offscreen

@@ -67,3 +67,7 @@ The tablet reference directory can contain callsigns, configured provider labels
 ## Desktop functional-owner additions
 
 The Groups.io database stores bounded offline membership/topic/message/draft/outbox records but never bearer tokens; config stores only a credential alias. Digi audio is bounded in memory and not included in support bundles. Native CAT/rotator frames, provider response bodies, operator location, TLE source text and voice clips are excluded from diagnostics/support export. Demo and fake-service evidence is synthetic.
+
+## Multiplatform RC1 privacy boundary
+
+RC1 source archives, SPDX SBOMs, manifests, SHA ledgers and hosted packages contain no private evidence directory, device backup, database, credential value, provider response body, raw CAT frame or operator audio. Configuration export resets all transmission, connection, motion, session and pending-command state. Android backup rules also exclude protected stores. Authenticated live acceptance uses separate, owner-controlled evidence.

@@ -17,7 +17,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
-      - run: python3 scripts/check_release_candidate.py
+      - run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - run: python3 scripts/check_rc1_convergence.py
       - run: python3 scripts/check_hamlib_upstream.py
       - run: python3 -m unittest scripts/test_check_openhamclock_upstream.py
       - run: test -s NOTICE && test -s core/third_party/iturhfprop/SOURCE_MANIFEST.json
@@ -27,22 +28,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
       - run: cargo test --manifest-path rust/rigweave-flex/Cargo.toml --locked
+      - run: cargo test --manifest-path third_party/mfsk-core/Cargo.toml --locked
+      - run: cargo test --manifest-path rust/tempo-sstv/Cargo.toml --locked
       - run: cmake -S core -B build/core && cmake --build build/core && ctest --test-dir build/core --output-on-failure
-      - name: Native lifecycle ASan and UBSan
+      - name: Native lifecycle ASan
         run: >-
-          cmake -S core -B build/core-sanitized -DCMAKE_BUILD_TYPE=Debug
-          -DRIGWEAVE_ENABLE_ASAN=ON -DRIGWEAVE_ENABLE_UBSAN=ON
-          && cmake --build build/core-sanitized
-          && ctest --test-dir build/core-sanitized --output-on-failure
+          cmake -S core -B build/core-asan -DCMAKE_BUILD_TYPE=Debug
+          -DRIGWEAVE_ENABLE_ASAN=ON
+          && cmake --build build/core-asan
+          && ctest --test-dir build/core-asan --output-on-failure
+      - name: Native lifecycle UBSan
+        run: >-
+          cmake -S core -B build/core-ubsan -DCMAKE_BUILD_TYPE=Debug
+          -DRIGWEAVE_ENABLE_UBSAN=ON
+          && cmake --build build/core-ubsan
+          && ctest --test-dir build/core-ubsan --output-on-failure
 
   android:
     runs-on: ubuntu-latest
+    env:
+      RIGWEAVE_BUILD_CHANNEL: RC
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: "17"}
       - uses: android-actions/setup-android@v3
+      - run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: armv7-linux-androideabi,aarch64-linux-android,i686-linux-android,x86_64-linux-android
@@ -78,11 +91,24 @@ jobs:
               abis = {name.split("/")[1] for name in apk.namelist() if name.startswith("lib/") and len(name.split("/")) > 2}
           assert abis == {"arm64-v8a"}, abis
           PY
+      - name: Stage exact-SHA Android packages
+        run: |
+          mkdir -p build/rc1/android
+          cp android/app/build/outputs/apk/debug/app-debug.apk "build/rc1/android/RigWeave-Android-arm64-v8a-${{ github.sha }}.apk"
+          cp android/app/build/outputs/bundle/debug/app-debug.aab "build/rc1/android/RigWeave-Android-four-ABI-${{ github.sha }}.aab"
+          sha256sum build/rc1/android/* > build/rc1/android/SHA256SUMS.txt
+      - name: Upload exact-SHA Android packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: RigWeave-Android-${{ github.sha }}
+          path: build/rc1/android
+          if-no-files-found: error
 
   apple:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
       - name: Run Apple fast-entry golden tests
         run: swiftc ios/RigWeave/FastEntry.swift ios/Tests/FastEntryGoldenTests.swift -o /tmp/rigweave-fast-entry-tests && /tmp/rigweave-fast-entry-tests
       - run: xcodebuild -project ios/RigWeave.xcodeproj -scheme RigWeave -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
@@ -95,6 +121,7 @@ jobs:
       - uses: actions/setup-java@v4
         with: {distribution: temurin, java-version: "17"}
       - uses: android-actions/setup-android@v3
+      - run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: armv7-linux-androideabi,aarch64-linux-android,i686-linux-android,x86_64-linux-android
@@ -116,6 +143,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
       - run: python3 scripts/run_release_soak.py
 
   upstream-watchers:
@@ -125,6 +153,7 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+      - run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
       - run: python3 scripts/check_wavelog_upstream.py --verify-pinned-paths
       - run: python3 scripts/check_openhamclock_upstream.py
         continue-on-error: true

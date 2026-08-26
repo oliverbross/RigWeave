@@ -75,3 +75,7 @@ Sweep 3 makes Radio, Hamlib, QMX/QMX+, RGO ONE, Rotator and WWFF operator-reacha
 ## Desktop Functional Parity Closure v1
 
 The desktop source matrix is now 31/31 source-complete with zero foundation or missing rows. This does not change the `PENDING` physical/authenticated/release boundary; exact-SHA hosted results and package hashes are recorded separately for the candidate SHA.
+
+## Multiplatform RC1
+
+The RC1 owner and platform matrices extend closure across Android, iOS, Windows and macOS: `FOUNDATION_WIRED = 0` and `MISSING = 0`. Source-complete rows that depend on providers, radio, audio, RF, motion or physical presentation are labelled `SOURCE_COMPLETE_LIVE_ACCEPTANCE_PENDING`; build evidence does not promote them.

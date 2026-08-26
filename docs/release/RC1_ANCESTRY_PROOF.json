@@ -1,0 +1,26 @@
+{
+  "contract": "RIGWEAVE_RC1_ANCESTRY_V1",
+  "rc_branch": "integration/rigweave-multiplatform-rc1",
+  "recorded_rc_head": "5ee25b51d979d319bdc2bc9410c5af3599b87887",
+  "immutable_refs": {
+    "accepted_ui": "de32c8ac908c7979f39bfdfc41ca050378901e75",
+    "canonical_source": "bf297ae5d13708c16fe3ed621f29b2f649c36110",
+    "frozen_origin_main": "fb04d52df0c9ccc305125449bb188ef8e3f0185e",
+    "protected_local_main": "27c70d0c2ab0ae21ef18d7fd9b39f8878b0940ea",
+    "recovery_ref": "27c70d0c2ab0ae21ef18d7fd9b39f8878b0940ea",
+    "review_tip": "00fe01cd56c206543b1afb0fb03dfdb9befb92f7",
+    "semantic_integration": "5ee25b51d979d319bdc2bc9410c5af3599b87887"
+  },
+  "inventory_at_recorded_head": {
+    "branch_ref_count": 81,
+    "distinct_tip_count": 40,
+    "tag_count": 0,
+    "worktree_count": 39,
+    "classification_counts": {
+      "ALREADY_PRESENT_EQUIVALENT": 1,
+      "ANCESTOR_OF_RC": 77,
+      "UNRELATED_PRESERVED": 3
+    }
+  },
+  "notes": "The executable audit resolves the final RC head at runtime and requires this recorded semantic-integration commit to remain its ancestor."
+}

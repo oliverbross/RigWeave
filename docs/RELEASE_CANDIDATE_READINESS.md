@@ -91,3 +91,7 @@ Source now includes a canonical command/menu model, 40 original packaged SVGs, r
 ## Desktop Functional Parity Closure v1
 
 Source closure is 31/31 with fail-closed external boundaries. Candidate readiness additionally requires the exact pushed SHA to pass the multiplatform workflow, including Windows/macOS packages, Android/iOS regression, migrations, fake protocols, scale, visual and privacy gates. Signing, notarization, publication and deployment remain out of scope.
+
+## Multiplatform RC1
+
+The whole-repository RC branch adds immutable ancestry proof, singular owner/platform matrices, converged schema/configuration contracts, privacy/provenance audits and deterministic exact-SHA source/SBOM/digest generation. Readiness is granted only after the final pushed SHA passes the authoritative workflow and every mandatory artifact is verified. Local builds, protected-device process evidence and hosted galleries remain distinct from physical/authenticated/signing acceptance.

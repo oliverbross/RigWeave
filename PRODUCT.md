@@ -85,3 +85,7 @@ The v2 candidate defines a locked official operating layout for every workspace 
 ### Desktop Functional Parity Closure v1
 
 Windows and macOS now share real owners for native radio/rotator profiles, presets/EQ/keyer review, receive-only Digi, Chaser, Contest, Band Maps, empirical outlook, planning/Satellite, Groups.io and notifications. Source completion never converts missing credentials, capability readback or physical proof into authority: TX, automatic Doppler and rotator movement remain locked.
+
+### Multiplatform RC1
+
+The whole product now has a single RC source contract across Android, iOS, Windows and macOS with zero `FOUNDATION_WIRED` and zero `MISSING` completion rows. Release identity is channel `RC`, exact SHA, UTC build time, schema set and platform. This is source/package readiness only: authenticated services, visual hardware, audio, CAT/PTT/TUNE, RF, rotator movement, signing and distribution retain explicit acceptance gates.

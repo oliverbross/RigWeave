@@ -163,3 +163,9 @@ font, emoji set, or tablet APK asset and add no separate attribution obligation.
 Desktop Functional Parity Closure v1 reuses the existing in-tree RigWeave core,
 rigweave-flex, Qt and pinned Hamlib components. It adds no third-party source,
 binary, provider dataset, model, font, icon family or media asset.
+
+RigWeave Multiplatform RC1 adds no new third-party runtime or dataset. Its SPDX
+SBOM and SOURCE_MANIFEST are generated from the exact Git SHA and reference this
+NOTICE. The single Hamlib authority remains pinned at 4.7.2; existing SDRoxide,
+mfsk-core, tempo-sstv, SGP4, ITUHFProp, CTY and band-plan provenance remains
+unchanged and is not duplicated by packaging.
