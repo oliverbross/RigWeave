@@ -57,7 +57,15 @@ WorkspaceCanvas {
         ColumnLayout { anchors.fill: parent
             MetricTile { label: "QSOs"; value: Parity.contestScore().qsos; truth: "Temporary schema-2 staging log" }
             MetricTile { label: "Score"; value: Parity.contestScore().score; truth: "Session score from staged QSO owner" }
-            Label { text: "SCP is downloaded at runtime only. Cabrillo and ADIF export remain session-scoped."; color: "#98a0a6"; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+            RowLayout { Layout.fillWidth: true
+                TextField { id: scpQuery; placeholderText: "SCP prefix"; maximumLength: 16; Layout.fillWidth: true }
+                Button { text: "Refresh SCP"; enabled: !Parity.scpState.startsWith("REFRESHING"); onClicked: Parity.refreshScp() }
+            }
+            Label {
+                readonly property var result: scpQuery.text.length >= 3 ? Parity.scpLookup(scpQuery.text, 6) : ({suggestions:[]})
+                text: Parity.scpState + (result.suggestions.length ? " · " + result.suggestions.join(", ") : "")
+                color: "#98a0a6"; wrapMode: Text.WordWrap; Layout.fillWidth: true
+            }
             Item { Layout.fillHeight: true }
         }
     }

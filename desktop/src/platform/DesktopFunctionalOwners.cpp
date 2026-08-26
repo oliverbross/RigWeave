@@ -6,11 +6,13 @@
 #endif
 
 #include <QDateTime>
+#include <QCryptographicHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkRequest>
 #include <QNetworkReply>
+#include <QNetworkDatagram>
 #include <QRegularExpression>
 #include <QPointer>
 #include <QSqlError>
@@ -89,7 +91,11 @@ bool DesktopParityPlatform::loadFunctionalOwners(QString *error) {
             "CREATE TABLE IF NOT EXISTS delivery_ledger(outbox_id TEXT PRIMARY KEY, server_id TEXT, state TEXT NOT NULL, reconciled_at INTEGER NOT NULL)"}},
         {"Contest", {
             "CREATE TABLE IF NOT EXISTS serial_authority(session_id TEXT PRIMARY KEY, next_serial INTEGER NOT NULL)",
-            "CREATE TABLE IF NOT EXISTS n1mm_peer(id TEXT PRIMARY KEY, endpoint TEXT NOT NULL, trusted INTEGER NOT NULL DEFAULT 0, armed INTEGER NOT NULL DEFAULT 0, last_seen INTEGER)"}},
+            "CREATE TABLE IF NOT EXISTS n1mm_peer(id TEXT PRIMARY KEY, endpoint TEXT NOT NULL, trusted INTEGER NOT NULL DEFAULT 0, armed INTEGER NOT NULL DEFAULT 0, lifecycle TEXT NOT NULL DEFAULT 'DISCOVERED', last_seen INTEGER)",
+            "CREATE TABLE IF NOT EXISTS n1mm_event(id TEXT PRIMARY KEY, peer_id TEXT NOT NULL, event_type TEXT NOT NULL, payload_digest TEXT NOT NULL, policy TEXT NOT NULL, received_at INTEGER NOT NULL, UNIQUE(peer_id,event_type,payload_digest))",
+            "CREATE TABLE IF NOT EXISTS scp_manifest(id INTEGER PRIMARY KEY CHECK(id=1), source_url TEXT NOT NULL, source_date INTEGER NOT NULL, digest TEXT NOT NULL, row_count INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS scp_callsign(callsign TEXT PRIMARY KEY CHECK(length(callsign) BETWEEN 3 AND 16))",
+            "CREATE TABLE IF NOT EXISTS scp_callsign_next(callsign TEXT PRIMARY KEY CHECK(length(callsign) BETWEEN 3 AND 16))"}},
         {"DX Chaser", {
             "CREATE TABLE IF NOT EXISTS attempt_journal(id TEXT PRIMARY KEY, engagement_id TEXT NOT NULL, event TEXT NOT NULL, reason TEXT NOT NULL, created_at INTEGER NOT NULL)"}}
     };
@@ -616,20 +622,280 @@ QVariantMap DesktopParityPlatform::parseN1mmPacket(const QByteArray &packet) con
     if (packet.isEmpty() || packet.size() > 65536 || packet.contains("<!DOCTYPE") || packet.contains("<!ENTITY")) return {};
     QXmlStreamReader xml(packet);
     QVariantMap result;
-    int fields = 0;
-    while (!xml.atEnd()) {
-        xml.readNext();
-        if (!xml.isStartElement()) continue;
-        const QString name = xml.name().toString();
-        if (name == "contactinfo" || name == "contactreplace" || name == "contactdelete") result["type"] = name;
-        else if (fields < 43 && xml.readNextStartElement()) {
-            result[name.left(40)] = xml.readElementText(QXmlStreamReader::SkipChildElements).left(512);
-            ++fields;
-        }
+    static const QSet<QString> packetTypes{"appinfo", "contactinfo", "contactreplace",
+        "contactdelete", "lookupinfo", "radioinfo", "spot", "scoreinfo", "talk", "dynamicresults"};
+    static const QSet<QString> fields{"app", "timestamp", "mycall", "band", "call", "contestnr",
+        "stationname", "id", "operator", "rxfreq", "txfreq", "mode", "contestname", "contestid",
+        "category", "assisted", "isoriginal", "wpxprefix", "continent", "snt", "sntnr", "rcv",
+        "rcvnr", "gridsquare", "section", "prec", "ck", "zone", "power", "points", "radionr",
+        "runnr", "isrunqso", "stationprefix", "wpxprefix2", "exchange1", "contacttype", "networkedcomputer",
+        "ismultiplier1", "isofftimeqso", "ismultiplier2", "frequency", "comment"};
+    if (!xml.readNextStartElement()) return {};
+    const QString type = xml.name().toString().toLower();
+    if (!packetTypes.contains(type)) return {};
+    result["type"] = type;
+    int count = 0;
+    while (xml.readNextStartElement()) {
+        const QString name = xml.name().toString().toLower();
+        const QString value = xml.readElementText(QXmlStreamReader::SkipChildElements).left(512);
+        if (!fields.contains(name) || ++count > 43) return {};
+        result[name] = value;
     }
-    if (xml.hasError() || result.value("type").toString().isEmpty()) return {};
-    result["trusted"] = false; result["armed"] = false; result["fieldCount"] = fields;
+    if (xml.hasError()) return {};
+    result["trusted"] = false; result["armed"] = false; result["fieldCount"] = count;
+    result["policy"] = "REVIEW_ONLY";
+    result["dedupeKey"] = QString::fromLatin1(QCryptographicHash::hash(packet, QCryptographicHash::Sha256).toHex());
     return result;
+}
+
+bool DesktopParityPlatform::registerN1mmPeer(const QString &peerId, const QString &endpoint) {
+    const QString id = peerId.trimmed().left(64);
+    const QUrl url = QUrl::fromUserInput(endpoint.trimmed());
+    if (id.isEmpty() || !url.isValid() || url.host().isEmpty() || url.port() < 1 || url.port() > 65535) return false;
+    StoreSpec *contest = store("Contest"); if (!contest) return false;
+    QSqlQuery query(contest->database);
+    query.prepare("INSERT INTO n1mm_peer(id,endpoint,trusted,armed,lifecycle,last_seen) VALUES(?,?,0,0,'DISCOVERED',?) ON CONFLICT(id) DO UPDATE SET endpoint=excluded.endpoint,armed=0,lifecycle='DISCOVERED',last_seen=excluded.last_seen");
+    query.addBindValue(id); query.addBindValue(url.toString()); query.addBindValue(QDateTime::currentSecsSinceEpoch());
+    if (!query.exec()) return false;
+    m_n1mmState = QStringLiteral("DISCOVERED / %1 / untrusted / unarmed").arg(id);
+    emit workflowStateChanged();
+    return true;
+}
+
+bool DesktopParityPlatform::setN1mmPeerTrusted(const QString &peerId, bool trusted) {
+    StoreSpec *contest = store("Contest"); if (!contest) return false;
+    QSqlQuery query(contest->database);
+    query.prepare("UPDATE n1mm_peer SET trusted=?,armed=0,last_seen=? WHERE id=?");
+    query.addBindValue(trusted ? 1 : 0); query.addBindValue(QDateTime::currentSecsSinceEpoch()); query.addBindValue(peerId.trimmed());
+    if (!query.exec() || query.numRowsAffected() != 1) return false;
+    m_n1mmState = QStringLiteral("PAIRED / %1 / %2 / unarmed").arg(peerId.trimmed(), trusted ? "trusted" : "untrusted");
+    emit workflowStateChanged();
+    return true;
+}
+
+bool DesktopParityPlatform::updateN1mmPeerLifecycle(const QString &peerId, const QString &event) {
+    static const QSet<QString> allowed{"DISCOVERED", "CONNECTED", "HEARTBEAT", "DISCONNECTED"};
+    const QString state = event.trimmed().toUpper();
+    if (!allowed.contains(state)) return false;
+    StoreSpec *contest = store("Contest"); if (!contest) return false;
+    QSqlQuery query(contest->database);
+    query.prepare("UPDATE n1mm_peer SET lifecycle=?,armed=0,last_seen=? WHERE id=?");
+    query.addBindValue(state); query.addBindValue(QDateTime::currentSecsSinceEpoch()); query.addBindValue(peerId.trimmed());
+    if (!query.exec() || query.numRowsAffected() != 1) return false;
+    m_n1mmState = QStringLiteral("%1 / %2 / unarmed").arg(state, peerId.trimmed());
+    emit workflowStateChanged();
+    return true;
+}
+
+bool DesktopParityPlatform::startN1mmDiscovery(quint16 port) {
+    if (m_n1mmUdp.state() != QAbstractSocket::UnconnectedState ||
+        !m_n1mmUdp.bind(QHostAddress::LocalHost, port,
+                        QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint)) return false;
+    disconnect(&m_n1mmUdp, nullptr, this, nullptr);
+    connect(&m_n1mmUdp, &QUdpSocket::readyRead, this, [this] {
+        while (m_n1mmUdp.hasPendingDatagrams()) {
+            const QNetworkDatagram datagram = m_n1mmUdp.receiveDatagram(65536);
+            if (!datagram.isValid() || datagram.data().isEmpty()) continue;
+            const QString endpoint = QStringLiteral("udp://%1:%2").arg(datagram.senderAddress().toString()).arg(datagram.senderPort());
+            const QString peerId = QStringLiteral("udp-%1").arg(QString::fromLatin1(
+                QCryptographicHash::hash(endpoint.toUtf8(), QCryptographicHash::Sha256).toHex().left(16)));
+            if (registerN1mmPeer(peerId, endpoint)) ingestN1mmPacket(peerId, datagram.data());
+        }
+    });
+    m_n1mmState = QStringLiteral("LISTENING / 127.0.0.1:%1 / untrusted / unarmed").arg(m_n1mmUdp.localPort());
+    emit workflowStateChanged();
+    return true;
+}
+
+bool DesktopParityPlatform::connectN1mmPeer(const QString &peerId) {
+    if (m_n1mmTcp.state() != QAbstractSocket::UnconnectedState) return false;
+    StoreSpec *contest = store("Contest"); if (!contest) return false;
+    QSqlQuery query(contest->database);
+    query.prepare("SELECT endpoint,trusted FROM n1mm_peer WHERE id=?"); query.addBindValue(peerId.trimmed());
+    if (!query.exec() || !query.next() || !query.value(1).toBool()) return false;
+    const QUrl endpoint(query.value(0).toString());
+    if (endpoint.scheme() != "tcp" || endpoint.host().isEmpty() || endpoint.port() < 1) return false;
+    m_n1mmTcpPeerId = peerId.trimmed(); m_n1mmTcpBuffer.clear();
+    disconnect(&m_n1mmTcp, nullptr, this, nullptr);
+    connect(&m_n1mmTcp, &QTcpSocket::connected, this, [this] {
+        updateN1mmPeerLifecycle(m_n1mmTcpPeerId, "CONNECTED");
+    });
+    connect(&m_n1mmTcp, &QTcpSocket::readyRead, this, [this] {
+        m_n1mmTcpBuffer += m_n1mmTcp.readAll();
+        if (m_n1mmTcpBuffer.size() > 1048576) { stopN1mmRuntime(); return; }
+        while (m_n1mmTcpBuffer.size() >= 4) {
+            const auto *p = reinterpret_cast<const unsigned char *>(m_n1mmTcpBuffer.constData());
+            const quint32 size = (quint32(p[0]) << 24) | (quint32(p[1]) << 16) | (quint32(p[2]) << 8) | quint32(p[3]);
+            if (size == 0 || size > 65536) { stopN1mmRuntime(); return; }
+            if (m_n1mmTcpBuffer.size() < qsizetype(size + 4)) return;
+            const QByteArray packet = m_n1mmTcpBuffer.mid(4, size);
+            m_n1mmTcpBuffer.remove(0, size + 4);
+            if (!ingestN1mmPacket(m_n1mmTcpPeerId, packet)) { stopN1mmRuntime(); return; }
+        }
+    });
+    connect(&m_n1mmTcp, &QTcpSocket::disconnected, this, [this] {
+        if (!m_n1mmTcpPeerId.isEmpty()) updateN1mmPeerLifecycle(m_n1mmTcpPeerId, "DISCONNECTED");
+        m_n1mmTcpPeerId.clear(); m_n1mmTcpBuffer.clear();
+    });
+    m_n1mmTcp.connectToHost(endpoint.host(), quint16(endpoint.port()));
+    return true;
+}
+
+void DesktopParityPlatform::stopN1mmRuntime() {
+    m_n1mmUdp.close();
+    if (m_n1mmTcp.state() != QAbstractSocket::UnconnectedState) m_n1mmTcp.abort();
+    m_n1mmTcpBuffer.clear(); m_n1mmTcpPeerId.clear();
+    m_n1mmState = "DISABLED / loopback / untrusted / unarmed";
+    emit workflowStateChanged();
+}
+
+bool DesktopParityPlatform::ingestN1mmPacket(const QString &peerId, const QByteArray &packet) {
+    const QVariantMap parsed = parseN1mmPacket(packet);
+    if (parsed.isEmpty()) return false;
+    StoreSpec *contest = store("Contest"); if (!contest) return false;
+    QSqlQuery peer(contest->database);
+    peer.prepare("SELECT trusted FROM n1mm_peer WHERE id=?"); peer.addBindValue(peerId.trimmed());
+    if (!peer.exec() || !peer.next()) return false;
+    const QString digest = parsed.value("dedupeKey").toString();
+    QSqlQuery event(contest->database);
+    event.prepare("INSERT OR IGNORE INTO n1mm_event(id,peer_id,event_type,payload_digest,policy,received_at) VALUES(?,?,?,?,?,?)");
+    event.addBindValue(QUuid::createUuid().toString(QUuid::WithoutBraces)); event.addBindValue(peerId.trimmed());
+    event.addBindValue(parsed.value("type")); event.addBindValue(digest); event.addBindValue("REVIEW_ONLY");
+    event.addBindValue(QDateTime::currentSecsSinceEpoch());
+    if (!event.exec()) return false;
+    updateN1mmPeerLifecycle(peerId, "HEARTBEAT");
+    if (event.numRowsAffected() == 1)
+        setReview(QStringLiteral("N1MM %1 received from %2 · review-only staging; no radio, Keyer, Digi or Chaser action")
+                      .arg(parsed.value("type").toString(), peerId.trimmed()));
+    return true;
+}
+
+QByteArray DesktopParityPlatform::frameN1mmTcpPacket(const QByteArray &packet) const {
+    if (parseN1mmPacket(packet).isEmpty()) return {};
+    const quint32 size = quint32(packet.size());
+    QByteArray framed(4, Qt::Uninitialized);
+    framed[0] = char((size >> 24) & 0xff); framed[1] = char((size >> 16) & 0xff);
+    framed[2] = char((size >> 8) & 0xff); framed[3] = char(size & 0xff);
+    return framed + packet;
+}
+
+QVariantList DesktopParityPlatform::parseN1mmTcpFrames(const QByteArray &frames) const {
+    if (frames.size() > 1048576) return {};
+    QVariantList result; qsizetype offset = 0;
+    while (offset < frames.size()) {
+        if (frames.size() - offset < 4) return {};
+        const auto *p = reinterpret_cast<const unsigned char *>(frames.constData() + offset);
+        const quint32 size = (quint32(p[0]) << 24) | (quint32(p[1]) << 16) | (quint32(p[2]) << 8) | quint32(p[3]);
+        offset += 4;
+        if (size == 0 || size > 65536 || size > quint32(frames.size() - offset)) return {};
+        const QVariantMap packet = parseN1mmPacket(frames.mid(offset, size));
+        if (packet.isEmpty()) return {};
+        result << packet; offset += size;
+    }
+    return result;
+}
+
+void DesktopParityPlatform::setScpEndpointForTest(const QUrl &endpoint) { m_scpEndpoint = endpoint; }
+
+bool DesktopParityPlatform::importScpPayloadForTest(const QByteArray &payload, const QUrl &source,
+                                                    qint64 sourceDate, QString *error) {
+    return importScpPayload(payload, source, sourceDate, error);
+}
+
+bool DesktopParityPlatform::importScpPayload(const QByteArray &payload, const QUrl &source,
+                                             qint64 sourceDate, QString *error) {
+    if (payload.isEmpty() || payload.size() > 8 * 1024 * 1024 || !source.isValid()) {
+        if (error) *error = "SCP payload/source invalid"; return false;
+    }
+    QSet<QString> unique;
+    for (QByteArray token : payload.split('\n')) {
+        token = token.trimmed().toUpper();
+        if (token.endsWith('\r')) token.chop(1);
+        if (token.isEmpty()) continue;
+        const QString call = normalizedCallsign(QString::fromLatin1(token));
+        if (call.isEmpty() || call.toLatin1() != token || unique.size() >= 1000000) {
+            if (error) *error = "SCP contains an invalid or excessive callsign set"; return false;
+        }
+        unique.insert(call);
+    }
+    if (unique.isEmpty()) { if (error) *error = "SCP has no callsigns"; return false; }
+    StoreSpec *contest = store("Contest");
+    if (!contest || !contest->database.transaction()) { if (error) *error = "Contest store unavailable"; return false; }
+    QSqlQuery query(contest->database);
+    if (!query.exec("DELETE FROM scp_callsign_next")) { contest->database.rollback(); return false; }
+    query.prepare("INSERT INTO scp_callsign_next(callsign) VALUES(?)");
+    for (const QString &call : std::as_const(unique)) {
+        query.bindValue(0, call);
+        if (!query.exec()) { if (error) *error = query.lastError().text(); contest->database.rollback(); return false; }
+    }
+    if (!query.exec("DELETE FROM scp_callsign") || !query.exec("INSERT INTO scp_callsign SELECT callsign FROM scp_callsign_next")) {
+        if (error) *error = query.lastError().text(); contest->database.rollback(); return false;
+    }
+    query.prepare("INSERT INTO scp_manifest(id,source_url,source_date,digest,row_count,updated_at) VALUES(1,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET source_url=excluded.source_url,source_date=excluded.source_date,digest=excluded.digest,row_count=excluded.row_count,updated_at=excluded.updated_at");
+    query.addBindValue(source.toString()); query.addBindValue(sourceDate);
+    query.addBindValue(QString::fromLatin1(QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex()));
+    query.addBindValue(unique.size()); query.addBindValue(QDateTime::currentSecsSinceEpoch());
+    if (!query.exec() || !contest->database.commit()) { if (error) *error = query.lastError().text(); contest->database.rollback(); return false; }
+    m_scpState = QStringLiteral("READY / %1 calls / %2").arg(unique.size()).arg(QDateTime::fromSecsSinceEpoch(sourceDate, QTimeZone::UTC).date().toString(Qt::ISODate));
+    emit workflowStateChanged();
+    return true;
+}
+
+bool DesktopParityPlatform::refreshScp() {
+    const bool productionSecure = m_scpEndpoint.scheme() == "https";
+    const bool loopbackTest = m_scpEndpoint.scheme() == "http" &&
+        (m_scpEndpoint.host() == "127.0.0.1" || m_scpEndpoint.host() == "::1" ||
+         m_scpEndpoint.host() == "localhost");
+    if (m_scpReply || !m_scpEndpoint.isValid() || (!productionSecure && !loopbackTest)) return false;
+    QNetworkRequest request(m_scpEndpoint);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setTransferTimeout(20000);
+    m_scpBody.clear(); m_scpState = "REFRESHING / last-good retained"; emit workflowStateChanged();
+    m_scpReply = m_network.get(request);
+    connect(m_scpReply, &QNetworkReply::readyRead, this, [this] {
+        if (!m_scpReply) return;
+        m_scpBody += m_scpReply->readAll();
+        if (m_scpBody.size() > 8 * 1024 * 1024) m_scpReply->abort();
+    });
+    connect(m_scpReply, &QNetworkReply::finished, this, &DesktopParityPlatform::finishScpRequest);
+    return true;
+}
+
+void DesktopParityPlatform::finishScpRequest() {
+    if (!m_scpReply) return;
+    m_scpBody += m_scpReply->readAll();
+    const int status = m_scpReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    QString error = m_scpReply->errorString();
+    const QDateTime modified = m_scpReply->header(QNetworkRequest::LastModifiedHeader).toDateTime();
+    const bool accepted = m_scpReply->error() == QNetworkReply::NoError && status == 200 &&
+        importScpPayload(m_scpBody, m_scpReply->url(),
+                         modified.isValid() ? modified.toSecsSinceEpoch() : QDateTime::currentSecsSinceEpoch(),
+                         &error);
+    m_scpReply->deleteLater(); m_scpReply = nullptr; m_scpBody.clear();
+    if (!accepted) { m_scpState = QStringLiteral("ERROR / last-good retained / %1").arg(sanitizedNetworkError(error).left(120)); emit workflowStateChanged(); }
+}
+
+QVariantMap DesktopParityPlatform::scpStatus() const {
+    const StoreSpec *contest = store("Contest"); if (!contest) return {{"state", "UNAVAILABLE"}};
+    QSqlQuery query(contest->database);
+    if (!query.exec("SELECT source_url,source_date,digest,row_count,updated_at FROM scp_manifest WHERE id=1") || !query.next())
+        return {{"state", "EMPTY"}, {"rowCount", 0}};
+    return {{"state", "READY"}, {"sourceUrl", query.value(0)}, {"sourceDate", query.value(1)},
+            {"digest", query.value(2)}, {"rowCount", query.value(3)}, {"updatedAt", query.value(4)}};
+}
+
+QVariantMap DesktopParityPlatform::scpLookup(const QString &partial, int limit) const {
+    const QString needle = normalizedCallsign(partial);
+    if (needle.isEmpty() || limit < 1 || limit > 50) return {};
+    const StoreSpec *contest = store("Contest"); if (!contest) return {};
+    QSqlQuery exact(contest->database); exact.prepare("SELECT 1 FROM scp_callsign WHERE callsign=?"); exact.addBindValue(needle);
+    const bool found = exact.exec() && exact.next();
+    QSqlQuery query(contest->database);
+    query.prepare("SELECT callsign FROM scp_callsign WHERE callsign LIKE ? ORDER BY length(callsign),callsign LIMIT ?");
+    query.addBindValue(needle + "%"); query.addBindValue(limit);
+    if (!query.exec()) return {};
+    QVariantList suggestions; while (query.next()) suggestions << query.value(0).toString();
+    return {{"query", needle}, {"exact", found}, {"likelyBust", !found && !suggestions.isEmpty()}, {"suggestions", suggestions}};
 }
 
 QVariantMap DesktopParityPlatform::computeEmpiricalOutlook(const QVariantList &evidence,
@@ -1139,9 +1405,9 @@ void DesktopParityPlatform::refreshOwnerHealth() {
 
 void DesktopParityPlatform::functionalStop() {
     stopDigi();
+    stopN1mmRuntime();
     m_activeContestSession.clear();
     m_contestState = "INACTIVE";
-    m_n1mmState = "DISABLED / loopback / untrusted / unarmed";
     m_operatingContext["contestSession"] = QString{};
     m_operatingContext["digiSession"] = QString{};
     m_operatingContext["transmitAccepted"] = false;

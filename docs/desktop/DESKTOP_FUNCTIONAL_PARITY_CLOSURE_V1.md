@@ -17,6 +17,8 @@ Source completion requires an owner, domain behavior, storage/migration where ap
 - Transmit and rotator movement acceptance default false after create, migration and import.
 - External spots/news/evidence never create Digi or Chaser eligibility.
 - N1MM defaults disabled, loopback, untrusted, unarmed and non-restoring.
+- N1MM contact/replace/delete, lookup, radio, spot, talk and score packets are field-whitelisted, deduplicated and review-only; paired framing is bounded and inbound packets never operate radio, Keyer, Digi or Chaser.
+- SCP is fetched only at runtime from the official HTTPS endpoint (or an explicit loopback test endpoint), validated into SQLite, atomically promoted over the last-good generation and reported with source, date, digest and row count.
 - Global Stop cancels provider work and disarms every operating workflow; physical RX/stop is claimed only after readback.
 - Credentials stay in Windows Credential Manager/macOS Keychain aliases and never enter databases, configuration exports, diagnostics or support bundles.
 
@@ -30,6 +32,6 @@ See `DESKTOP_FUNCTIONAL_GAP_LEDGER_V1.md` for the 17-row source audit and `DESKT
 
 The authoritative matrix is `DESKTOP_FUNCTIONAL_PARITY_MATRIX.md`: 31 audited rows, 31 source-complete, zero `FOUNDATION_WIRED` and zero `MISSING`. Source-complete rows with credentials, hardware, audio, RF, transmission or movement requirements retain `LIVE_ACCEPTANCE_PENDING` boundaries.
 
-Implementation evidence includes native serial/TCP radio and rotator fixtures, linked Rust modem/audio sessions, Groups.io fake authentication/delivery, migration/reopen checks, application/QML contracts and the 100k-QSO/domain scale probe. `DESKTOP_FUNCTIONAL_VISUAL_REGRESSION_V1.md` records the protected UI result. Hardware and provider procedures are deliberately separate in `DESKTOP_HARDWARE_ACCEPTANCE.md` and `DESKTOP_PROVIDER_ACCEPTANCE.md`.
+Implementation evidence includes native serial/TCP radio and rotator fixtures, linked Rust modem/audio sessions, runtime SCP atomic-cache and N1MM framing/dedup fakes, Groups.io fake authentication/delivery, migration/reopen checks, application/QML contracts and the 100k-QSO/domain scale probe. `DESKTOP_FUNCTIONAL_VISUAL_REGRESSION_V1.md` records the protected UI result. Hardware and provider procedures are deliberately separate in `DESKTOP_HARDWARE_ACCEPTANCE.md` and `DESKTOP_PROVIDER_ACCEPTANCE.md`.
 
 Hosted workflow/package results and hashes are attached to the exact candidate SHA. No row is promoted solely because its layout, fixture or hosted build exists.

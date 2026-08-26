@@ -26,7 +26,7 @@ Source baseline: `de32c8ac908c7979f39bfdfc41ca050378901e75`. This matrix separat
 | DX Chaser | SOURCE_COMPLETE_LIVE_ACCEPTANCE_PENDING | Local-decode eligibility, dry run and attempt journal; TX locked |
 | CW/Voice Keyer | SOURCE_COMPLETE_LIVE_ACCEPTANCE_PENDING | Typed tokens, local preview and stopped queue; send locked |
 | Intelligence/Awards/Contact Map | SOURCE_COMPLETE | Paged canonical QSO/RF projections and local estimates |
-| Contest/N1MM | SOURCE_COMPLETE_LIVE_ACCEPTANCE_PENDING | Schema-2 staging/scoring and typed bounded packet policy; live peer pending |
+| Contest/SCP/N1MM | SOURCE_COMPLETE_LIVE_ACCEPTANCE_PENDING | Schema-2 staging/scoring; atomic runtime SCP last-good cache; typed 43-field XML, discovery/trust/lifecycle/dedup and bounded TCP framing; live peer pending |
 | Intelligent Band Maps | SOURCE_COMPLETE | Shared-spot canonical evaluator and four accepted layouts |
 | DX workspace | SOURCE_COMPLETE_LIVE_ACCEPTANCE_PENDING | Shared projections over spot/provider/outlook owners |
 | Portable | SOURCE_COMPLETE_LIVE_ACCEPTANCE_PENDING | Cached provider/catalogue projections and reviewed handoff |

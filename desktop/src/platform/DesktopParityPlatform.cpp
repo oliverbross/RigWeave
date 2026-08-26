@@ -331,10 +331,10 @@ void DesktopParityPlatform::loadRegistries() {
     };
     m_digiModes.replace(modes);
     m_contestDefinitions.replace({
-        row("CQ-WW", "CQ World Wide", "Versioned desktop rule fixture", "READY", "SCP runtime download only", "Contest"),
-        row("CQ-WPX", "CQ WPX", "Versioned desktop rule fixture", "READY", {}, "Contest"),
-        row("ARRL-DX", "ARRL International DX", "Versioned desktop rule fixture", "READY", {}, "Contest"),
-        row("IARU-HF", "IARU HF Championship", "Versioned desktop rule fixture", "READY", {}, "Contest")
+        row("CQ-WW", "CQ World Wide", "Built-in versioned rule definition", "READY", "Official rules review required; SCP refreshes at runtime", "Contest"),
+        row("CQ-WPX", "CQ WPX", "Built-in versioned rule definition", "READY", "Official rules review required", "Contest"),
+        row("ARRL-DX", "ARRL International DX", "Built-in versioned rule definition", "READY", "Official rules review required", "Contest"),
+        row("IARU-HF", "IARU HF Championship", "Built-in versioned rule definition", "READY", "Official rules review required", "Contest")
     });
     m_keyerMacros.replace({
         row("F1", "F1 CQ", "CQ {MYCALL} {MYCALL}", "STOPPED", "Foreground shortcut; TX acceptance required", "Keyer"),
@@ -612,6 +612,7 @@ void DesktopParityPlatform::globalStop() {
         if (it->reply) it->reply->abort();
     }
     if (m_groupsReply) m_groupsReply->abort();
+    if (m_scpReply) m_scpReply->abort();
     clearReview();
     functionalStop();
     m_safetyState = "STOPPED / disconnected / TX off / automation disarmed";
@@ -623,7 +624,10 @@ void DesktopParityPlatform::close() {
     for (auto it = m_providerSpecs.begin(); it != m_providerSpecs.end(); ++it)
         if (it->reply) it->reply->abort();
     if (m_groupsReply) m_groupsReply->abort();
+    if (m_scpReply) m_scpReply->abort();
     m_groupsReply.clear();
+    m_scpReply.clear();
+    stopN1mmRuntime();
     for (StoreSpec &store : m_stores) {
         const QString connection = store.connection;
         store.database.close();

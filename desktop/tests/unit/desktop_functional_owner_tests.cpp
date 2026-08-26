@@ -16,6 +16,7 @@ private slots:
     void presetsEqAndOperatingContextRestoreSafe();
     void digiChaserContestAndGroupsUseVersionedOwners();
     void groupsClientUsesVaultAliasAndReconcilesFakeService();
+    void scpCacheAndN1mmRuntimeAreBoundedAndFailClosed();
     void empiricalBandMapAndSatelliteUseProductionAlgorithms();
 };
 
@@ -171,6 +172,72 @@ void DesktopFunctionalOwnerTests::groupsClientUsesVaultAliasAndReconcilesFakeSer
                               QString("DELIVERED"), 5000);
     QCOMPARE(requests, 4);
     QVERIFY(bearerSeen);
+}
+
+void DesktopFunctionalOwnerTests::scpCacheAndN1mmRuntimeAreBoundedAndFailClosed() {
+    QTemporaryDir root;
+    DesktopParityPlatform platform;
+    QString error;
+    QVERIFY2(platform.open(root.filePath("db"), root.filePath("cache"), false, &error), qPrintable(error));
+
+    QTcpServer server;
+    QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+    connect(&server, &QTcpServer::newConnection, this, [&] {
+        while (QTcpSocket *socket = server.nextPendingConnection()) {
+            connect(socket, &QTcpSocket::readyRead, socket, [socket] {
+                socket->readAll();
+                const QByteArray body = "K1ABC\nK1ABD\nDL1AAA\nOM0RX\n";
+                socket->write("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: " +
+                              QByteArray::number(body.size()) + "\r\n\r\n" + body);
+                socket->disconnectFromHost();
+            });
+        }
+    });
+    platform.setScpEndpointForTest(QUrl(QStringLiteral("http://127.0.0.1:%1/MASTER.SCP").arg(server.serverPort())));
+    QVERIFY(platform.refreshScp());
+    QTRY_COMPARE_WITH_TIMEOUT(platform.scpStatus().value("rowCount").toInt(), 4, 3000);
+    const QVariantMap lookup = platform.scpLookup("K1A", 10);
+    QVERIFY(!lookup.value("exact").toBool());
+    QVERIFY(lookup.value("likelyBust").toBool());
+    QCOMPARE(lookup.value("suggestions").toList().size(), 2);
+    const QString digest = platform.scpStatus().value("digest").toString();
+    QVERIFY(!platform.importScpPayloadForTest("K1ABC\nnot a call!\n", QUrl("https://invalid.test/MASTER.SCP"), 1, &error));
+    QCOMPARE(platform.scpStatus().value("digest").toString(), digest);
+
+    QVERIFY(platform.registerN1mmPeer("peer-a", "tcp://127.0.0.1:12060"));
+    QVERIFY(platform.setN1mmPeerTrusted("peer-a", true));
+    const QByteArray xml = "<contactinfo><app>N1MM</app><call>K1ABC</call><band>14</band><mode>CW</mode><id>qso-1</id></contactinfo>";
+    const QVariantMap parsed = platform.parseN1mmPacket(xml);
+    QCOMPARE(parsed.value("fieldCount").toInt(), 5);
+    QCOMPARE(parsed.value("policy").toString(), QString("REVIEW_ONLY"));
+    QVERIFY(!parsed.value("armed").toBool());
+    const QByteArray frame = platform.frameN1mmTcpPacket(xml);
+    QVERIFY(!frame.isEmpty());
+    QCOMPARE(platform.parseN1mmTcpFrames(frame + frame).size(), 2);
+    QVERIFY(platform.ingestN1mmPacket("peer-a", xml));
+    QVERIFY(platform.ingestN1mmPacket("peer-a", xml));
+    QVERIFY(platform.activeReview().contains("no radio, Keyer, Digi or Chaser action"));
+
+    QVERIFY(platform.startN1mmDiscovery(0));
+    QUdpSocket sender;
+    QCOMPARE(sender.writeDatagram(xml, QHostAddress::LocalHost, platform.n1mmDiscoveryPortForTest()), qint64(xml.size()));
+    QTRY_VERIFY_WITH_TIMEOUT(platform.n1mmState().startsWith("HEARTBEAT"), 3000);
+    platform.stopN1mmRuntime();
+
+    QTcpServer n1mmServer;
+    QVERIFY(n1mmServer.listen(QHostAddress::LocalHost, 0));
+    QVERIFY(platform.registerN1mmPeer("peer-tcp", QStringLiteral("tcp://127.0.0.1:%1").arg(n1mmServer.serverPort())));
+    QVERIFY(platform.setN1mmPeerTrusted("peer-tcp", true));
+    QVERIFY(platform.connectN1mmPeer("peer-tcp"));
+    QVERIFY(n1mmServer.waitForNewConnection(3000));
+    QTcpSocket *n1mmSocket = n1mmServer.nextPendingConnection();
+    QVERIFY(n1mmSocket);
+    QCOMPARE(n1mmSocket->write(frame), qint64(frame.size()));
+    QVERIFY(n1mmSocket->waitForBytesWritten(3000));
+    QTRY_VERIFY_WITH_TIMEOUT(platform.n1mmState().startsWith("HEARTBEAT"), 3000);
+    platform.stopN1mmRuntime();
+    QVERIFY(platform.updateN1mmPeerLifecycle("peer-a", "DISCONNECTED"));
+    QVERIFY(platform.n1mmState().contains("unarmed"));
 }
 
 void DesktopFunctionalOwnerTests::empiricalBandMapAndSatelliteUseProductionAlgorithms() {

@@ -3,6 +3,8 @@
 #include <QAbstractListModel>
 #include <QHash>
 #include <QNetworkAccessManager>
+#include <QTcpSocket>
+#include <QUdpSocket>
 #include <QObject>
 #include <QPointer>
 #include <QSqlDatabase>
@@ -88,6 +90,7 @@ class DesktopParityPlatform final : public QObject {
     Q_PROPERTY(QString digiState READ digiState NOTIFY workflowStateChanged)
     Q_PROPERTY(QString contestState READ contestState NOTIFY workflowStateChanged)
     Q_PROPERTY(QString n1mmState READ n1mmState NOTIFY workflowStateChanged)
+    Q_PROPERTY(QString scpState READ scpState NOTIFY workflowStateChanged)
     Q_PROPERTY(QString groupsCredentialAlias READ groupsCredentialAlias NOTIFY groupsConfigurationChanged)
     Q_PROPERTY(QVariantMap operatingContext READ operatingContext NOTIFY operatingContextChanged)
     Q_PROPERTY(bool demoMode READ demoMode CONSTANT)
@@ -131,6 +134,7 @@ public:
     QString digiState() const { return m_digiState; }
     QString contestState() const { return m_contestState; }
     QString n1mmState() const { return m_n1mmState; }
+    QString scpState() const { return m_scpState; }
     QString groupsCredentialAlias() const { return m_groupsCredentialAlias; }
     QVariantMap operatingContext() const { return m_operatingContext; }
     bool demoMode() const { return m_demoMode; }
@@ -173,6 +177,18 @@ public:
     Q_INVOKABLE bool stageContestQso(const QVariantMap &qso);
     Q_INVOKABLE QVariantMap contestScore() const;
     Q_INVOKABLE QVariantMap parseN1mmPacket(const QByteArray &packet) const;
+    Q_INVOKABLE bool registerN1mmPeer(const QString &peerId, const QString &endpoint);
+    Q_INVOKABLE bool setN1mmPeerTrusted(const QString &peerId, bool trusted);
+    Q_INVOKABLE bool updateN1mmPeerLifecycle(const QString &peerId, const QString &event);
+    Q_INVOKABLE bool ingestN1mmPacket(const QString &peerId, const QByteArray &packet);
+    Q_INVOKABLE bool startN1mmDiscovery(quint16 port = 12060);
+    Q_INVOKABLE bool connectN1mmPeer(const QString &peerId);
+    Q_INVOKABLE void stopN1mmRuntime();
+    Q_INVOKABLE QByteArray frameN1mmTcpPacket(const QByteArray &packet) const;
+    Q_INVOKABLE QVariantList parseN1mmTcpFrames(const QByteArray &frames) const;
+    Q_INVOKABLE bool refreshScp();
+    Q_INVOKABLE QVariantMap scpStatus() const;
+    Q_INVOKABLE QVariantMap scpLookup(const QString &partial, int limit = 12) const;
     Q_INVOKABLE QVariantMap computeEmpiricalOutlook(const QVariantList &evidence,
                                                      int windowMinutes) const;
     Q_INVOKABLE QVariantList evaluateBandMap(const QVariantList &spots) const;
@@ -220,6 +236,10 @@ public:
     bool restoreGroupsConfiguration(const QVariantMap &section,
                                     QString *error = nullptr);
     void setGroupsEndpointForTest(const QUrl &endpoint);
+    void setScpEndpointForTest(const QUrl &endpoint);
+    bool importScpPayloadForTest(const QByteArray &payload, const QUrl &source,
+                                 qint64 sourceDate, QString *error = nullptr);
+    quint16 n1mmDiscoveryPortForTest() const { return m_n1mmUdp.localPort(); }
 
 signals:
     void activeReviewChanged();
@@ -270,6 +290,9 @@ private:
                             const QVariantMap &form = {},
                             const QString &outboxId = {});
     void finishGroupsRequest();
+    bool importScpPayload(const QByteArray &payload, const QUrl &source,
+                          qint64 sourceDate, QString *error);
+    void finishScpRequest();
     StoreSpec *store(const QString &key);
     const StoreSpec *store(const QString &key) const;
     void finishProvider(const QString &key);
@@ -310,6 +333,7 @@ private:
     QString m_digiState{"STOPPED / no audio route / TX locked"};
     QString m_contestState{"INACTIVE"};
     QString m_n1mmState{"DISABLED / loopback / untrusted / unarmed"};
+    QString m_scpState{"EMPTY / runtime download required"};
     QVariantMap m_operatingContext{{"generation", 0}, {"radioConnected", false},
                                    {"transmitAccepted", false},
                                    {"rotatorMovementAccepted", false}};
@@ -330,6 +354,13 @@ private:
     QString m_groupsScopeId;
     QString m_groupsOutboxId;
     qint64 m_groupsRemoteDraftId{};
+    QUdpSocket m_n1mmUdp;
+    QTcpSocket m_n1mmTcp;
+    QByteArray m_n1mmTcpBuffer;
+    QString m_n1mmTcpPeerId;
+    QUrl m_scpEndpoint{"https://supercheckpartial.com/MASTER.SCP"};
+    QPointer<QNetworkReply> m_scpReply;
+    QByteArray m_scpBody;
     bool m_demoMode{};
     bool m_closed{true};
     int m_galleryBandMapLayout{};
