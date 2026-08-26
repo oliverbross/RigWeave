@@ -169,3 +169,15 @@ SBOM and SOURCE_MANIFEST are generated from the exact Git SHA and reference this
 NOTICE. The single Hamlib authority remains pinned at 4.7.2; existing SDRoxide,
 mfsk-core, tempo-sstv, SGP4, ITUHFProp, CTY and band-plan provenance remains
 unchanged and is not duplicated by packaging.
+
+Android SDR enhancement review reference
+----------------------------------------
+
+SDRoxide <https://github.com/dividebysandwich/sdroxide>, reviewed at stable
+release v1.5.3 / commit a680935b10f33768a499435e8bd37f779fa640ae,
+is GPL version 3 software. No SDRoxide code, shader, asset, data, recording,
+voice model, or binary is included. Independently implemented interoperability
+and UI behavior is documented in docs/android/SDROXIDE_ANDROID_PROVENANCE.md.
+
+OkHttp 5.3.0 is used for the Android WebSocket client under its upstream
+Apache-2.0 licence and existing Gradle dependency/notice handling.
