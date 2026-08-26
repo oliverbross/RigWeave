@@ -30,6 +30,8 @@ jobs:
           fetch-depth: 0
       - name: Verify exact checked-out SHA
         run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - name: Fetch declared lineage refs
+        run: git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - name: Contract, provenance, watcher and privacy gates

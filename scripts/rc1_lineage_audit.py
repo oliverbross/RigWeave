@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -39,9 +40,17 @@ def resolve(ref: str) -> str:
     return git("rev-parse", "--verify", ref)
 
 
+def resolve_first(*refs: str) -> str:
+    for ref in refs:
+        resolved = git("rev-parse", "--verify", ref, check=False)
+        if resolved:
+            return resolved
+    raise SystemExit(f"none of the required refs resolve: {', '.join(refs)}")
+
+
 def build_proof() -> dict:
     head = resolve("HEAD")
-    branch = git("branch", "--show-current")
+    branch = git("branch", "--show-current") or os.environ.get("GITHUB_REF_NAME", "")
     required = {
         "canonical_source": SOURCE,
         "accepted_ui": ACCEPTED_UI,
@@ -54,10 +63,17 @@ def build_proof() -> dict:
     actual = {
         "canonical_source": resolve(SOURCE),
         "accepted_ui": resolve(ACCEPTED_UI),
-        "protected_local_main": resolve("main"),
+        # Hosted checkouts do not have Oliver's protected local-only `main`.
+        # The recovery ref carries that immutable object into the remote audit.
+        "protected_local_main": resolve_first(
+            "main", "origin/recovery/local-main-27c70d0"
+        ),
         "frozen_origin_main": resolve("origin/main"),
         "recovery_ref": resolve("origin/recovery/local-main-27c70d0"),
-        "review_tip": resolve("integration/rigweave-final-whole-app-v1"),
+        "review_tip": resolve_first(
+            "integration/rigweave-final-whole-app-v1",
+            "origin/integration/rigweave-final-whole-app-v1",
+        ),
         "semantic_integration": resolve(SEMANTIC_INTEGRATION),
     }
     if actual != required:
