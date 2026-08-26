@@ -134,7 +134,7 @@ WorkspaceCanvas {
             Label { text: root.cockpitMode === 0 ? "RX WORKFLOW" : "ASSIST / DRY RUN"; color: "#e9a72b"; font.weight: Font.Bold }
             Label {
                 Layout.fillWidth: true
-                text: root.cockpitMode === 0 ? "Select a supported mode, acquire an exact route, then start an explicit receive session. This foundation has no fake waterfall or decoder output." : "Assist may rank evidence. Chase remains inactive until an operator starts it with a fresh local decode and accepted radio/audio path."
+                text: root.cockpitMode === 0 ? "Select a supported mode, acquire an exact route, then start an explicit receive session. This workspace has no fake waterfall or decoder output." : "Assist may rank evidence. Chase remains inactive until an operator starts it with a fresh local decode and accepted radio/audio path."
                 color: "#f4f0e7"
                 wrapMode: Text.WordWrap
             }
