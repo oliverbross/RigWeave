@@ -63,6 +63,7 @@ def resolve_local_only(ref: str, expected: str) -> str:
 def build_proof() -> dict:
     head = resolve("HEAD")
     branch = git("branch", "--show-current") or os.environ.get("GITHUB_REF_NAME", "")
+    allow_descendant_validation = os.environ.get("RIGWEAVE_ALLOW_RC1_DESCENDANT_VALIDATION") == "1"
     required = {
         "canonical_source": SOURCE,
         "accepted_ui": ACCEPTED_UI,
@@ -89,7 +90,7 @@ def build_proof() -> dict:
     }
     if actual != required:
         raise SystemExit(f"immutable reference mismatch: {actual}")
-    if branch != RC_BRANCH:
+    if branch != RC_BRANCH and not allow_descendant_validation:
         raise SystemExit(f"expected {RC_BRANCH}, got {branch}")
     for commit in (SOURCE, ACCEPTED_UI, SEMANTIC_INTEGRATION):
         if not ancestor(commit, head):
@@ -120,7 +121,8 @@ def build_proof() -> dict:
         counts[key] = counts.get(key, 0) + 1
     return {
         "contract": "RIGWEAVE_RC1_ANCESTRY_V1",
-        "rc_branch": branch,
+        "rc_branch": RC_BRANCH,
+        "validation_branch": branch,
         "rc_head": head,
         "immutable_refs": required,
         "invariants": {

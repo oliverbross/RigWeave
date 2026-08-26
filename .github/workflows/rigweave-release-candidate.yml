@@ -2,6 +2,12 @@ name: Release Candidate Gates
 
 on:
   workflow_call:
+    inputs:
+      allow_descendant_validation:
+        description: Validate an exact descendant branch while retaining RC1 ancestry and immutable-ref checks
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
   pull_request:
   push:
@@ -13,6 +19,8 @@ permissions:
 jobs:
   contract-audit:
     runs-on: ubuntu-latest
+    env:
+      RIGWEAVE_ALLOW_RC1_DESCENDANT_VALIDATION: ${{ inputs.allow_descendant_validation && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
         with:
