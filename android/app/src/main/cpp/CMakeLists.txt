@@ -26,10 +26,12 @@ set_target_properties(rigweave_hamlib PROPERTIES IMPORTED_LOCATION
 add_library(rigweave SHARED
     native_bridge.cpp
     native_rx_dsp.cpp
+    native_local_receiver.cpp
     hamclock_propagation_bridge.cpp
     hamlib/hamlib_jni.cpp
     ${CORE_ROOT}/src/core.cpp
     ${CORE_ROOT}/src/features.cpp
+    ${CORE_ROOT}/src/local_receiver.cpp
     ${CORE_ROOT}/src/tci.cpp
     ${CORE_ROOT}/src/satellite.cpp
     ${CORE_ROOT}/src/propagation/p533.cpp
