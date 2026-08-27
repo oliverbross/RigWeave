@@ -4,6 +4,7 @@ package app.rigweave.mobile
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -79,7 +80,7 @@ private val SdrHold = Color(0xFFF4C94E)
 private val SdrHealthy = Color(0xFF42C77B)
 private val SdrDanger = Color(0xFFE4544D)
 
-private enum class TciCockpitPage { RECEIVERS, PANADAPTER, SCANNER }
+private enum class TciCockpitPage { RECEIVERS, PANADAPTER, SCANNER, CALIBRATION }
 
 @Composable
 fun TciRadioCockpit(
@@ -88,11 +89,13 @@ fun TciRadioCockpit(
     panadapter: PanadapterController,
     rxAudio: TciRxAudioController,
     scanner: ReceiveOnlyScannerController,
+    operational: SdrOperationalV2,
     memories: List<RadioPreset>,
     dispatch: (RadioPlatformAction) -> Unit,
     connect: () -> Unit,
     disconnect: () -> Unit,
     debugLab: DebugSdrLab?,
+    openDigi: () -> Unit,
 ) {
     val state = runtime.snapshot
     var page by remember { mutableStateOf(TciCockpitPage.RECEIVERS) }
@@ -117,9 +120,10 @@ fun TciRadioCockpit(
             SdrTruthChip("TX BLOCKED", true)
         }
         when (page) {
-            TciCockpitPage.RECEIVERS -> ReceiverCockpit(state, rxAudio, dispatch)
-            TciCockpitPage.PANADAPTER -> TciPanadapterPanel(state, panadapter, dispatch)
-            TciCockpitPage.SCANNER -> ScannerPanel(scanner, memories, panadapter.frame, state, dispatch)
+            TciCockpitPage.RECEIVERS -> ReceiverCockpit(state, rxAudio, operational, dispatch)
+            TciCockpitPage.PANADAPTER -> TciPanadapterPanel(state, panadapter, dispatch, operational = operational, openDigi = openDigi)
+            TciCockpitPage.SCANNER -> ScannerPanel(scanner, memories, panadapter.frame, state, dispatch, operational)
+            TciCockpitPage.CALIBRATION -> TxAudioCalibrationPanel(operational, state)
         }
         if (!state.ready && debugLab?.active != true) SdrEmptyState(
             "TCI data unavailable",
@@ -131,7 +135,8 @@ fun TciRadioCockpit(
 }
 
 @Composable
-private fun ReceiverCockpit(state: TciRuntimeSnapshot, rxAudio: TciRxAudioController, dispatch: (RadioPlatformAction) -> Unit) {
+private fun ReceiverCockpit(state: TciRuntimeSnapshot, rxAudio: TciRxAudioController, operational: SdrOperationalV2,
+    dispatch: (RadioPlatformAction) -> Unit) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 760.dp
         val content: @Composable (TciReceiverSnapshot) -> Unit = { receiver ->
@@ -140,22 +145,24 @@ private fun ReceiverCockpit(state: TciRuntimeSnapshot, rxAudio: TciRxAudioContro
             }, {
                 dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "listen_receiver", longValue = receiver.backendIndex.toLong()))
             }, { action ->
-                val routeReady = action != "audio_start" ||
-                    rxAudio.start(receiver.backendIndex, receiver.sampleRate.coerceAtLeast(48_000))
+                val dualAudio = rxAudio.mixer.mode in setOf(RxMixerMode.STEREO_SPLIT, RxMixerMode.MIX)
+                val targets = if (action.startsWith("audio_") && dualAudio) state.receivers.take(2) else listOf(receiver)
+                val outputRate = targets.maxOfOrNull { it.rxAudioSampleRate.coerceAtLeast(48_000) } ?: 48_000
+                val routeReady = action != "audio_start" || rxAudio.start(receiver.backendIndex, outputRate)
                 if (action == "audio_stop") rxAudio.stop("Operator stopped TCI RX audio")
-                if (routeReady) dispatch(
-                    RadioPlatformAction(RadioActionClass.SAFE_SET,
-                        if (action == "unmute") "mute" else action,
-                        longValue = when (action) { "mute" -> 1L; "unmute" -> 0L; else -> null }),
-                )
+                if (routeReady) targets.forEach { target -> dispatch(
+                    RadioPlatformAction(RadioActionClass.SAFE_SET, if (action == "unmute") "mute" else action,
+                        longValue = when (action) { "mute" -> 1L; "unmute" -> 0L; else -> null },
+                        targetReceiver = target.backendIndex),
+                ) }
             })
         }
         if (wide) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             state.receivers.take(2).forEach { receiver -> Box(Modifier.weight(1f)) { content(receiver) } }
-            StreamHealthRail(state, Modifier.widthIn(min = 190.dp, max = 260.dp).fillMaxHeight())
+            TciWorkbenchRail(state, rxAudio, operational, dispatch, Modifier.widthIn(min = 220.dp, max = 310.dp).fillMaxHeight())
         } else Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             state.receivers.take(2).forEach { receiver -> content(receiver) }
-            StreamHealthRail(state, Modifier.fillMaxWidth())
+            TciWorkbenchRail(state, rxAudio, operational, dispatch, Modifier.fillMaxWidth())
         }
     }
 }
@@ -185,7 +192,90 @@ private fun ReceiverInstrument(receiver: TciReceiverSnapshot, select: () -> Unit
                 OutlinedButton({ stream(if (receiver.audioRunning) "audio_stop" else "audio_start") }) { Text(if (receiver.audioRunning) "STOP AUDIO" else "START AUDIO") }
                 OutlinedButton({ stream(if (receiver.muted) "unmute" else "mute") }) { Text(if (receiver.muted) "UNMUTE" else "MUTE") }
             }
-            Text("${if (receiver.enabled) "RX ENABLED" else "RX DISABLED"} · IQ ${if (receiver.iqRunning) "LIVE" else "STOPPED"} · AUDIO ${if (receiver.audioRunning) "LIVE" else "STOPPED"} · ${receiver.sampleRate} Hz · DROP ${receiver.droppedFrames}", color = SdrMuted)
+            Text("${if (receiver.enabled) "RX ENABLED" else "RX DISABLED"} · IF ${receiver.ifOffsetHz?.let { "$it Hz" } ?: "UNKNOWN"} · SPLIT ${receiver.split?.toString()?.uppercase() ?: "UNKNOWN"} · IQ ${if (receiver.iqRunning) "LIVE" else "STOPPED"} · AUDIO ${if (receiver.audioRunning) "LIVE" else "STOPPED"} · IQ ${receiver.iqSampleRate} / AUDIO ${receiver.rxAudioSampleRate} Hz · DROP ${receiver.droppedFrames}", color = SdrMuted)
+            Text("METER ${receiver.meterDbm?.let { "%.1f dBm".format(it) } ?: "UNKNOWN"} · FWD ${receiver.forwardPowerWatts?.let { "%.1f W".format(it) } ?: "UNKNOWN"} · SWR ${receiver.swr?.let { "%.2f".format(it) } ?: "UNKNOWN"} · DRIVE ${receiver.drivePercent?.let { "$it%" } ?: "UNKNOWN"}", color = SdrMuted, fontSize = 10.sp)
+        }
+    }
+}
+
+@Composable
+private fun TciWorkbenchRail(state: TciRuntimeSnapshot, rxAudio: TciRxAudioController, operational: SdrOperationalV2,
+    dispatch: (RadioPlatformAction) -> Unit, modifier: Modifier) {
+    var digits by remember { mutableStateOf(state.receivers.firstOrNull { it.active }?.effectiveRxHz?.toString().orEmpty()) }
+    var ifOffset by remember { mutableStateOf("0") }
+    var volume by remember { mutableFloatStateOf((state.receivers.firstOrNull()?.volumeDb ?: -20).toFloat()) }
+    Card(modifier, colors = CardDefaults.cardColors(containerColor = SdrRaised)) {
+        Column(Modifier.padding(10.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Text("RECEIVER / AUDIO / LINK", color = SdrAmber, fontWeight = FontWeight.Bold)
+            ReceiverLinkMode.entries.forEach { value ->
+                FilterChip(operational.linkMode == value, { operational.updateLinkMode(value) }, { Text(value.name.replace('_', ' '), fontSize = 10.sp) })
+            }
+            Text("Diversity · ${operational.diversity} · no coherence claim", color = SdrHold, fontSize = 10.sp)
+            Text("DIRECT DIGIT TUNING", color = SdrAmber, fontSize = 10.sp)
+            OutlinedTextField(digits, { digits = it.filter(Char::isDigit).take(11) }, label = { Text("Frequency Hz") }, singleLine = true)
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                listOf(1_000_000L, 100_000L, 10_000L, 1_000L, 100L, 10L).forEach { decade ->
+                    TextButton({ val current = frequencyFromDigits(digits) ?: return@TextButton; digits = adjustFrequencyDigit(current, decade, 1).toString() }) {
+                        Text("+${when { decade >= 1_000_000 -> "M"; decade >= 1_000 -> "k"; else -> decade }}", fontSize = 9.sp)
+                    }
+                }
+            }
+            Button({
+                val receiver = state.receivers.firstOrNull { it.active } ?: state.receivers.firstOrNull() ?: return@Button
+                val hz = frequencyFromDigits(digits) ?: return@Button
+                dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "frequency", longValue = hz, targetReceiver = receiver.backendIndex))
+                operational.linkedActions(receiver.backendIndex, hz, null, state.receivers).forEach(dispatch)
+            }, enabled = state.ready && frequencyFromDigits(digits) != null) { Text("RECEIVE REVIEW · SET") }
+            Text("A frequency change is operator initiated; linked receiver writes remain bounded and require readback.", color = SdrMuted, fontSize = 9.sp)
+            Text("MODE / IF / SPLIT / VOLUME", color = SdrAmber, fontSize = 10.sp)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf("LSB", "USB", "CW", "AM", "SAM", "NFM", "WFM", "DIGU", "DIGL", "DSB").forEach { mode ->
+                    FilterChip(state.receivers.firstOrNull { it.active }?.mode == mode, {
+                        val receiver = state.receivers.firstOrNull { it.active } ?: return@FilterChip
+                        dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "mode", textValue = mode, targetReceiver = receiver.backendIndex))
+                        operational.linkedActions(receiver.backendIndex, null, mode, state.receivers).forEach(dispatch)
+                    }, { Text(mode, fontSize = 9.sp) })
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(ifOffset, { ifOffset = it.filter { char -> char.isDigit() || char == '-' }.take(9) },
+                    label = { Text("IF offset Hz") }, singleLine = true, modifier = Modifier.weight(1f))
+                OutlinedButton({
+                    val receiver = state.receivers.firstOrNull { it.active } ?: return@OutlinedButton
+                    dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "if_offset", longValue = ifOffset.toLongOrNull() ?: 0,
+                        targetReceiver = receiver.backendIndex))
+                }) { Text("SET IF") }
+                OutlinedButton({
+                    val receiver = state.receivers.firstOrNull { it.active } ?: return@OutlinedButton
+                    dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "split", longValue = if (receiver.split == true) 0 else 1,
+                        targetReceiver = receiver.backendIndex))
+                }) { Text("SPLIT") }
+            }
+            Text("TCI master volume ${volume.toInt()} dB", color = SdrMuted, fontSize = 9.sp)
+            Slider(volume, { value -> volume = value; dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "volume", longValue = value.toLong())) }, valueRange = -60f..0f)
+            Text("Passband/filter and RIT/XIT remain UNKNOWN/UNAVAILABLE because v1.5.3 exposes no stable setter contract.", color = SdrHold, fontSize = 9.sp)
+            Text("AUDIO MIXER", color = SdrAmber, fontSize = 10.sp)
+            RxMixerMode.entries.forEach { mode -> FilterChip(rxAudio.mixer.mode == mode,
+                { rxAudio.updateMixer(rxAudio.mixer.copy(mode = mode)) }, { Text(mode.name.replace('_', ' '), fontSize = 10.sp) }) }
+            Text("Crossfade ${"%.2f".format(rxAudio.mixer.crossfade)} · master ${"%.2f".format(rxAudio.mixer.master)}", color = SdrMuted, fontSize = 9.sp)
+            Slider(rxAudio.mixer.crossfade, { rxAudio.updateMixer(rxAudio.mixer.copy(crossfade = it)) }, valueRange = -1f..1f)
+            Slider(rxAudio.mixer.master, { rxAudio.updateMixer(rxAudio.mixer.copy(master = it)) }, valueRange = 0f..1.5f)
+            Text("A gain ${"%.2f".format(rxAudio.mixer.receiverA.gain)} · pan ${"%.2f".format(rxAudio.mixer.receiverA.pan)}", color = SdrMuted, fontSize = 9.sp)
+            Slider(rxAudio.mixer.receiverA.gain, { rxAudio.updateMixer(rxAudio.mixer.copy(receiverA = rxAudio.mixer.receiverA.copy(gain = it))) }, valueRange = 0f..2f)
+            Slider(rxAudio.mixer.receiverA.pan, { rxAudio.updateMixer(rxAudio.mixer.copy(receiverA = rxAudio.mixer.receiverA.copy(pan = it))) }, valueRange = -1f..1f)
+            Text("B gain ${"%.2f".format(rxAudio.mixer.receiverB.gain)} · pan ${"%.2f".format(rxAudio.mixer.receiverB.pan)}", color = SdrMuted, fontSize = 9.sp)
+            Slider(rxAudio.mixer.receiverB.gain, { rxAudio.updateMixer(rxAudio.mixer.copy(receiverB = rxAudio.mixer.receiverB.copy(gain = it))) }, valueRange = 0f..2f)
+            Slider(rxAudio.mixer.receiverB.pan, { rxAudio.updateMixer(rxAudio.mixer.copy(receiverB = rxAudio.mixer.receiverB.copy(pan = it))) }, valueRange = -1f..1f)
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton({ rxAudio.updateMixer(rxAudio.mixer.copy(receiverA = rxAudio.mixer.receiverA.copy(solo = !rxAudio.mixer.receiverA.solo))) }) { Text("A SOLO") }
+                TextButton({ rxAudio.updateMixer(rxAudio.mixer.copy(receiverA = rxAudio.mixer.receiverA.copy(muted = !rxAudio.mixer.receiverA.muted))) }) { Text("A MUTE") }
+                TextButton({ rxAudio.updateMixer(rxAudio.mixer.copy(receiverB = rxAudio.mixer.receiverB.copy(solo = !rxAudio.mixer.receiverB.solo))) }) { Text("B SOLO") }
+                TextButton({ rxAudio.updateMixer(rxAudio.mixer.copy(receiverB = rxAudio.mixer.receiverB.copy(muted = !rxAudio.mixer.receiverB.muted))) }) { Text("B MUTE") }
+            }
+            SdrMeasure("READBACK", "${state.confirmedReadbacks} confirmed · ${state.pendingReadbacks.size} pending")
+            SdrMeasure("WRITE FAIL", "${state.failedWrites}")
+            SdrMeasure("AUDIO QUEUES", "drop ${rxAudio.overflowByReceiver.joinToString("/")} · under ${rxAudio.underflowByReceiver.joinToString("/")}")
+            Text("Spot bridge · ${operational.spotBridge}; the audited dialect has no stable spot contract.", color = SdrHold, fontSize = 10.sp)
         }
     }
 }
@@ -207,7 +297,8 @@ private fun StreamHealthRail(state: TciRuntimeSnapshot, modifier: Modifier) {
 
 @Composable
 fun TciPanadapterPanel(state: TciRuntimeSnapshot, controller: PanadapterController, dispatch: (RadioPlatformAction) -> Unit,
-    scanner: ReceiveOnlyScannerController? = null, memories: List<RadioPreset> = emptyList()) {
+    scanner: ReceiveOnlyScannerController? = null, operational: SdrOperationalV2? = null,
+    memories: List<RadioPreset> = emptyList(), openDigi: () -> Unit = {}) {
     var dual by remember { mutableStateOf(true) }
     var fit by remember { mutableStateOf(true) }
     var peak by remember { mutableStateOf(true) }
@@ -226,8 +317,38 @@ fun TciPanadapterPanel(state: TciRuntimeSnapshot, controller: PanadapterControll
             if (scanner != null) FilterChip(scannerOpen, { scannerOpen = !scannerOpen }, { Text("SCANNER") })
         }
         if (scannerOpen && scanner != null) {
-            ScannerPanel(scanner, memories, controller.frame, state, dispatch)
+            ScannerPanel(scanner, memories, controller.frame, state, dispatch, operational)
             return@Column
+        }
+        operational?.let { v2 ->
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                TimeShiftLength.entries.forEach { length -> FilterChip(v2.timeShift.snapshot.length == length,
+                    { v2.timeShift.configure(length) }, { Text(if (length == TimeShiftLength.OFF) "SHIFT OFF" else "${length.seconds}s SHIFT") }) }
+                OutlinedButton(v2.timeShift::pause, enabled = v2.timeShift.snapshot.frameCount > 0) { Text("PAUSE") }
+                OutlinedButton(v2.timeShift::replay, enabled = v2.timeShift.selectedFrame != null) { Text("REPLAY") }
+                OutlinedButton(v2.timeShift::returnLive) { Text("LIVE") }
+                OutlinedButton({ v2.timeShift.bookmark("Operator signal bookmark") }, enabled = v2.timeShift.selectedFrame != null) { Text("BOOKMARK") }
+                OutlinedButton({ v2.timeShift.clear() }) { Text("CLEAR") }
+            }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SkimmerMode.entries.forEach { mode -> FilterChip(mode in v2.skimmer.enabledModes,
+                    { v2.skimmer.setEnabled(mode, mode !in v2.skimmer.enabledModes) }, { Text("${mode.name} SKIMMER") }) }
+                SdrTruthChip("${v2.timeShift.snapshot.playback} · ${v2.timeShift.snapshot.bufferedSeconds}s · ${v2.timeShift.snapshot.bytes / 1024} KiB", true)
+                SdrTruthChip("${v2.skimmer.markers.size} MARKERS · ${v2.skimmer.decodeMillis} ms", v2.skimmer.decodeMillis < 250)
+            }
+            if (v2.timeShift.snapshot.length != TimeShiftLength.OFF && v2.timeShift.snapshot.frameCount > 0) {
+                Text("TIME-SHIFT CURSOR · ${v2.timeShift.snapshot.cursorSecondsBehind}s behind live", color = SdrMuted, fontSize = 9.sp)
+                Slider(v2.timeShift.snapshot.cursorSecondsBehind.toFloat(), { v2.timeShift.scrub(it.toInt()) },
+                    valueRange = 0f..v2.timeShift.snapshot.length.seconds.toFloat().coerceAtLeast(1f))
+            }
+            if (v2.timeShift.bookmarks.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                v2.timeShift.bookmarks.take(6).forEach { bookmark ->
+                    TextButton({ v2.timeShift.deleteBookmark(bookmark.id) }) {
+                        Text("BOOKMARK · ${formatRadioFrequency(bookmark.frequencyHz)} · DELETE", fontSize = 9.sp)
+                    }
+                }
+            }
         }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             listOf("BOTH", "SPECTRUM", "WATERFALL").forEach { value ->
@@ -249,24 +370,32 @@ fun TciPanadapterPanel(state: TciRuntimeSnapshot, controller: PanadapterControll
             if (sideBySide) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 displays.forEach { display ->
                     val centerHz = state.receivers.firstOrNull { it.backendIndex == display.receiverIndex }?.effectiveRxHz
-                    TciSpectrumInstrument(display, centerHz, fit, peak, palette, floor, top, displayMode, dispatch, Modifier.weight(1f))
+                    TciSpectrumInstrument(display, centerHz, fit, peak, palette, floor, top, displayMode, operational, dispatch, Modifier.weight(1f))
                 }
             } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 displays.forEach { display ->
                     val centerHz = state.receivers.firstOrNull { it.backendIndex == display.receiverIndex }?.effectiveRxHz
-                    TciSpectrumInstrument(display, centerHz, fit, peak, palette, floor, top, displayMode, dispatch, Modifier.weight(1f))
+                    TciSpectrumInstrument(display, centerHz, fit, peak, palette, floor, top, displayMode, operational, dispatch, Modifier.weight(1f))
                 }
             }
         }
+        operational?.skimmer?.selectedMarker?.let { marker -> MarkerInspector(marker, operational, dispatch, openDigi) }
     }
 }
 
 @Composable
 private fun TciSpectrumInstrument(display: TciPanadapterDisplay, centerHz: Long?, fit: Boolean, peak: Boolean, palette: Int,
-    manualFloor: Float, manualTop: Float, displayMode: String, dispatch: (RadioPlatformAction) -> Unit, modifier: Modifier) {
+    manualFloor: Float, manualTop: Float, displayMode: String, operational: SdrOperationalV2?,
+    dispatch: (RadioPlatformAction) -> Unit, modifier: Modifier) {
     val frame = display.frame
-    val fittedFloor = if (fit) frame.floorDb.coerceAtMost(frame.peakDb - 30f) else manualFloor
-    val fittedTop = if (fit) max(frame.peakDb + 4f, fittedFloor + 30f) else manualTop
+    val reviewFrame = operational?.timeShift?.selectedFrame?.takeIf {
+        operational.timeShift.snapshot.playback != TimeShiftPlayback.LIVE && it.receiver == display.receiverIndex
+    }
+    val visibleTrace = reviewFrame?.trace ?: frame.trace
+    val tracePeak = visibleTrace.maxOrNull() ?: frame.peakDb
+    val traceFloor = visibleTrace.minOrNull() ?: frame.floorDb
+    val fittedFloor = if (fit) traceFloor.coerceAtMost(tracePeak - 30f) else manualFloor
+    val fittedTop = if (fit) max(tracePeak + 4f, fittedFloor + 30f) else manualTop
     var viewZoom by remember(display.receiverIndex) { mutableFloatStateOf(1f) }
     var viewPan by remember(display.receiverIndex) { mutableFloatStateOf(0f) }
     var reviewOffsetHz by remember(display.receiverIndex) { mutableStateOf(0L) }
@@ -274,7 +403,7 @@ private fun TciSpectrumInstrument(display: TciPanadapterDisplay, centerHz: Long?
     Card(modifier, colors = CardDefaults.cardColors(containerColor = Color.Black)) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 9.dp, vertical = 5.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("RX ${display.receiverIndex + 1} · ${display.sampleRate / 1000} kHz · ${frame.fftSize} FFT", color = SdrAmber, fontWeight = FontWeight.Bold)
+                Text("RX ${display.receiverIndex + 1} · ${display.sampleRate / 1000} kHz · ${if (reviewFrame == null) "LIVE" else "TIME SHIFT ${operational?.timeShift?.snapshot?.cursorSecondsBehind}s"}", color = SdrAmber, fontWeight = FontWeight.Bold)
                 Text("FIT ${"%.0f".format(fittedFloor)} / ${"%.0f".format(fittedTop)} dB · DROP ${display.droppedFrames}", color = SdrMuted)
             }
             if (displayMode != "WATERFALL") Canvas(Modifier.fillMaxWidth().weight(if (displayMode == "BOTH") .44f else 1f)
@@ -290,9 +419,18 @@ private fun TciSpectrumInstrument(display: TciPanadapterDisplay, centerHz: Long?
                         }
                     }
                 }
+                .pointerInput(centerHz, operational?.skimmer?.markers) {
+                    detectTapGestures { offset ->
+                        val center = centerHz ?: return@detectTapGestures
+                        val hz = center - display.sampleRate / 2L + (display.sampleRate * offset.x / size.width.coerceAtLeast(1)).toLong()
+                        operational?.skimmer?.markers?.minByOrNull { kotlin.math.abs(it.frequencyHz - hz) }
+                            ?.takeIf { kotlin.math.abs(it.frequencyHz - hz) <= display.sampleRate / 30L }
+                            ?.let { operational.skimmer.select(it.id) }
+                    }
+                }
                 .semantics { contentDescription = "TCI receiver ${display.receiverIndex + 1} live spectrum with VFO, passband, band plan and explicit QSY review" }) {
                 drawRect(Color(0xFF07090B))
-                val trace = frame.trace
+                val trace = visibleTrace
                 if (trace.size > 1) {
                     val visibleBins = (trace.size / viewZoom).toInt().coerceAtLeast(2)
                     val centerBin = ((.5f + viewPan) * trace.lastIndex).toInt().coerceIn(0, trace.lastIndex)
@@ -306,7 +444,7 @@ private fun TciSpectrumInstrument(display: TciPanadapterDisplay, centerHz: Long?
                         if (index == firstBin) path.moveTo(x, y) else path.lineTo(x, y)
                     }
                     drawPath(path, SdrAmber, style = Stroke(1.5.dp.toPx()))
-                    if (peak) {
+                    if (peak && reviewFrame == null && frame.peakHold.size == trace.size) {
                         val peakPath = Path()
                         for (index in firstBin..lastBin) {
                             val value = frame.peakHold[index]
@@ -326,6 +464,12 @@ private fun TciSpectrumInstrument(display: TciPanadapterDisplay, centerHz: Long?
                 segments.forEachIndexed { index, segment -> drawRect(colors[index].copy(alpha = .45f),
                     topLeft = Offset(size.width * segment.first, size.height - 7.dp.toPx()),
                     size = androidx.compose.ui.geometry.Size(size.width * (segment.second - segment.first), 7.dp.toPx())) }
+                if (centerHz != null && operational != null) operational.skimmer.markers.forEach { marker ->
+                    val x = size.width * ((marker.frequencyHz - (centerHz - display.sampleRate / 2.0)) / display.sampleRate).toFloat()
+                    if (x in 0f..size.width) {
+                        drawLine(if (marker.confirmed) SdrHealthy else SdrHold, Offset(x, 0f), Offset(x, size.height), 1.dp.toPx())
+                    }
+                }
             }
             if (displayMode != "SPECTRUM") WaterfallCanvas(display.waterfallRows, fittedFloor, fittedTop, palette,
                 Modifier.fillMaxWidth().weight(if (displayMode == "BOTH") .56f else 1f))
@@ -336,6 +480,26 @@ private fun TciSpectrumInstrument(display: TciPanadapterDisplay, centerHz: Long?
                     centerHz?.let { dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "frequency", longValue = it + reviewOffsetHz)) }
                 }, enabled = centerHz != null) { Text("QSY REVIEW") }
             }
+        }
+    }
+}
+
+@Composable
+private fun MarkerInspector(marker: SkimmerMarker, operational: SdrOperationalV2,
+    dispatch: (RadioPlatformAction) -> Unit, openDigi: () -> Unit) {
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SdrRaised)) {
+        Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("MARKER INSPECTOR · ${marker.mode} · ${if (marker.confirmed) "DECODE CONFIRMED" else "CANDIDATE ONLY"}",
+                color = if (marker.confirmed) SdrHealthy else SdrHold, fontWeight = FontWeight.Bold)
+            Text("${marker.callLikeToken ?: "NO CALL TOKEN"} · ${formatRadioFrequency(marker.frequencyHz)} · SNR ${"%.1f".format(marker.snrDb)} dB · confidence ${"%.2f".format(marker.confidence)} · ${marker.source}", color = SdrMuted)
+            if (marker.text.isNotBlank()) Text(marker.text.take(160), color = SdrInk, fontFamily = FontFamily.Monospace)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button({ dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "frequency", longValue = marker.frequencyHz)) }) { Text("RECEIVE REVIEW") }
+                OutlinedButton(openDigi) { Text("OPEN DIGI") }
+                OutlinedButton({ operational.timeShift.bookmark("${marker.mode} · ${marker.callLikeToken ?: "candidate"}") }) { Text("BOOKMARK") }
+                OutlinedButton({ operational.skimmer.hide(marker.id) }) { Text("HIDE") }
+            }
+            Text("No marker tunes automatically and no skimmer action can transmit.", color = SdrHold, fontSize = 9.sp)
         }
     }
 }
@@ -367,7 +531,7 @@ private fun waterfallColor(value: Float, palette: Int): Color = when (palette) {
 
 @Composable
 fun ScannerPanel(scanner: ReceiveOnlyScannerController, memories: List<RadioPreset>, frame: PanadapterFrame?,
-    tci: TciRuntimeSnapshot, dispatch: (RadioPlatformAction) -> Unit) {
+    tci: TciRuntimeSnapshot, dispatch: (RadioPlatformAction) -> Unit, operational: SdrOperationalV2? = null) {
     val snapshot = scanner.snapshot
     var mode by remember { mutableStateOf(scanner.config.mode) }
     var startMHz by remember { mutableStateOf("%.6f".format(scanner.config.startHz / 1_000_000.0)) }
@@ -378,6 +542,23 @@ fun ScannerPanel(scanner: ReceiveOnlyScannerController, memories: List<RadioPres
     var skipList by remember { mutableStateOf(scanner.config.skipHz.sorted().joinToString(",")) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(9.dp)) {
         Text("RECEIVE-ONLY SCANNER", color = SdrAmber, fontWeight = FontWeight.Black)
+        operational?.let { v2 ->
+            Text("SCAN BANKS / PRIORITY", color = SdrAmber, fontSize = 10.sp)
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                v2.scanBanks.forEach { bank -> FilterChip(v2.selectedBankId == bank.id,
+                    { v2.selectBank(bank.id) }, { Text("${bank.name} · ${bank.memories.size}") }) }
+            }
+            v2.scanBanks.firstOrNull { it.id == v2.selectedBankId }?.let { bank ->
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button({ scanner.startBank(bank) }, enabled = snapshot.state == ScannerState.STOPPED && tci.ready && bank.enabled) { Text("START BANK") }
+                    SdrMeasure("PRIORITY", bank.priority?.let { formatRadioFrequency(it.frequencyHz) } ?: "OFF")
+                    RecordOnHitMode.entries.forEach { mode -> FilterChip(bank.recordOnHit == mode,
+                        { v2.upsertBank(bank.copy(recordOnHit = mode)) }, { Text("REC ${mode.name}") }) }
+                }
+                Text("Priority is checked every five memories and never interrupts an operator-locked signal. Record-on-hit is explicit and uses the bounded time-shift authority.", color = SdrMuted, fontSize = 9.sp)
+                Text("CAPTURE BOUNDS · pre ${v2.recordPolicy.preRollSeconds}s · post ${v2.recordPolicy.postRollSeconds}s · max ${v2.recordPolicy.maximumDurationSeconds}s · daily ${v2.recordPolicy.dailyBytes / 1024 / 1024} MiB · total ${v2.recordPolicy.totalBytes / 1024 / 1024} MiB", color = SdrMuted, fontSize = 9.sp)
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) { ScannerMode.entries.forEach { value ->
             FilterChip(mode == value, { mode = value; if (snapshot.state == ScannerState.STOPPED) scanner.updateConfig(scanner.config.copy(mode = value)) }, { Text(value.name.replace('_', ' ')) }) } }
         SdrMeasure("STATE", snapshot.state.name)
@@ -423,6 +604,12 @@ fun ScannerPanel(scanner: ReceiveOnlyScannerController, memories: List<RadioPres
             OutlinedButton({ dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "frequency", longValue = snapshot.currentHz)) }, enabled = snapshot.currentHz > 0) { Text("HOLD / REVIEW") }
         }
         Text("Explicit Start only. Background, profile change, disconnect, manual tune and Global Stop disarm scanning. No PTT, TUNE or TX command exists.", color = SdrHold)
+        operational?.let { v2 ->
+            HorizontalDivider()
+            Text("ACTIVITY JOURNAL · ${v2.journalRetentionDays} DAYS · ${v2.journal.size}/${v2.maximumJournalRows}", color = SdrAmber, fontWeight = FontWeight.Bold)
+            v2.journal.take(8).forEach { row -> Text("${row.bank} · ${formatRadioFrequency(row.frequencyHz)} · ${row.mode} · ${row.peakDb?.let { "${it.toInt()} dB" } ?: "UNKNOWN"} · ${row.resumeReason}${row.captureId?.let { " · CAPTURE" } ?: ""}", color = SdrMuted, fontSize = 9.sp) }
+            if (v2.journal.isEmpty()) Text("No bounded scanner activity yet.", color = SdrMuted)
+        }
     }
 }
 
@@ -580,7 +767,40 @@ private fun RfFilterDialog(controller: RfObservationController, close: () -> Uni
 }
 
 @Composable
-fun SdrSettingsPanel(runtime: TciRuntimeState, rxAudio: TciRxAudioController, scanner: ReceiveOnlyScannerController, rf: RfObservationController,
+fun TxAudioCalibrationPanel(operational: SdrOperationalV2, state: TciRuntimeSnapshot) {
+    val controller = operational.txLevels
+    val current = controller.level()
+    val snapshot = controller.snapshot(state.device, "TCI TX SOURCE · FAKE PREVIEW ONLY",
+        state.receivers.any { it.forwardPowerWatts != null && it.swr != null })
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        Text("PER-MODE TX-AUDIO CALIBRATION · PHYSICALLY LOCKED", color = SdrAmber, fontWeight = FontWeight.Black)
+        Text("Level editing and deterministic preview are available. No real calibration transmission is authorised.", color = SdrHold)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("LSB", "USB", "CW", "AM", "SAM", "NFM", "WFM", "DIGU", "DIGL", "DSB").forEach { mode ->
+                FilterChip(controller.selectedMode == mode, { controller.select(mode) }, { Text(mode) })
+            }
+        }
+        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SdrRaised)) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SdrMeasure("MODE", snapshot.mode)
+                SdrMeasure("LEVEL", "${"%.3f".format(snapshot.level)} · ${if (snapshot.inherited) "INHERITED" else "OVERRIDE"}")
+                Slider(current.level, { controller.update(it, current.mode) }, valueRange = 0f..1f)
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    OutlinedButton({ controller.clearOverride() }) { Text("USE DEFAULT") }
+                    OutlinedButton({ }, enabled = false) { Text("SEND ON AIR · LOCKED") }
+                    OutlinedButton({ }, enabled = false) { Text("CALIBRATE ON AIR · LOCKED") }
+                }
+                Text("Profile ${snapshot.profile} · route ${snapshot.route} · ALC/SWR/power telemetry ${if (snapshot.telemetryReady) "READBACK READY" else "UNCONFIRMED"}", color = SdrMuted)
+                Text(snapshot.reason, color = SdrDanger)
+            }
+        }
+        Text("Fake accepted-profile tests cover mode inheritance, clamping, debounced persistence, plan snapshots, telemetry abort contracts and RX cleanup. Production TCI trx:true, tune:true and TX-audio frames remain unreachable.", color = SdrMuted)
+    }
+}
+
+@Composable
+fun SdrSettingsPanel(runtime: TciRuntimeState, rxAudio: TciRxAudioController, scanner: ReceiveOnlyScannerController,
+    operational: SdrOperationalV2, rf: RfObservationController,
     announcements: SpokenAnnouncementController, bandStacks: BandStackStore, debugLab: DebugSdrLab?) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SdrRaised)) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -620,8 +840,21 @@ fun SdrSettingsPanel(runtime: TciRuntimeState, rxAudio: TciRxAudioController, sc
             if (BuildConfig.DEBUG && debugLab != null) OutlinedButton({ if (debugLab.active) debugLab.stop() else debugLab.start() }) { Text(if (debugLab.active) "STOP DEMO · NO RADIO" else "START DEMO · NO RADIO") }
         } }
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SdrRaised)) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("OPERATIONAL SDR v2", color = SdrAmber, fontWeight = FontWeight.Bold)
+            Text("Link ${operational.linkMode} · time-shift ${operational.timeShift.snapshot.length.seconds}s · skimmers restore STOPPED · recording ${operational.recordingState}", color = SdrMuted)
+            Text("Record bounds · ${operational.recordPolicy.preRollSeconds}s pre / ${operational.recordPolicy.postRollSeconds}s post / ${operational.recordPolicy.maximumDurationSeconds}s max · ${operational.recordPolicy.dailyBytes / 1024 / 1024} MiB daily / ${operational.recordPolicy.totalBytes / 1024 / 1024} MiB total", color = SdrMuted, fontSize = 10.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { ReceiverLinkMode.entries.forEach { mode ->
+                FilterChip(operational.linkMode == mode, { operational.updateLinkMode(mode) }, { Text(mode.name.replace('_', ' ')) })
+            } }
+            Text("Journal retention", color = SdrMuted)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf(7, 30, 90).forEach { days ->
+                FilterChip(operational.journalRetentionDays == days, { operational.updateJournalRetention(days, operational.maximumJournalRows) }, { Text("$days days") })
+            } }
+            Text("Safe restore is disconnected: audio, IQ, scanner, time-shift replay, skimmers, recording, TX acceptance and pending TX plans are inactive.", color = SdrHold)
+        } }
+        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SdrRaised)) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("SCANNER", color = SdrAmber, fontWeight = FontWeight.Bold)
-            Text("${scanner.config.mode} · ${scanner.config.startHz}–${scanner.config.endHz} Hz · ${scanner.config.resumePolicy}", color = SdrMuted)
+            Text("${scanner.config.mode} · ${scanner.config.startHz}–${scanner.config.endHz} Hz · ${scanner.config.resumePolicy} · ${operational.scanBanks.size} banks", color = SdrMuted)
             Text("Active scanning is never persisted or restored.", color = SdrHold)
         } }
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SdrRaised)) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -653,7 +886,7 @@ fun SdrSettingsPanel(runtime: TciRuntimeState, rxAudio: TciRxAudioController, sc
 
 @Composable
 fun SdrHealthPanel(runtime: TciRuntimeState, rxAudio: TciRxAudioController, panadapter: PanadapterController, scanner: ReceiveOnlyScannerController,
-    rf: RfObservationController, announcements: SpokenAnnouncementController) {
+    operational: SdrOperationalV2, rf: RfObservationController, announcements: SpokenAnnouncementController) {
     val tci = runtime.snapshot
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("ANDROID SDR HEALTH", color = SdrAmber, fontWeight = FontWeight.Bold)
@@ -666,8 +899,16 @@ fun SdrHealthPanel(runtime: TciRuntimeState, rxAudio: TciRxAudioController, pana
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SdrHealthCard("SCANNER", "${scanner.snapshot.state} · ${scanner.snapshot.stopReason}", scanner.snapshot.state != ScannerState.ERROR, Modifier.weight(1f))
+            SdrHealthCard("TIME-SHIFT", "${operational.timeShift.snapshot.playback} · ${operational.timeShift.snapshot.bufferedSeconds}s · ${operational.timeShift.snapshot.bytes / 1024} KiB", operational.timeShift.snapshot.bytes <= 32L * 1024 * 1024, Modifier.weight(1f))
+            SdrHealthCard("SKIMMERS", "${operational.skimmer.markers.size} markers · ${operational.skimmer.decodeMillis} ms · ${operational.skimmer.status}", operational.skimmer.decodeMillis < 250, Modifier.weight(1f))
             SdrHealthCard("RF GLOBE", "${rf.filtered.size}/${rf.observations.size} · ${rf.filterMillis} ms", rf.observations.size <= 100_000, Modifier.weight(1f))
             SdrHealthCard("TTS", if (announcements.available) "AVAILABLE · ${if (announcements.speaking) "SPEAKING" else "IDLE"}" else "UNAVAILABLE", announcements.available, Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SdrHealthCard("READBACK", "${tci.confirmedReadbacks} confirmed · ${tci.pendingReadbacks.size} pending · ${tci.failedWrites} failed", tci.failedWrites == 0L, Modifier.weight(1f))
+            SdrHealthCard("AUDIO MIXER", "${rxAudio.mixer.mode} · overflow ${rxAudio.overflowByReceiver.joinToString("/")} · underflow ${rxAudio.underflowByReceiver.joinToString("/")}", rxAudio.droppedFrames == 0L, Modifier.weight(1f))
+            SdrHealthCard("TX GATE", "PHYSICAL ACCEPTANCE FALSE · TCI TX BLOCKED", true, Modifier.weight(1f))
+            SdrHealthCard("DERIVED STORE", "${operational.journal.size} journal · ${operational.timeShift.bookmarks.size} bookmarks", true, Modifier.weight(1f))
         }
         Text("Support metrics are bounded and sanitized. Raw IQ, raw audio, raw TCI payloads, credentials, private endpoint values and precise callsign coordinates are excluded.", color = SdrMuted)
     }

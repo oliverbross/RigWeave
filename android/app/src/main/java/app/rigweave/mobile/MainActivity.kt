@@ -526,14 +526,30 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 source = "DX Chaser", reason = intent.reason.ifBlank { "Open exact DX details" }))
         } }) }
     val panadapter = remember { PanadapterController(context, audio, { radio }, direct) }
-    val scanner = remember { ReceiveOnlyScannerController { frequency, mode, _ ->
-        val tuned = radioPlatform.dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "frequency", longValue = frequency))
-        tuned && radioPlatform.dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "mode", textValue = mode))
-    } }
+    val sdrOperationalV2 = remember { SdrOperationalV2(context) }
+    val scanner = remember { ReceiveOnlyScannerController(
+        tuneReceive = { frequency, mode, _ ->
+            val tuned = radioPlatform.dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "frequency", longValue = frequency))
+            tuned && radioPlatform.dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "mode", textValue = mode))
+        },
+        signalLevel = { panadapter.frame?.peakDb },
+        onDwell = { event ->
+            val bank = event.bankId?.let { id -> sdrOperationalV2.scanBanks.firstOrNull { it.id == id } }
+            if (bank != null && event.peakDb?.let { it >= bank.thresholdDb } == true)
+                sdrOperationalV2.recordOnHit(bank, event.frequencyHz, event.mode, event.peakDb, event.dwellMillis)
+        },
+    ) }
     val rfObservations = remember { RfObservationController() }
     val bandStacks = remember { BandStackStore(context) }
     val announcements = remember { SpokenAnnouncementController(context, { radio.transmitting }, { voiceTx.isBusy }, { app.quietAlerts }) }
-    val debugSdrLab = remember { if (BuildConfig.DEBUG) DebugSdrLab(tciRuntime, panadapter, rfObservations) else null }
+    val debugSdrLab = remember { if (BuildConfig.DEBUG) DebugSdrLab(tciRuntime, panadapter, rfObservations, sdrOperationalV2) else null }
+    LaunchedEffect(panadapter.frame?.sequence, tciRuntime.snapshot.activeReceiverId) {
+        val frame = panadapter.frame ?: return@LaunchedEffect
+        val receiver = tciRuntime.snapshot.receivers.firstOrNull { it.id == tciRuntime.snapshot.activeReceiverId }
+            ?: tciRuntime.snapshot.receivers.firstOrNull() ?: return@LaunchedEffect
+        sdrOperationalV2.onPanadapterFrame(frame, receiver.backendIndex, receiver.effectiveRxHz,
+            if (debugSdrLab?.active == true) "DEBUG FIXTURE" else "TCI LIVE DISPLAY")
+    }
     LaunchedEffect(radio.connected, radio.frequencyHz, radio.mode) {
         if (radio.connected && radio.frequencyHz > 0) {
             val band = radioPresetBandName(radio.frequencyHz)
@@ -548,11 +564,15 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         if (radio.transmitting && radio.swrTenths >= 30) announcements.announceHighSwr(radio.swrTenths / 10.0)
     }
     SideEffect {
-        tciRuntime.iqSink = panadapter::pushTciIq
+        tciRuntime.iqSink = { receiver, rate, values ->
+            panadapter.pushTciIq(receiver, rate, values)
+            val center = tciRuntime.snapshot.receivers.firstOrNull { it.backendIndex == receiver }?.effectiveRxHz ?: 0
+            sdrOperationalV2.skimmer.pushIq(receiver, rate, center, values)
+        }
         tciRuntime.rxAudioSink = tciRxAudio::push
     }
     val operatorStop = remember { OperatorStopRouter(digi, keyer, repeatCq, contest, chaser) {
-        scanner.globalStop(); announcements.globalStop(); tciRxAudio.stop("Global Stop")
+        scanner.globalStop(); sdrOperationalV2.stopActive(); announcements.globalStop(); tciRxAudio.stop("Global Stop")
         scope.launch { radioPlatform.stopAndDisarm(); rotator.stopAndDisarm() }
     } }
     val sendKx: (String) -> Unit = { raw ->
@@ -678,7 +698,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 digi.stopRx("App left foreground · RX stopped")
                 digi.disarm()
                 voiceTx.stop("App left foreground; defensive RX cleanup requested")
-                scanner.onBackground(); announcements.stop(); tciRxAudio.stop("App left foreground")
+                scanner.onBackground(); sdrOperationalV2.stopActive("App left foreground"); announcements.stop(); tciRxAudio.stop("App left foreground")
                 scope.launch { flex.onForegroundChanged(false) }
             }
             else -> Unit
@@ -715,7 +735,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         while (foreground) { chaser.poll(); delay(1_000) }
     }
     DisposableEffect(Unit) { onDispose {
-        app.disarmAll(); bandMaps.close(); chaser.close(); contest.close(); scanner.close(); rfObservations.close(); debugSdrLab?.close(); announcements.close(); tciRxAudio.close(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close(); groupsIo.close()
+        app.disarmAll(); bandMaps.close(); chaser.close(); contest.close(); scanner.close(); debugSdrLab?.close(); sdrOperationalV2.close(); rfObservations.close(); announcements.close(); tciRxAudio.close(); digi.close(); voiceTx.close(); voiceAudio.close(); eqAudio.close(); panadapter.close(); flex.close(); audio.close(); groupsIo.close()
         runBlocking {
             transport.disconnect()
             radioPlatform.close()
@@ -835,10 +855,10 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                     { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
             }
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
-                panadapter, tciRxAudio, tciRuntime, scanner, rfObservations, bandStacks, announcements, debugSdrLab,
+                panadapter, tciRxAudio, tciRuntime, scanner, sdrOperationalV2, rfObservations, bandStacks, announcements, debugSdrLab,
                 portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app,
                 selectedProfile, platformSnapshot, hamlibModels, rotator,
-                { tciRxAudio.stop("Radio disconnected"); scope.launch { radioPlatform.disconnect(); platformSnapshot = radioPlatform.snapshot } },
+                { tciRxAudio.stop("Radio disconnected"); sdrOperationalV2.stopActive("Radio disconnected"); scope.launch { radioPlatform.disconnect(); platformSnapshot = radioPlatform.snapshot } },
                 { action -> scope.launch {
                     if (action.name.equals("frequency", ignoreCase = true)) scanner.onManualTune()
                     val accepted = radioPlatform.dispatch(action)
@@ -877,10 +897,10 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
-                panadapter, tciRxAudio, tciRuntime, scanner, rfObservations, bandStacks, announcements, debugSdrLab,
+                panadapter, tciRxAudio, tciRuntime, scanner, sdrOperationalV2, rfObservations, bandStacks, announcements, debugSdrLab,
                 portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app,
                 selectedProfile, platformSnapshot, hamlibModels, rotator,
-                { tciRxAudio.stop("Radio disconnected"); scope.launch { radioPlatform.disconnect(); platformSnapshot = radioPlatform.snapshot } },
+                { tciRxAudio.stop("Radio disconnected"); sdrOperationalV2.stopActive("Radio disconnected"); scope.launch { radioPlatform.disconnect(); platformSnapshot = radioPlatform.snapshot } },
                 { action -> scope.launch {
                     if (action.name.equals("frequency", ignoreCase = true)) scanner.onManualTune()
                     val accepted = radioPlatform.dispatch(action)
@@ -952,7 +972,7 @@ private fun navIcon(item: Destination) = when (item) {
     features: FeatureController, neuralDx: NeuralDxController, wavelog: WavelogController, wavelogNative: WavelogNativeController,
     syncHub: SyncHubController, callbook: CallbookController, cty: CtyController, audio: AudioMonitorController, panadapter: PanadapterController,
     tciRxAudio: TciRxAudioController,
-    tciRuntime: TciRuntimeState, scanner: ReceiveOnlyScannerController, rfObservations: RfObservationController,
+    tciRuntime: TciRuntimeState, scanner: ReceiveOnlyScannerController, sdrOperationalV2: SdrOperationalV2, rfObservations: RfObservationController,
     bandStacks: BandStackStore, announcements: SpokenAnnouncementController, debugSdrLab: DebugSdrLab?,
     portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
     selectedProfile: RadioConnectionProfile, platformSnapshot: RadioRuntimeSnapshot, hamlibModels: List<HamlibModelDescriptor>,
@@ -1168,8 +1188,8 @@ private fun navIcon(item: Destination) = when (item) {
                         Box(Modifier.fillMaxHeight().weight(if (showCompactBandMap) .9f else 1f)) {
                         if (selectedProfile.backendKind == RadioBackendKind.NATIVE_FLEX) FlexRadioScreen(flex, openLogbook)
                         else if (selectedProfile.backendKind == RadioBackendKind.NATIVE_TCI) TciRadioCockpit(
-                            tciRuntime, platformSnapshot, panadapter, tciRxAudio, scanner, app.presets, dispatchPlatform,
-                            connect, disconnectPlatform, debugSdrLab)
+                            tciRuntime, platformSnapshot, panadapter, tciRxAudio, scanner, sdrOperationalV2, app.presets, dispatchPlatform,
+                            connect, disconnectPlatform, debugSdrLab, openDigi)
                         else if (integratedRadioSelected) IntegratedRadioPlatformScreen(
                             selectedProfile,
                             platformSnapshot,
@@ -1204,7 +1224,7 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.BAND_MAPS -> BandMapScreen(bandMaps, database, features, neuralDx, portable, cty, contest, chaser,
             operatingContext, bandMapKeyer, app, workspaceAction)
         Destination.PANADAPTER -> if (selectedProfile.backendKind == RadioBackendKind.NATIVE_TCI)
-            TciPanadapterPanel(tciRuntime.snapshot, panadapter, dispatchPlatform, scanner, app.presets)
+            TciPanadapterPanel(tciRuntime.snapshot, panadapter, dispatchPlatform, scanner, sdrOperationalV2, app.presets, openDigi)
         else if (app.panadapterEnabled && selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT)
             PanadapterScreen(panadapter, radio, features.liveSpots, compact)
         else RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty, features, voiceStore, voiceTx,
@@ -1254,7 +1274,7 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.SETTINGS -> Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f)) { SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, syncHub, callbook, cty, audio, panadapter, app,
                 transport, flex, digi, voiceStore, voiceAudio, voiceTx, groupsIo, operatingContext, keyerProfiles, keyer, repeatCq,
-                 bandMaps, contest, chaser, hamlibModels, rotator, tciRuntime, tciRxAudio, scanner, rfObservations, bandStacks, announcements, debugSdrLab,
+                 bandMaps, contest, chaser, hamlibModels, rotator, tciRuntime, tciRxAudio, scanner, sdrOperationalV2, rfObservations, bandStacks, announcements, debugSdrLab,
                 openEq, openContest, openSync, openDigi, openGroupsIo, openRotator,
                 disconnectPlatform, connect, direct) }
         }
@@ -4563,7 +4583,8 @@ private fun statusColourForeground(argb: Int): Color {
     operatingContext: OperatingContextSnapshot, keyerProfiles: KeyerProfileStore, keyer: KeyerController, repeatCq: RepeatCqController,
     bandMaps: BandMapController, contestRuntime: ContestRuntime, chaserRuntime: DxChaserRuntime,
     hamlibModels: List<HamlibModelDescriptor>, rotator: AndroidRotatorRuntime,
-    tciRuntime: TciRuntimeState, tciRxAudio: TciRxAudioController, scanner: ReceiveOnlyScannerController, rfObservations: RfObservationController,
+    tciRuntime: TciRuntimeState, tciRxAudio: TciRxAudioController, scanner: ReceiveOnlyScannerController,
+    sdrOperationalV2: SdrOperationalV2, rfObservations: RfObservationController,
     bandStacks: BandStackStore, announcements: SpokenAnnouncementController, debugSdrLab: DebugSdrLab?,
     openEq: () -> Unit, openContest: () -> Unit, openSync: () -> Unit, openDigi: () -> Unit, openGroupsIo: () -> Unit,
     openRotator: () -> Unit, disconnectRadio: () -> Unit,
@@ -4817,7 +4838,7 @@ private fun statusColourForeground(argb: Int): Color {
                     FilterChip(app.selectedRadioProfileId == profile.id, { app.selectRadioProfile(profile) }, { Text(profile.name) })
                 }
             }
-            SdrSettingsPanel(tciRuntime, tciRxAudio, scanner, rfObservations, announcements, bandStacks, debugSdrLab)
+            SdrSettingsPanel(tciRuntime, tciRxAudio, scanner, sdrOperationalV2, rfObservations, announcements, bandStacks, debugSdrLab)
             Text("Native profiles are preferred when RigWeave has a dedicated integration. Unknown or future stored identifiers restore disconnected.", color = Muted)
             OutlinedTextField(
                 hamlibSearch,
@@ -5441,7 +5462,7 @@ private fun statusColourForeground(argb: Int): Color {
             }
         }
         if (section == SettingsSection.HEALTH) SettingsCard("SYSTEM HEALTH") {
-            SdrHealthPanel(tciRuntime, tciRxAudio, panadapter, scanner, rfObservations, announcements)
+            SdrHealthPanel(tciRuntime, tciRxAudio, panadapter, scanner, sdrOperationalV2, rfObservations, announcements)
             val health = buildSystemHealthSnapshot(context, operatingContext, stability, wavelog.status, wavelog.pendingCount,
                 syncHub.records.count { it.state !in setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED) },
                 features.clusterStatus, neuralDx.status, groupsIo.status, groupsIo.cacheStats.messages, groupsIo.homeSummary.needsAttention,

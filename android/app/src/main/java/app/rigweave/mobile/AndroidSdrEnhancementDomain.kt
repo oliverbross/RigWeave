@@ -67,13 +67,27 @@ data class ScannerSnapshot(
     val candidateCount: Int = 0,
     val cycles: Long = 0,
     val stopReason: String = "Explicit Start required",
+    val activeBankId: String? = null,
+    val priorityChecks: Long = 0,
+)
+
+data class ScannerDwellEvent(
+    val bankId: String?,
+    val frequencyHz: Long,
+    val mode: String,
+    val peakDb: Float?,
+    val dwellMillis: Long,
+    val priority: Boolean,
 )
 
 class ReceiveOnlyScannerController(
     private val tuneReceive: suspend (Long, String, Int) -> Boolean,
+    private val signalLevel: () -> Float? = { null },
+    private val onDwell: (ScannerDwellEvent) -> Unit = {},
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var scanJob: Job? = null
+    private var activeBankId: String? = null
     var config by mutableStateOf(ScannerConfig()); private set
     var snapshot by mutableStateOf(ScannerSnapshot()); private set
 
@@ -83,6 +97,19 @@ class ReceiveOnlyScannerController(
     }
 
     fun startMemory(memories: List<RadioPreset>) = start(memories.map { it.frequencyHz to it.mode })
+
+    fun startEntries(memories: List<ScanMemory>, bankId: String? = null, priority: ScanMemory? = null) {
+        activeBankId = bankId
+        start(memories.map { it.frequencyHz to it.mode }, priority?.let { it.frequencyHz to it.mode })
+    }
+
+    fun startBank(bank: ScanBank) {
+        val value = bank.validated()
+        if (!value.enabled) return
+        updateConfig(config.copy(thresholdDb = value.thresholdDb, dwellMillis = value.dwellMillis,
+            resumePolicy = value.resumePolicy, filterHz = value.memories.firstOrNull()?.filterHz ?: config.filterHz))
+        startEntries(value.memories, value.id, value.priority)
+    }
 
     fun startRange() {
         val value = config.validated()
@@ -98,24 +125,33 @@ class ReceiveOnlyScannerController(
         start(candidates)
     }
 
-    private fun start(channels: List<Pair<Long, String>>) {
+    private fun start(channels: List<Pair<Long, String>>, priority: Pair<Long, String>? = null) {
         if (scanJob != null || channels.isEmpty()) {
             if (channels.isEmpty()) snapshot = snapshot.copy(state = ScannerState.ERROR, stopReason = "No receive-only scan candidates")
             return
         }
-        snapshot = ScannerSnapshot(ScannerState.ARMED, config.mode, candidateCount = channels.size, stopReason = "")
+        snapshot = ScannerSnapshot(ScannerState.ARMED, config.mode, candidateCount = channels.size, stopReason = "", activeBankId = activeBankId)
         scanJob = scope.launch {
             var cycles = 0L
+            var visited = 0L
+            var priorityChecks = 0L
             while (isActive) {
                 for ((frequency, mode) in channels) {
                     if (!isActive) break
-                    snapshot = snapshot.copy(state = ScannerState.TUNING, currentHz = frequency, cycles = cycles)
-                    if (!tuneReceive(frequency, mode, config.filterHz)) {
+                    val priorityDue = priority != null && visited > 0 && visited % 5L == 0L
+                    val target = if (priorityDue) priority else frequency to mode
+                    if (priorityDue) priorityChecks++
+                    snapshot = snapshot.copy(state = ScannerState.TUNING, currentHz = target.first, cycles = cycles,
+                        priorityChecks = priorityChecks)
+                    if (!tuneReceive(target.first, target.second, config.filterHz)) {
                         stop("Receive tune unavailable")
                         return@launch
                     }
-                    snapshot = snapshot.copy(state = ScannerState.DWELLING, currentHz = frequency)
+                    val peak = signalLevel()
+                    snapshot = snapshot.copy(state = ScannerState.DWELLING, currentHz = target.first, signalDb = peak)
                     delay(config.dwellMillis)
+                    onDwell(ScannerDwellEvent(activeBankId, target.first, target.second, peak, config.dwellMillis, priorityDue))
+                    visited++
                     if (config.resumePolicy == ScannerResumePolicy.MANUAL) {
                         snapshot = snapshot.copy(state = ScannerState.HOLDING, stopReason = "Manual resume selected")
                         return@launch
@@ -128,7 +164,8 @@ class ReceiveOnlyScannerController(
 
     fun stop(reason: String = "Stopped by operator") {
         scanJob?.cancel(); scanJob = null
-        snapshot = snapshot.copy(state = ScannerState.STOPPED, stopReason = reason)
+        snapshot = snapshot.copy(state = ScannerState.STOPPED, stopReason = reason, activeBankId = null)
+        activeBankId = null
     }
 
     fun onBackground() = stop("Background safety stop")
@@ -491,6 +528,7 @@ class DebugSdrLab(
     private val runtime: TciRuntimeState,
     private val panadapter: PanadapterController,
     private val rf: RfObservationController,
+    private val operational: SdrOperationalV2? = null,
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     var active by mutableStateOf(false); private set
@@ -509,6 +547,7 @@ class DebugSdrLab(
         )
         runtime.publish(TciRuntimeSnapshot(1, TciConnectionState.READY, "TCI", "DEBUG", "DEMO · NO RADIO", true, 2, 2,
             "tci:0", "tci:0", receivers))
+        operational?.seedDebug()
         rf.submit((0 until 120).map { index -> RfObservation("demo-$index", listOf("PSK", "WSPR", "RBN")[index % 3],
             RfEvidenceClass.OBSERVED, now - index * 20L, "DEMO${index + 1}", listOf("20m", "40m", "15m")[index % 3],
             if (index % 2 == 0) "FT8" else "WSPR", -12.0, 130.0, -70.0 + index % 35 * 4.0,
@@ -537,6 +576,7 @@ class DebugSdrLab(
         panadapter.detachTciSources("Debug SDR lab stopped")
         runtime.publish(TciRuntimeSnapshot(lastError = "DEMO · NO RADIO stopped"))
         rf.submit(emptyList())
+        operational?.stopActive("Debug SDR lab stopped")
     }
 
     override fun close() { stop(); scope.cancel() }

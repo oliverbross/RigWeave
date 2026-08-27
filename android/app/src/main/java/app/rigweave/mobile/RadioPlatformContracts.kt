@@ -127,8 +127,12 @@ data class RadioPlatformAction(
     val name: String,
     val longValue: Long? = null,
     val textValue: String? = null,
+    val targetReceiver: Int? = null,
 ) {
-    init { require(name.isNotBlank() && name.length <= 64 && (textValue == null || textValue.length <= 128)) }
+    init {
+        require(name.isNotBlank() && name.length <= 64 && (textValue == null || textValue.length <= 128))
+        require(targetReceiver == null || targetReceiver in 0..7)
+    }
 }
 
 interface ManagedRadioBackend {

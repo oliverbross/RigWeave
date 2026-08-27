@@ -63,6 +63,8 @@ std::optional<std::string> build_vfo(std::uint32_t receiver, std::uint32_t chann
 std::optional<std::string> build_if(std::uint32_t receiver, std::uint32_t channel,
                                     std::int64_t offset_hz);
 std::optional<std::string> build_mode(std::uint32_t receiver, std::string_view mode);
+std::optional<std::string> build_volume(std::int32_t decibels);
+std::optional<std::string> build_split_enable(std::uint32_t receiver, bool enabled);
 std::optional<std::string> build_iq_sample_rate(std::uint32_t sample_rate);
 std::optional<std::string> build_iq_start(std::uint32_t receiver);
 std::optional<std::string> build_iq_stop(std::uint32_t receiver);

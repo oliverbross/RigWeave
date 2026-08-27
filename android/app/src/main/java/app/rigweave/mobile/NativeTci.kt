@@ -19,6 +19,9 @@ object NativeTci {
     const val RX_ENABLE = 7
     const val MUTE = 8
     const val SAFE_STOP = 9
+    const val IF_OFFSET = 10
+    const val VOLUME = 11
+    const val SPLIT = 12
 
     const val DATA_IQ = 0
     const val DATA_RX_AUDIO = 1

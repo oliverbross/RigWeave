@@ -588,6 +588,9 @@ Java_app_rigweave_mobile_NativeTci_buildCommand(JNIEnv *env, jobject, jint kind,
     case 7: command = build_rx_enable(static_cast<std::uint32_t>(receiver), number != 0); break;
     case 8: command = build_mute(static_cast<std::uint32_t>(receiver), number != 0); break;
     case 9: command = build_safe_stop(static_cast<std::uint32_t>(receiver)); break;
+    case 10: command = build_if(static_cast<std::uint32_t>(receiver), static_cast<std::uint32_t>(channel), static_cast<std::int64_t>(number)); break;
+    case 11: command = build_volume(static_cast<std::int32_t>(number)); break;
+    case 12: command = build_split_enable(static_cast<std::uint32_t>(receiver), number != 0); break;
     default: break;
     }
     return env->NewStringUTF(command ? command->c_str() : "");

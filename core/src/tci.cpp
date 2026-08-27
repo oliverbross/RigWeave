@@ -124,6 +124,15 @@ std::optional<std::string> build_mode(std::uint32_t receiver, std::string_view m
     return "modulation:" + std::to_string(receiver) + ',' + *canonical + ';';
 }
 
+std::optional<std::string> build_volume(std::int32_t decibels) {
+    return "volume:" + std::to_string(std::clamp(decibels, -60, 0)) + ';';
+}
+
+std::optional<std::string> build_split_enable(std::uint32_t receiver, bool enabled) {
+    if (!receiver_valid(receiver)) return std::nullopt;
+    return "split_enable:" + std::to_string(receiver) + ',' + (enabled ? "true;" : "false;");
+}
+
 std::optional<std::string> build_iq_sample_rate(std::uint32_t sample_rate) {
     if (!sample_rate_valid(sample_rate)) return std::nullopt;
     return "iq_samplerate:" + std::to_string(sample_rate) + ';';
