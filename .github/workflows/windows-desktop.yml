@@ -22,6 +22,7 @@ jobs:
     env:
       QT_VERSION: '6.11.2'
       HAMLIB_VERSION: '4.7.2'
+      OPENSSL_ROOT_DIR: 'C:/msys64/mingw64'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -62,7 +63,7 @@ jobs:
         with:
           msystem: MSYS
           update: false
-          install: autoconf automake libtool make
+          install: autoconf automake libtool make mingw-w64-x86_64-openssl
       - name: Verify pinned Hamlib provenance
         shell: pwsh
         run: python scripts/check_hamlib_upstream.py
@@ -102,7 +103,7 @@ jobs:
           key: windows-hamlib-4.7.2-mingw1310-${{ hashFiles('core/third_party/hamlib/SOURCE_MANIFEST.json') }}
       - name: Configure Release
         shell: pwsh
-        run: cmake -S desktop -B build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DRIGWEAVE_BUILD_TESTS=ON -DRIGWEAVE_REQUIRE_HAMLIB=ON "-DRIGWEAVE_HAMLIB_ROOT=$env:RUNNER_TEMP/hamlib"
+        run: cmake -S desktop -B build/windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DRIGWEAVE_BUILD_TESTS=ON -DRIGWEAVE_REQUIRE_HAMLIB=ON "-DRIGWEAVE_HAMLIB_ROOT=$env:RUNNER_TEMP/hamlib" "-DOPENSSL_ROOT_DIR=$env:OPENSSL_ROOT_DIR"
       - name: Build Release
         shell: pwsh
         run: cmake --build build/windows --config Release --parallel 2
@@ -154,6 +155,8 @@ jobs:
           $stage = 'artifacts/windows/stationd-portable'
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item build/windows/rigweave-stationd.exe $stage
+          Copy-Item "$env:OPENSSL_ROOT_DIR/bin/libcrypto-3-x64.dll" $stage
+          Copy-Item "$env:OPENSSL_ROOT_DIR/bin/libssl-3-x64.dll" $stage
           Copy-Item COPYING "$stage/COPYING.txt"
           Copy-Item NOTICE "$stage/NOTICE.txt"
           windeployqt --release --no-translations --no-system-d3d-compiler --dir $stage "$stage/rigweave-stationd.exe"
