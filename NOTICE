@@ -181,3 +181,9 @@ and UI behavior is documented in docs/android/SDROXIDE_ANDROID_PROVENANCE.md.
 
 OkHttp 5.3.0 is used for the Android WebSocket client under its upstream
 Apache-2.0 licence and existing Gradle dependency/notice handling.
+
+The Android SDRoxide Operational Enhancements v2 review reverified v1.5.3 at
+commit a680935b10f33768a499435e8bd37f779fa640ae. No upstream source, asset,
+recording, test I/Q, model, or runtime payload is incorporated. Provenance and
+the audited GPL-3.0 licence digest are recorded in
+docs/android/SDROXIDE_ANDROID_V2_PROVENANCE.md.

@@ -75,3 +75,7 @@ RC1 source archives, SPDX SBOMs, manifests, SHA ledgers and hosted packages cont
 ## Android SDR data
 
 TCI profiles store display name, host, port, TLS choice, preferred I/Q rate, initial receiver, and RX route preference in app-private settings; streams never restore active. Raw TCI frames, I/Q, and RX audio are processed in bounded memory and are neither logged nor persisted. RF observations are capped and support output excludes raw payloads, credentials, private endpoints, exact private coordinates, raw audio, and raw I/Q. TTS uses installed Android system voices and bundles no voice data.
+
+## Android SDR operational v2 derived data
+
+`rigweave-sdr-operational-v2-derived.db` is schema 1 and separate from the canonical QSO database. It stores a bounded scanner journal and at most 256 signal bookmarks containing metadata plus reduced display traces. It stores no QSO, credential, raw CAT frame, raw IQ stream, or raw audio. Scan-bank, mixer, time-shift length, journal retention, capture bounds, and per-mode audio levels use bounded preferences. Active connection, streams, scanner, skimmers, recording, pending writes, and playback do not restore.

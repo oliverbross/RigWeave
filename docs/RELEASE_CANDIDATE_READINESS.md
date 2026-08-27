@@ -99,3 +99,9 @@ The whole-repository RC branch adds immutable ancestry proof, singular owner/pla
 ## Android SDR enhancement candidate gate
 
 This candidate adds no merge or release authorization. Readiness additionally requires the read-only SDRoxide watcher, Android unit/instrumentation/native gates, package-size/hash proof, exact-SHA hosted workflow, and protected-tablet in-place verification when the named device is available. Physical TCI/RF/TX remains pending without explicit operator authority.
+
+## Android SDRoxide operational v2 gate
+
+The v2 candidate additionally requires unit/lint/instrumentation compilation, arm64 APK and AAB limits, native/Rust sanitizers, iOS/desktop regressions, ownership/privacy/package audits, and an exact-SHA hosted run. TCI spot/diversity and record-on-hit audio are explicit unavailable states, not release defects. No merge, signing, publication, deployment, or live radio operation is authorised by this gate.
+
+Local final-source gates pass: 728 JVM tests, Android lint, instrumentation compile/test APK, four-ABI AAB, arm64 APK, package/prohibited-payload audit, native normal/ASan/UBSan 5/5, Flex 98 passed/one ignored, Tempo SSTV 160 passed, MFSK 407 passed/28 ignored, both unsigned iOS targets, and macOS desktop 10/10. Hosted exact-SHA and conditional protected-tablet evidence remain separate.

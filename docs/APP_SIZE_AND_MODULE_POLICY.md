@@ -72,3 +72,9 @@ The final RC SHA must produce an arm64-only Android APK, a four-ABI AAB, a Windo
 ## Android SDR enhancement budget
 
 Hard gates remain 130 MB for the arm64 APK and 60 MB for the four-ABI AAB, with a preferred AAB delta of at most 3 MB from the 55,757,902-byte RC1 baseline. The enhancement may add OkHttp bytecode and one small native DSP translation unit; it must not package SDRoxide assets, map textures, neural voice/noise models, test I/Q, recordings, or private evidence.
+
+## Android SDRoxide operational v2 budget
+
+V2 adds Kotlin/C++ code and a small SQLite schema only. It adds no bundled upstream source, recording, raw IQ, decoder model, map, shader, or P.533 payload. Gates remain arm64 APK less than 130 MB and AAB less than 60 MB, with a preferred AAB delta no greater than 2 MB from the frozen v1 base. Final exact-SHA byte counts and hashes supersede candidate estimates.
+
+Local final-source packages pass: arm64 APK 64,855,821 bytes (`8ad0b7629a89c96606246490d406b76da0a33b119575db5beebc5709d90a3203`); four-ABI AAB 56,262,274 bytes (`3820a2cff78e5b7df45e29a32c17d25507fa2d7594031d08bd769bcd46c68c19`); AAB delta from the frozen v1 baseline is +113,682 bytes. The instrumentation APK is 1,196,331 bytes (`541a2fa7b74f7277eb0c0642ecc7b81fb31df9c359193e18f554d44f435fe36c`). Hosted exact-SHA artifacts remain authoritative for delivery.

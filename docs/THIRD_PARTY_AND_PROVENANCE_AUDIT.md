@@ -27,3 +27,7 @@ RC1 preserves one Hamlib 4.7.2 source authority, one TCI implementation contract
 ## Android SDRoxide Enhancement Pack v1
 
 The reviewed SDRoxide production pin is v1.5.3 / `a680935b10f33768a499435e8bd37f779fa640ae` / tree `4697195080495da4a727b14234b85af89c10ecda`, GPL version 3. No upstream source or asset is incorporated. OkHttp 5.3.0 is the sole new runtime dependency and supplies the Android WebSocket transport; TLS trust validation is not bypassed.
+
+## Android SDRoxide Operational Enhancements v2
+
+The v2 audit reverified `v1.5.3` at commit `a680935b10f33768a499435e8bd37f779fa640ae`, tree `4697195080495da4a727b14234b85af89c10ecda`, release timestamp `2026-08-26T20:02:33Z`, GPL-3.0 licence digest `3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986`. The upstream checkout remained outside the product tree and no upstream file or payload was incorporated.

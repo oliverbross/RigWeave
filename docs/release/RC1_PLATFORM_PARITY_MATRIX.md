@@ -24,3 +24,9 @@ The canonical desktop functional matrix also contains no `FOUNDATION_WIRED` or `
 | TCI/multi-receiver/Panadapter v4/scanner/RX DSP/RF views/TTS | SOURCE_COMPLETE candidate | UNCHANGED | UNCHANGED | UNCHANGED | Android exact-SHA hosted and protected-tablet gates required; physical TCI/RF/audio pending |
 
 Desktop UI and feature parity claims are unchanged. Shared native TCI and Panadapter compatibility is reused without adding a desktop surface.
+
+| Android SDR operational v2 | Android | iOS | Windows | macOS | Acceptance |
+|---|---|---|---|---|---|
+| TCI readback/links, dual RX mixer, Panadapter v5/time-shift/skimmers, scanner v2, TX-level configuration | SOURCE_COMPLETE candidate | UNCHANGED | UNCHANGED | UNCHANGED | Exact-SHA hosted/device gates pending; live TCI/audio/control/RF and TX acceptance remain separate |
+
+V2 does not change desktop feature or UI claims. Other platforms receive shared codec regression evidence only.

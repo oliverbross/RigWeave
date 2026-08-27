@@ -151,3 +151,7 @@ The RC1 extended Rust quality run completed the full `tempo-sstv` catalogue with
 ## Android SDR enhancement scale contracts
 
 TCI binary input is capped at 8 MiB and decode backlog at eight frames. Panadapter publication is capped at 30 fps with two receiver contexts and 180 waterfall rows of at most 1,024 samples. Scanner ranges and FFT candidates cap at 10,000. RF observations cap at 100,000 and Canvas rendering at the newest 4,096 paths per frame. RX audio backlog is eight frames. Health exposes drop/clipping/filter-time counters without raw payload retention.
+
+## Android SDRoxide operational v2 bounds
+
+TCI safe setters coalesce to the latest generation; two audio queues are capped at eight frames each; time-shift stores at most 120 seconds of 512-bin reduced traces at bounded cadence; skimmers serialize off-main work and retain at most four candidates per mode; scan banks cap at 64 with 2,000 memories each; the journal caps at 50,000 rows; bookmarks cap at 256 and record-on-hit enforces duration/daily/total policy. Overload drops or refuses work and publishes counters/status rather than allocating without bound.

@@ -83,3 +83,14 @@ The RC1 owner and platform matrices extend closure across Android, iOS, Windows 
 ## Android SDRoxide Enhancement Pack v1 candidate
 
 Twelve Android-visible areas are source-complete: TCI, multi-receiver, I/Q, RX audio, Panadapter/waterfall, scanner, band stacks, RX DSP, RF map, RF globe, Digi paths, and spoken announcements. Deterministic tests do not promote physical TCI/RF/audio or protected-tablet acceptance; those rows remain `SOURCE_COMPLETE_LIVE_ACCEPTANCE_PENDING`.
+
+## Android SDRoxide Operational Enhancements v2 candidate
+
+| Layer | Status | Boundary |
+|---|---|---|
+| TCI control/readback and receiver links | SOURCE_COMPLETE | Receive/control only; spot and diversity unavailable by protocol audit |
+| Dual RX mixer, Panadapter v5, time-shift and skimmers | SOURCE_COMPLETE | Bounded queues/frames/candidates; physical audio and decoder quality pending |
+| Scanner banks/priority/journal/capture policy | SOURCE_COMPLETE_WITH_AUDIO_CAPTURE_UNAVAILABLE | IQ-display bookmark only; no silent audio capture |
+| Per-mode TX audio | SOURCE_COMPLETE_CONFIG_ONLY | Production send and physical acceptance locked |
+| Desktop/iOS | UNCHANGED | Shared-code regression only; no UI or feature promotion |
+| Hosted/device/live | PENDING | Must be recorded separately on the exact final SHA |

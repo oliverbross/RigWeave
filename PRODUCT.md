@@ -93,3 +93,7 @@ The whole product now has a single RC source contract across Android, iOS, Windo
 ## Android SDRoxide Enhancement Pack v1
 
 The tablet now exposes a receive-only TCI cockpit, two-receiver I/Q and audio, Panadapter/Waterfall v4, scanning and band stacks, native RX DSP, RF map/globe evidence, Digi path context, and system speech. These are additive Android surfaces under existing owners. Debug fixtures, physical radio evidence, tablet evidence, signing, and release remain distinct.
+
+## Android SDRoxide Operational Enhancements v2
+
+Android adds receiver-targeted TCI readback/control, explicit receiver links, a dual-receiver audio mixer, Panadapter v5 review and bounded time-shift, PSK31/RTTY candidate skimmers, scanner banks/priority/journal, and per-mode TX-audio configuration. Spot exchange and diversity remain protocol-unavailable; all transmit controls remain locked pending separate physical acceptance.
