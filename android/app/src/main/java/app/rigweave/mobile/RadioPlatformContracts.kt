@@ -84,7 +84,7 @@ data class RadioConnectionProfile(
         require(port == null || port in 1..65_535)
         require(baud in 300..3_000_000 && dataBits in 5..8 && stopBits in 1..2 && parity in setOf("N", "E", "O"))
         require(pollCadenceMillis in 100..60_000)
-        require(preferredIqSampleRate in setOf(48_000, 96_000, 192_000))
+        require(preferredIqSampleRate in setOf(48_000, 96_000, 192_000, 240_000, 384_000))
         require(preferredInitialReceiver in 0..7)
         require(rxAudioRoute in setOf("SYSTEM", "RECEIVER_0", "RECEIVER_1", "STEREO_SPLIT", "BALANCED_MIX"))
         require((backendKind == RadioBackendKind.HAMLIB_EMBEDDED || backendKind == RadioBackendKind.HAMLIB_NETWORK) == (hamlibModelId != null))

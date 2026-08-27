@@ -524,14 +524,21 @@ internal fun announcementAllowed(enabled: Boolean, available: Boolean, quiet: Bo
     voiceMacroBusy: Boolean, text: String): Boolean =
     enabled && available && !quiet && !transmitting && !voiceMacroBusy && text.isNotBlank()
 
+enum class DebugLocalFixture {
+    USB, LSB, CW, AM, SAM_OFFSET, NFM, NFM_CTCSS, NFM_DCS_NORMAL, NFM_DCS_INVERTED,
+    WFM_MONO, WFM_STEREO_RDS, DUAL_RECEIVERS, SCANNER_HIT, RECORDING_TIME_SHIFT,
+}
+
 class DebugSdrLab(
     private val runtime: TciRuntimeState,
     private val panadapter: PanadapterController,
     private val rf: RfObservationController,
     private val operational: SdrOperationalV2? = null,
+    private val localReceivers: LocalReceiverController? = null,
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     var active by mutableStateOf(false); private set
+    var localFixture by mutableStateOf(DebugLocalFixture.DUAL_RECEIVERS); private set
     private var job: Job? = null
 
     fun start() {
@@ -548,6 +555,14 @@ class DebugSdrLab(
         runtime.publish(TciRuntimeSnapshot(1, TciConnectionState.READY, "TCI", "DEBUG", "DEMO · NO RADIO", true, 2, 2,
             "tci:0", "tci:0", receivers))
         operational?.seedDebug()
+        localReceivers?.let { local ->
+            if (local.snapshot.receivers.isEmpty()) {
+                local.add("DEBUG FIXTURE", 0, 14_074_000, 96_000)
+                local.add("DEBUG FIXTURE", 1, 7_074_000, 96_000)
+            }
+            local.listen("local:A", true)
+        }
+        operational?.timeShift?.configure(TimeShiftLength.SECONDS_30)
         rf.submit((0 until 120).map { index -> RfObservation("demo-$index", listOf("PSK", "WSPR", "RBN")[index % 3],
             RfEvidenceClass.OBSERVED, now - index * 20L, "DEMO${index + 1}", listOf("20m", "40m", "15m")[index % 3],
             if (index % 2 == 0) "FT8" else "WSPR", -12.0, 130.0, -70.0 + index % 35 * 4.0,
@@ -555,20 +570,35 @@ class DebugSdrLab(
         job = scope.launch {
             var phase = 0.0
             while (isActive && active) {
-                repeat(2) { receiver ->
-                    val samples = FloatArray(4_096)
-                    val tone = if (receiver == 0) 1_100.0 else 2_400.0
-                    for (index in samples.indices step 2) {
-                        val t = phase + index / 2.0
-                        samples[index] = (.45 * sin(2 * PI * tone * t / 96_000.0) + .04 * sin(t * .17)).toFloat()
-                        samples[index + 1] = (.45 * cos(2 * PI * tone * t / 96_000.0) + .04 * cos(t * .13)).toFloat()
-                    }
-                    panadapter.pushTciIq(receiver, 96_000, samples)
+                val rate = if (localFixture in setOf(DebugLocalFixture.WFM_MONO, DebugLocalFixture.WFM_STEREO_RDS)) 192_000 else 96_000
+                repeat(if (localFixture == DebugLocalFixture.DUAL_RECEIVERS) 2 else 1) { receiver ->
+                    val samples = debugLocalIq(localFixture, receiver, rate, 2_048, phase)
+                    panadapter.pushTciIq(receiver, rate, samples)
+                    localReceivers?.pushIq("DEBUG FIXTURE", receiver,
+                        if (receiver == 0) 14_074_000 else 7_074_000, rate, samples)
                 }
+                if (localFixture == DebugLocalFixture.WFM_STEREO_RDS) localReceivers?.debugRds("local:A")
+                if (localFixture == DebugLocalFixture.RECORDING_TIME_SHIFT && localReceivers?.snapshot?.recordingState != "RECORDING")
+                    localReceivers?.startRecording("local:A", "DEMO · NO RADIO time-shift fixture")
                 phase += 2_048
                 delay(22)
             }
         }
+    }
+
+    fun selectLocalFixture(value: DebugLocalFixture) {
+        check(BuildConfig.DEBUG)
+        localFixture = value
+        val mode = when (value) {
+            DebugLocalFixture.USB, DebugLocalFixture.DUAL_RECEIVERS, DebugLocalFixture.SCANNER_HIT, DebugLocalFixture.RECORDING_TIME_SHIFT -> LocalReceiverMode.USB
+            DebugLocalFixture.LSB -> LocalReceiverMode.LSB
+            DebugLocalFixture.CW -> LocalReceiverMode.CW
+            DebugLocalFixture.AM -> LocalReceiverMode.AM
+            DebugLocalFixture.SAM_OFFSET -> LocalReceiverMode.SAM
+            DebugLocalFixture.NFM, DebugLocalFixture.NFM_CTCSS, DebugLocalFixture.NFM_DCS_NORMAL, DebugLocalFixture.NFM_DCS_INVERTED -> LocalReceiverMode.NFM
+            DebugLocalFixture.WFM_MONO, DebugLocalFixture.WFM_STEREO_RDS -> LocalReceiverMode.WFM
+        }
+        localReceivers?.setMode("local:A", mode)
     }
 
     fun stop() {
@@ -577,7 +607,45 @@ class DebugSdrLab(
         runtime.publish(TciRuntimeSnapshot(lastError = "DEMO · NO RADIO stopped"))
         rf.submit(emptyList())
         operational?.stopActive("Debug SDR lab stopped")
+        localReceivers?.stopActive("Debug SDR lab stopped")
     }
 
     override fun close() { stop(); scope.cancel() }
+}
+
+internal fun debugLocalIq(fixture: DebugLocalFixture, receiver: Int, rate: Int, frames: Int, startFrame: Double): FloatArray {
+    val output = FloatArray(frames * 2)
+    var fmPhase = 0.0
+    repeat(frames) { index ->
+        val t = startFrame + index
+        val complexHz = when (fixture) {
+            DebugLocalFixture.LSB -> -1_100.0
+            DebugLocalFixture.CW -> 600.0
+            DebugLocalFixture.SAM_OFFSET -> 73.0
+            DebugLocalFixture.DUAL_RECEIVERS -> if (receiver == 0) 1_100.0 else -2_400.0
+            else -> 1_100.0
+        }
+        val amplitude = when (fixture) {
+            DebugLocalFixture.AM, DebugLocalFixture.SAM_OFFSET -> .48 * (1.0 + .55 * sin(2.0 * PI * 1_000.0 * t / rate))
+            else -> .45
+        }
+        val phase = when (fixture) {
+            DebugLocalFixture.NFM, DebugLocalFixture.SCANNER_HIT -> { fmPhase += 2.0 * PI * 2_000.0 * sin(2.0 * PI * 1_000.0 * t / rate) / rate; fmPhase }
+            DebugLocalFixture.NFM_CTCSS -> { fmPhase += 2.0 * PI * (2_000.0 * sin(2.0 * PI * 1_000.0 * t / rate) + 600.0 * sin(2.0 * PI * 88.5 * t / rate)) / rate; fmPhase }
+            DebugLocalFixture.NFM_DCS_NORMAL, DebugLocalFixture.NFM_DCS_INVERTED -> {
+                val bit = ((t * 134.4 / rate).toLong() % 23L) in setOf(0L, 1L, 4L, 7L, 8L, 12L, 17L, 21L)
+                val sign = if (bit xor (fixture == DebugLocalFixture.NFM_DCS_INVERTED)) 1.0 else -1.0
+                fmPhase += 2.0 * PI * 650.0 * sign / rate; fmPhase
+            }
+            DebugLocalFixture.WFM_MONO, DebugLocalFixture.WFM_STEREO_RDS -> {
+                val multiplex = 12_000.0 * sin(2.0 * PI * 1_000.0 * t / rate) +
+                    if (fixture == DebugLocalFixture.WFM_STEREO_RDS) 3_000.0 * sin(2.0 * PI * 19_000.0 * t / rate) else 0.0
+                fmPhase += 2.0 * PI * multiplex / rate; fmPhase
+            }
+            else -> 2.0 * PI * complexHz * t / rate
+        }
+        output[index * 2] = (amplitude * sin(phase)).toFloat()
+        output[index * 2 + 1] = (amplitude * cos(phase)).toFloat()
+    }
+    return output
 }

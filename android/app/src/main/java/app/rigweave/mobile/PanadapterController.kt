@@ -173,6 +173,7 @@ class PanadapterController(
     var latencyEstimateMs by mutableStateOf(0f); private set
     var displayMetrics by mutableStateOf(PanadapterDisplayMetrics()); private set
     var tciDisplays by mutableStateOf<Map<Int, TciPanadapterDisplay>>(emptyMap()); private set
+    var localIqSink: ((String, Int, Long, Int, FloatArray) -> Unit)? = null
     var selectedTciReceiver by mutableIntStateOf(0); private set
     val inputCandidates: List<AudioRouteDescriptor> get() = audio.inputCandidates
     val selectedInput: AudioRouteDescriptor? get() = audio.selectedRx
@@ -437,7 +438,7 @@ class PanadapterController(
 
     /** Receives validated float32 I/Q from the single TCI radio owner; at most two DSP contexts are retained. */
     fun pushTciIq(receiverIndex: Int, sampleRate: Int, samples: FloatArray) {
-        if (closed || receiverIndex !in 0..7 || sampleRate !in setOf(48_000, 96_000, 192_000) || samples.isEmpty() || samples.size % 2 != 0) return
+        if (closed || receiverIndex !in 0..7 || sampleRate !in setOf(48_000, 96_000, 192_000, 240_000, 384_000) || samples.isEmpty() || samples.size % 2 != 0) return
         var source = tciContexts[receiverIndex]
         if (source == null) synchronized(tciContexts) {
             source = tciContexts[receiverIndex]
@@ -569,6 +570,8 @@ class PanadapterController(
             val count = record.read(samples, 0, samples.size, AudioRecord.READ_BLOCKING)
             if (count <= 0) { failRoute("Stereo I/Q read failed ($count)"); return }
             val discontinuity = count % 2 != 0
+            localIqSink?.invoke("STEREO I/Q", 0, effectiveCenter(), record.sampleRate,
+                FloatArray(count) { samples[it] / 32768f })
             appendRecording(samples, count, recordingBytes, record.sampleRate)
             accumulateCalibration(samples, count, record.sampleRate)
             val nativeGeneration = nativeHandle.generation()

@@ -3,5 +3,6 @@
     <cache-path name="pota_exports" path="pota-exports/" />
     <files-path name="groupsio_files" path="GroupsIO/" />
     <files-path name="sstv_gallery" path="digi/sstv/" />
+    <files-path name="local_receiver_recordings" path="local-receiver-recordings/" />
     <cache-path name="operations_exports" path="operations-exports/" />
 </paths>

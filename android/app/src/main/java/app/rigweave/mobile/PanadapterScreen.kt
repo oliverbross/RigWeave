@@ -64,6 +64,7 @@ fun PanadapterScreen(
     radio: RadioState,
     spots: List<AndroidDXSpot>,
     compact: Boolean,
+    localReceivers: LocalReceiverController? = null,
     onControls: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
@@ -122,6 +123,7 @@ fun PanadapterScreen(
             onStart = { if (controller.hasRecordPermission()) controller.start() else permission.launch(Manifest.permission.RECORD_AUDIO) },
             onStop = { controller.stop() }, onInspector = { inspector = true }, onDiagnostics = { diagnostics = true })
         PanadapterTruthStrip(controller)
+        localReceivers?.let { LocalReceiverRail(it, "STEREO I/Q", 0, center, provenSpan) }
 
         if (radio.transmitting) {
             Surface(color = PanDanger, modifier = Modifier.fillMaxWidth()) {
@@ -185,6 +187,7 @@ fun PanadapterScreen(
             onDisplayMode = { displayMode = (displayMode + 1) % 3 },
             onImmersive = { immersive = !immersive },
             compact = compact)
+        localReceivers?.let { LocalReceiverTapActions(it, "STEREO I/Q", 0, center, provenSpan, markerAHz.takeIf { value -> value > 0 }) }
         if (message.isNotBlank()) Text(message, color = if (message.contains("blocked", true) || message.contains("denied", true)) PanDanger else PanHold,
             fontSize = 11.sp, maxLines = 1)
     }

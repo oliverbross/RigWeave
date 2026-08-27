@@ -97,7 +97,7 @@ class TciRxAudioController(
     private val context: Context,
     private val routes: AudioMonitorController,
 ) {
-    private data class Frame(val receiver: Int, val rate: Int, val samples: FloatArray)
+    private data class Frame(val receiver: Int, val rate: Int, val samples: FloatArray, val settings: RxDspSettings?)
     private val main = Handler(Looper.getMainLooper())
     private val queues = Array(2) { ArrayBlockingQueue<Frame>(8) }
     private val active = AtomicBoolean(false)
@@ -218,16 +218,30 @@ class TciRxAudioController(
     }
 
     fun push(receiver: Int, sampleRate: Int, channels: Int, values: FloatArray) {
+        pushFrame(receiver, sampleRate, channels, values, null)
+    }
+
+    fun pushLocal(receiver: Int, sampleRate: Int, channels: Int, values: FloatArray, value: RxDspSettings) {
+        pushFrame(receiver, sampleRate, channels, values, value.copy(
+            noiseReduction = value.noiseReduction.coerceIn(0f, 1f),
+            agcHangMillis = value.agcHangMillis.coerceIn(0, 2_000),
+            squelchDb = value.squelchDb.coerceIn(-120f, -20f),
+            outputGain = value.outputGain.coerceIn(0f, 4f),
+            stereoMix = value.stereoMix.coerceIn(-1f, 1f),
+        ))
+    }
+
+    private fun pushFrame(receiver: Int, sampleRate: Int, channels: Int, values: FloatArray, override: RxDspSettings?) {
         if (!active.get() || receiver !in 0..1 || values.isEmpty()) return
         val mono = if (channels <= 1) values.copyOf() else FloatArray(values.size / channels) { frame ->
             val left = values[frame * channels]
             val right = values[frame * channels + 1]
-            val mix = settings.stereoMix
+            val mix = (override ?: settings).stereoMix
             left * (.5f * (1f - mix)) + right * (.5f * (1f + mix))
         }
         val queue = queues[receiver]
-        if (!queue.offer(Frame(receiver, sampleRate, mono))) {
-            queue.poll(); queue.offer(Frame(receiver, sampleRate, mono))
+        if (!queue.offer(Frame(receiver, sampleRate, mono, override))) {
+            queue.poll(); queue.offer(Frame(receiver, sampleRate, mono, override))
             main.post {
                 droppedFrames += 1
                 overflowByReceiver = overflowByReceiver.toMutableList().also { it[receiver] += 1 }
@@ -252,10 +266,10 @@ class TciRxAudioController(
                 } }
                 continue
             }
-            val value = settings
             fun process(frame: Frame?): Pair<FloatArray?, FloatArray?> {
                 if (frame == null) return null to null
                 val samples = resampleTciAudio(frame.samples, frame.rate, armedRate)
+                val value = frame.settings ?: settings
                 val metrics = NativeRxDsp.process(handles[frame.receiver], samples, armedRate, value.noiseBlanker,
                     value.automaticNotch, value.noiseReduction, value.agc, value.agcHangMillis,
                     value.squelchDb, value.outputGain)

@@ -230,7 +230,10 @@ internal class SdrV2DerivedStore(context: Context) : SQLiteOpenHelper(
 }
 
 class ReceiveTimeShiftController internal constructor(private val store: SdrV2DerivedStore) {
+    private data class AudioFrame(val receiver: Int, val epochMillis: Long, val samples: FloatArray)
     private val ring = ArrayDeque<TimeShiftFrame>()
+    private val audioRing = ArrayDeque<AudioFrame>()
+    private var audioSamples = 0L
     private var lastCaptureMillis = 0L
     private var invalidations = 0L
     var snapshot by mutableStateOf(TimeShiftSnapshot()); private set
@@ -262,6 +265,31 @@ class ReceiveTimeShiftController internal constructor(private val store: SdrV2De
         publish()
     }
 
+    /** The existing time-shift owner also retains explicitly enabled 48 kHz demod audio for recording pre-roll. */
+    @Synchronized fun captureAudio(receiver: Int, samples: FloatArray) {
+        if (snapshot.length == TimeShiftLength.OFF || snapshot.playback != TimeShiftPlayback.LIVE || samples.isEmpty()) return
+        val copy = samples.copyOf(samples.size.coerceAtMost(48_000))
+        audioRing += AudioFrame(receiver, System.currentTimeMillis(), copy)
+        audioSamples += copy.size
+        val maximum = snapshot.length.seconds.toLong() * 48_000L * 2L
+        while (audioSamples > maximum && audioRing.isNotEmpty()) audioSamples -= audioRing.removeFirst().samples.size
+    }
+
+    @Synchronized fun audioPreRoll(receiver: Int, seconds: Int): FloatArray {
+        val wanted = seconds.coerceIn(0, snapshot.length.seconds) * 48_000
+        if (wanted == 0) return FloatArray(0)
+        val selected = audioRing.asReversed().filter { it.receiver == receiver }
+        val output = FloatArray(minOf(wanted, selected.sumOf { it.samples.size }))
+        var cursor = output.size
+        selected.forEach { frame ->
+            if (cursor <= 0) return@forEach
+            val count = minOf(cursor, frame.samples.size)
+            cursor -= count
+            frame.samples.copyInto(output, cursor, frame.samples.size - count)
+        }
+        return if (cursor == 0) output else output.copyOfRange(cursor, output.size)
+    }
+
     @Synchronized fun pause() {
         if (ring.isEmpty()) return
         selectedFrame = ring.last()
@@ -289,7 +317,7 @@ class ReceiveTimeShiftController internal constructor(private val store: SdrV2De
     }
 
     @Synchronized fun clear(reason: String = "Cleared by operator") {
-        ring.clear(); selectedFrame = null
+        ring.clear(); audioRing.clear(); audioSamples = 0; selectedFrame = null
         snapshot = snapshot.copy(playback = TimeShiftPlayback.LIVE, bufferedSeconds = 0, cursorSecondsBehind = 0,
             frameCount = 0, bytes = 0, source = reason.take(40), invalidations = invalidations)
     }
@@ -515,20 +543,21 @@ class SdrOperationalV2(context: Context) : AutoCloseable {
         store.addJournal(row, journalRetentionDays, maximumJournalRows); journal = store.journal()
     }
 
-    fun recordOnHit(bank: ScanBank, frequencyHz: Long, mode: String, peakDb: Float?, dwellMillis: Long): String? {
+    fun recordOnHit(bank: ScanBank, frequencyHz: Long, mode: String, peakDb: Float?, dwellMillis: Long,
+        audioCapture: String? = null): String? {
         val estimatedBytes = timeShift.selectedFrame?.let { 16L + it.trace.size * 4L } ?: 0L
         val startOfDay = Instant.now().epochSecond / 86_400L * 86_400L
         val withinQuota = estimatedBytes > 0 && store.bookmarkBytesSince(startOfDay) + estimatedBytes <= recordPolicy.dailyBytes &&
             store.bookmarkBytesSince() + estimatedBytes <= recordPolicy.totalBytes
         val capture = when (bank.recordOnHit) {
             RecordOnHitMode.OFF -> null
-            RecordOnHitMode.AUDIO -> null // No silent audio capture: the current bounded display ring does not own RX audio recording.
+            RecordOnHitMode.AUDIO -> audioCapture
             RecordOnHitMode.IQ -> if (withinQuota && dwellMillis <= recordPolicy.maximumDurationSeconds * 1_000L)
                 timeShift.bookmark("Scan hit · ${bank.name}")?.id else null
         }
         recordingState = when {
             capture != null -> "SAVED · ${bank.recordOnHit}"
-            bank.recordOnHit == RecordOnHitMode.AUDIO -> "UNAVAILABLE · AUDIO SOURCE NOT OWNED"
+            bank.recordOnHit == RecordOnHitMode.AUDIO -> "UNAVAILABLE · LOCAL AUDIO SOURCE NOT LISTENING"
             bank.recordOnHit == RecordOnHitMode.IQ && !withinQuota -> "STOPPED · QUOTA OR SOURCE UNAVAILABLE"
             bank.recordOnHit == RecordOnHitMode.IQ -> "STOPPED · MAX DURATION EXCEEDED"
             else -> "STOPPED"
