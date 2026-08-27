@@ -78,3 +78,7 @@ Hard gates remain 130 MB for the arm64 APK and 60 MB for the four-ABI AAB, with 
 V2 adds Kotlin/C++ code and a small SQLite schema only. It adds no bundled upstream source, recording, raw IQ, decoder model, map, shader, or P.533 payload. Gates remain arm64 APK less than 130 MB and AAB less than 60 MB, with a preferred AAB delta no greater than 2 MB from the frozen v1 base. Final exact-SHA byte counts and hashes supersede candidate estimates.
 
 Local final-source packages pass: arm64 APK 64,855,821 bytes (`8ad0b7629a89c96606246490d406b76da0a33b119575db5beebc5709d90a3203`); four-ABI AAB 56,262,274 bytes (`3820a2cff78e5b7df45e29a32c17d25507fa2d7594031d08bd769bcd46c68c19`); AAB delta from the frozen v1 baseline is +113,682 bytes. The instrumentation APK is 1,196,331 bytes (`541a2fa7b74f7277eb0c0642ecc7b81fb31df9c359193e18f554d44f435fe36c`). Hosted exact-SHA artifacts remain authoritative for delivery.
+
+## Android Local SDR Receiver v3 budget
+
+V3 adds source code and one small metadata schema only. Synthetic I/Q is generated at runtime; no fixture, recording, RDS dataset, SDRoxide asset, neural model or codec library is packaged. Gates remain arm64 APK at most 130 MB, four-ABI AAB at most 60 MB and preferred AAB delta at most 2 MB from the v2 56,261,966-byte baseline. Final exact-SHA sizes and hashes replace estimates.

@@ -97,3 +97,7 @@ The tablet now exposes a receive-only TCI cockpit, two-receiver I/Q and audio, P
 ## Android SDRoxide Operational Enhancements v2
 
 Android adds receiver-targeted TCI readback/control, explicit receiver links, a dual-receiver audio mixer, Panadapter v5 review and bounded time-shift, PSK31/RTTY candidate skimmers, scanner banks/priority/journal, and per-mode TX-audio configuration. Spot exchange and diversity remain protocol-unavailable; all transmit controls remain locked pending separate physical acceptance.
+
+## Android Local SDR Receiver v3
+
+Compatible TCI, QMX/QMX+, KX3/KX2 external stereo and generic proven I/Q sources can feed up to two receive-only local virtual receivers. Shared C++ demodulation provides USB/LSB/CW/DIGU/DIGL/DSB/AM/SAM/NFM/WFM/SPECTRUM, CTCSS/DCS and validated RDS/RBDS metadata. Local audio reuses the existing two-input mixer and RX DSP. Panadapter click-to-listen, bounded PCM16 recording, time-shift pre-roll, Scanner audio hit, Settings, Health and `DEMO · NO RADIO` fixtures are Android-visible. No local action owns or implicitly changes a transmitter or physical radio.

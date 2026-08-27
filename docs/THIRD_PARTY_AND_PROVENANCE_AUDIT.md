@@ -31,3 +31,7 @@ The reviewed SDRoxide production pin is v1.5.3 / `a680935b10f33768a499435e8bd37f
 ## Android SDRoxide Operational Enhancements v2
 
 The v2 audit reverified `v1.5.3` at commit `a680935b10f33768a499435e8bd37f779fa640ae`, tree `4697195080495da4a727b14234b85af89c10ecda`, release timestamp `2026-08-26T20:02:33Z`, GPL-3.0 licence digest `3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986`. The upstream checkout remained outside the product tree and no upstream file or payload was incorporated.
+
+## Android Local SDR Receiver v3
+
+The v3 start audit found no newer stable SDRoxide release. Receive modes, tone/data decode, recording and Scanner behavior were reviewed at the same immutable pin. All new DSP/JNI/Kotlin/Compose/storage code is independently written and adds no third-party dependency or payload. The adaptation ledger is in `docs/android/SDROXIDE_LOCAL_RECEIVER_PROVENANCE_V3.md`.

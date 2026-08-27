@@ -79,3 +79,7 @@ TCI profiles store display name, host, port, TLS choice, preferred I/Q rate, ini
 ## Android SDR operational v2 derived data
 
 `rigweave-sdr-operational-v2-derived.db` is schema 1 and separate from the canonical QSO database. It stores a bounded scanner journal and at most 256 signal bookmarks containing metadata plus reduced display traces. It stores no QSO, credential, raw CAT frame, raw IQ stream, or raw audio. Scan-bank, mixer, time-shift length, journal retention, capture bounds, and per-mode audio levels use bounded preferences. Active connection, streams, scanner, skimmers, recording, pending writes, and playback do not restore.
+
+## Android local receiver v3 data
+
+Raw live I/Q and demodulated audio remain only in bounded memory unless the operator explicitly starts a recording. `rigweave-local-sdr-v3.db` schema 1 stores recording metadata and relative app-private filenames, never audio blobs or QSO rows. PCM16 WAV and bounded JSON sidecars live under app-private files with a 250 MB maximum default cap, atomic finalisation, orphan cleanup and delete support. Support output excludes recordings, raw I/Q, RDS RadioText, operator notes and raw station metadata. Safe mode/filter/DSP preferences may restore; listening, offsets, recording, scanner capture, SAM acquisition and RDS sessions do not.

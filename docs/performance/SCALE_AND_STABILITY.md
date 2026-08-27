@@ -155,3 +155,7 @@ TCI binary input is capped at 8 MiB and decode backlog at eight frames. Panadapt
 ## Android SDRoxide operational v2 bounds
 
 TCI safe setters coalesce to the latest generation; two audio queues are capped at eight frames each; time-shift stores at most 120 seconds of 512-bin reduced traces at bounded cadence; skimmers serialize off-main work and retain at most four candidates per mode; scan banks cap at 64 with 2,000 memories each; the journal caps at 50,000 rows; bookmarks cap at 256 and record-on-hit enforces duration/daily/total policy. Overload drops or refuses work and publishes counters/status rather than allocating without bound.
+
+## Android Local SDR Receiver v3 bounds
+
+One local-I/Q queue holds eight blocks and one worker services at most two checked native handles. JNI input caps at four million floats. Output is fixed at 48 kHz and reuses the existing two eight-frame audio queues and one AudioTrack. Time-shift audio is retained only by the existing owner for its selected 0/30/60/120-second window. Recording is one file, 30 minutes and 250 MB maximum total. Health exposes rate, NCO, filter, mode, DSP time, queue/drop, SAM/tone/RDS and recording counters without raw data. Golden churn covers 1,000 resets and 500 mode/rate changes; full platform and device soaks remain separate gates.

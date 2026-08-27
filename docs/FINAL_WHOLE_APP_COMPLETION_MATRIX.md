@@ -94,3 +94,16 @@ Twelve Android-visible areas are source-complete: TCI, multi-receiver, I/Q, RX a
 | Per-mode TX audio | SOURCE_COMPLETE_CONFIG_ONLY | Production send and physical acceptance locked |
 | Desktop/iOS | UNCHANGED | Shared-code regression only; no UI or feature promotion |
 | Hosted/device/live | PENDING | Must be recorded separately on the exact final SHA |
+
+## Android Local SDR Receiver v3 candidate
+
+| Area | Source status | Evidence boundary |
+|---|---|---|
+| Shared local receiver DSP and two Android virtual receivers | SOURCE_COMPLETE | Physical I/Q/audio/RF remains pending |
+| USB/LSB/CW/DIGU/DIGL/DSB/AM/SAM/NFM/SPECTRUM | SOURCE_COMPLETE | Native golden vectors and Android visibility |
+| CTCSS/DCS and WFM stereo/RDS | SOURCE_COMPLETE_CAPABILITY_GATED | WFM requires at least 192 kHz; live station accuracy pending |
+| Click-to-listen, markers and passbands | SOURCE_COMPLETE | Local NCO only; physical receive review is separate |
+| PCM16 recording, pre-roll and Scanner AUDIO hit | SOURCE_COMPLETE_EXPLICIT_ONLY | One recording, quota/retention and visible indicator |
+| Settings, Health, privacy and debug lab | SOURCE_COMPLETE | Debug state is `DEMO · NO RADIO` |
+| Windows/macOS feature/UI | UNCHANGED | Shared-core regression only |
+| Hosted/protected tablet/live | PENDING | Exact-SHA and conditional device evidence recorded separately |
