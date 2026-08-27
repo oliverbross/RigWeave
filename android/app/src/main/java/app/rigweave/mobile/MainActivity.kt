@@ -873,25 +873,36 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             keyer.availability(keyerRuntime.context()), { keyer.submit(it, keyerRuntime.context()) }, Modifier.align(Alignment.TopCenter).fillMaxWidth())
         val keyerStripInset = if (keyerProfiles.showStrip) 76.dp else 0.dp
         if (maxWidth >= 700.dp) Row(Modifier.fillMaxSize().padding(top = keyerStripInset)) {
-            NavigationRail(containerColor = Panel) {
+            NavigationRail(
+                modifier = Modifier.testTag("primary-navigation-rail"),
+                containerColor = Panel,
+            ) {
                 Image(
                     painter = painterResource(R.drawable.rigweave_logo_mark),
                     contentDescription = "RigWeave",
                     modifier = Modifier.padding(vertical = 12.dp).size(42.dp),
                     contentScale = ContentScale.Fit,
                 )
-                Destination.entries.filterNot { item ->
-                    item == Destination.SYNC ||
-                    (item == Destination.GROUPS_IO && !groupsIoDestinationVisible(groupsIo.enabled, compact = false)) ||
-                    (item == Destination.BAND_MAPS && (!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible)) ||
-                    (item == Destination.ROTATOR && !app.rotatorEnabled) ||
-                    (item == Destination.PANADAPTER &&
-                        ((app.selectedRadioProfile.backendKind != RadioBackendKind.NATIVE_TCI && !app.panadapterEnabled) ||
-                            app.radioFamily == RadioFamily.FLEXRADIO)) ||
-                    (item == Destination.EQ && !eqVisible) ||
-                    (item == Destination.CONTEST && !contestDestinationVisible(app.contestEnabled))
-                }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
-                    { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .testTag("primary-navigation-destinations"),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Destination.entries.filterNot { item ->
+                        item == Destination.SYNC ||
+                        (item == Destination.GROUPS_IO && !groupsIoDestinationVisible(groupsIo.enabled, compact = false)) ||
+                        (item == Destination.BAND_MAPS && (!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible)) ||
+                        (item == Destination.ROTATOR && !app.rotatorEnabled) ||
+                        (item == Destination.PANADAPTER &&
+                            ((app.selectedRadioProfile.backendKind != RadioBackendKind.NATIVE_TCI && !app.panadapterEnabled) ||
+                                app.radioFamily == RadioFamily.FLEXRADIO)) ||
+                        (item == Destination.EQ && !eqVisible) ||
+                        (item == Destination.CONTEST && !contestDestinationVisible(app.contestEnabled))
+                    }.forEach { item -> NavigationRailItem(destination == item, { destination = item },
+                        { Icon(navIcon(item), item.label) }, label = { Text(item.label) }) }
+                }
             }
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, tciRxAudio, tciRuntime, scanner, sdrOperationalV2, sdrWorkbenchV4, localReceivers, rfObservations, bandStacks, announcements, debugSdrLab,
