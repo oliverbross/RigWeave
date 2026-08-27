@@ -239,8 +239,11 @@ class PanadapterController(
         stopReplay()
         val radio = radioState()
         if (!hasRecordPermission()) { lifecycle = PanadapterLifecycle.ERROR; status = "RECORD_AUDIO permission is required"; return }
-        if (!radio.connected || radio.model != "KX3") { lifecycle = PanadapterLifecycle.ERROR; status = "Connect and identify a KX3 before enabling wideband RX I/Q"; return }
-        if (radio.transmitting) { lifecycle = PanadapterLifecycle.ERROR; status = "Receive I/Q cannot start while the KX3 is transmitting"; return }
+        panadapterCaptureRadioBlocker(radio)?.let { blocker ->
+            lifecycle = PanadapterLifecycle.ERROR
+            status = blocker
+            return
+        }
         audio.refreshDevices()
         val selected = audio.selectedRx ?: run { lifecycle = PanadapterLifecycle.ERROR; status = "Select one external stereo USB input"; return }
         val device = audio.selectedRxDevice() ?: run { lifecycle = PanadapterLifecycle.ERROR; status = "Selected USB input is no longer connected"; return }
@@ -429,7 +432,8 @@ class PanadapterController(
         performanceWindowNanos = System.nanoTime(); performancePublishedFrames = 0; performanceWaterfallRows = 0
         lastPublishedNanos = 0L; lastWaterfallNanos = 0L
         publishedFps = 0f; waterfallFps = 0f
-        status = "LIVE · ${selected.name} · TRUE ${physicalRate / 1000} kHz stereo · ${configured.fftSize} FFT"
+        val frequencyTruth = if (effectiveCenter() > 0) "CAT CENTERED" else "CAT OFFLINE · RELATIVE OFFSETS"
+        status = "LIVE · ${selected.name} · TRUE ${physicalRate / 1000} kHz stereo · ${configured.fftSize} FFT · $frequencyTruth"
         // The AudioRecord owns a generously sized internal buffer; bounded ~16.7 ms reads let
         // presentation hit 30 fps without changing the proven route, format, FFT or RF span.
         val samples = ShortArray(physicalRate / 60 * 2)

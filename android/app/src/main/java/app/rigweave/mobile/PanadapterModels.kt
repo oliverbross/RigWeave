@@ -27,6 +27,13 @@ fun effectivePanadapterCenter(radio: RadioState, nowMonotonicMs: Long): Long {
 fun canPanadapterQsy(radio: RadioState, liveCenterHz: Long): Boolean =
     radio.connected && radio.model == "KX3" && !radio.transmitting && liveCenterHz > 0
 
+fun panadapterCaptureRadioBlocker(radio: RadioState): String? = when {
+    !radio.connected -> null
+    radio.model != "KX3" -> "Connected CAT radio is not a KX3; disconnect CAT to use standalone relative I/Q"
+    radio.transmitting -> "Receive I/Q cannot start while the KX3 is transmitting"
+    else -> null
+}
+
 data class PanadapterSettings(
     val requestedRate: Int = 48_000,
     val allow48kFallback: Boolean = true,
