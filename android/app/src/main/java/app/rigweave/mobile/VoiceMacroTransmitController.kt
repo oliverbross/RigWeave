@@ -42,6 +42,8 @@ class VoiceMacroTransmitController(
     private val foreground: () -> Boolean,
     private val audioOperationIdle: () -> Boolean,
     private val onFrames: (ByteArray) -> Unit,
+    private val tciAuthority: TciTransmitAuthority? = null,
+    private val tciSelected: () -> Boolean = { false },
 ) {
     private val audioManager = context.getSystemService(AudioManager::class.java)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -71,11 +73,16 @@ class VoiceMacroTransmitController(
     fun stop(reason: String = "Voice macro stopped by operator") {
         active.set(false); app.updateVoiceMacrosArmed(false); status = reason
         runCatching { track?.pause() }; runCatching { track?.flush() }
+        if (tciSelected()) tciAuthority?.globalStop("VOICE_MACRO_STOP")
     }
 
     fun forceRx() {
         stop("Force RX requested")
         scope.launch(NonCancellable) {
+            if (tciSelected()) {
+                tciAuthority?.requestRxAndRecheck()
+                return@launch
+            }
             runCatching { onFrames(transport.sendFast("RX;")) }
             val confirmed = runCatching { transport.confirmTq(false) }.getOrNull()
             confirmed?.frames?.let(onFrames)
@@ -99,9 +106,9 @@ class VoiceMacroTransmitController(
             !app.voiceMacrosArmed -> "Voice macros are not armed"
             !foreground() -> "RigWeave is not in the foreground"
             !audioOperationIdle() -> "Recording or preview is active"
-            !radio.connected || !transport.isConnected -> "CAT is disconnected"
+            !radio.connected || (!tciSelected() && !transport.isConnected) -> "Radio control is disconnected"
             !isVoiceMacroMode(radio.mode) -> "Voice macros require exact USB or LSB mode"
-            routes.selectedTxDevice() == null -> "Select one unambiguous voice TX USB output"
+            !tciSelected() && routes.selectedTxDevice() == null -> "Select one unambiguous voice TX USB output"
             else -> null
         }
         if (invalid != null) { fail(invalid, false); return }
@@ -111,6 +118,21 @@ class VoiceMacroTransmitController(
             .getOrElse { fail(it.message ?: "Voice plan is invalid", false); return }
         val displaySlot = plan.slotIds.first()
         active.set(true); progress = 0f; state = VoiceTransmitState.Preflighting; log("Preflight started")
+        if (tciSelected()) {
+            val authority = tciAuthority
+            val samples = FloatArray(pcm.samples.size) { pcm.samples[it] / 32768.0F }
+            val completed = authority?.transmit(TciTxIntent(
+                owner = "VoiceMacro:$displaySlot", source = TciTxSource.VOICE_MACRO,
+                mode = radio.mode, mono = samples, sampleRate = VOICE_SAMPLE_RATE, receiver = 0,
+                expectedFrequencyHz = radio.frequencyHz,
+                foregroundValid = { active.get() && foreground() && tciSelected() && isVoiceMacroMode(radioState().mode) },
+            )) == true
+            active.set(false); progress = 0f
+            if (completed) { state = VoiceTransmitState.Idle; status = "TCI voice macro complete · RX confirmed" }
+            else fail("TCI voice TX blocked · ${authority?.snapshot?.interlock ?: "authority unavailable"}",
+                authority?.snapshot?.state == TciTxMachineState.RX_UNCONFIRMED)
+            return
+        }
         transport.beginVoiceOperation()
         val io = AndroidVoiceTxIo(displaySlot, pcm)
         val result = try { withContext(NonCancellable) { executeVoiceTxSequence(io) } }

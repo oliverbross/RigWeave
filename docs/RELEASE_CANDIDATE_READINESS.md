@@ -115,3 +115,7 @@ Local final-source gates pass: 736 JVM tests, Android lint, instrumentation test
 ## Android SDR Workbench v4 gate
 
 V4 requires the fail-closed source/parity checker, recording/replay/storage migration tests, deterministic scale profile, complete Android unit/lint/instrumentation packages, arm64 APK/four-ABI AAB audits, existing native/Rust/iOS/desktop regressions, unchanged protected refs and the authoritative exact-SHA hosted workflow. Final package hashes, hosted run and conditional tablet evidence are recorded only after the immutable candidate SHA exists. Demo fixtures establish deterministic behavior and UI reachability only; physical I/Q, audio quality, calibrated dBm, authenticated services, CAT/PTT/TUNE, RF, signing and release remain separate.
+
+## Android TCI Transmit v5 gate
+
+V5 requires the immutable upstream/protocol audit, one-owner TX checker, native framing tests, focused authority/interlock tests, deterministic fake stress, complete Android/native/Rust/iOS/desktop regressions, package caps, protected refs, clean pushed exact SHA, and all mandatory hosted jobs. Production acceptance remains identity-bound and unverified unless separately evidenced. Physical PTT/Tune/RF may remain pending without converting source-complete fake/bench acceptance into RF proof.

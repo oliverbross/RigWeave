@@ -75,6 +75,9 @@ data class RadioConnectionProfile(
     val preferredIqSampleRate: Int = 96_000,
     val preferredInitialReceiver: Int = 0,
     val rxAudioRoute: String = "SYSTEM",
+    val tciAcceptance: TciAcceptanceState = TciAcceptanceState.UNVERIFIED,
+    val tciAcceptanceIdentity: String? = null,
+    val tciTxSettings: TciTxSettings = TciTxSettings(),
 ) {
     init {
         require(name.isNotBlank() && name.length <= 80)
@@ -87,6 +90,7 @@ data class RadioConnectionProfile(
         require(preferredIqSampleRate in setOf(48_000, 96_000, 192_000, 240_000, 384_000))
         require(preferredInitialReceiver in 0..7)
         require(rxAudioRoute in setOf("SYSTEM", "RECEIVER_0", "RECEIVER_1", "STEREO_SPLIT", "BALANCED_MIX"))
+        require(tciAcceptanceIdentity == null || tciAcceptanceIdentity.length in 8..512)
         require((backendKind == RadioBackendKind.HAMLIB_EMBEDDED || backendKind == RadioBackendKind.HAMLIB_NETWORK) == (hamlibModelId != null))
         require(transport == RadioTransportType.USB_SERIAL || host != null)
     }

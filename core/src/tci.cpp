@@ -169,6 +169,52 @@ std::optional<std::string> build_safe_stop(std::uint32_t receiver) {
     return "trx:" + std::to_string(receiver) + ",false;tune:" + std::to_string(receiver) + ",false;";
 }
 
+std::optional<std::string> build_trx(std::uint32_t receiver, bool transmitting) {
+    if (!receiver_valid(receiver)) return std::nullopt;
+    return "trx:" + std::to_string(receiver) + ',' + (transmitting ? "true,tci;" : "false;");
+}
+
+std::optional<std::string> build_tune(std::uint32_t receiver, bool enabled) {
+    if (!receiver_valid(receiver)) return std::nullopt;
+    return "tune:" + std::to_string(receiver) + ',' + (enabled ? "true;" : "false;");
+}
+
+std::optional<std::string> build_drive(std::uint32_t receiver, std::uint32_t percent) {
+    if (!receiver_valid(receiver) || percent > 100U) return std::nullopt;
+    return "drive:" + std::to_string(receiver) + ',' + std::to_string(percent) + ';';
+}
+
+std::optional<std::string> build_tune_drive(std::uint32_t receiver, std::uint32_t percent) {
+    if (!receiver_valid(receiver) || percent > 100U) return std::nullopt;
+    return "tune_drive:" + std::to_string(receiver) + ',' + std::to_string(percent) + ';';
+}
+
+std::optional<std::string> build_audio_sample_rate(std::uint32_t sample_rate) {
+    if (sample_rate != 8'000U && sample_rate != 12'000U && sample_rate != 24'000U && sample_rate != 48'000U)
+        return std::nullopt;
+    return "audio_samplerate:" + std::to_string(sample_rate) + ';';
+}
+
+std::optional<std::string> build_tx_sensors_enable(std::uint32_t receiver, bool enabled) {
+    if (!receiver_valid(receiver)) return std::nullopt;
+    return "tx_sensors_enable:" + std::to_string(receiver) + ',' + (enabled ? "true;" : "false;");
+}
+
+std::optional<std::string> build_xit_enable(std::uint32_t receiver, bool enabled) {
+    if (!receiver_valid(receiver)) return std::nullopt;
+    return "xit_enable:" + std::to_string(receiver) + ',' + (enabled ? "true;" : "false;");
+}
+
+std::optional<std::string> build_xit_offset(std::uint32_t receiver, std::int64_t offset_hz) {
+    if (!receiver_valid(receiver) || offset_hz < -100'000LL || offset_hz > 100'000LL) return std::nullopt;
+    return "xit_offset:" + std::to_string(receiver) + ',' + std::to_string(offset_hz) + ';';
+}
+
+std::optional<std::string> build_monitor_enable(std::uint32_t receiver, bool enabled) {
+    if (!receiver_valid(receiver)) return std::nullopt;
+    return "mon_enable:" + std::to_string(receiver) + ',' + (enabled ? "true;" : "false;");
+}
+
 std::optional<BinaryFrame> decode_binary(const std::uint8_t *message,
                                          std::size_t message_size,
                                          BinaryError *error,
@@ -270,6 +316,42 @@ std::vector<std::uint8_t> build_binary_for_test(DataType type,
         }
     }
     return output;
+}
+
+std::optional<std::vector<std::uint8_t>> build_tx_audio(
+    std::uint32_t receiver,
+    std::uint32_t source_sample_rate,
+    std::uint32_t target_sample_rate,
+    const float *mono,
+    std::size_t mono_frames,
+    std::uint64_t target_frame_offset,
+    std::uint32_t requested_values,
+    float level) {
+    if (!receiver_valid(receiver) || !mono || mono_frames == 0U ||
+        !sample_rate_valid(source_sample_rate) || !build_audio_sample_rate(target_sample_rate) ||
+        requested_values == 0U || requested_values > 16'384U || (requested_values & 1U) != 0U ||
+        !std::isfinite(level) || level < 0.0F || level > 2.0F) return std::nullopt;
+    if (std::any_of(mono, mono + mono_frames, [](float sample) { return !std::isfinite(sample); }))
+        return std::nullopt;
+
+    const std::size_t frames = requested_values / 2U;
+    std::vector<float> stereo;
+    stereo.reserve(requested_values);
+    for (std::size_t frame = 0; frame < frames; ++frame) {
+        const long double source_position = static_cast<long double>(target_frame_offset + frame) *
+            static_cast<long double>(source_sample_rate) / static_cast<long double>(target_sample_rate);
+        const auto left = static_cast<std::uint64_t>(source_position);
+        float sample = 0.0F;
+        if (left < mono_frames) {
+            const auto right = std::min<std::uint64_t>(left + 1U, mono_frames - 1U);
+            const float fraction = static_cast<float>(source_position - static_cast<long double>(left));
+            sample = mono[left] + (mono[right] - mono[left]) * fraction;
+            sample = std::clamp(sample * level, -0.98F, 0.98F);
+        }
+        stereo.push_back(sample);
+        stereo.push_back(sample);
+    }
+    return build_binary_for_test(DataType::TxAudio, receiver, target_sample_rate, 2U, stereo);
 }
 
 } // namespace rigweave::tci

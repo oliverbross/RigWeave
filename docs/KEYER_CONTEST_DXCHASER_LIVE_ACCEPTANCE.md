@@ -40,3 +40,7 @@ does not prove physical UI, keyboard, audio, radio, network peer, authenticated 
 Record device model, app exact SHA, peer versions, radio/audio route, operator confirmations and
 observed results. Never infer RF, PTT, authenticated Wavelog or N1MM+ success from this source/build
 record. Do not install as part of this integration programme.
+
+## TCI v5 routing
+
+Existing Digi/SSTV, reviewed CW audio-keying and Voice Macro plans submit typed intents to the single TCI authority. FT timing, keyer queue/context invalidation, voice plan bounds, arming and Stop remain with their existing owners. Contest ESM stays pure, N1MM never writes TCI, and DX Chaser never enables TX. Fake routing proves source behavior only; physical PTT/audio/RF acceptance remains pending.

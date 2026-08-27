@@ -192,12 +192,33 @@ class AppController(private val context: Context) {
     fun upsertTciProfile(value: RadioConnectionProfile) {
         require(value.backendKind == RadioBackendKind.NATIVE_TCI && value.transport == RadioTransportType.TCI)
         val index = tciProfiles.indexOfFirst { it.id == value.id }
-        if (index >= 0) tciProfiles[index] = value else {
+        if (index >= 0) {
+            val previous = tciProfiles[index]
+            val sameEndpoint = previous.host.equals(value.host, true) && previous.port == value.port &&
+                previous.secureWebSocket == value.secureWebSocket
+            tciProfiles[index] = value.copy(
+                tciAcceptance = if (sameEndpoint) previous.tciAcceptance else TciAcceptanceState.UNVERIFIED,
+                tciAcceptanceIdentity = if (sameEndpoint) previous.tciAcceptanceIdentity else null,
+            )
+        } else {
             require(tciProfiles.size < 32) { "At most 32 TCI profiles are supported" }
-            tciProfiles += value
+            tciProfiles += value.copy(tciAcceptance = TciAcceptanceState.UNVERIFIED, tciAcceptanceIdentity = null)
         }
         persistTciProfiles()
         selectRadioProfile(value)
+    }
+
+    fun recordTciAcceptance(evidence: TciAcceptanceEvidence): Boolean {
+        val index = tciProfiles.indexOfFirst { it.id == evidence.profileId }
+        if (index < 0 || evidence.demoNoRadio || !evidence.operatorConfirmed || !evidence.rxConfirmed) return false
+        val profile = tciProfiles[index]
+        val endpoint = profile.physicalIdentity ?: return false
+        if (!evidence.deviceIdentity.startsWith("$endpoint|") || evidence.from != profile.tciAcceptance ||
+            evidence.to.ordinal != evidence.from.ordinal + 1) return false
+        tciProfiles[index] = profile.copy(tciAcceptance = evidence.to, tciAcceptanceIdentity = evidence.deviceIdentity)
+        persistTciProfiles()
+        disarmAll()
+        return true
     }
 
     fun deleteTciProfile(id: RadioProfileId): Boolean {
@@ -499,16 +520,28 @@ class AppController(private val context: Context) {
                 backendKind = RadioBackendKind.NATIVE_TCI,
                 modelId = RadioModelId("TCI:${id.take(80)}"),
                 manufacturer = "TCI",
-                model = "TCI receive-only server",
+                model = "TCI control server",
                 transport = RadioTransportType.TCI,
                 host = row.getString("host"),
                 port = row.getInt("port"),
-                readOnly = true,
+                readOnly = false,
                 automaticSafeReconnect = row.optBoolean("reconnect", false),
                 secureWebSocket = row.optBoolean("secure", false),
                 preferredIqSampleRate = row.optInt("iq_rate", 96_000),
                 preferredInitialReceiver = row.optInt("receiver", 0),
                 rxAudioRoute = row.optString("audio_route", "SYSTEM"),
+                tciAcceptance = runCatching { TciAcceptanceState.valueOf(row.optString("acceptance", "UNVERIFIED")) }
+                    .getOrDefault(TciAcceptanceState.UNVERIFIED),
+                tciAcceptanceIdentity = row.optString("acceptance_identity").takeIf(String::isNotBlank),
+                tciTxSettings = TciTxSettings(
+                    maxDrivePercent = row.optInt("max_drive", 35).coerceIn(0, 100),
+                    maxTuneDrivePercent = row.optInt("max_tune_drive", 10).coerceIn(0, 25),
+                    maxTuneDurationMillis = row.optLong("max_tune_ms", 10_000).coerceIn(500, 30_000),
+                    swrAbort = row.optDouble("swr_abort", 3.0).coerceIn(1.1, 10.0),
+                    alcAbort = row.optDouble("alc_abort", .95).coerceIn(.1, 1.0),
+                    txAudioRate = row.optInt("tx_audio_rate", 48_000).takeIf { it in setOf(8_000, 12_000, 24_000, 48_000) } ?: 48_000,
+                    monitorEnabled = row.optBoolean("tx_monitor", false),
+                ),
             )
         }
     }.getOrDefault(emptyList())
@@ -519,7 +552,13 @@ class AppController(private val context: Context) {
             .put("host", profile.host).put("port", profile.port)
             .put("secure", profile.secureWebSocket).put("iq_rate", profile.preferredIqSampleRate)
             .put("receiver", profile.preferredInitialReceiver).put("audio_route", profile.rxAudioRoute)
-            .put("reconnect", profile.automaticSafeReconnect) })
+            .put("reconnect", profile.automaticSafeReconnect)
+            .put("acceptance", profile.tciAcceptance.name).put("acceptance_identity", profile.tciAcceptanceIdentity)
+            .put("max_drive", profile.tciTxSettings.maxDrivePercent)
+            .put("max_tune_drive", profile.tciTxSettings.maxTuneDrivePercent)
+            .put("max_tune_ms", profile.tciTxSettings.maxTuneDurationMillis)
+            .put("swr_abort", profile.tciTxSettings.swrAbort).put("alc_abort", profile.tciTxSettings.alcAbort)
+            .put("tx_audio_rate", profile.tciTxSettings.txAudioRate).put("tx_monitor", profile.tciTxSettings.monitorEnabled) })
         prefs.edit().putString("tci_profiles_v1", rows.toString()).apply()
     }
 

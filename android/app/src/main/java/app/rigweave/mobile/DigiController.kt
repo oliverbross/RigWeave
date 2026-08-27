@@ -145,6 +145,8 @@ class DigiController(
     private val stationGrid: () -> String,
     private val dependencies: DigiDependencies,
     private val transmitEligible: () -> Boolean = { true },
+    private val tciAuthority: TciTransmitAuthority? = null,
+    private val tciSelected: () -> Boolean = { false },
 ) : AutoCloseable {
     private val prefs = context.getSharedPreferences("rigweave-digi", Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -1482,7 +1484,10 @@ class DigiController(
         txPhase = DigiTxPhase.RX_UNCONFIRMED
         status = "Digital transmission stopped · requesting and verifying RX"
         scope.launch {
-            val confirmed = if (radioFamily() == RadioFamily.FLEXRADIO) {
+            val confirmed = if (tciSelected()) {
+                tciAuthority?.globalStop("DIGI_OPERATOR_STOP") == true &&
+                    runCatching { tciAuthority.requestRxAndRecheck() }.getOrDefault(false)
+            } else if (radioFamily() == RadioFamily.FLEXRADIO) {
                 runCatching { flex.stopTransmit("operator stopped digital transmission") }.isSuccess &&
                     waitForFlexReceive(2_000L)
             } else {
@@ -1507,7 +1512,9 @@ class DigiController(
         disarm()
         scope.launch {
             status = "Requesting RX and checking radio state"
-            val confirmed = if (radioFamily() == RadioFamily.FLEXRADIO) {
+            val confirmed = if (tciSelected()) {
+                runCatching { tciAuthority?.requestRxAndRecheck() == true }.getOrDefault(false)
+            } else if (radioFamily() == RadioFamily.FLEXRADIO) {
                 runCatching { flex.stopTransmit("Digi RX recovery recheck") }.isSuccess && waitForFlexReceive(2_000L)
             } else {
                 transport.send("RX;") is UsbResult.Connected &&
@@ -1613,7 +1620,8 @@ class DigiController(
             stopRx("RX paused immediately before transmit")
             adapterEntered = true
             val outcome = withTimeoutOrNull(DigiCapabilities.forMode(selectedMode).maximumTxMillis + 5_000L) {
-                if (selectedFamily == RadioFamily.FLEXRADIO) transmitFlex(samples, slotStartMillis)
+                if (tciSelected()) transmitTci(samples, selectedMode, selectedFrequency, selectedIdentity, slotStartMillis)
+                else if (selectedFamily == RadioFamily.FLEXRADIO) transmitFlex(samples, slotStartMillis)
                 else transmitElecraft(samples, slotStartMillis)
             } ?: DigiTxOutcome.failed(DigiTxFailure.CANCELLED, "Digital TX exceeded its finite safety timeout",
                 encoded = true, slotStartMillis = slotStartMillis, pttAttempted = true)
@@ -1656,6 +1664,35 @@ class DigiController(
             txEnabled, txActive, rxActive, rxAudioHz.roundToInt(), txAudioHz.roundToInt(),
             stationCallsign(), stationGrid(),
         ))
+    }
+
+    private suspend fun transmitTci(samples: FloatArray, selectedMode: DigiMode, selectedFrequency: Long,
+        selectedIdentity: String, slotStartMillis: Long): DigiTxOutcome {
+        val authority = tciAuthority ?: return DigiTxOutcome.failed(DigiTxFailure.TCI_INTERLOCK_REFUSED,
+            "TCI TX authority is unavailable", slotStartMillis = slotStartMillis)
+        val completed = authority.transmit(TciTxIntent(
+            owner = "Digi:${selectedMode.label}",
+            source = if (selectedMode == DigiMode.SSTV) TciTxSource.SSTV else TciTxSource.DIGI,
+            mode = selectedMode.family, mono = samples, sampleRate = 48_000, receiver = 0,
+            expectedFrequencyHz = selectedFrequency,
+            foregroundValid = {
+                txEnabled && txActive && mode == selectedMode && dependencies.radioState().identity == selectedIdentity &&
+                    dependencies.radioState().frequencyHz == selectedFrequency && tciSelected()
+            },
+        ))
+        return if (completed) {
+            txPhase = DigiTxPhase.SAFE
+            status = "TCI ${selectedMode.label} TX complete · RX confirmed"
+            DigiTxOutcome.success(slotStartMillis)
+        } else {
+            val unsafe = authority.snapshot.state == TciTxMachineState.RX_UNCONFIRMED
+            if (unsafe) latchRxUnconfirmed("RX UNCONFIRMED · TCI recovery requires REQUEST RX & RECHECK")
+            status = "TCI ${selectedMode.label} TX blocked · ${authority.snapshot.interlock ?: "interlock"}"
+            DigiTxOutcome.failed(if (unsafe) DigiTxFailure.RX_UNCONFIRMED else DigiTxFailure.TCI_INTERLOCK_REFUSED,
+                status, pttConfirmed = authority.snapshot.pttLatencyMillis != null,
+                audioCompleted = authority.snapshot.frames > 0, rxConfirmed = !unsafe,
+                slotStartMillis = slotStartMillis, pttAttempted = authority.snapshot.pttLatencyMillis != null)
+        }
     }
 
     fun onForegroundChanged(foreground: Boolean) {

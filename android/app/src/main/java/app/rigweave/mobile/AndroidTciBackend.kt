@@ -14,6 +14,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
+import okio.ByteString.Companion.toByteString
 import java.util.Locale
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
@@ -45,6 +46,18 @@ data class TciReceiverSnapshot(
     val swr: Double? = null,
     val drivePercent: Int? = null,
     val tuneDrivePercent: Int? = null,
+    val transmitting: Boolean? = null,
+    val tuning: Boolean? = null,
+    val txEnabled: Boolean? = null,
+    val txFrequencyHz: Long? = null,
+    val txVfo: String? = null,
+    val xitEnabled: Boolean? = null,
+    val xitOffsetHz: Long? = null,
+    val peakPowerWatts: Double? = null,
+    val reflectedPowerWatts: Double? = null,
+    val alc: Double? = null,
+    val txAudioSampleRate: Int? = null,
+    val monitorEnabled: Boolean? = null,
     val sampleRate: Int = 0,
     val iqSampleRate: Int = 0,
     val rxAudioSampleRate: Int = 0,
@@ -116,7 +129,10 @@ internal class LatestTciWriteQueue {
     @Synchronized fun size(): Int = rows.size
 }
 
-class AndroidTciBackendFactory(private val runtime: TciRuntimeState) : RadioBackendFactory {
+class AndroidTciBackendFactory(
+    private val runtime: TciRuntimeState,
+    private val transmitAuthority: TciTransmitAuthority = TciTransmitAuthority(),
+) : RadioBackendFactory {
     private val client = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -125,7 +141,7 @@ class AndroidTciBackendFactory(private val runtime: TciRuntimeState) : RadioBack
 
     override suspend fun create(profile: RadioConnectionProfile): ManagedRadioBackend {
         require(profile.backendKind == RadioBackendKind.NATIVE_TCI)
-        return AndroidTciBackend(profile, client, runtime)
+        return AndroidTciBackend(profile, client, runtime, transmitAuthority)
     }
 }
 
@@ -133,6 +149,7 @@ private class AndroidTciBackend(
     override val profile: RadioConnectionProfile,
     private val client: OkHttpClient,
     private val runtime: TciRuntimeState,
+    private val transmitAuthority: TciTransmitAuthority,
 ) : ManagedRadioBackend {
     private val lock = Any()
     private val receivers = linkedMapOf<Int, TciReceiverSnapshot>()
@@ -153,7 +170,12 @@ private class AndroidTciBackend(
     @Volatile private var ready = CompletableDeferred<Boolean>()
     private var fragment = ""
     private var lastStatusRow = ""
-    private var safeStopGeneration = Long.MIN_VALUE
+    private val txAdapter = object : TciTransmitAdapter {
+        override val deviceIdentity: String get() = "${profile.physicalIdentity ?: "tci:unknown"}|${current.device}"
+        override fun readback(): TciTxReadback = synchronized(lock) { txReadbackLocked() }
+        override fun sendText(command: String): Boolean = send(command)
+        override fun sendBinary(frame: ByteArray): Boolean = frame.isNotEmpty() && socket?.send(frame.toByteString()) == true
+    }
 
     override val snapshot: RadioRuntimeSnapshot
         get() = synchronized(lock) {
@@ -168,16 +190,17 @@ private class AndroidTciBackend(
                 vfoAHz = available(receiver?.vfoAHz?.takeIf { it > 0 }),
                 vfoBHz = available(receiver?.vfoBHz?.takeIf { it > 0 }),
                 receiveVfo = available(receiver?.selectedChannel?.let { if (it == 1) "B" else "A" }),
-                transmitVfo = AvailableRadioValue(RadioAvailability.UNAVAILABLE),
+                transmitVfo = receiver?.txVfo?.let(::available) ?: AvailableRadioValue(RadioAvailability.UNKNOWN),
                 mode = available(receiver?.mode?.takeUnless { it == "UNKNOWN" }),
                 passbandHz = available(receiver?.passbandHz),
                 split = receiver?.split?.let(::available) ?: AvailableRadioValue(RadioAvailability.UNKNOWN),
                 ritHz = AvailableRadioValue(RadioAvailability.UNAVAILABLE),
-                xitHz = AvailableRadioValue(RadioAvailability.UNAVAILABLE),
+                xitHz = receiver?.xitOffsetHz?.toInt()?.let(::available) ?: AvailableRadioValue(RadioAvailability.UNKNOWN),
                 sMeter = available(receiver?.meterDbm),
                 powerWatts = available(receiver?.forwardPowerWatts),
                 swr = available(receiver?.swr),
-                transmitting = AvailableRadioValue(RadioAvailability.UNAVAILABLE),
+                alc = receiver?.alc?.let(::available) ?: AvailableRadioValue(RadioAvailability.UNAVAILABLE),
+                transmitting = receiver?.transmitting?.let(::available) ?: AvailableRadioValue(RadioAvailability.UNKNOWN),
                 capabilities = RadioCapabilitySet(
                     frequency = availability(receiver?.vfoAHz?.takeIf { it > 0 }),
                     vfoB = availability(receiver?.vfoBHz?.takeIf { it > 0 }),
@@ -189,8 +212,8 @@ private class AndroidTciBackend(
                     gains = RadioAvailability.UNKNOWN,
                     panadapter = if (receiver?.iqRunning == true) RadioAvailability.AVAILABLE else RadioAvailability.UNKNOWN,
                     iqAudio = RadioAvailability.AVAILABLE,
-                    ptt = RadioAvailability.UNAVAILABLE,
-                    tune = RadioAvailability.UNAVAILABLE,
+                    ptt = if (profile.tciAcceptance.permits(TciAcceptanceState.PTT_ACCEPTED)) RadioAvailability.AVAILABLE else RadioAvailability.UNKNOWN,
+                    tune = if (profile.tciAcceptance.permits(TciAcceptanceState.TUNE_ACCEPTED)) RadioAvailability.AVAILABLE else RadioAvailability.UNKNOWN,
                     memoryWrite = RadioAvailability.UNAVAILABLE,
                 ),
                 firmware = "${current.protocol} ${current.protocolVersion}".trim(),
@@ -227,6 +250,7 @@ private class AndroidTciBackend(
     }
 
     override suspend fun disconnect() {
+        transmitAuthority.globalStop("TCI_DISCONNECT")
         val ws = socket
         synchronized(lock) {
             receivers.values.filter { it.iqRunning }.forEach { receiver -> send(command(NativeTci.IQ_STOP, receiver.backendIndex)) }
@@ -241,16 +265,15 @@ private class AndroidTciBackend(
 
     override suspend fun requestReceive(): Boolean {
         val ws = socket ?: return true
-        val value = synchronized(lock) {
-            if (safeStopGeneration == current.generation) return@synchronized ""
-            safeStopGeneration = current.generation
-            receivers.values.joinToString("") { command(NativeTci.SAFE_STOP, it.backendIndex) }
-        }
+        transmitAuthority.globalStop("REQUEST_RECEIVE")
+        val value = synchronized(lock) { receivers.values.joinToString("") { command(NativeTci.SAFE_STOP, it.backendIndex) } }
         return value.isBlank() || ws.send(value)
     }
 
     override suspend fun execute(action: RadioPlatformAction): Boolean {
         if (action.actionClass in setOf(RadioActionClass.TRANSMIT, RadioActionClass.TUNE, RadioActionClass.MEMORY_WRITE)) return false
+        if (action.actionClass != RadioActionClass.READ_ONLY &&
+            !profile.tciAcceptance.permits(TciAcceptanceState.SAFE_SETTERS_ACCEPTED)) return false
         val active = synchronized(lock) { action.targetReceiver?.let(receivers::get)
             ?: receivers.values.firstOrNull { it.id == current.activeReceiverId } ?: receivers.values.firstOrNull() }
             ?: return false
@@ -280,6 +303,7 @@ private class AndroidTciBackend(
     }
 
     override fun close() {
+        transmitAuthority.globalStop("TCI_BACKEND_CLOSE")
         closed.set(true)
         socket?.cancel()
         socket = null
@@ -321,10 +345,10 @@ private class AndroidTciBackend(
             }
             decodeExecutor.execute {
                 if (!currentConnection()) { synchronized(lock) { publishLocked(current.copy(staleFrames = current.staleFrames + 1)) }; return@execute }
-                val metadata = IntArray(6)
+                val metadata = IntArray(7)
                 val samples = NativeTci.decodeBinary(bytes.toByteArray(), metadata)
-                if (metadata[5] != 0) {
-                    synchronized(lock) { publishLocked(current.copy(malformedFrames = current.malformedFrames + 1, lastError = "Malformed TCI binary frame (${metadata[5]})")) }
+                if (metadata[6] != 0) {
+                    synchronized(lock) { publishLocked(current.copy(malformedFrames = current.malformedFrames + 1, lastError = "Malformed TCI binary frame (${metadata[6]})")) }
                     return@execute
                 }
                 val receiver = metadata[0]
@@ -351,9 +375,10 @@ private class AndroidTciBackend(
                 when (metadata[3]) {
                     NativeTci.DATA_IQ -> runtime.iqSink(receiver, metadata[1], samples)
                     NativeTci.DATA_RX_AUDIO -> runtime.rxAudioSink(receiver, metadata[1], metadata[4].coerceAtLeast(1), samples)
-                    NativeTci.DATA_TX_AUDIO, NativeTci.DATA_TX_CHRONO -> synchronized(lock) {
+                    NativeTci.DATA_TX_CHRONO -> transmitAuthority.onChrono(metadata[5])
+                    NativeTci.DATA_TX_AUDIO -> synchronized(lock) {
                         publishLocked(current.copy(blockedTxFrames = current.blockedTxFrames + 1,
-                            lastError = "Server TX stream ignored by receive-only Android profile"))
+                            lastError = "Unexpected server TX_AUDIO ignored"))
                     }
                 }
                 synchronized(lock) {
@@ -431,6 +456,24 @@ private class AndroidTciBackend(
                 receivers[index] = value.copy(split = fields.getOrNull(1)?.equals("true", true))
                 confirmLocked("$index:split")
             }
+            "xit_enable" -> receiver()?.let { (index, value) ->
+                receivers[index] = value.copy(xitEnabled = fields.getOrNull(1)?.equals("true", true), sourceAgeMillis = 0)
+            }
+            "xit_offset" -> receiver()?.let { (index, value) ->
+                receivers[index] = value.copy(xitOffsetHz = fields.getOrNull(1)?.toLongOrNull(), sourceAgeMillis = 0)
+            }
+            "trx" -> receiver()?.let { (index, value) ->
+                receivers[index] = value.copy(transmitting = fields.getOrNull(1)?.equals("true", true), sourceAgeMillis = 0)
+            }
+            "tune" -> receiver()?.let { (index, value) ->
+                receivers[index] = value.copy(tuning = fields.getOrNull(1)?.equals("true", true), sourceAgeMillis = 0)
+            }
+            "tx_enable" -> receiver()?.let { (index, value) ->
+                receivers[index] = value.copy(txEnabled = fields.getOrNull(1)?.equals("true", true), sourceAgeMillis = 0)
+            }
+            "tx_frequency" -> receiver()?.let { (index, value) ->
+                receivers[index] = value.copy(txFrequencyHz = fields.getOrNull(1)?.toLongOrNull()?.takeIf { it > 0 }, sourceAgeMillis = 0)
+            }
             "rx_enable" -> receiver()?.let { (index, value) ->
                 receivers[index] = value.copy(enabled = fields.getOrNull(1)?.equals("true", true) == true)
                 confirmLocked("$index:enabled")
@@ -447,7 +490,14 @@ private class AndroidTciBackend(
             "tune_drive" -> receiver()?.let { (index, value) -> receivers[index] = value.copy(tuneDrivePercent = fields.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 100)) }
             "tx_sensors" -> receiver()?.let { (index, value) -> receivers[index] = value.copy(
                 forwardPowerWatts = fields.getOrNull(2)?.toDoubleOrNull()?.takeIf { it >= 0.0 },
-                swr = fields.getOrNull(4)?.toDoubleOrNull()?.takeIf { it >= 1.0 }) }
+                peakPowerWatts = fields.getOrNull(3)?.toDoubleOrNull()?.takeIf { it >= 0.0 },
+                swr = fields.getOrNull(4)?.toDoubleOrNull()?.takeIf { it >= 1.0 }, sourceAgeMillis = 0) }
+            "audio_samplerate" -> fields.lastOrNull()?.toIntOrNull()?.takeIf { it in setOf(8_000, 12_000, 24_000, 48_000) }?.let { rate ->
+                receivers.replaceAll { _, value -> value.copy(txAudioSampleRate = rate) }
+            }
+            "mon_enable" -> receiver()?.let { (index, value) ->
+                receivers[index] = value.copy(monitorEnabled = fields.getOrNull(1)?.equals("true", true))
+            }
             "iq_start" -> receiver()?.let { (index, value) -> receivers[index] = value.copy(iqRunning = true) }
             "iq_stop" -> receiver()?.let { (index, value) -> receivers[index] = value.copy(iqRunning = false) }
             "audio_start" -> receiver()?.let { (index, value) -> receivers[index] = value.copy(audioRunning = true) }
@@ -462,7 +512,10 @@ private class AndroidTciBackend(
                 repeat(count) { receivers.getOrPut(it) { TciReceiverSnapshot("tci:$it", it, "RX ${it + 1}") } }
                 val preferred = profile.preferredInitialReceiver.coerceAtMost(count - 1)
                 current = current.copy(state = TciConnectionState.READY, activeReceiverId = "tci:$preferred", listeningReceiverId = "tci:$preferred",
-                    receiveOnly = true, streamAttachmentRequired = true, reconnectState = "CONTROL READY · EXPLICIT STREAM ATTACHMENT REQUIRED")
+                    receiveOnly = !profile.tciAcceptance.permits(TciAcceptanceState.PTT_ACCEPTED), streamAttachmentRequired = true,
+                    reconnectState = "CONTROL READY · EXPLICIT STREAM ATTACHMENT REQUIRED")
+                transmitAuthority.attach(profile.id.value, txAdapter.deviceIdentity, profile.tciAcceptance,
+                    profile.tciAcceptanceIdentity, txAdapter, profile.tciTxSettings)
                 ready.complete(true)
             }
             "start" -> Unit
@@ -538,6 +591,23 @@ private class AndroidTciBackend(
         val active = current.activeReceiverId
         val listening = current.listeningReceiverId
         publishLocked(current.copy(receivers = receivers.values.map { it.copy(active = it.id == active, listening = it.id == listening) }))
+        transmitAuthority.publishReadback(txReadbackLocked())
+    }
+
+    private fun txReadbackLocked(): TciTxReadback {
+        val value = receivers.values.firstOrNull { it.id == current.activeReceiverId } ?: receivers.values.firstOrNull()
+        return TciTxReadback(
+            connected = current.ready, transmitting = value?.transmitting, tuning = value?.tuning,
+            txEnabled = value?.txEnabled, receiver = value?.backendIndex,
+            rxFrequencyHz = value?.effectiveRxHz?.takeIf { it > 0 }, txFrequencyHz = value?.txFrequencyHz,
+            txVfo = value?.txVfo, split = value?.split, xitEnabled = value?.xitEnabled,
+            xitOffsetHz = value?.xitOffsetHz, mode = value?.mode?.takeUnless { it == "UNKNOWN" },
+            txFilterHz = value?.passbandHz, drivePercent = value?.drivePercent,
+            tuneDrivePercent = value?.tuneDrivePercent, forwardPowerWatts = value?.forwardPowerWatts,
+            peakPowerWatts = value?.peakPowerWatts, reflectedPowerWatts = value?.reflectedPowerWatts,
+            swr = value?.swr, alc = value?.alc, txAudioRate = value?.txAudioSampleRate,
+            monitorEnabled = value?.monitorEnabled, sourceAgeMillis = value?.sourceAgeMillis, sequence = current.generation,
+        )
     }
 
     private fun publishLocked(value: TciRuntimeSnapshot) {
@@ -546,6 +616,7 @@ private class AndroidTciBackend(
     }
 
     private fun disconnected() = synchronized(lock) {
+        transmitAuthority.detach("TCI_DISCONNECTED")
         socket = null
         coalescedWrites.clear()
         sentReadbacks.clear()
@@ -557,6 +628,7 @@ private class AndroidTciBackend(
     }
 
     private fun fail(message: String) = synchronized(lock) {
+        transmitAuthority.detach("TCI_FAILURE")
         socket = null
         publishLocked(current.copy(state = TciConnectionState.ERROR, lastError = message.take(180)))
         if (!ready.isCompleted) ready.complete(false)

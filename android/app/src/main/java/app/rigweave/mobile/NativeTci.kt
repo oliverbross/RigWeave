@@ -8,6 +8,8 @@ object NativeTci {
     external fun parseStatus(text: String): Array<String>
     external fun decodeBinary(message: ByteArray, metadata: IntArray): FloatArray
     external fun buildCommand(kind: Int, receiver: Int, channel: Int, number: Long, text: String): String
+    external fun buildTxAudio(mono: FloatArray, sourceRate: Int, targetRate: Int, receiver: Int,
+        targetFrameOffset: Long, requestedValues: Int, level: Float): ByteArray
 
     const val VFO = 0
     const val MODE = 1
@@ -22,6 +24,15 @@ object NativeTci {
     const val IF_OFFSET = 10
     const val VOLUME = 11
     const val SPLIT = 12
+    const val TRX = 13
+    const val TUNE = 14
+    const val DRIVE = 15
+    const val TUNE_DRIVE = 16
+    const val AUDIO_RATE = 17
+    const val TX_SENSORS = 18
+    const val XIT_ENABLE = 19
+    const val XIT_OFFSET = 20
+    const val MONITOR_ENABLE = 21
 
     const val DATA_IQ = 0
     const val DATA_RX_AUDIO = 1

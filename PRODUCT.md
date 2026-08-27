@@ -105,3 +105,7 @@ Compatible TCI, QMX/QMX+, KX3/KX2 external stereo and generic proven I/Q sources
 ## Android SDR Operator Workbench v4
 
 Android adds production portable float32 I/Q capture/offline replay, Panadapter v6 history and Marker A/B tools, calibrated/relative measurements, signal tracking with local-receiver-only follow, bounded Spectrum Survey, historical scanner ordering, four channel monitors, memory/band-stack metadata and receive calibration. Replay is receive-only, detaches live TCI, never moves a physical VFO and disables audio outside 1×. Derived survey/capture storage is app-private and separate from canonical QSO ownership.
+
+## Android TCI Transmit Control v5
+
+Android adds an acceptance-gated TCI transmit authority for existing Digi/SSTV, reviewed CW audio-keying and immutable Voice Macro plans. PTT, Tune, TX audio, interlocks, Global Stop and RX recovery have one owner. New/restored profiles remain unverified; physical PTT/Tune/RF acceptance is pending. Debug TX is labelled `DEMO · NO RADIO` and cannot upgrade production acceptance.

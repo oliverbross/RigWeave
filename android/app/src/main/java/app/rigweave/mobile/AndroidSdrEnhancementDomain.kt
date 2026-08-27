@@ -578,16 +578,19 @@ class DebugSdrLab(
     private val operational: SdrOperationalV2? = null,
     private val localReceivers: LocalReceiverController? = null,
     private val workbench: AndroidSdrWorkbenchV4? = null,
+    private val txDebug: DebugTciTransmitter? = null,
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     var active by mutableStateOf(false); private set
     var localFixture by mutableStateOf(DebugLocalFixture.DUAL_RECEIVERS); private set
+    var txScenario by mutableStateOf(DebugTciTxScenario.PTT_SUCCESS); private set
     private var job: Job? = null
 
     fun start() {
         check(BuildConfig.DEBUG) { "Debug SDR lab is unavailable in release builds" }
         if (active) return
         active = true
+        txDebug?.start()
         val now = Instant.now().epochSecond
         val receivers = listOf(
             TciReceiverSnapshot("tci:0", 0, "DEMO RX 1", active = true, listening = true, vfoAHz = 14_074_000, vfoBHz = 14_095_600,
@@ -656,7 +659,15 @@ class DebugSdrLab(
         localReceivers?.setMode("local:A", mode)
     }
 
+    fun selectTxScenario(value: DebugTciTxScenario) {
+        check(BuildConfig.DEBUG); txScenario = value; txDebug?.select(value)
+    }
+
+    fun fakeTransmit() { check(BuildConfig.DEBUG && active); scope.launch { txDebug?.transmit() } }
+    fun fakeTune() { check(BuildConfig.DEBUG && active); scope.launch { txDebug?.tune() } }
+
     fun stop() {
+        txDebug?.stop()
         active = false; job?.cancel(); job = null
         panadapter.detachTciSources("Debug SDR lab stopped")
         runtime.publish(TciRuntimeSnapshot(lastError = "DEMO · NO RADIO stopped"))

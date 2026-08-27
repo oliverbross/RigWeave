@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -545,7 +546,7 @@ Java_app_rigweave_mobile_NativeTci_parseStatus(JNIEnv *env, jobject, jstring val
 
 extern "C" JNIEXPORT jfloatArray JNICALL
 Java_app_rigweave_mobile_NativeTci_decodeBinary(JNIEnv *env, jobject, jbyteArray data, jintArray metadata) {
-    if (!data || !metadata || env->GetArrayLength(metadata) < 6) return env->NewFloatArray(0);
+    if (!data || !metadata || env->GetArrayLength(metadata) < 7) return env->NewFloatArray(0);
     const jsize length = env->GetArrayLength(data);
     if (length <= 0 || length > kMaximumJniInput) return env->NewFloatArray(0);
     jbyte *bytes = env->GetByteArrayElements(data, nullptr);
@@ -554,10 +555,10 @@ Java_app_rigweave_mobile_NativeTci_decodeBinary(JNIEnv *env, jobject, jbyteArray
     const auto frame = rigweave::tci::decode_binary(reinterpret_cast<const std::uint8_t *>(bytes),
         static_cast<std::size_t>(length), &error);
     env->ReleaseByteArrayElements(data, bytes, JNI_ABORT);
-    jint meta[6]{};
+    jint meta[7]{};
     if (!frame) {
-        meta[5] = static_cast<jint>(error);
-        env->SetIntArrayRegion(metadata, 0, 6, meta);
+        meta[6] = static_cast<jint>(error);
+        env->SetIntArrayRegion(metadata, 0, 7, meta);
         return env->NewFloatArray(0);
     }
     meta[0] = static_cast<jint>(frame->header.receiver);
@@ -565,7 +566,8 @@ Java_app_rigweave_mobile_NativeTci_decodeBinary(JNIEnv *env, jobject, jbyteArray
     meta[2] = static_cast<jint>(frame->header.format);
     meta[3] = static_cast<jint>(frame->header.data_type);
     meta[4] = static_cast<jint>(frame->header.channels);
-    env->SetIntArrayRegion(metadata, 0, 6, meta);
+    meta[5] = static_cast<jint>(frame->header.value_count);
+    env->SetIntArrayRegion(metadata, 0, 7, meta);
     jfloatArray output = env->NewFloatArray(static_cast<jsize>(frame->values.size()));
     if (output && !frame->values.empty()) env->SetFloatArrayRegion(output, 0,
         static_cast<jsize>(frame->values.size()), frame->values.data());
@@ -591,9 +593,41 @@ Java_app_rigweave_mobile_NativeTci_buildCommand(JNIEnv *env, jobject, jint kind,
     case 10: command = build_if(static_cast<std::uint32_t>(receiver), static_cast<std::uint32_t>(channel), static_cast<std::int64_t>(number)); break;
     case 11: command = build_volume(static_cast<std::int32_t>(number)); break;
     case 12: command = build_split_enable(static_cast<std::uint32_t>(receiver), number != 0); break;
+    case 13: command = build_trx(static_cast<std::uint32_t>(receiver), number != 0); break;
+    case 14: command = build_tune(static_cast<std::uint32_t>(receiver), number != 0); break;
+    case 15: command = build_drive(static_cast<std::uint32_t>(receiver), static_cast<std::uint32_t>(number)); break;
+    case 16: command = build_tune_drive(static_cast<std::uint32_t>(receiver), static_cast<std::uint32_t>(number)); break;
+    case 17: command = build_audio_sample_rate(static_cast<std::uint32_t>(number)); break;
+    case 18: command = build_tx_sensors_enable(static_cast<std::uint32_t>(receiver), number != 0); break;
+    case 19: command = build_xit_enable(static_cast<std::uint32_t>(receiver), number != 0); break;
+    case 20: command = build_xit_offset(static_cast<std::uint32_t>(receiver), static_cast<std::int64_t>(number)); break;
+    case 21: command = build_monitor_enable(static_cast<std::uint32_t>(receiver), number != 0); break;
     default: break;
     }
     return env->NewStringUTF(command ? command->c_str() : "");
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_app_rigweave_mobile_NativeTci_buildTxAudio(JNIEnv *env, jobject, jfloatArray mono,
+    jint sourceRate, jint targetRate, jint receiver, jlong targetFrameOffset,
+    jint requestedValues, jfloat level) {
+    if (!mono || sourceRate <= 0 || targetRate <= 0 || receiver < 0 || targetFrameOffset < 0 ||
+        requestedValues <= 0 || requestedValues > 16'384) return env->NewByteArray(0);
+    const jsize count = env->GetArrayLength(mono);
+    if (count <= 0 || count > kMaximumJniInput) return env->NewByteArray(0);
+    jfloat *samples = env->GetFloatArrayElements(mono, nullptr);
+    if (!samples) return env->NewByteArray(0);
+    const auto frame = rigweave::tci::build_tx_audio(static_cast<std::uint32_t>(receiver),
+        static_cast<std::uint32_t>(sourceRate), static_cast<std::uint32_t>(targetRate),
+        samples, static_cast<std::size_t>(count), static_cast<std::uint64_t>(targetFrameOffset),
+        static_cast<std::uint32_t>(requestedValues), level);
+    env->ReleaseFloatArrayElements(mono, samples, JNI_ABORT);
+    if (!frame || frame->size() > static_cast<std::size_t>(std::numeric_limits<jsize>::max()))
+        return env->NewByteArray(0);
+    jbyteArray output = env->NewByteArray(static_cast<jsize>(frame->size()));
+    if (output) env->SetByteArrayRegion(output, 0, static_cast<jsize>(frame->size()),
+        reinterpret_cast<const jbyte *>(frame->data()));
+    return output ? output : env->NewByteArray(0);
 }
 
 extern "C" JNIEXPORT jint JNICALL

@@ -86,3 +86,7 @@ V3 adds source code and one small metadata schema only. Synthetic I/Q is generat
 ## Android SDR Workbench v4 budget
 
 Frozen v3 baselines are arm64 APK 65,104,138 bytes and four-ABI AAB 56,431,306 bytes. V4 adds Kotlin/Compose code and an empty-on-install SQLite schema; recordings and survey rows are runtime app-private data. No I/Q/audio fixture, SDRoxide asset, model, map, codec or new native dependency is packaged. Hard gates remain arm64 APK at most 130 MB and four-ABI AAB at most 60 MB, with preferred AAB delta at most 2 MB. Exact final-SHA sizes/hashes supersede this policy row.
+
+## Android TCI Transmit v5 budget
+
+Exact v4 baselines are arm64 APK 59,321,767 bytes and four-ABI AAB 56,593,563 bytes. V5 adds Kotlin/C++ source only: no model, recording, TX-audio fixture, SDRoxide payload, codec or dependency. Hard gates remain arm64 APK at most 130 MB and four-ABI AAB at most 60 MB. Final exact-SHA paths, sizes and SHA-256 hashes supersede estimates.

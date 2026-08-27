@@ -1,8 +1,12 @@
 package app.rigweave.mobile.keyer
 
 import app.rigweave.mobile.AppController
+import app.rigweave.mobile.NativeCore
 import app.rigweave.mobile.OperatingContextSnapshot
 import app.rigweave.mobile.RadioState
+import app.rigweave.mobile.TciTransmitAuthority
+import app.rigweave.mobile.TciTxIntent
+import app.rigweave.mobile.TciTxSource
 import app.rigweave.mobile.VoiceMacroTransmitController
 import app.rigweave.mobile.VoiceTransmitState
 import app.rigweave.mobile.cwMacroCommand
@@ -22,6 +26,8 @@ class AndroidKeyerRuntime(
     private val foregroundGeneration: () -> Long,
     private val direct: (String) -> Unit,
     private val scope: CoroutineScope,
+    private val tciAuthority: TciTransmitAuthority? = null,
+    private val tciSelected: () -> Boolean = { false },
 ) {
     val controller: KeyerController = KeyerController(
         profiles = profiles,
@@ -29,7 +35,8 @@ class AndroidKeyerRuntime(
         execute = ::execute,
         stopExecution = {
             app.updateCwMacrosArmed(false); app.updateVoiceMacrosArmed(false)
-            if (voiceTx.isBusy) voiceTx.forceRx() else direct("RX;")
+            if (tciSelected()) tciAuthority?.globalStop("KEYER_STOP")
+            else if (voiceTx.isBusy) voiceTx.forceRx() else direct("RX;")
         },
     )
 
@@ -74,8 +81,19 @@ class AndroidKeyerRuntime(
             else KeyerTemplateResolver.resolve(message.template, keyerContext).let { resolved ->
                 if (resolved.error != null) KeyerDispatchResult.Rejected(resolved.error, resolved.detail)
                 else {
-                    direct(cwMacroCommand(resolved.text)!!)
-                    scope.launch { delay(50); controller.onExecutionComplete() }
+                    if (tciSelected()) scope.launch {
+                        val pcm = NativeCore.digiEncodeCw(resolved.text, 20, 700f, 48_000)
+                        tciAuthority?.transmit(TciTxIntent(
+                            owner = "Keyer:${message.id}", source = TciTxSource.CW_AUDIO_KEYER,
+                            mode = "CW", mono = pcm, sampleRate = 48_000, receiver = 0,
+                            expectedFrequencyHz = radioState().frequencyHz,
+                            foregroundValid = { foreground() && app.cwMacrosArmed && tciSelected() },
+                        ))
+                        controller.onExecutionComplete()
+                    } else {
+                        direct(cwMacroCommand(resolved.text)!!)
+                        scope.launch { delay(50); controller.onExecutionComplete() }
+                    }
                     KeyerDispatchResult.Accepted(false)
                 }
             }

@@ -202,3 +202,10 @@ measurement, survey, scanner, monitor, calibration and TCI-lifecycle code is
 independently written RigWeave GPL-3.0-only code. No SDRoxide source, UI,
 asset, recording, I/Q fixture, model, dependency or binary is incorporated.
 See docs/android/SDROXIDE_ANDROID_V4_PROVENANCE.md.
+
+The Android TCI Transmit v5 audit reverified the same immutable SDRoxide release
+and audited the official ExpertSDR3 TCI reference at commit
+b081213ff97150fd29f669c633f060f93c81a286. RigWeave TX authority, framing,
+resampling, interlock, UI and fake-lab code is independently written GPL-3.0-only
+code. No upstream source, asset or binary is incorporated. See
+docs/android/TCI_TX_PROVENANCE_V5.md.

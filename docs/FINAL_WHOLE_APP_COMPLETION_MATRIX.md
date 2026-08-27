@@ -120,3 +120,13 @@ Twelve Android-visible areas are source-complete: TCI, multi-receiver, I/Q, RX a
 | Desktop feature/UI | UNCHANGED | Regression evidence only. |
 | Hosted exact SHA/packages | PENDING_UNTIL_FINAL_SHA | Mandatory workflow and final hashes cannot precede the immutable commit. |
 | Protected tablet/unlocked visual/live RF/audio | CONDITIONAL_PENDING | Never inferred from debug/build/package evidence. |
+
+### Android TCI Transmit v5
+
+| Surface | State | Boundary |
+|---|---|---|
+| Single TX authority and audited TX audio | SOURCE_COMPLETE | Digi/SSTV/CW/Voice/Stop route through one adapter; no direct feature writes. |
+| PTT/Tune/interlocks/RX recovery | SOURCE_COMPLETE | Readback-gated; ambiguous recovery latches `RX_UNCONFIRMED`. |
+| Acceptance/profile/UI/Debug Lab | SOURCE_COMPLETE | Production starts unverified; demo is session-only and labelled no-radio. |
+| Physical PTT/Tune/RF | PENDING | Requires exact-device controlled acceptance; not inferred from fake/build evidence. |
+| Hosted/package/tablet | PENDING_UNTIL_FINAL_SHA | Recorded only at immutable candidate SHA. |

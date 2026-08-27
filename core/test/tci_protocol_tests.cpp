@@ -38,6 +38,18 @@ int main() {
     assert(build_rx_enable(1U, true) == "rx_enable:1,true;");
     assert(build_mute(1U, false) == "mute:1,false;");
     assert(build_safe_stop(1U) == "trx:1,false;tune:1,false;");
+    assert(build_trx(1U, true) == "trx:1,true,tci;");
+    assert(build_trx(1U, false) == "trx:1,false;");
+    assert(build_tune(1U, true) == "tune:1,true;");
+    assert(build_drive(1U, 35U) == "drive:1,35;");
+    assert(!build_drive(1U, 101U));
+    assert(build_tune_drive(1U, 10U) == "tune_drive:1,10;");
+    assert(build_audio_sample_rate(48'000U) == "audio_samplerate:48000;");
+    assert(!build_audio_sample_rate(44'100U));
+    assert(build_tx_sensors_enable(1U, true) == "tx_sensors_enable:1,true;");
+    assert(build_xit_enable(1U, true) == "xit_enable:1,true;");
+    assert(build_xit_offset(1U, -250) == "xit_offset:1,-250;");
+    assert(build_monitor_enable(1U, true) == "mon_enable:1,true;");
     assert(!build_vfo(9U, 0U, 14'074'000U));
     assert(!build_vfo(0U, 2U, 14'074'000U));
     assert(!build_iq_sample_rate(1U));
@@ -91,6 +103,16 @@ int main() {
     const auto chrono_frame = decode_binary(chrono.data(), chrono.size(), &error, 1U);
     assert(chrono_frame && chrono_frame->header.data_type == DataType::TxChrono);
     assert(chrono_frame->header.value_count == 960U && chrono_frame->values.empty());
+
+    const std::vector<float> mono{0.0F, 0.5F, 1.0F, -1.0F};
+    const auto tx = build_tx_audio(0U, 24'000U, 48'000U, mono.data(), mono.size(), 0U, 8U, 2.0F);
+    assert(tx && tx->size() == BinaryHeaderBytes + 8U * sizeof(float));
+    const auto tx_frame = decode_binary(tx->data(), tx->size(), &error, 1U);
+    assert(tx_frame && tx_frame->header.data_type == DataType::TxAudio);
+    assert(tx_frame->header.sample_rate == 48'000U && tx_frame->header.channels == 2U);
+    assert(tx_frame->values.size() == 8U && tx_frame->values[4] == 0.98F);
+    assert(!build_tx_audio(0U, 24'000U, 48'000U, non_finite.data(), non_finite.size(), 0U, 8U, 1.0F));
+    assert(!build_tx_audio(0U, 24'000U, 48'000U, mono.data(), mono.size(), 0U, 7U, 1.0F));
 
     assert(std::string(*build_safe_stop(0U)).find("true") == std::string::npos);
 }

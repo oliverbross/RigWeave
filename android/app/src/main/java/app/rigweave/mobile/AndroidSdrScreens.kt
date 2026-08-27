@@ -33,6 +33,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -80,7 +81,7 @@ private val SdrHold = Color(0xFFF4C94E)
 private val SdrHealthy = Color(0xFF42C77B)
 private val SdrDanger = Color(0xFFE4544D)
 
-private enum class TciCockpitPage { RECEIVERS, PANADAPTER, SCANNER, CALIBRATION }
+private enum class TciCockpitPage { RECEIVERS, TRANSMIT, PANADAPTER, SCANNER, CALIBRATION }
 
 @Composable
 fun TciRadioCockpit(
@@ -92,19 +93,22 @@ fun TciRadioCockpit(
     operational: SdrOperationalV2,
     workbench: AndroidSdrWorkbenchV4,
     localReceivers: LocalReceiverController,
+    transmit: TciTransmitAuthority,
     memories: List<RadioPreset>,
     dispatch: (RadioPlatformAction) -> Unit,
     connect: () -> Unit,
     disconnect: () -> Unit,
     debugLab: DebugSdrLab?,
     openDigi: () -> Unit,
+    requestRxRecheck: () -> Unit,
+    requestTune: () -> Unit,
 ) {
     val state = runtime.snapshot
     var page by remember { mutableStateOf(TciCockpitPage.RECEIVERS) }
     Column(Modifier.fillMaxSize().background(SdrChassis).padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column {
-                Text("TCI RADIO · RECEIVE ONLY", color = SdrAmber, fontWeight = FontWeight.Black, fontSize = 18.sp)
+                Text("TCI RADIO · TRANSMIT CONTROL V5", color = SdrAmber, fontWeight = FontWeight.Black, fontSize = 18.sp)
                 Text("${state.device} · ${state.protocol} ${state.protocolVersion} · ${state.state}", color = if (state.ready) SdrHealthy else SdrHold)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -125,7 +129,8 @@ fun TciRadioCockpit(
             TciCockpitPage.entries.forEach { item -> FilterChip(page == item, { page = item }, { Text(item.name) }) }
             SdrTruthChip("RX ${state.receivers.size}/${state.declaredReceiverCount}", state.receivers.isNotEmpty())
             SdrTruthChip("IQ DROP ${state.droppedFrames}", state.droppedFrames == 0L)
-            SdrTruthChip("TX BLOCKED", true)
+            SdrTruthChip(transmit.snapshot.acceptance.name.replace('_', ' '), transmit.snapshot.acceptance.permits(TciAcceptanceState.PTT_ACCEPTED))
+            SdrTruthChip("TX ${transmit.snapshot.state}", transmit.snapshot.state == TciTxMachineState.RX_IDLE)
         }
         when (page) {
             TciCockpitPage.RECEIVERS -> Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -134,6 +139,8 @@ fun TciRadioCockpit(
                     state.receivers.firstOrNull()?.sampleRate ?: 0)
                 ReceiverCockpit(state, rxAudio, operational, dispatch)
             }
+            TciCockpitPage.TRANSMIT -> TciTransmitPanel(transmit.snapshot, requestRxRecheck, requestTune,
+                { transmit.globalStop("TCI_UI_STOP") }, openDigi, debugLab)
             TciCockpitPage.PANADAPTER -> TciPanadapterPanel(state, panadapter, dispatch, operational = operational, workbench = workbench,
                 localReceivers = localReceivers, openDigi = openDigi)
             TciCockpitPage.SCANNER -> ScannerPanel(scanner, memories, panadapter.frame, state, dispatch, operational)
@@ -144,9 +151,61 @@ fun TciRadioCockpit(
         }
         if (!state.ready && debugLab?.active != true) SdrEmptyState(
             "TCI data unavailable",
-            "Configure a TCI profile in Settings, then explicitly Connect. The app remains disconnected, receive-only and TX locked.")
+            "Configure a TCI profile in Settings, then explicitly Connect. TX stays locked until exact-device physical acceptance.")
         if (platform.lastSanitizedError != null || state.lastError != null) {
             Text("STATUS · ${state.lastError ?: platform.lastSanitizedError}", color = SdrDanger)
+        }
+    }
+}
+
+@Composable private fun TciTransmitPanel(snapshot: TciTxSnapshot, requestRxRecheck: () -> Unit,
+    requestTune: () -> Unit, stop: () -> Unit, openDigi: () -> Unit, debugLab: DebugSdrLab?) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        Text("TCI TX AUTHORITY", color = SdrAmber, fontWeight = FontWeight.Black)
+        Text(if (snapshot.demoNoRadio) "DEMO · NO RADIO" else "LIVE PROFILE · PHYSICAL ACCEPTANCE APPLIES",
+            color = if (snapshot.demoNoRadio) SdrDanger else SdrHold, fontWeight = FontWeight.Bold)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SdrHealthCard("STATE", snapshot.state.name, snapshot.state == TciTxMachineState.RX_IDLE, Modifier.weight(1f))
+            SdrHealthCard("ACCEPTANCE", snapshot.acceptance.name.replace('_', ' '),
+                snapshot.acceptance.permits(TciAcceptanceState.PTT_ACCEPTED), Modifier.weight(1f))
+            SdrHealthCard("READBACK", snapshot.readback.name, snapshot.readback == TciReadbackTruth.CONFIRMED, Modifier.weight(1f))
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SdrHealthCard("TX", "${snapshot.txFrequencyHz?.let { "${it / 1_000} kHz" } ?: "UNKNOWN"} · ${snapshot.mode ?: "UNKNOWN"} · ${snapshot.txVfo ?: "VFO UNKNOWN"}",
+                snapshot.txFrequencyHz != null, Modifier.weight(1f))
+            SdrHealthCard("POWER", "FWD ${snapshot.forwardPowerWatts?.let { "%.1f W".format(it) } ?: "UNKNOWN"} · REFL ${snapshot.reflectedPowerWatts?.let { "%.1f W".format(it) } ?: "UNAVAILABLE"}",
+                snapshot.swr?.let { it < 3.0 } != false, Modifier.weight(1f))
+            SdrHealthCard("SWR / ALC", "${snapshot.swr?.let { "%.2f".format(it) } ?: "UNKNOWN"} / ${snapshot.alc?.let { "%.2f".format(it) } ?: "UNAVAILABLE_PROTOCOL"}",
+                snapshot.interlock == null, Modifier.weight(1f))
+        }
+        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SdrRaised)) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("TX AUDIO · LOCAL, NOT RF", color = SdrAmber, fontWeight = FontWeight.Bold)
+                LinearProgressIndicator(progress = { (snapshot.peak ?: 0.0).toFloat().coerceIn(0f, 1f) }, Modifier.fillMaxWidth())
+                Text("RMS ${snapshot.rms?.let { "%.3f".format(it) } ?: "—"} · PEAK ${snapshot.peak?.let { "%.3f".format(it) } ?: "—"} · CLIP ${snapshot.clippedSamples} · ${snapshot.txAudioRate ?: 0} Hz",
+                    color = SdrMuted, fontFamily = FontFamily.Monospace)
+                Text("frames ${snapshot.frames} · queue ${snapshot.queueDepth} · under/over ${snapshot.underruns}/${snapshot.overruns} · jitter ${snapshot.frameJitterMillis?.let { "%.2f ms".format(it) } ?: "—"}", color = SdrMuted)
+            }
+        }
+        Text("INTERLOCK · ${snapshot.interlock ?: "CLEAR"} · elapsed ${snapshot.elapsedMillis} ms · watchdog ${snapshot.watchdogMillis ?: 0} ms", color = if (snapshot.interlock == null) SdrHealthy else SdrDanger)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(stop) { Text("GLOBAL STOP") }
+            OutlinedButton(requestRxRecheck, enabled = snapshot.state == TciTxMachineState.RX_UNCONFIRMED) { Text("REQUEST RX & RECHECK") }
+            OutlinedButton(requestTune, enabled = snapshot.acceptance.permits(TciAcceptanceState.TUNE_ACCEPTED) && snapshot.state == TciTxMachineState.RX_IDLE) { Text("BOUNDED TUNE") }
+            OutlinedButton(openDigi) { Text("OPEN DIGI") }
+        }
+        Text("Split ${snapshot.split ?: "UNKNOWN"} · XIT ${snapshot.xitOffsetHz?.let { "$it Hz" } ?: "UNKNOWN"} · TX filter ${snapshot.txFilterHz?.let { "$it Hz" } ?: "UNAVAILABLE_PROTOCOL"}. Split changes are blocked during TX by default.", color = SdrMuted)
+        if (BuildConfig.DEBUG && debugLab?.active == true) {
+            Text("DEBUG LAB V5 · DEMO · NO RADIO", color = SdrDanger, fontWeight = FontWeight.Black)
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                DebugTciTxScenario.entries.forEach { scenario -> FilterChip(debugLab.txScenario == scenario,
+                    { debugLab.selectTxScenario(scenario) }, { Text(scenario.name.replace('_', ' ')) }) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(debugLab::fakeTransmit) { Text("FAKE PTT + TX AUDIO") }
+                OutlinedButton(debugLab::fakeTune) { Text("FAKE TUNE") }
+                Text("DEMO · NO RADIO", color = SdrDanger, modifier = Modifier.padding(top = 12.dp))
+            }
         }
     }
 }
@@ -965,7 +1024,7 @@ fun SdrSettingsPanel(runtime: TciRuntimeState, rxAudio: TciRxAudioController, sc
 }
 
 @Composable
-fun SdrHealthPanel(runtime: TciRuntimeState, rxAudio: TciRxAudioController, panadapter: PanadapterController, scanner: ReceiveOnlyScannerController,
+fun SdrHealthPanel(runtime: TciRuntimeState, transmit: TciTransmitAuthority, rxAudio: TciRxAudioController, panadapter: PanadapterController, scanner: ReceiveOnlyScannerController,
     operational: SdrOperationalV2, workbench: AndroidSdrWorkbenchV4, localReceivers: LocalReceiverController,
     rf: RfObservationController, announcements: SpokenAnnouncementController) {
     val tci = runtime.snapshot
@@ -990,7 +1049,8 @@ fun SdrHealthPanel(runtime: TciRuntimeState, rxAudio: TciRxAudioController, pana
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SdrHealthCard("READBACK", "${tci.confirmedReadbacks} confirmed · ${tci.pendingReadbacks.size} pending · ${tci.failedWrites} failed", tci.failedWrites == 0L, Modifier.weight(1f))
             SdrHealthCard("AUDIO MIXER", "${rxAudio.mixer.mode} · overflow ${rxAudio.overflowByReceiver.joinToString("/")} · underflow ${rxAudio.underflowByReceiver.joinToString("/")}", rxAudio.droppedFrames == 0L, Modifier.weight(1f))
-            SdrHealthCard("TX GATE", "PHYSICAL ACCEPTANCE FALSE · TCI TX BLOCKED", true, Modifier.weight(1f))
+            SdrHealthCard("TX GATE", "${transmit.snapshot.acceptance} · ${transmit.snapshot.state} · ${transmit.snapshot.interlock ?: "CLEAR"}",
+                transmit.snapshot.state != TciTxMachineState.RX_UNCONFIRMED, Modifier.weight(1f))
             SdrHealthCard("DERIVED STORE", "${operational.journal.size} journal · ${operational.timeShift.bookmarks.size} bookmarks", true, Modifier.weight(1f))
         }
         Text("Support metrics are bounded and sanitized. Raw IQ, raw audio, raw TCI payloads, credentials, private endpoint values and precise callsign coordinates are excluded.", color = SdrMuted)
@@ -1005,10 +1065,17 @@ fun TciProfileDialog(app: AppController, close: () -> Unit) {
     var secure by remember { mutableStateOf(false) }
     var rate by remember { mutableIntStateOf(96_000) }
     var receiver by remember { mutableIntStateOf(0) }
+    var maxDrive by remember { mutableIntStateOf(35) }
+    var maxTuneDrive by remember { mutableIntStateOf(10) }
+    var maxTuneSeconds by remember { mutableIntStateOf(10) }
+    var swrAbort by remember { mutableFloatStateOf(3f) }
+    var alcAbort by remember { mutableFloatStateOf(.95f) }
+    var txRate by remember { mutableIntStateOf(48_000) }
+    var monitor by remember { mutableStateOf(false) }
     val valid = name.isNotBlank() && host.isNotBlank() && host.none { it.isWhitespace() || it == '/' } && port.toIntOrNull() in 1..65_535
     AlertDialog(onDismissRequest = close, title = { Text("Add TCI radio") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Profile creation never connects. Android TCI v1 remains receive-only and TX locked.", color = SdrHold)
+            Text("Profile creation never connects or upgrades acceptance. New and restored profiles start UNVERIFIED.", color = SdrHold)
             OutlinedTextField(name, { name = it.take(80) }, label = { Text("Display name") }, singleLine = true)
             OutlinedTextField(host, { host = it.take(253) }, label = { Text("Host") }, singleLine = true)
             OutlinedTextField(port, { port = it.filter(Char::isDigit).take(5) }, label = { Text("Port") }, singleLine = true)
@@ -1017,14 +1084,33 @@ fun TciProfileDialog(app: AppController, close: () -> Unit) {
                 FilterChip(rate == value, { rate = value }, { Text("${value / 1000} kHz") }) } }
             Text("Initial receiver", color = SdrAmber); Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { (0..1).forEach { value ->
                 FilterChip(receiver == value, { receiver = value }, { Text("RX ${value + 1}") }) } }
+            Text("TCI TX SAFETY · acceptance remains UNVERIFIED", color = SdrAmber, fontWeight = FontWeight.Bold)
+            Text("Maximum drive · $maxDrive%", color = SdrMuted)
+            Slider(maxDrive.toFloat(), { maxDrive = it.toInt() }, valueRange = 0f..100f)
+            Text("Maximum tune drive · $maxTuneDrive%", color = SdrMuted)
+            Slider(maxTuneDrive.toFloat(), { maxTuneDrive = it.toInt() }, valueRange = 0f..25f)
+            Text("Tune watchdog · ${maxTuneSeconds}s", color = SdrMuted)
+            Slider(maxTuneSeconds.toFloat(), { maxTuneSeconds = it.toInt() }, valueRange = 1f..30f)
+            Text("SWR abort · ${"%.1f".format(swrAbort)}", color = SdrMuted)
+            Slider(swrAbort, { swrAbort = it }, valueRange = 1.1f..5f)
+            Text("ALC abort · ${"%.2f".format(alcAbort)} · unavailable on baseline TCI", color = SdrMuted)
+            Slider(alcAbort, { alcAbort = it }, valueRange = .1f..1f)
+            Text("Audited TX audio rate", color = SdrMuted)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf(8_000, 12_000, 24_000, 48_000).forEach { value ->
+                FilterChip(txRate == value, { txRate = value }, { Text("${value / 1000}k") }) } }
+            Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(monitor, { monitor = it }); Text("Local TX-audio monitor") }
+            Text("No Enable TX switch. PTT, TUNE and RF require sequential physical acceptance with exact device identity.", color = SdrHold)
             Text("Safe reconnect defaults OFF. RX audio and IQ never restore active.", color = SdrMuted)
         } },
         confirmButton = { Button({
             val id = "tci.${name.lowercase(Locale.US).replace(Regex("[^a-z0-9]+"), "-").trim('-').take(48)}.${System.currentTimeMillis().toString(36)}"
             app.upsertTciProfile(RadioConnectionProfile(RadioProfileId(id), name.trim(), RadioBackendKind.NATIVE_TCI,
-                RadioModelId("TCI:${id.take(80)}"), "TCI", "TCI receive-only server", RadioTransportType.TCI,
+                RadioModelId("TCI:${id.take(80)}"), "TCI", "TCI control server", RadioTransportType.TCI,
                 host = host.trim(), port = port.toInt(), readOnly = false, automaticSafeReconnect = false,
-                secureWebSocket = secure, preferredIqSampleRate = rate, preferredInitialReceiver = receiver))
+                secureWebSocket = secure, preferredIqSampleRate = rate, preferredInitialReceiver = receiver,
+                tciTxSettings = TciTxSettings(maxDrivePercent = maxDrive, maxTuneDrivePercent = maxTuneDrive,
+                    maxTuneDurationMillis = maxTuneSeconds * 1_000L, swrAbort = swrAbort.toDouble(),
+                    alcAbort = alcAbort.toDouble(), txAudioRate = txRate, monitorEnabled = monitor)))
             close()
         }, enabled = valid) { Text("ADD DISCONNECTED") } },
         dismissButton = { TextButton(close) { Text("CANCEL") } })

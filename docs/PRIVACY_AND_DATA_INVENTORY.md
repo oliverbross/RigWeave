@@ -89,3 +89,7 @@ Raw live I/Q and demodulated audio remain only in bounded memory unless the oper
 Explicit raw I/Q captures live under app-private `files/sdr/iq-captures` as capped float32 data plus metadata. Spectrum Survey schema 2 stores derived aggregate counts/levels only in `rigweave-spectrum-survey.sqlite`; it has no raw sample, audio, decoded conversation, RadioText, QSO or credential column. Capture, replay, tracker, monitor, scanner and TCI stream state never restore active. Safe caps/retention/calibration preferences may restore.
 
 Support bundles exclude raw I/Q, IQ/audio recordings, decoded conversations, RDS RadioText, operator notes, private paths, raw TCI payloads and private station metadata. Only bounded sanitized state, counts, sizes, latency and truth labels may be included.
+
+## Android TCI TX v5 data
+
+Profiles may store conservative TX limits, per-mode level preferences, monitor preference, an acceptance enum, and a sanitized endpoint/reported-device identity binding. They never store current PTT/Tune/stream state or fake acceptance. TX-audio samples and raw TCI frames are transient bounded memory only and are excluded from logs, support bundles, config export and backups intended for support. Health may expose sanitized counts, ages, queue depth, RMS/peak/clipping, latency, interlock and availability labels.

@@ -39,3 +39,7 @@ The v3 start audit found no newer stable SDRoxide release. Receive modes, tone/d
 ## Android SDR Operator Workbench v4
 
 The v4 final-family audit again found stable SDRoxide `v1.5.3` at commit `a680935b10f33768a499435e8bd37f779fa640ae`, tree `4697195080495da4a727b14234b85af89c10ecda`, GPL-3.0 licence digest `3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986`. All new Kotlin/Compose/SQLite code is independently written. No upstream source, asset, recording, I/Q fixture, model, binary, package or runtime dependency is incorporated. The read-only watcher cannot mutate code or pins.
+
+## Android TCI Transmit v5
+
+V5 reverified SDRoxide v1.5.3 at the same commit/tree/license digest and audited the official ExpertSDR3 TCI reference repository at `b081213ff97150fd29f669c633f060f93c81a286`, tree `21a77eb5187da3c7e46c43ba3423b307a05d3047`. No code or payload was imported. The original implementation adds no dependency; classifications and intentional deltas are recorded in the v5 audit, protocol matrix and provenance ledger.
