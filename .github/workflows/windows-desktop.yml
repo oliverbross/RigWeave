@@ -22,7 +22,6 @@ jobs:
     env:
       QT_VERSION: '6.11.2'
       HAMLIB_VERSION: '4.7.2'
-      OPENSSL_ROOT_DIR: 'C:/msys64/mingw64'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -59,11 +58,22 @@ jobs:
         shell: pwsh
         run: rustup target add x86_64-pc-windows-gnu
       - name: Install MSYS2 autotools shell
+        id: msys2
         uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2
         with:
           msystem: MSYS
           update: false
           install: autoconf automake libtool make mingw-w64-x86_64-openssl
+      - name: Record the installed MinGW OpenSSL root
+        shell: pwsh
+        run: |
+          $opensslRoot = Join-Path '${{ steps.msys2.outputs.msys2-location }}' 'mingw64'
+          if (!(Test-Path "$opensslRoot/include/openssl/ssl.h") -or
+              !(Test-Path "$opensslRoot/lib/libssl.dll.a") -or
+              !(Test-Path "$opensslRoot/bin/libssl-3-x64.dll")) {
+            throw "MSYS2 OpenSSL installation is incomplete at $opensslRoot"
+          }
+          "OPENSSL_ROOT_DIR=$opensslRoot" | Out-File $env:GITHUB_ENV -Append
       - name: Verify pinned Hamlib provenance
         shell: pwsh
         run: python scripts/check_hamlib_upstream.py
