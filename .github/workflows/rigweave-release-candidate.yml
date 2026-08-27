@@ -150,7 +150,7 @@ jobs:
           arch: x86_64
           script: >-
             cd android && ./gradlew connectedDebugAndroidTest --no-daemon
-            -Pandroid.testInstrumentationRunnerArguments.class=app.rigweave.mobile.QsoDatabaseInstrumentedTest,app.rigweave.mobile.NeuralDxStoreInstrumentedTest,app.rigweave.mobile.NexusDigiSessionStoreInstrumentedTest,app.rigweave.mobile.groupsio.GroupsIoDatabaseInstrumentedTest,app.rigweave.mobile.ConfigurationRecoveryInstrumentedTest
+            -Pandroid.testInstrumentationRunnerArguments.class=app.rigweave.mobile.QsoDatabaseInstrumentedTest,app.rigweave.mobile.NeuralDxStoreInstrumentedTest,app.rigweave.mobile.NexusDigiSessionStoreInstrumentedTest,app.rigweave.mobile.groupsio.GroupsIoDatabaseInstrumentedTest,app.rigweave.mobile.ConfigurationRecoveryInstrumentedTest,app.rigweave.mobile.RemoteStationInstrumentedTest
 
   scale-soak:
     runs-on: ubuntu-latest

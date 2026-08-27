@@ -93,3 +93,7 @@ Support bundles exclude raw I/Q, IQ/audio recordings, decoded conversations, RDS
 ## Android TCI TX v5 data
 
 Profiles may store conservative TX limits, per-mode level preferences, monitor preference, an acceptance enum, and a sanitized endpoint/reported-device identity binding. They never store current PTT/Tune/stream state or fake acceptance. TX-audio samples and raw TCI frames are transient bounded memory only and are excluded from logs, support bundles, config export and backups intended for support. Health may expose sanitized counts, ages, queue depth, RMS/peak/clipping, latency, interlock and availability labels.
+
+## Secure Remote Station v6 data
+
+Station TLS/signing private keys and paired public-key records are stored through the existing desktop credential-vault boundary. Android keeps its P-256 device key non-exportable in Android Keystore and stores only bounded station metadata and certificate fingerprints. Pairing offers, challenges, sessions and leases are transient. Support/Health output is limited to sanitized identities, roles, counts, ages, latency, sequence and drop metrics; it excludes private keys, credentials, raw control frames, audio/IQ payloads and private paths.

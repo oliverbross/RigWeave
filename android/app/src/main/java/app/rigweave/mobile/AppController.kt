@@ -99,6 +99,8 @@ class AppController(private val context: Context) {
     private val needsDxccCountryColumnMigration = !prefs.getBoolean("logbook_dxcc_country_v1", false)
     var fieldProfile by mutableStateOf(runCatching { FieldProfile.valueOf(prefs.getString("profile", "DAY")!!) }.getOrDefault(FieldProfile.DAY)); private set
     val tciProfiles = mutableStateListOf<RadioConnectionProfile>().apply { addAll(loadTciProfiles()) }
+    private val remoteStationStore = RemoteStationStore(context)
+    val remoteStationProfiles = mutableStateListOf<RemoteStationProfile>().apply { addAll(remoteStationStore.load()) }
     var selectedRadioProfileId by mutableStateOf(migrateSelectedRadioProfile(
         prefs.getString("radio_profile_id", null), prefs.getString("radio_family", null))); private set
     val selectedRadioProfile: RadioConnectionProfile get() = selectedProfile(selectedRadioProfileId)
@@ -206,6 +208,27 @@ class AppController(private val context: Context) {
         }
         persistTciProfiles()
         selectRadioProfile(value)
+    }
+
+    fun upsertRemoteStation(value: RemoteStationProfile) {
+        val index = remoteStationProfiles.indexOfFirst { it.stationId == value.stationId }
+        if (index >= 0) remoteStationProfiles[index] = value else {
+            require(remoteStationProfiles.size < 8) { "At most 8 Remote Station profiles are supported" }
+            remoteStationProfiles += value
+        }
+        remoteStationStore.save(value)
+        selectRadioProfile(value.radioProfile())
+    }
+
+    fun remoteStation(profile: RadioConnectionProfile): RemoteStationProfile? =
+        remoteStationProfiles.firstOrNull { it.radioProfile().id == profile.id }
+
+    fun forgetRemoteStation(stationId: String): Boolean {
+        val profile = remoteStationProfiles.firstOrNull { it.stationId == stationId } ?: return false
+        if (selectedRadioProfileId == profile.radioProfile().id) return false
+        remoteStationProfiles.remove(profile)
+        remoteStationStore.forget(stationId)
+        return true
     }
 
     fun recordTciAcceptance(evidence: TciAcceptanceEvidence): Boolean {
@@ -483,6 +506,7 @@ class AppController(private val context: Context) {
     private fun selectedProfile(id: RadioProfileId): RadioConnectionProfile {
         RadioProfileCatalog.find(id)?.let { return it }
         tciProfiles.firstOrNull { it.id == id }?.let { return it }
+        remoteStationProfiles.firstOrNull { it.radioProfile().id == id }?.let { return it.radioProfile() }
         val modelId = prefs.getInt("hamlib_model_id", 0)
         if (id.value.startsWith("hamlib.") && modelId > 0) {
             val network = id.value.startsWith("hamlib.network.")
@@ -505,7 +529,7 @@ class AppController(private val context: Context) {
 
     private fun migrateSelectedRadioProfile(storedProfileId: String?, legacyFamily: String?): RadioProfileId {
         val stored = storedProfileId?.let { runCatching { RadioProfileId(it) }.getOrNull() }
-        if (stored != null && tciProfiles.any { it.id == stored }) return stored
+        if (stored != null && (tciProfiles.any { it.id == stored } || remoteStationProfiles.any { it.radioProfile().id == stored })) return stored
         return RadioProfileCatalog.migrate(storedProfileId, legacyFamily)
     }
 

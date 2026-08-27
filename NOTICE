@@ -209,3 +209,11 @@ b081213ff97150fd29f669c633f060f93c81a286. RigWeave TX authority, framing,
 resampling, interlock, UI and fake-lab code is independently written GPL-3.0-only
 code. No upstream source, asset or binary is incorporated. See
 docs/android/TCI_TX_PROVENANCE_V5.md.
+
+The Secure Remote Station v6 audit reviewed SDRoxide v1.5.3 and the official
+ExpertSDR3 TCI reference for behavior only. No upstream source, UI, asset,
+recording, model, identity, certificate or binary was incorporated. The
+protocol, station service, Android client, TCI/rigctld adapters and test
+fixtures are independently written RigWeave GPL-3.0-only code and use the
+project's existing Qt, OpenSSL and OkHttp dependencies. See
+docs/remote/REMOTE_PROVENANCE_V6.md.

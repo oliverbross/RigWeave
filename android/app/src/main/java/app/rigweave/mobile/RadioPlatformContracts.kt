@@ -23,9 +23,10 @@ enum class RadioBackendKind {
     HAMLIB_EMBEDDED,
     HAMLIB_NETWORK,
     NATIVE_TCI,
+    REMOTE_STATION,
 }
 
-enum class RadioTransportType { USB_SERIAL, LAN, RIGCTLD, FLRIG, TCI }
+enum class RadioTransportType { USB_SERIAL, LAN, RIGCTLD, FLRIG, TCI, REMOTE_STATION }
 enum class RadioActionClass { READ_ONLY, SAFE_SET, EDGE_TRIGGERED, TRANSMIT, TUNE, MEMORY_WRITE, EMERGENCY_RECEIVE }
 enum class RadioAvailability { AVAILABLE, UNAVAILABLE, UNKNOWN }
 
@@ -295,6 +296,7 @@ object RadioProfileCatalog {
                 RadioBackendKind.NATIVE_QMX -> "QRP Labs"
                 RadioBackendKind.NATIVE_RGO_ONE -> "RGO ONE"
                 RadioBackendKind.NATIVE_TCI -> "TCI"
+                RadioBackendKind.REMOTE_STATION -> "RigWeave"
                 else -> name
             }, name, RadioTransportType.USB_SERIAL, baud = baud)
 }

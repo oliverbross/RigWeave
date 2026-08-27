@@ -146,7 +146,7 @@ private val Danger = Color(0xFFE4544D)
 )
 
 private enum class Destination(val label: String) {
-    HOME("Home"), RADIO("Radio"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Intelligence"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), OPERATIONS("Operations"), ROTATOR("Rotator"), GROUPS_IO("Groups.io"), SETTINGS("Settings")
+    HOME("Home"), RADIO("Radio"), REMOTE("Remote"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), PANADAPTER("Panadapter"), EQ("EQ"), LOGBOOK("Logbook"), PROGRESS("Intelligence"), SYNC("Sync"), PRESETS("Presets"), DX("DX"), PORTABLE("Portable"), OPERATIONS("Operations"), ROTATOR("Rotator"), GROUPS_IO("Groups.io"), SETTINGS("Settings")
 }
 private enum class SettingsSection(val label: String) {
     RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
@@ -213,6 +213,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val activation = remember { PotaActivationController(context, database) }
     val features = remember { FeatureController(context) }
     val app = remember { AppController(context) }
+    val remoteRuntime = remember { RemoteRuntimeState() }
+    val remoteFactory = remember { RemoteStationBackendFactory(app::remoteStation, remoteRuntime) }
     val tciRuntime = remember { TciRuntimeState() }
     val tciTransmit = remember { TciTransmitAuthority() }
     val tciFactory = remember { AndroidTciBackendFactory(tciRuntime, tciTransmit) }
@@ -227,6 +229,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 RadioBackendKind.HAMLIB_EMBEDDED to androidRadioFactory,
                 RadioBackendKind.HAMLIB_NETWORK to androidRadioFactory,
                 RadioBackendKind.NATIVE_TCI to tciFactory,
+                RadioBackendKind.REMOTE_STATION to remoteFactory,
             ),
             devices = physicalAuthority,
             disarmTransmitWorkflows = app::disarmAll,
@@ -236,9 +239,10 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val hamlibRegistry = remember { HamlibConnectionController() }
     val hamlibModels = remember { runCatching { hamlibRegistry.registry.models }.getOrDefault(emptyList()) }
     val selectedProfile = app.selectedRadioProfile
+    var pendingRemoteAutoConnect by remember { mutableStateOf<RadioProfileId?>(null) }
     val integratedRadioSelected = selectedProfile.backendKind in setOf(
         RadioBackendKind.NATIVE_QMX, RadioBackendKind.NATIVE_RGO_ONE,
-        RadioBackendKind.HAMLIB_EMBEDDED, RadioBackendKind.HAMLIB_NETWORK, RadioBackendKind.NATIVE_TCI,
+        RadioBackendKind.HAMLIB_EMBEDDED, RadioBackendKind.HAMLIB_NETWORK, RadioBackendKind.NATIVE_TCI, RadioBackendKind.REMOTE_STATION,
     )
     val bandMapStore = remember { BandMapStateStore(context) }
     val bandMaps = remember { BandMapController(bandMapStore.load(), bandMapStore::save) }
@@ -614,6 +618,15 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 localReceivers.pushIq(source, receiver, center, rate, values)
         }
         tciRuntime.rxAudioSink = tciRxAudio::push
+        remoteRuntime.spectrumSink = { bins, sequence, _ -> panadapter.pushRemoteDerivedSpectrum(bins, sequence) }
+        remoteRuntime.audioPcm16Sink = { rate, pcm, _, _ ->
+            val values = FloatArray(pcm.size / 2) { index ->
+                val low = pcm[index * 2].toInt() and 0xff
+                val high = pcm[index * 2 + 1].toInt()
+                ((high shl 8) or low).toShort() / 32768f
+            }
+            tciRxAudio.push(0, rate, 1, values)
+        }
     }
     val operatorStop = remember { OperatorStopRouter(digi, keyer, repeatCq, contest, chaser) {
         tciTransmit.globalStop("GLOBAL_STOP")
@@ -670,6 +683,13 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             while (app.selectedRadioProfileId == selectedProfile.id) { delay(240); transport.poll()?.let(::accept) }
         } else {
             radioPlatform.select(selectedProfile, connectAfterSelection = false)
+            if (pendingRemoteAutoConnect == selectedProfile.id) {
+                pendingRemoteAutoConnect = null
+                val connected = radioPlatform.connectSelected()
+                platformSnapshot = radioPlatform.snapshot
+                radio = platformSnapshot.asRadioState(selectedProfile)
+                usbDetail = if (connected) "Connected · ${selectedProfile.name}" else "Connection failed closed · ${selectedProfile.name}"
+            }
             while (app.selectedRadioProfileId == selectedProfile.id) {
                 platformSnapshot = radioPlatform.snapshot
                 radio = platformSnapshot.asRadioState(selectedProfile)
@@ -903,7 +923,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             }
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, tciRxAudio, tciRuntime, tciTransmit, scanner, sdrOperationalV2, sdrWorkbenchV4, localReceivers, rfObservations, bandStacks, announcements, debugSdrLab,
-                portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app,
+                portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, remoteRuntime, remoteFactory,
+                { station -> pendingRemoteAutoConnect = station.radioProfile().id; app.upsertRemoteStation(station) },
                 selectedProfile, platformSnapshot, hamlibModels, rotator,
                 { tciRxAudio.stop("Radio disconnected"); sdrOperationalV2.stopActive("Radio disconnected"); localReceivers.stopActive("Radio disconnected"); scope.launch { radioPlatform.disconnect(); platformSnapshot = radioPlatform.snapshot } },
                 { action -> scope.launch {
@@ -945,7 +966,8 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         } }) { padding -> Box(Modifier.padding(padding)) {
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
                 panadapter, tciRxAudio, tciRuntime, tciTransmit, scanner, sdrOperationalV2, sdrWorkbenchV4, localReceivers, rfObservations, bandStacks, announcements, debugSdrLab,
-                portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app,
+                portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, remoteRuntime, remoteFactory,
+                { station -> pendingRemoteAutoConnect = station.radioProfile().id; app.upsertRemoteStation(station) },
                 selectedProfile, platformSnapshot, hamlibModels, rotator,
                 { tciRxAudio.stop("Radio disconnected"); sdrOperationalV2.stopActive("Radio disconnected"); localReceivers.stopActive("Radio disconnected"); scope.launch { radioPlatform.disconnect(); platformSnapshot = radioPlatform.snapshot } },
                 { action -> scope.launch {
@@ -995,6 +1017,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
 private fun navIcon(item: Destination) = when (item) {
     Destination.HOME -> Icons.Outlined.Home
     Destination.RADIO -> Icons.Outlined.SettingsInputAntenna
+    Destination.REMOTE -> Icons.Outlined.Router
     Destination.DIGI -> Icons.Outlined.GraphicEq
     Destination.CONTEST -> Icons.Outlined.EmojiEvents
     Destination.BAND_MAPS -> Icons.Outlined.StackedLineChart
@@ -1023,6 +1046,8 @@ private fun navIcon(item: Destination) = when (item) {
     localReceivers: LocalReceiverController, rfObservations: RfObservationController,
     bandStacks: BandStackStore, announcements: SpokenAnnouncementController, debugSdrLab: DebugSdrLab?,
     portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
+    remoteRuntime: RemoteRuntimeState, remoteFactory: RemoteStationBackendFactory,
+    selectRemoteStation: (RemoteStationProfile) -> Unit,
     selectedProfile: RadioConnectionProfile, platformSnapshot: RadioRuntimeSnapshot, hamlibModels: List<HamlibModelDescriptor>,
     rotator: AndroidRotatorRuntime,
     disconnectPlatform: () -> Unit, dispatchPlatform: (RadioPlatformAction) -> Unit,
@@ -1043,7 +1068,7 @@ private fun navIcon(item: Destination) = when (item) {
     val screenScope = rememberCoroutineScope()
     val integratedRadioSelected = selectedProfile.id == RadioProfileCatalog.UNKNOWN.id || selectedProfile.backendKind in setOf(
         RadioBackendKind.NATIVE_QMX, RadioBackendKind.NATIVE_RGO_ONE,
-        RadioBackendKind.HAMLIB_EMBEDDED, RadioBackendKind.HAMLIB_NETWORK, RadioBackendKind.NATIVE_TCI,
+        RadioBackendKind.HAMLIB_EMBEDDED, RadioBackendKind.HAMLIB_NETWORK, RadioBackendKind.NATIVE_TCI, RadioBackendKind.REMOTE_STATION,
     )
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
     val intelligencePortableSpots = portable.pota.spots.map(PotaSpot::toPortable) + portable.sotaSpots + portable.wwffSpots
@@ -1209,7 +1234,11 @@ private fun navIcon(item: Destination) = when (item) {
             qsoSummary = logSummary, candidates = candidates,
         ))
     }
-    when (destination) {
+    Column(Modifier.fillMaxSize()) {
+        if (selectedProfile.backendKind == RadioBackendKind.REMOTE_STATION) {
+            RemoteConnectionBanner(remoteRuntime.snapshot)
+        }
+        Box(Modifier.weight(1f)) { when (destination) {
         Destination.HOME -> HamClockHomeScreen(radio, app, features, neuralDx, portable, database, wavelog, cty, callbook,
             publicProviders, hamClockSettings, operations, progress.bandHealthSnapshot, send, openDx, openPortable, openProgress, openOperations,
             openLogbook, closeEq, openDigi, openGroupsIo, foreground, operatingContext, requestHomeReceiveTune,
@@ -1266,6 +1295,15 @@ private fun navIcon(item: Destination) = when (item) {
                 }
             }
         }
+        Destination.REMOTE -> RemoteStationScreen(
+            app, remoteRuntime, remoteFactory,
+            selectAndConnect = { station ->
+                disconnectPlatform()
+                selectRemoteStation(station)
+            },
+            disconnect = disconnectPlatform,
+            globalStop = { screenScope.launch { remoteFactory.active?.requestReceive() } },
+        )
         Destination.DIGI -> DigiRfPathWrapper(rfObservations) {
             IntegratedDigiWorkspace(integratedDigiPage, setIntegratedDigiPage, digi, radio, compact, chaser)
         }
@@ -1330,6 +1368,21 @@ private fun navIcon(item: Destination) = when (item) {
                 localReceivers, rfObservations, bandStacks, announcements, debugSdrLab,
                 openEq, openContest, openSync, openDigi, openGroupsIo, openRotator,
                 disconnectPlatform, connect, direct) }
+        }
+        }
+    }
+}
+}
+
+@Composable private fun RemoteConnectionBanner(snapshot: RemoteRuntimeSnapshot) {
+    val healthy = snapshot.state == RemoteConnectionState.READY
+    Surface(color = (if (healthy) Healthy else Danger).copy(alpha = .16f), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 7.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("REMOTE · ${snapshot.stationName ?: "STATION"}", color = if (healthy) Healthy else Danger,
+                fontWeight = FontWeight.Black)
+            Text("${snapshot.state.name} · WRITER ${snapshot.writerLease.name} · TX ${snapshot.txLease.name} · ROTATOR ${snapshot.rotatorLease.name}",
+                color = Ink, style = MaterialTheme.typography.labelSmall)
         }
     }
 }

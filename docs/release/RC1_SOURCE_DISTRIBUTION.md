@@ -15,3 +15,5 @@ Binary artifact naming is exact-SHA based:
 - `RigWeave-macOS-arm64-unsigned-<sha>.zip`
 
 Artifacts are unsigned RC evidence. Creation does not publish or distribute them.
+
+Secure Remote Station v6 additionally produces exact-SHA unsigned stationd packages for Windows x64, macOS arm64 and Linux x64. The package gates reject private identities, PEM keys and private rigctld configuration. `scripts/prepare_rc1_distribution.py` remains the authority for the source archive, SPDX SBOM, manifests and digest ledger; package creation is not publication or deployment.

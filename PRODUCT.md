@@ -109,3 +109,7 @@ Android adds production portable float32 I/Q capture/offline replay, Panadapter 
 ## Android TCI Transmit Control v5
 
 Android adds an acceptance-gated TCI transmit authority for existing Digi/SSTV, reviewed CW audio-keying and immutable Voice Macro plans. PTT, Tune, TX audio, interlocks, Global Stop and RX recovery have one owner. New/restored profiles remain unverified; physical PTT/Tune/RF acceptance is pending. Debug TX is labelled `DEMO · NO RADIO` and cannot upgrade production acceptance.
+
+## Secure Remote Station v6
+
+RigWeave Desktop and the standalone `rigweave-stationd` expose a versioned TLS 1.3 Remote Station service for Windows, macOS and Linux. The Android app discovers or manually pairs with a pinned station, then reuses its existing Radio, Panadapter, Digi, Keyer, Voice and Rotator owners through explicit observer/operator/admin roles and exclusive writer/TX/rotator leases. Global Stop and local pre-emption remain authoritative; debug media is labelled `DEMO · NO RADIO`, and source/build evidence is not public-internet, audio, motion or RF acceptance.

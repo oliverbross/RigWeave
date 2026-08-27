@@ -54,6 +54,20 @@ jobs:
                 artifacts/macos/RigWeaveDesktop.app/Contents/PlugIns/sqldrivers/libqsqlmimer.dylib
           ditto -c -k --sequesterRsrc artifacts/macos/RigWeaveDesktop.app "artifacts/macos/RigWeave-macOS-arm64-unsigned-${GITHUB_SHA}.zip"
           shasum -a 256 "artifacts/macos/RigWeave-macOS-arm64-unsigned-${GITHUB_SHA}.zip" > artifacts/macos/SHA256SUMS.txt
+      - name: Unsigned standalone stationd packaging proof
+        run: |
+          mkdir -p artifacts/macos/RigWeaveStationd.app/Contents/MacOS
+          cp build/macos/rigweave-stationd artifacts/macos/RigWeaveStationd.app/Contents/MacOS/
+          cp desktop/packaging/macos/stationd-Info.plist artifacts/macos/RigWeaveStationd.app/Contents/Info.plist
+          macdeployqt artifacts/macos/RigWeaveStationd.app
+          rm -f artifacts/macos/RigWeaveStationd.app/Contents/PlugIns/sqldrivers/libqsqlodbc.dylib \
+                artifacts/macos/RigWeaveStationd.app/Contents/PlugIns/sqldrivers/libqsqlpsql.dylib \
+                artifacts/macos/RigWeaveStationd.app/Contents/PlugIns/sqldrivers/libqsqlmimer.dylib
+          mkdir -p artifacts/macos/RigWeaveStationd.app/Contents/Resources
+          cp COPYING NOTICE artifacts/macos/RigWeaveStationd.app/Contents/Resources/
+          ! find artifacts/macos/RigWeaveStationd.app -type f | grep -Ei '(private|identity|\.pem$|rigctld)'
+          ditto -c -k --sequesterRsrc artifacts/macos/RigWeaveStationd.app "artifacts/macos/RigWeave-stationd-macOS-arm64-unsigned-${GITHUB_SHA}.zip"
+          shasum -a 256 "artifacts/macos/RigWeave-stationd-macOS-arm64-unsigned-${GITHUB_SHA}.zip" >> artifacts/macos/SHA256SUMS.txt
       - name: Deterministic macOS UI gallery
         env:
           QT_QPA_PLATFORM: offscreen

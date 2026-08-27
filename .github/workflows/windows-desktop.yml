@@ -148,6 +148,17 @@ jobs:
       - name: Package portable ZIP and per-user NSIS installer
         shell: pwsh
         run: desktop/packaging/windows/package.ps1 -BuildDirectory build/windows -OutputDirectory artifacts/windows
+      - name: Package standalone stationd ZIP
+        shell: pwsh
+        run: |
+          $stage = 'artifacts/windows/stationd-portable'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item build/windows/rigweave-stationd.exe $stage
+          Copy-Item COPYING "$stage/COPYING.txt"
+          Copy-Item NOTICE "$stage/NOTICE.txt"
+          windeployqt --release --no-translations --no-system-d3d-compiler --dir $stage "$stage/rigweave-stationd.exe"
+          if (Get-ChildItem $stage -Recurse -File | Where-Object Name -Match '(?i)(private|identity|\.pem$|rigctld)') { throw 'Forbidden stationd package content' }
+          Compress-Archive -Path "$stage/*" -DestinationPath "artifacts/windows/RigWeave-stationd-Windows-x64-${{ github.sha }}.zip" -CompressionLevel Optimal
       - name: Enforce measured size ceilings
         shell: pwsh
         run: |
@@ -158,7 +169,7 @@ jobs:
       - name: Stage exact-SHA Windows packages
         shell: pwsh
         run: |
-          $portable = Get-ChildItem artifacts/windows -File -Filter '*.zip' | Select-Object -First 1
+          $portable = Get-ChildItem artifacts/windows -File -Filter 'RigWeave-Windows-x64-portable.zip' | Select-Object -First 1
           $installer = Get-ChildItem artifacts/windows -File -Filter '*.exe' | Select-Object -First 1
           if (!$portable -or !$installer) { throw 'Expected Windows packages were not produced' }
           Rename-Item $portable.FullName "RigWeave-Windows-x64-portable-${{ github.sha }}.zip"

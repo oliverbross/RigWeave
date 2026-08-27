@@ -119,3 +119,7 @@ V4 requires the fail-closed source/parity checker, recording/replay/storage migr
 ## Android TCI Transmit v5 gate
 
 V5 requires the immutable upstream/protocol audit, one-owner TX checker, native framing tests, focused authority/interlock tests, deterministic fake stress, complete Android/native/Rust/iOS/desktop regressions, package caps, protected refs, clean pushed exact SHA, and all mandatory hosted jobs. Production acceptance remains identity-bound and unverified unless separately evidenced. Physical PTT/Tune/RF may remain pending without converting source-complete fake/bench acceptance into RF proof.
+
+## Secure Remote Station v6 gate
+
+V6 requires the frozen protocol/security/media contracts, Windows/macOS/Linux stationd packages without private identities, Android client compilation and packages, protocol/security/scale sanitizers, unchanged platform regressions, a clean pushed exact SHA and the authoritative hosted workflow. Protected-tablet install is conditional and preservation-gated. Signing, deployment, authenticated public-internet operation, physical audio/CAT/PTT/Tune/RF, real WSJT-X/fldigi and rotator motion remain separate.

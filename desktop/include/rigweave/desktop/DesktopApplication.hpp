@@ -9,6 +9,7 @@
 #include "rigweave/desktop/DesktopRadioController.hpp"
 #include "rigweave/desktop/DesktopRotatorController.hpp"
 #include "rigweave/desktop/RfObservationModel.hpp"
+#include "rigweave/desktop/RemoteStationService.hpp"
 #include "rigweave/desktop/WavelogSync.hpp"
 
 #include <QQmlApplicationEngine>
@@ -90,6 +91,7 @@ private:
   DesktopRadioController m_radio;
   DesktopRotatorController m_rotator;
   DesktopPanadapter m_panadapter;
+  RemoteStationService m_remote;
   DesktopParityPlatform m_parity;
   DesktopKeyerController m_keyer;
   DesktopNotificationController m_notifications;

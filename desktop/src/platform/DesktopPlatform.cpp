@@ -352,7 +352,8 @@ bool DesktopConfigurationManager::safeSection(const QString &name) {
                      "neural",
                       "presets",
                       "accessibility",
-                      "desktopLayouts"}
+                       "desktopLayouts",
+                       "remoteStation"}
       .contains(name);
 }
 bool DesktopConfigurationManager::load(QString *error) {

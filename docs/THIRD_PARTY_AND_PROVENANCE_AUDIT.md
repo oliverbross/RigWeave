@@ -43,3 +43,7 @@ The v4 final-family audit again found stable SDRoxide `v1.5.3` at commit `a68093
 ## Android TCI Transmit v5
 
 V5 reverified SDRoxide v1.5.3 at the same commit/tree/license digest and audited the official ExpertSDR3 TCI reference repository at `b081213ff97150fd29f669c633f060f93c81a286`, tree `21a77eb5187da3c7e46c43ba3423b307a05d3047`. No code or payload was imported. The original implementation adds no dependency; classifications and intentional deltas are recorded in the v5 audit, protocol matrix and provenance ledger.
+
+## Secure Remote Station v6
+
+V6 reuses the same immutable SDRoxide and ExpertSDR3 reference audits for behavioral comparison. No upstream code or payload is incorporated. The remote protocol, station service, Android client, TCI/rigctld adapters, mDNS records and deterministic fixtures are original RigWeave code; the detailed classification and watcher boundaries are in `docs/remote/REMOTE_PROVENANCE_V6.md`.

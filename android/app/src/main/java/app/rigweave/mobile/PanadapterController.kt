@@ -492,6 +492,34 @@ class PanadapterController(
         }
     }
 
+    /** Projects bounded station-derived bins without relabelling them as local or raw I/Q. */
+    fun pushRemoteDerivedSpectrum(bins: ByteArray, sequence: Long) {
+        if (closed || bins.size !in 64..2048) return
+        val trace = FloatArray(bins.size) { index -> -120f + (bins[index].toInt() and 0xff) * (120f / 255f) }
+        val next = PanadapterFrame(
+            sequence = sequence, inputFrames = sequence, transforms = sequence, discontinuities = 0,
+            sampleRate = 0, effectiveSampleRate = 0, fftSize = bins.size, hopSize = 0, zoomDecimation = 1,
+            zoomOffsetHz = 0f, enbwBins = Float.NaN, rbwHz = Float.NaN,
+            peakDb = trace.maxOrNull() ?: -120f, floorDb = -120f,
+            iRmsDb = Float.NaN, qRmsDb = Float.NaN, iqCorrelation = Float.NaN,
+            clippedFraction = 0f, duplicateCorrelation = Float.NaN, validStereo = false,
+            trace = trace, waterfall = trace.copyOf(), peakHold = trace.copyOf(),
+            validMask = BooleanArray(trace.size) { true },
+        )
+        main.post {
+            frame = next
+            lifecycle = PanadapterLifecycle.LIVE
+            status = "REMOTE DERIVED SPECTRUM · ${bins.size} bins · not raw I/Q"
+        }
+    }
+
+    fun detachRemoteDerived(reason: String = "Remote spectrum stopped") {
+        if (status.startsWith("REMOTE DERIVED SPECTRUM")) {
+            lifecycle = PanadapterLifecycle.STOPPED
+            status = reason
+        }
+    }
+
     fun selectTciReceiver(receiverIndex: Int) {
         if (receiverIndex !in tciDisplays.keys && receiverIndex !in tciContexts.keys) return
         selectedTciReceiver = receiverIndex

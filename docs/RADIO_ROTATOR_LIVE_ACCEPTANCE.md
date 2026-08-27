@@ -31,3 +31,7 @@ Sweep 3 source exposes full profile cards, setup actions, persistence and health
 ## TCI v5 radio-safety boundary
 
 TCI production PTT and Tune require sequential exact-device acceptance and authoritative readback. Tune is capped and watched separately from PTT. Global Stop always requests audio stop, `trx:false`, and `tune:false`; uncertain recovery latches `RX_UNCONFIRMED`. Debug Lab is `DEMO · NO RADIO`. Do not perform or claim live PTT, Tune, RF, reflected-power or ALC acceptance from source, package, install or fake evidence.
+
+## Remote Station v6 boundary
+
+Remote writer, TX and rotator leases do not bypass local radio or rotator authorities. A local operator may pre-empt any remote lease, and Global Stop invalidates all generations and sessions. Remote telemetry and deterministic commands are source evidence only; PTT/Tune/RF and rotator motion still require the owner-present sequences above.

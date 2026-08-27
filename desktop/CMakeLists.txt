@@ -16,6 +16,7 @@ option(RIGWEAVE_BUILD_NATIVE_DIGI "Build and link the existing native Rust modem
 find_package(Qt6 6.11.2 EXACT REQUIRED COMPONENTS
     Core Gui Quick QuickControls2 Qml Network Sql SerialPort Multimedia WebSockets
     Concurrent Svg Positioning Location Test QuickTest Widgets)
+find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto SSL)
 
 if(RIGWEAVE_REQUIRE_HAMLIB)
     find_package(RigWeaveHamlib REQUIRED)
@@ -36,6 +37,7 @@ set(RIGWEAVE_DESKTOP_SERVICE_SOURCES
     src/data/AdifService.cpp
     src/network/WavelogSync.cpp
     src/network/ClusterController.cpp
+    src/network/RemoteStationService.cpp
     src/platform/DesktopPlatform.cpp
     src/platform/DesktopEngagementControllers.cpp
     src/platform/DesktopParityPlatform.cpp
@@ -57,7 +59,8 @@ target_include_directories(rigweave_desktop_services PUBLIC include)
 target_link_libraries(rigweave_desktop_services PUBLIC
     rigweave_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::QuickControls2 Qt6::Qml
     Qt6::Network Qt6::Sql Qt6::SerialPort Qt6::Multimedia Qt6::WebSockets
-    Qt6::Concurrent Qt6::Svg Qt6::Positioning Qt6::Location Qt6::Widgets)
+    Qt6::Concurrent Qt6::Svg Qt6::Positioning Qt6::Location Qt6::Widgets
+    OpenSSL::Crypto OpenSSL::SSL)
 if(RigWeaveHamlib_FOUND)
     target_link_libraries(rigweave_desktop_services PUBLIC RigWeave::Hamlib)
     target_compile_definitions(rigweave_desktop_services PRIVATE RIGWEAVE_HAVE_HAMLIB=1)
@@ -131,6 +134,10 @@ if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_options(RigWeaveDesktop PRIVATE -Wno-variadic-macro-arguments-omitted)
 endif()
 
+qt_add_executable(rigweave-stationd src/app/stationd_main.cpp)
+target_link_libraries(rigweave-stationd PRIVATE rigweave_desktop_services)
+rigweave_target_warnings(rigweave-stationd)
+
 file(GLOB_RECURSE RIGWEAVE_QML_FILES CONFIGURE_DEPENDS "qml/*.qml")
 file(GLOB RIGWEAVE_ICON_FILES CONFIGURE_DEPENDS "resources/icons/*.svg")
 set(RIGWEAVE_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/../assets/branding/rigweave-app-icon-1024.png")
@@ -157,6 +164,11 @@ qt_add_qml_module(RigWeaveDesktop
 install(TARGETS RigWeaveDesktop
     BUNDLE DESTINATION .
     RUNTIME DESTINATION .)
+if(WIN32)
+    install(TARGETS rigweave-stationd RUNTIME DESTINATION .)
+else()
+    install(TARGETS rigweave-stationd RUNTIME DESTINATION stationd)
+endif()
 
 if(WIN32)
     qt_generate_deploy_qml_app_script(

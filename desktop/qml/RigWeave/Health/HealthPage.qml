@@ -12,7 +12,7 @@ WorkspaceCanvas {
     function describeRf(){const r=status.rfObservations||{};return ["Visible / stored: "+(r.count||0)+" / "+(r.storedCount||0),"Renderer cap / dropped: "+(r.rendererRecordCap||0)+" / "+(r.droppedObservations||0),"Freshness: "+(r.sourceFreshness||"none"),"Renderer: "+(r.renderer||"unknown"),"Selected: "+(r.selectedId||"none")].join("\n")}
 
     Repeater {
-        model:[{n:"Database / projection",v:root.status.database+" • "+root.status.projection},{n:"Wavelog",v:root.status.wavelog},{n:"DX Cluster",v:root.status.cluster},{n:"Radio / Hamlib / TCI",v:root.describeRadio()},{n:"Rotator",v:root.status.rotator},{n:"Panadapter / waterfall",v:root.describePanadapter()},{n:"RF observations",v:root.describeRf()},{n:"Providers",v:root.status.providers},{n:"Configuration",v:root.status.configuration}]
+        model:[{n:"Database / projection",v:root.status.database+" • "+root.status.projection},{n:"Wavelog",v:root.status.wavelog},{n:"DX Cluster",v:root.status.cluster},{n:"Radio / Hamlib / TCI",v:root.describeRadio()},{n:"Remote Station",v:JSON.stringify(RemoteStation.health(),null,2)},{n:"Rotator",v:root.status.rotator},{n:"Panadapter / waterfall",v:root.describePanadapter()},{n:"RF observations",v:root.describeRf()},{n:"Providers",v:root.status.providers},{n:"Configuration",v:root.status.configuration}]
         delegate: CanvasPanel {
             required property int index
             required property var modelData

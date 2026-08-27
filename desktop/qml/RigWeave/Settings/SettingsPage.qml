@@ -11,6 +11,7 @@ WorkspaceCanvas {
     property var importPreview: ({})
     readonly property var categories: [
         {id:"station", label:"Station", icon:"home"},
+        {id:"remote", label:"Remote Station", icon:"radio"},
         {id:"radio", label:"Radio", icon:"radio"},
         {id:"audio", label:"Audio / Panadapter", icon:"panadapter"},
         {id:"digi", label:"Digi", icon:"digi"},
@@ -117,6 +118,53 @@ WorkspaceCanvas {
                         }
                         Label { text: "Import preview" }
                         Label { Layout.fillWidth: true; text: root.importPreview.valid ? (root.importPreview.requiresReview ? "Valid · explicit review required · unknown sections: " + root.importPreview.unknownSections : "Valid safe bundle · preview only") : (root.importPreview.error || "No bundle selected"); color: root.importPreview.valid ? "#e3c765" : "#aeb5ba"; wrapMode: Text.WordWrap }
+                    }
+                }
+                GroupBox {
+                    id: remoteGroup
+                    visible: root.currentCategory === "remote"
+                    title: "Secure Remote Station service"
+                    Layout.fillWidth: true
+                    property var cfg: RemoteStation.configuration()
+                    property string pairingOffer: ""
+                    property var pending: RemoteStation.pendingDevices()
+                    property var paired: RemoteStation.pairedDevices()
+                    GridLayout {
+                        anchors.fill: parent; columns: 2
+                        Label { text: "State" } StatusChip { text: RemoteStation.state; kind: RemoteStation.running ? "healthy" : "neutral" }
+                        Label { text: "Identity" } Label { text: remoteGroup.cfg.stationId || "Created on first start"; color: "#aeb5ba" }
+                        Label { text: "TLS / protocol" } Label { text: "TLS 1.3 · certificate pinning · RigWeave Remote Protocol v1"; color: "#4ec47b" }
+                        CheckBox { id: remoteEnabled; text: "Enable service"; checked: remoteGroup.cfg.enabled }
+                        CheckBox { id: remoteLan; text: "Allow configured LAN/VPN address"; checked: remoteGroup.cfg.lanEnabled }
+                        Label { text: "Station name" } TextField { id: remoteName; text: remoteGroup.cfg.stationName || "RigWeave Station"; Layout.fillWidth: true }
+                        Label { text: "Listen address / port" }
+                        RowLayout { TextField { id: remoteAddress; text: remoteGroup.cfg.listenAddress || "127.0.0.1"; Layout.fillWidth: true }
+                            SpinBox { id: remotePort; from: 1; to: 65535; value: remoteGroup.cfg.port || 7443 } }
+                        CheckBox { id: remoteTci; text: "TCI server · OFF / loopback / read-only default"; checked: remoteGroup.cfg.tciEnabled }
+                        CheckBox { id: remoteRigctld; text: "rigctld server · OFF / loopback / read-only default"; checked: remoteGroup.cfg.rigctldEnabled }
+                        Button { text: "Save safe settings"; enabled: !RemoteStation.running; onClicked: RemoteStation.applyLocalSettings({enabled:remoteEnabled.checked,stationName:remoteName.text,listenAddress:remoteAddress.text,port:remotePort.value,lanEnabled:remoteLan.checked,tciEnabled:remoteTci.checked,rigctldEnabled:remoteRigctld.checked}) }
+                        RowLayout { Button { text: RemoteStation.running ? "Stop + Global Stop" : "Start service"; onClicked: RemoteStation.running ? RemoteStation.stop() : RemoteStation.startFromUi() }
+                            Button { text: "Arm bridge writer · 30 s"; enabled: RemoteStation.running; onClicked: RemoteStation.armThirdPartyWriter(30000) }
+                            Button { text: "Global Stop"; onClicked: RemoteStation.globalStop() } }
+                        Label { text: "Remote TX / Tune" } Label { text: "Unavailable: desktop radio owner exposes no accepted PTT/Tune authority"; color: "#e3c765"; wrapMode: Text.WordWrap }
+                        Label { text: "Clients" } Label { text: RemoteStation.sessionCount + " active · " + RemoteStation.pairedDevices().length + " paired"; color: "#f2efe7" }
+                        Label { text: "Pairing" }
+                        ColumnLayout { Layout.fillWidth: true
+                            Button { text: "Create 2-minute OBSERVER offer"; enabled: RemoteStation.running; onClicked: remoteGroup.pairingOffer = JSON.stringify(RemoteStation.createPairingOffer("OBSERVER")) }
+                            TextArea { Layout.fillWidth: true; readOnly: true; wrapMode: TextEdit.WrapAnywhere; text: remoteGroup.pairingOffer || "No active offer" }
+                        }
+                        Label { text: "Pending approval" }
+                        RowLayout { Layout.fillWidth: true
+                            Label { text: remoteGroup.pending.length ? remoteGroup.pending[0].deviceId + " · requested " + remoteGroup.pending[0].requestedRole : "None"; color: "#aeb5ba"; Layout.fillWidth: true }
+                            Button { text: "Approve observer"; enabled: remoteGroup.pending.length > 0; onClicked: { RemoteStation.approvePendingDevice(remoteGroup.pending[0].deviceId,"OBSERVER"); remoteGroup.pending=RemoteStation.pendingDevices(); remoteGroup.paired=RemoteStation.pairedDevices() } }
+                            Button { text: "Approve operator"; enabled: remoteGroup.pending.length > 0; onClicked: { RemoteStation.approvePendingDevice(remoteGroup.pending[0].deviceId,"OPERATOR"); remoteGroup.pending=RemoteStation.pendingDevices(); remoteGroup.paired=RemoteStation.pairedDevices() } }
+                            Button { text: "Approve admin"; enabled: remoteGroup.pending.length > 0; onClicked: { RemoteStation.approvePendingDevice(remoteGroup.pending[0].deviceId,"ADMIN"); remoteGroup.pending=RemoteStation.pendingDevices(); remoteGroup.paired=RemoteStation.pairedDevices() } }
+                        }
+                        Label { text: "Paired device" }
+                        RowLayout { Layout.fillWidth: true
+                            Label { text: remoteGroup.paired.length ? remoteGroup.paired[0].deviceId + " · " + remoteGroup.paired[0].role : "None"; color: "#aeb5ba"; Layout.fillWidth: true }
+                            Button { text: "Revoke"; enabled: remoteGroup.paired.length > 0; onClicked: { RemoteStation.revokeDevice(remoteGroup.paired[0].deviceId); remoteGroup.paired=RemoteStation.pairedDevices() } }
+                        }
                     }
                 }
                 GroupBox {

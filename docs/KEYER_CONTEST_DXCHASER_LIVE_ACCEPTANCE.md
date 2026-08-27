@@ -44,3 +44,7 @@ record. Do not install as part of this integration programme.
 ## TCI v5 routing
 
 Existing Digi/SSTV, reviewed CW audio-keying and Voice Macro plans submit typed intents to the single TCI authority. FT timing, keyer queue/context invalidation, voice plan bounds, arming and Stop remain with their existing owners. Contest ESM stays pure, N1MM never writes TCI, and DX Chaser never enables TX. Fake routing proves source behavior only; physical PTT/audio/RF acceptance remains pending.
+
+## Remote Station v6 routing
+
+Remote Digi, Keyer and Voice requests retain their established plan, arming, timing, queue and cancellation owners. The Remote Station transport can carry bounded intent/media only after role and lease checks; disconnect, revocation, local pre-emption and Global Stop cancel remote authority. Fixture clients are not real WSJT-X/fldigi, voice-audio or RF acceptance.

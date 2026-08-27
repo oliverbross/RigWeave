@@ -22,3 +22,7 @@ Do not mark an item passed without observing it on the protected tablet or named
 18. Trigger global Stop repeatedly; confirm Digi, Keyer, voice, repeat CQ, Chaser, pending ESM and N1MM runtime stop idempotently.
 19. Export the support bundle and inspect it for metadata only—no credentials, QSO/message bodies, decodes, XML, callsigns, audio or private paths.
 20. Record device model/serial alias, app version/SHA, UTC time, observed result and operator initials for every performed item.
+
+## Secure Remote Station v6 additions
+
+Before any live remote test, verify exact client/station SHAs, TLS certificate pin, device identity, approved role, session generation and lease owner. Test observe-only state and RX media before any write; then separately exercise local pre-emption, revocation and repeated Global Stop. Public-internet reachability, real WSJT-X/fldigi, voice/CW audio, physical PTT/Tune/RF and rotator motion require explicit owner-present acceptance and must not be inferred from the source, fixture, hosted or package gates.

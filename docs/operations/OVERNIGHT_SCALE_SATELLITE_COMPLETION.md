@@ -36,3 +36,7 @@ The pushed branch is `feature/wavelog-native-integration-v1`. The final branch-t
 ## External evidence limitations
 
 No Apple build, physical-device step, real Wavelog mutation, or automatic radio transmit was performed. Real provider availability, a real Wavelog token, RF behaviour, and tablet interaction remain external evidence. These are not source-completion gates. `docs/wavelog/Archive.zip` remains untouched and untracked.
+
+## Secure Remote Station v6 deterministic scale
+
+The native remote scale test covers eight concurrent sessions, 10,000 valid/malformed frame cycles, 1,000 reconnect/lease/rotator/Global-Stop cycles, and simulated 30-minute waterfall and PCM16 RX-audio streams with bounded buffers. ASan and UBSan runs must complete with zero sanitizer findings. This is deterministic process evidence, not network-WAN, live-radio, audio-quality or RF acceptance; exact figures are recorded in `docs/remote/REMOTE_SCALE_SOAK_V6.md`.

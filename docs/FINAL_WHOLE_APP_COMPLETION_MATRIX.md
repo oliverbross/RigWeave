@@ -130,3 +130,13 @@ Twelve Android-visible areas are source-complete: TCI, multi-receiver, I/Q, RX a
 | Acceptance/profile/UI/Debug Lab | SOURCE_COMPLETE | Production starts unverified; demo is session-only and labelled no-radio. |
 | Physical PTT/Tune/RF | PENDING | Requires exact-device controlled acceptance; not inferred from fake/build evidence. |
 | Hosted/package/tablet | PENDING_UNTIL_FINAL_SHA | Recorded only at immutable candidate SHA. |
+
+### Secure Remote Station v6
+
+| Surface | State | Boundary |
+|---|---|---|
+| Protocol, TLS, pairing, roles, sessions and leases | SOURCE_COMPLETE | TLS 1.3, pinned identity, bounded frames, revocation and generation checks; deployment acceptance separate. |
+| stationd and Android Remote Station client | SOURCE_COMPLETE | Windows/macOS/Linux service and native Android backend reuse existing owners. |
+| State, spectrum/waterfall and RX audio | SOURCE_COMPLETE | Derived spectrum remains labelled derived; optional IQ and TX media are bounded and capability-gated. |
+| TCI, rigctld, Digi/Keyer/Voice, TX and rotator paths | SOURCE_COMPLETE | All mutations pass existing authorities; unsupported capability fails closed. |
+| Physical/authenticated/RF/rotator-motion acceptance | PENDING | Never inferred from deterministic fixtures, builds, packages or device launch. |

@@ -90,3 +90,7 @@ Frozen v3 baselines are arm64 APK 65,104,138 bytes and four-ABI AAB 56,431,306 b
 ## Android TCI Transmit v5 budget
 
 Exact v4 baselines are arm64 APK 59,321,767 bytes and four-ABI AAB 56,593,563 bytes. V5 adds Kotlin/C++ source only: no model, recording, TX-audio fixture, SDRoxide payload, codec or dependency. Hard gates remain arm64 APK at most 130 MB and four-ABI AAB at most 60 MB. Final exact-SHA paths, sizes and SHA-256 hashes supersede estimates.
+
+## Secure Remote Station v6 budget
+
+V6 adds Kotlin, C++/Qt, QML, protocol tests and documentation only. It bundles no certificate, private identity, audio/IQ recording, radio firmware, SDRoxide payload, model or new codec. Android retains the 130 MB arm64 APK and 60 MB four-ABI AAB caps; stationd packages are exact-SHA, unsigned, and scanned to exclude private identity material.

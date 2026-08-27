@@ -22,6 +22,7 @@ namespace rigweave::desktop {
 
 DesktopApplication::DesktopApplication(QObject *parent)
     : QObject(parent), m_rfObservations(this), m_cluster(&m_spots, this),
+      m_remote(&m_credentials, &m_radio, &m_rotator, &m_panadapter, this),
       m_parity(this), m_keyer(this), m_notifications(this),
       m_supportBundle(&m_paths, this) {
   connect(
@@ -92,6 +93,10 @@ bool DesktopApplication::initialize(QString *error) {
                                          error))
     return false;
   m_configuration->setSection("panadapter", m_panadapter.configuration());
+  if (!m_remote.restoreConfiguration(m_configuration->section("remoteStation"),
+                                     error))
+    return false;
+  m_configuration->setSection("remoteStation", m_remote.configuration());
   if (!m_rfObservations.restoreConfiguration(
           m_configuration->section("display").value("rfObservations").toMap(),
           error))
@@ -114,6 +119,10 @@ bool DesktopApplication::initialize(QString *error) {
   connect(&m_panadapter, &DesktopPanadapter::settingsChanged, this, [this] {
     if (m_configuration)
       m_configuration->setSection("panadapter", m_panadapter.configuration());
+  });
+  connect(&m_remote, &RemoteStationService::pairingChanged, this, [this] {
+    if (m_configuration)
+      m_configuration->setSection("remoteStation", m_remote.configuration());
   });
   connect(&m_rfObservations, &RfObservationModel::filtersChanged, this, [this] {
     if (!m_configuration)
@@ -191,6 +200,7 @@ void DesktopApplication::expose(QQmlApplicationEngine &engine) {
   context->setContextProperty("Radio", &m_radio);
   context->setContextProperty("Rotator", &m_rotator);
   context->setContextProperty("Panadapter", &m_panadapter);
+  context->setContextProperty("RemoteStation", &m_remote);
   context->setContextProperty("Parity", &m_parity);
   context->setContextProperty("Keyer", &m_keyer);
   context->setContextProperty("Notifications", &m_notifications);
@@ -570,6 +580,7 @@ bool DesktopApplication::saveFastEntry(const QVariantMap &values) {
 }
 
 void DesktopApplication::globalStop() {
+  m_remote.globalStop();
   m_parity.globalStop();
   m_keyer.stop();
   m_radio.globalStop();
@@ -591,6 +602,7 @@ void DesktopApplication::shutdown() {
   m_parity.close();
   m_keyer.stop();
   m_notifications.clearBanner();
+  m_remote.stop();
   m_panadapter.stop();
   m_rotator.stop();
   m_rotator.disconnectRotator();

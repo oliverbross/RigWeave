@@ -84,3 +84,7 @@ Functional owners are rooted in `DesktopApplication`: one radio, rotator, canoni
 ## Android SDR enhancement ownership
 
 Android TCI is another managed radio backend, not a parallel radio owner. The existing Panadapter controller owns at most two TCI DSP contexts, and the existing audio-route controller grants one explicit `TCI_RX_AUDIO` output lease. Scanner, TCI streams, receiver audio, and speech all stop on the established lifecycle and Global Stop boundaries. RF map/globe views consume bounded evidence models and never own tuning.
+
+## Secure Remote Station v6 ownership
+
+`RemoteStationService` is an adapter around the existing desktop radio, media, Digi, Keyer, Voice and rotator authorities; it is not a second hardware owner. Protocol v1 uses TLS 1.3, signed one-time challenges, certificate pinning, bounded control/media frames, generation checks and at most eight sessions. Android's `REMOTE_STATION` backend projects state and media into existing controllers. Observer/operator/admin roles plus separate writer, TX and rotator leases are fail-closed, short-lived and invalidated by disconnect, revocation, local pre-emption or Global Stop.

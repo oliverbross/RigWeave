@@ -1,0 +1,85 @@
+name: RigWeave Secure Remote Station v6
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/secure-remote-station-v6]
+
+permissions:
+  contents: read
+
+jobs:
+  android-ios-core:
+    uses: ./.github/workflows/rigweave-release-candidate.yml
+    with:
+      allow_descendant_validation: true
+
+  windows-desktop-stationd:
+    uses: ./.github/workflows/windows-desktop.yml
+
+  macos-desktop-stationd:
+    uses: ./.github/workflows/desktop-cross-platform.yml
+
+  protocol-security-media-scale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify exact checked-out SHA
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - name: Install host dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang libssl-dev
+      - name: Source, protocol and privacy gate
+        run: python3 scripts/check_secure_remote_station_v6.py
+      - name: Configure core with ASan and UBSan
+        run: cmake -S core -B build/remote-core -G Ninja -DCMAKE_BUILD_TYPE=Debug -DRIGWEAVE_ENABLE_ASAN=ON -DRIGWEAVE_ENABLE_UBSAN=ON
+      - name: Build and test protocol, security, media and scale
+        run: cmake --build build/remote-core && ctest --test-dir build/remote-core --output-on-failure
+
+  linux-x64-stationd-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify exact checked-out SHA
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - name: Install Qt and build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libssl-dev
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: '6.11.2'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          modules: 'qtmultimedia qtserialport qtwebsockets qtlocation qtpositioning'
+          cache: true
+      - name: Build stationd and desktop regression targets
+        run: cmake -S desktop -B build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build/linux
+      - name: Run desktop/station regression tests
+        run: ctest --test-dir build/linux --output-on-failure
+      - name: Package Linux x64 stationd without identities
+        run: |
+          mkdir -p build/package/stationd
+          cp build/linux/rigweave-stationd build/package/stationd/
+          cp COPYING NOTICE build/package/
+          tar -C build/package -czf build/RigWeave-stationd-linux-x64-${{ github.sha }}.tar.gz stationd COPYING NOTICE
+          ! tar -tzf build/RigWeave-stationd-linux-x64-${{ github.sha }}.tar.gz | grep -Ei '(private|identity|\.pem$|rigctld)'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: RigWeave-stationd-linux-x64-${{ github.sha }}
+          path: build/RigWeave-stationd-linux-x64-${{ github.sha }}.tar.gz
+          if-no-files-found: error
+
+  source-sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: {fetch-depth: 0}
+      - name: Verify exact checked-out SHA
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - name: Exact-SHA source archive, SBOM, manifests and digest ledger
+        env: {RIGWEAVE_ALLOW_RC1_DESCENDANT_VALIDATION: "1"}
+        run: python3 scripts/prepare_rc1_distribution.py --output build/remote-v6/distribution --channel RC
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: RigWeave-remote-v6-source-sbom-${{ github.sha }}
+          path: build/remote-v6/distribution
+          if-no-files-found: error
