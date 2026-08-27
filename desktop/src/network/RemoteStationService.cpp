@@ -312,10 +312,14 @@ bool RemoteStationService::start(QString *error) {
     return false;
   }
   if (m_rigctldEnabled && !m_rigctldServer.listen(address, m_rigctldPort)) {
-    if (error) *error = m_rigctldServer.errorString().left(300); stop(); return false;
+    if (error) *error = m_rigctldServer.errorString().left(300);
+    stop();
+    return false;
   }
   if (m_tciEnabled && !m_tciServer.listen(address, m_tciPort)) {
-    if (error) *error = m_tciServer.errorString().left(300); stop(); return false;
+    if (error) *error = m_tciServer.errorString().left(300);
+    stop();
+    return false;
   }
   if (m_lanEnabled && !startDiscovery(error)) { stop(); return false; }
   m_stateTimer.start(); m_expiryTimer.start();
@@ -609,9 +613,11 @@ bool RemoteStationService::executeMutation(const QString &sessionId,
     return m_rotator->prepareTarget(payload.value("azimuth").toDouble(), payload.value("elevation").toDouble());
   if (operation == "ptt" || operation == "tune" || operation.startsWith("digi.") ||
       operation.startsWith("keyer.") || operation.startsWith("voice.")) {
-    if (failure) *failure = "TX_OWNER_OR_PHYSICAL_ACCEPTANCE_UNAVAILABLE"; return false;
+    if (failure) *failure = "TX_OWNER_OR_PHYSICAL_ACCEPTANCE_UNAVAILABLE";
+    return false;
   }
-  if (failure) *failure = "UNSUPPORTED_OPERATION"; return false;
+  if (failure) *failure = "UNSUPPORTED_OPERATION";
+  return false;
 }
 
 remote::RigState RemoteStationService::rigState() const {
