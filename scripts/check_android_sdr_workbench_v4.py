@@ -20,12 +20,17 @@ def implement_v4_rows(matrix: str) -> list[str]:
     return [line for line in matrix.splitlines() if re.search(r"\|\s*IMPLEMENT_V4\s*\|", line)]
 
 
+def workbench_strip_calls(source: str) -> int:
+    return len(re.findall(r"\bSdrStereoWorkbenchStrip\s*\(", source))
+
+
 def audit(root: pathlib.Path = ROOT) -> None:
     domain = (root / "android/app/src/main/java/app/rigweave/mobile/AndroidSdrWorkbenchV4.kt").read_text()
     screens = (root / "android/app/src/main/java/app/rigweave/mobile/AndroidSdrWorkbenchScreensV4.kt").read_text()
     tci = (root / "android/app/src/main/java/app/rigweave/mobile/AndroidTciBackend.kt").read_text()
     integration = (root / "android/app/src/main/java/app/rigweave/mobile/MainActivity.kt").read_text()
     enhancement = (root / "android/app/src/main/java/app/rigweave/mobile/AndroidSdrEnhancementDomain.kt").read_text()
+    panadapter = (root / "android/app/src/main/java/app/rigweave/mobile/PanadapterScreen.kt").read_text()
     kotlin_files = list((root / "android/app/src/main/java").rglob("*.kt"))
     for owner in ("AndroidSdrWorkbenchV4", "IqCaptureRepository", "ReplayIqSource", "SpectrumSurveyRepository", "SignalMeasurementController"):
         count = sum(len(re.findall(rf"\bclass\s+{owner}\b", path.read_text(errors="ignore"))) for path in kotlin_files)
@@ -45,6 +50,8 @@ def audit(root: pathlib.Path = ROOT) -> None:
         require(token in tci, f"TCI hardening invariant missing: {token}")
     require("BuildConfig.DEBUG" in enhancement and "DEMO · NO RADIO" in enhancement,
             "Debug SDR Lab must be debug-only and visibly synthetic")
+    require(workbench_strip_calls(panadapter) == 1,
+            "generic Panadapter must render exactly one SDR Workbench control strip")
     for token in ("exportChannelMemoriesJson", "importChannelMemoriesJson", "exportChannelMemoriesCsv", "importChannelMemoriesCsv"):
         require(token in domain, f"memory interchange missing: {token}")
     required_docs = (
