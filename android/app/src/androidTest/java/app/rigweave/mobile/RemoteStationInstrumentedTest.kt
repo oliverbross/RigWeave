@@ -7,6 +7,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
@@ -33,7 +34,7 @@ class RemoteStationInstrumentedTest {
         compose.onNodeWithText("REMOTE STATIONS").assertIsDisplayed()
         compose.onNodeWithText("REMOTE · DISCONNECTED").assertIsDisplayed()
         compose.onAllNodesWithText("GLOBAL STOP").onFirst().assertIsDisplayed()
-        compose.onNodeWithText("DEMO · NO RADIO").assertIsDisplayed()
+        compose.onNodeWithText("DEMO · NO RADIO").performScrollTo().assertIsDisplayed()
     }
 
     @Test fun profileStoreIsBoundedAndFaultLabClearsEveryLease() {
