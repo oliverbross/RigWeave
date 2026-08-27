@@ -26,6 +26,10 @@ int main() {
     assert(build_vfo(1U, 0U, 14'074'000U) == "vfo:1,0,14074000;");
     assert(build_if(1U, 0U, -1'500) == "if:1,0,-1500;");
     assert(build_mode(1U, "FT4") == "modulation:1,digu;");
+    assert(build_volume(-20) == "volume:-20;");
+    assert(build_volume(-99) == "volume:-60;");
+    assert(build_split_enable(1U, true) == "split_enable:1,true;");
+    assert(!build_split_enable(9U, true));
     assert(build_iq_sample_rate(96'000U) == "iq_samplerate:96000;");
     assert(build_iq_start(1U) == "iq_start:1;");
     assert(build_iq_stop(1U) == "iq_stop:1;");

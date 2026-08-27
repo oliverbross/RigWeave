@@ -12,6 +12,25 @@ import kotlinx.coroutines.withTimeout
 import kotlin.math.abs
 
 class AndroidSdrEnhancementDomainTest {
+    @Test fun scanBankRunsBoundedPriorityWatchAndPublishesDwellEvents() = runBlocking {
+        val tuned = CopyOnWriteArrayList<Long>()
+        val events = CopyOnWriteArrayList<ScannerDwellEvent>()
+        val scanner = ReceiveOnlyScannerController(
+            tuneReceive = { frequency, _, _ -> tuned += frequency; true },
+            signalLevel = { -42f },
+            onDwell = events::add,
+        )
+        val bank = ScanBank("bank", "Priority", memories = listOf(ScanMemory(14_070_000, "DIGU"), ScanMemory(14_071_000, "DIGU")),
+            priority = ScanMemory(14_074_000, "DIGU"), dwellMillis = 100)
+        scanner.startBank(bank)
+        withTimeout(2_000) { while (events.none { it.priority }) delay(25) }
+        scanner.stop()
+        assertTrue(14_074_000L in tuned)
+        assertTrue(events.any { it.priority })
+        assertEquals(ScannerState.STOPPED, scanner.snapshot.state)
+        scanner.close()
+    }
+
     @Test fun fftCandidatesAreLocalMaximaSortedByStrengthAndBounded() {
         val trace = floatArrayOf(-120f, -50f, -90f, -42f, -80f, -38f, -100f)
         val values = fftCandidates(trace, 14_100_000, 70_000, -60f, 2)
@@ -47,7 +66,7 @@ class AndroidSdrEnhancementDomainTest {
 
     @Test fun scannerTunesReceiveOnlyMemoryAndManualTuneStopsIt() = runBlocking {
         val tuned = CopyOnWriteArrayList<Long>()
-        val scanner = ReceiveOnlyScannerController { frequency, _, _ -> tuned += frequency; true }
+        val scanner = ReceiveOnlyScannerController(tuneReceive = { frequency, _, _ -> tuned += frequency; true })
         try {
             scanner.updateConfig(ScannerConfig(dwellMillis = 100))
             scanner.startMemory(listOf(
@@ -66,7 +85,7 @@ class AndroidSdrEnhancementDomainTest {
 
     @Test fun rangeScannerCapsCandidatesSkipsChannelsAndStopsOnBackground() = runBlocking {
         val tuned = CopyOnWriteArrayList<Long>()
-        val scanner = ReceiveOnlyScannerController { frequency, _, _ -> tuned += frequency; true }
+        val scanner = ReceiveOnlyScannerController(tuneReceive = { frequency, _, _ -> tuned += frequency; true })
         try {
             scanner.updateConfig(ScannerConfig(mode = ScannerMode.RANGE, startHz = 1_000_000,
                 endHz = 50_000_000, stepHz = 10, dwellMillis = 100, skipHz = setOf(1_000_010)))
