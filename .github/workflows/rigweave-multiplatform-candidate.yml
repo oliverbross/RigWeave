@@ -8,6 +8,7 @@ on:
       - feature/windows-desktop-full-parity-v1
       - feature/desktop-functional-parity-closure-v1
       - feature/android-sdroxide-enhancements-v2
+      - feature/android-local-sdr-receiver-v3
       - integration/rigweave-multiplatform-rc1
 
 permissions:
@@ -44,10 +45,18 @@ jobs:
           python3 scripts/check_rc1_convergence.py
           python3 scripts/check_hamlib_upstream.py
           python3 scripts/check_sdroxide_upstream.py
+          python3 scripts/check_local_sdr_receiver_v3.py
+          python3 -m unittest scripts/test_check_local_sdr_receiver_v3.py
           python3 -m unittest scripts/test_check_openhamclock_upstream.py
           test -s docs/android/ANDROID_SDROXIDE_OPERATIONAL_V2.md
           test -s docs/android/SDROXIDE_ANDROID_V2_CROSSWALK.md
           test -s docs/android/ANDROID_SDROXIDE_V2_LIVE_ACCEPTANCE.md
+          test -s docs/android/ANDROID_LOCAL_SDR_RECEIVER_V3.md
+          test -s docs/android/ANDROID_LOCAL_RECEIVER_ARCHITECTURE.md
+          test -s docs/android/ANDROID_RECEIVE_MODES.md
+          test -s docs/android/ANDROID_FM_TONE_AND_RDS.md
+          test -s docs/android/ANDROID_RECEIVER_RECORDING.md
+          test -s docs/android/ANDROID_LOCAL_SDR_LIVE_ACCEPTANCE.md
           test -s NOTICE
           test -s core/third_party/iturhfprop/SOURCE_MANIFEST.json
       - name: Repository conflict and credential audit
