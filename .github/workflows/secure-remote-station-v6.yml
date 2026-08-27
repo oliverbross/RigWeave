@@ -54,6 +54,8 @@ jobs:
       - name: Build stationd and desktop regression targets
         run: cmake -S desktop -B build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build/linux
       - name: Run desktop/station regression tests
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build/linux --output-on-failure
       - name: Package Linux x64 stationd without identities
         run: |
