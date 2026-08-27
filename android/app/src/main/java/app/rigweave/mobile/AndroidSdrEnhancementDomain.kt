@@ -84,6 +84,8 @@ class ReceiveOnlyScannerController(
     private val tuneReceive: suspend (Long, String, Int) -> Boolean,
     private val signalLevel: () -> Float? = { null },
     private val onDwell: (ScannerDwellEvent) -> Unit = {},
+    private val orderEntries: (List<ScanMemory>, String?) -> List<ScanMemory> = { rows, _ -> rows },
+    private val adaptiveDwell: (Long, Long, Boolean) -> Long = { _, minimum, _ -> minimum },
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var scanJob: Job? = null
@@ -100,7 +102,8 @@ class ReceiveOnlyScannerController(
 
     fun startEntries(memories: List<ScanMemory>, bankId: String? = null, priority: ScanMemory? = null) {
         activeBankId = bankId
-        start(memories.map { it.frequencyHz to it.mode }, priority?.let { it.frequencyHz to it.mode })
+        val ordered = orderEntries(memories.filter { it.scanEnabled }, bankId)
+        start(ordered.map { it.frequencyHz to it.mode }, priority?.let { it.frequencyHz to it.mode })
     }
 
     fun startBank(bank: ScanBank) {
@@ -149,8 +152,9 @@ class ReceiveOnlyScannerController(
                     }
                     val peak = signalLevel()
                     snapshot = snapshot.copy(state = ScannerState.DWELLING, currentHz = target.first, signalDb = peak)
-                    delay(config.dwellMillis)
-                    onDwell(ScannerDwellEvent(activeBankId, target.first, target.second, peak, config.dwellMillis, priorityDue))
+                    val dwell = adaptiveDwell(target.first, config.dwellMillis, priorityDue).coerceIn(config.dwellMillis, config.dwellMillis * 2)
+                    delay(dwell)
+                    onDwell(ScannerDwellEvent(activeBankId, target.first, target.second, peak, dwell, priorityDue))
                     visited++
                     if (config.resumePolicy == ScannerResumePolicy.MANUAL) {
                         snapshot = snapshot.copy(state = ScannerState.HOLDING, stopReason = "Manual resume selected")
@@ -184,11 +188,22 @@ internal fun fftCandidates(trace: FloatArray, centerHz: Long, spanHz: Long, thre
         .map { centerHz - spanHz / 2 + spanHz * it / trace.size }.toList()
 }
 
-data class BandStackEntry(val frequencyHz: Long, val mode: String, val filterHz: Int, val receiverId: String, val epoch: Long)
+data class BandStackEntry(
+    val frequencyHz: Long,
+    val mode: String,
+    val filterHz: Int,
+    val receiverId: String,
+    val epoch: Long,
+    val slotName: String = "",
+    val lastHeardEpoch: Long = epoch,
+)
 
 class BandStackStore(context: Context) {
     private val prefs = context.getSharedPreferences("rigweave-sdr", Context.MODE_PRIVATE)
     var depth by mutableStateOf(prefs.getInt("band_stack_depth", 3).coerceIn(1, 12)); private set
+    var perModeStacks by mutableStateOf(prefs.getBoolean("band_stack_per_mode", false)); private set
+    var cycleDirection by mutableStateOf(runCatching { BandStackCycleDirection.valueOf(prefs.getString("band_stack_direction", "") ?: "") }
+        .getOrDefault(BandStackCycleDirection.FORWARD)); private set
     var stacks by mutableStateOf(load()); private set
 
     fun updateDepth(value: Int) {
@@ -197,17 +212,42 @@ class BandStackStore(context: Context) {
         persist()
     }
 
+    fun updateOptions(perMode: Boolean, direction: BandStackCycleDirection) {
+        perModeStacks = perMode
+        cycleDirection = direction
+        prefs.edit().putBoolean("band_stack_per_mode", perMode).putString("band_stack_direction", direction.name).apply()
+    }
+
     fun record(band: String, entry: BandStackEntry) {
         if (band.isBlank() || entry.frequencyHz <= 0) return
-        stacks = stacks + (band to (listOf(entry) + stacks[band].orEmpty().filterNot { it.frequencyHz == entry.frequencyHz && it.mode == entry.mode }).take(depth))
+        val validated = entry.copy(mode = entry.mode.uppercase().take(12), filterHz = entry.filterHz.coerceIn(0, 100_000),
+            receiverId = entry.receiverId.take(40), slotName = entry.slotName.take(40), lastHeardEpoch = entry.lastHeardEpoch.coerceAtLeast(0))
+        val key = if (perModeStacks) "$band|${validated.mode}" else band
+        stacks = stacks + (key to (listOf(validated) + stacks[key].orEmpty().filterNot { it.frequencyHz == validated.frequencyHz && it.mode == validated.mode }).take(depth))
         persist()
     }
 
-    fun cycle(band: String, currentHz: Long): BandStackEntry? {
-        val rows = stacks[band].orEmpty()
+    fun entries(band: String, mode: String? = null): List<BandStackEntry> {
+        val key = if (perModeStacks && !mode.isNullOrBlank()) "$band|${mode.uppercase()}" else band
+        return stacks[key].orEmpty()
+    }
+
+    fun cycle(band: String, currentHz: Long, mode: String? = null): BandStackEntry? {
+        val key = if (perModeStacks && !mode.isNullOrBlank()) "$band|${mode.uppercase()}" else band
+        val rows = entries(band, mode)
         if (rows.isEmpty()) return null
         val index = rows.indexOfFirst { it.frequencyHz == currentHz }
-        return rows[(index + 1).mod(rows.size)]
+        val step = if (cycleDirection == BandStackCycleDirection.FORWARD) 1 else -1
+        return if (index < 0) rows[if (step > 0) 0 else rows.lastIndex] else rows[(index + step).mod(rows.size)]
+    }
+
+    fun replace(band: String, index: Int, entry: BandStackEntry) {
+        val key = if (perModeStacks) "$band|${entry.mode.uppercase()}" else band
+        val rows = stacks[key].orEmpty().toMutableList()
+        if (index !in rows.indices) return
+        rows[index] = entry
+        stacks = stacks + (key to rows.take(depth))
+        persist()
     }
 
     private fun load(): Map<String, List<BandStackEntry>> = runCatching {
@@ -215,7 +255,8 @@ class BandStackStore(context: Context) {
         root.keys().asSequence().associateWith { band ->
             val rows = root.getJSONArray(band)
             List(rows.length().coerceAtMost(12)) { index -> rows.getJSONObject(index).let { row ->
-                BandStackEntry(row.getLong("hz"), row.getString("mode"), row.getInt("filter"), row.optString("receiver"), row.getLong("epoch"))
+                BandStackEntry(row.getLong("hz"), row.getString("mode"), row.getInt("filter"), row.optString("receiver"), row.getLong("epoch"),
+                    row.optString("slot_name"), row.optLong("last_heard", row.getLong("epoch")))
             } }
         }
     }.getOrDefault(emptyMap())
@@ -224,7 +265,7 @@ class BandStackStore(context: Context) {
         val root = JSONObject()
         stacks.forEach { (band, entries) -> root.put(band, JSONArray(entries.map { JSONObject()
             .put("hz", it.frequencyHz).put("mode", it.mode).put("filter", it.filterHz)
-            .put("receiver", it.receiverId).put("epoch", it.epoch) })) }
+            .put("receiver", it.receiverId).put("epoch", it.epoch).put("slot_name", it.slotName).put("last_heard", it.lastHeardEpoch) })) }
         prefs.edit().putInt("band_stack_depth", depth).putString("band_stacks_v1", root.toString()).apply()
     }
 }
@@ -527,6 +568,7 @@ internal fun announcementAllowed(enabled: Boolean, available: Boolean, quiet: Bo
 enum class DebugLocalFixture {
     USB, LSB, CW, AM, SAM_OFFSET, NFM, NFM_CTCSS, NFM_DCS_NORMAL, NFM_DCS_INVERTED,
     WFM_MONO, WFM_STEREO_RDS, DUAL_RECEIVERS, SCANNER_HIT, RECORDING_TIME_SHIFT,
+    DRIFTING_CARRIERS, CLOSE_CARRIERS, RTTY_PAIR, BURSTY_TRAFFIC, CHANGING_NOISE,
 }
 
 class DebugSdrLab(
@@ -535,6 +577,7 @@ class DebugSdrLab(
     private val rf: RfObservationController,
     private val operational: SdrOperationalV2? = null,
     private val localReceivers: LocalReceiverController? = null,
+    private val workbench: AndroidSdrWorkbenchV4? = null,
 ) : AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     var active by mutableStateOf(false); private set
@@ -555,6 +598,14 @@ class DebugSdrLab(
         runtime.publish(TciRuntimeSnapshot(1, TciConnectionState.READY, "TCI", "DEBUG", "DEMO · NO RADIO", true, 2, 2,
             "tci:0", "tci:0", receivers))
         operational?.seedDebug()
+        workbench?.seedDebugSurvey()
+        workbench?.measurement?.apply {
+            upsertMonitor(ChannelMonitor(name = "DEMO REPEATER", frequencyHz = 14_074_000, mode = "NFM", expectedCtcssHz = 88.5f))
+            upsertMonitor(ChannelMonitor(name = "DEMO BEACON", frequencyHz = 14_075_250, mode = "CW"))
+            upsertMonitor(ChannelMonitor(name = "DEMO CALLING", frequencyHz = 14_076_000, mode = "USB"))
+            upsertMonitor(ChannelMonitor(name = "DEMO PRIORITY", frequencyHz = 14_077_000, mode = "NFM", expectedDcs = 23))
+            selectTracker(14_075_100)
+        }
         localReceivers?.let { local ->
             if (local.snapshot.receivers.isEmpty()) {
                 local.add("DEBUG FIXTURE", 0, 14_074_000, 96_000)
@@ -573,9 +624,11 @@ class DebugSdrLab(
                 val rate = if (localFixture in setOf(DebugLocalFixture.WFM_MONO, DebugLocalFixture.WFM_STEREO_RDS)) 192_000 else 96_000
                 repeat(if (localFixture == DebugLocalFixture.DUAL_RECEIVERS) 2 else 1) { receiver ->
                     val samples = debugLocalIq(localFixture, receiver, rate, 2_048, phase)
-                    panadapter.pushTciIq(receiver, rate, samples)
+                    val processed = workbench?.ingestLive("DEBUG FIXTURE", receiver,
+                        if (receiver == 0) 14_074_000 else 7_074_000, rate, samples) ?: samples
+                    panadapter.pushTciIq(receiver, rate, processed)
                     localReceivers?.pushIq("DEBUG FIXTURE", receiver,
-                        if (receiver == 0) 14_074_000 else 7_074_000, rate, samples)
+                        if (receiver == 0) 14_074_000 else 7_074_000, rate, processed)
                 }
                 if (localFixture == DebugLocalFixture.WFM_STEREO_RDS) localReceivers?.debugRds("local:A")
                 if (localFixture == DebugLocalFixture.RECORDING_TIME_SHIFT && localReceivers?.snapshot?.recordingState != "RECORDING")
@@ -591,6 +644,8 @@ class DebugSdrLab(
         localFixture = value
         val mode = when (value) {
             DebugLocalFixture.USB, DebugLocalFixture.DUAL_RECEIVERS, DebugLocalFixture.SCANNER_HIT, DebugLocalFixture.RECORDING_TIME_SHIFT -> LocalReceiverMode.USB
+            DebugLocalFixture.DRIFTING_CARRIERS, DebugLocalFixture.CLOSE_CARRIERS, DebugLocalFixture.RTTY_PAIR,
+            DebugLocalFixture.BURSTY_TRAFFIC, DebugLocalFixture.CHANGING_NOISE -> LocalReceiverMode.USB
             DebugLocalFixture.LSB -> LocalReceiverMode.LSB
             DebugLocalFixture.CW -> LocalReceiverMode.CW
             DebugLocalFixture.AM -> LocalReceiverMode.AM
@@ -608,6 +663,7 @@ class DebugSdrLab(
         rf.submit(emptyList())
         operational?.stopActive("Debug SDR lab stopped")
         localReceivers?.stopActive("Debug SDR lab stopped")
+        workbench?.capture?.captures?.filter { it.metadata.source == "DEBUG FIXTURE" }?.forEach { workbench.capture.delete(it.metadata.id) }
     }
 
     override fun close() { stop(); scope.cancel() }
@@ -623,10 +679,17 @@ internal fun debugLocalIq(fixture: DebugLocalFixture, receiver: Int, rate: Int, 
             DebugLocalFixture.CW -> 600.0
             DebugLocalFixture.SAM_OFFSET -> 73.0
             DebugLocalFixture.DUAL_RECEIVERS -> if (receiver == 0) 1_100.0 else -2_400.0
+            DebugLocalFixture.DRIFTING_CARRIERS -> 900.0 + (t / rate / 4.0) % 500.0
+            DebugLocalFixture.CLOSE_CARRIERS -> if ((t.toLong() / 256L) % 2L == 0L) 1_000.0 else 1_125.0
+            DebugLocalFixture.RTTY_PAIR -> if ((t.toLong() / 240L) % 2L == 0L) 900.0 else 1_070.0
+            DebugLocalFixture.BURSTY_TRAFFIC -> 1_500.0
+            DebugLocalFixture.CHANGING_NOISE -> 500.0 + (t / rate * 50.0) % 2_000.0
             else -> 1_100.0
         }
         val amplitude = when (fixture) {
             DebugLocalFixture.AM, DebugLocalFixture.SAM_OFFSET -> .48 * (1.0 + .55 * sin(2.0 * PI * 1_000.0 * t / rate))
+            DebugLocalFixture.BURSTY_TRAFFIC -> if ((t.toLong() / rate) % 3L == 0L) .48 else .01
+            DebugLocalFixture.CHANGING_NOISE -> .08 + .35 * (1.0 + sin(2.0 * PI * t / rate / 8.0)) / 2.0
             else -> .45
         }
         val phase = when (fixture) {

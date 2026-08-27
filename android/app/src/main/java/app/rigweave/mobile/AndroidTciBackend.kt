@@ -77,6 +77,11 @@ data class TciRuntimeSnapshot(
     val pendingReadbacks: Set<String> = emptySet(),
     val confirmedReadbacks: Long = 0,
     val failedWrites: Long = 0,
+    val staleFrames: Long = 0,
+    val duplicateStatus: Long = 0,
+    val capabilityChanges: Long = 0,
+    val streamAttachmentRequired: Boolean = true,
+    val reconnectState: String = "OFF · EXPLICIT CONNECT REQUIRED",
     val lastError: String? = null,
 ) {
     val ready: Boolean get() = state == TciConnectionState.READY
@@ -147,6 +152,7 @@ private class AndroidTciBackend(
     @Volatile private var socket: WebSocket? = null
     @Volatile private var ready = CompletableDeferred<Boolean>()
     private var fragment = ""
+    private var lastStatusRow = ""
     private var safeStopGeneration = Long.MIN_VALUE
 
     override val snapshot: RadioRuntimeSnapshot
@@ -193,7 +199,8 @@ private class AndroidTciBackend(
         }
 
     override suspend fun connect(): Boolean {
-        if (closed.getAndSet(false)) return false
+        if (closed.get()) return false
+        if (socket != null || current.state !in setOf(TciConnectionState.DISCONNECTED, TciConnectionState.ERROR)) return false
         synchronized(lock) {
             receivers.clear()
             current = TciRuntimeSnapshot(generation = generation.incrementAndGet(), state = TciConnectionState.CONNECTING)
@@ -202,16 +209,19 @@ private class AndroidTciBackend(
             publishLocked(current)
             ready = CompletableDeferred()
             fragment = ""
+            lastStatusRow = ""
         }
         val scheme = if (profile.secureWebSocket) "wss" else "ws"
         val request = runCatching { Request.Builder().url("$scheme://${profile.host}:${profile.port}").build() }.getOrElse {
             fail("Invalid TCI endpoint")
             return false
         }
-        socket = client.newWebSocket(request, Listener())
+        val connectionGeneration = current.generation
+        socket = client.newWebSocket(request, Listener(connectionGeneration))
         return withTimeoutOrNull(8_000L) { ready.await() } ?: run {
             fail("TCI ready timeout")
             socket?.cancel()
+            socket = null
             false
         }
     }
@@ -280,14 +290,19 @@ private class AndroidTciBackend(
         disconnected()
     }
 
-    private inner class Listener : WebSocketListener() {
+    private inner class Listener(private val connectionGeneration: Long) : WebSocketListener() {
+        private fun currentConnection(): Boolean = current.generation == connectionGeneration && !closed.get() &&
+            current.state in setOf(TciConnectionState.CONNECTING, TciConnectionState.HANDSHAKE, TciConnectionState.READY)
+
         override fun onOpen(webSocket: WebSocket, response: Response) {
+            if (!currentConnection()) { webSocket.cancel(); return }
             synchronized(lock) { publishLocked(current.copy(state = TciConnectionState.HANDSHAKE, lastError = null)) }
             webSocket.send("start;")
         }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             synchronized(lock) {
+                if (!currentConnection()) { publishLocked(current.copy(staleFrames = current.staleFrames + 1)); return }
                 fragment = (fragment + text).takeLast(65_536)
                 val end = fragment.lastIndexOf(';')
                 if (end < 0) return
@@ -299,11 +314,13 @@ private class AndroidTciBackend(
         }
 
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+            if (!currentConnection()) { synchronized(lock) { publishLocked(current.copy(staleFrames = current.staleFrames + 1)) }; return }
             if (bytes.size > 8 * 1024 * 1024) {
                 synchronized(lock) { publishLocked(current.copy(malformedFrames = current.malformedFrames + 1, lastError = "TCI frame exceeds 8 MiB")) }
                 return
             }
             decodeExecutor.execute {
+                if (!currentConnection()) { synchronized(lock) { publishLocked(current.copy(staleFrames = current.staleFrames + 1)) }; return@execute }
                 val metadata = IntArray(6)
                 val samples = NativeTci.decodeBinary(bytes.toByteArray(), metadata)
                 if (metadata[5] != 0) {
@@ -311,6 +328,26 @@ private class AndroidTciBackend(
                     return@execute
                 }
                 val receiver = metadata[0]
+                val rateAccepted = synchronized(lock) {
+                    val previous = receivers[receiver]
+                    val attached = when (metadata[3]) {
+                        NativeTci.DATA_IQ -> previous?.iqRunning == true
+                        NativeTci.DATA_RX_AUDIO -> previous?.audioRunning == true
+                        else -> true
+                    }
+                    if (!attached) {
+                        publishLocked(current.copy(staleFrames = current.staleFrames + 1,
+                            lastError = "Unattached TCI receive stream ignored"))
+                        false
+                    } else if (previous != null && metadata[3] == NativeTci.DATA_IQ &&
+                        previous.iqSampleRate > 0 && previous.iqSampleRate != metadata[1]) {
+                        receivers[receiver] = previous.copy(iqRunning = false, lastError = "I/Q sample rate changed · explicit stream reattachment required")
+                        publishLocked(current.copy(capabilityChanges = current.capabilityChanges + 1, streamAttachmentRequired = true,
+                            lastError = "TCI I/Q capability changed; stream stopped"))
+                        false
+                    } else true
+                }
+                if (!rateAccepted) return@execute
                 when (metadata[3]) {
                     NativeTci.DATA_IQ -> runtime.iqSink(receiver, metadata[1], samples)
                     NativeTci.DATA_RX_AUDIO -> runtime.rxAudioSink(receiver, metadata[1], metadata[4].coerceAtLeast(1), samples)
@@ -331,13 +368,18 @@ private class AndroidTciBackend(
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) { webSocket.close(code, null) }
-        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { disconnected() }
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { if (currentConnection()) disconnected() }
         override fun onFailure(webSocket: WebSocket, error: Throwable, response: Response?) {
-            fail(error.message?.replace(Regex("(wss?://)[^/\\s]+"), "$1<endpoint>")?.take(160) ?: "TCI transport failed")
+            if (currentConnection()) fail(error.message?.replace(Regex("(wss?://)[^/\\s]+"), "$1<endpoint>")?.take(160) ?: "TCI transport failed")
         }
     }
 
     private fun applyStatusLocked(row: String) {
+        if (row == lastStatusRow) {
+            publishLocked(current.copy(duplicateStatus = current.duplicateStatus + 1))
+            return
+        }
+        lastStatusRow = row
         val name = row.substringBefore('|')
         val args = row.substringAfter('|', "")
         val fields = args.split(',').map(String::trim)
@@ -349,8 +391,27 @@ private class AndroidTciBackend(
             "protocol" -> publishLocked(current.copy(protocol = fields.getOrNull(0).orEmpty().ifBlank { "TCI" }, protocolVersion = fields.getOrNull(1).orEmpty().ifBlank { "UNKNOWN" }))
             "device" -> publishLocked(current.copy(device = args.take(96).ifBlank { "UNKNOWN" }))
             "receive_only" -> publishLocked(current.copy(receiveOnly = fields.firstOrNull()?.equals("true", true) != false))
-            "trx_count" -> publishLocked(current.copy(declaredReceiverCount = fields.firstOrNull()?.toIntOrNull()?.coerceIn(0, 8) ?: 0))
-            "channels_count" -> publishLocked(current.copy(channelsCount = fields.lastOrNull()?.toIntOrNull()?.coerceIn(0, 2) ?: 0))
+            "trx_count" -> {
+                val count = fields.firstOrNull()?.toIntOrNull()?.coerceIn(0, 8) ?: 0
+                val changed = current.declaredReceiverCount > 0 && current.declaredReceiverCount != count
+                if (changed) {
+                    receivers.replaceAll { _, value -> value.copy(iqRunning = false, audioRunning = false,
+                        lastError = "Receiver capability changed · explicit stream reattachment required") }
+                    receivers.keys.filter { it >= count }.forEach(receivers::remove)
+                }
+                publishLocked(current.copy(declaredReceiverCount = count,
+                    capabilityChanges = current.capabilityChanges + if (changed) 1 else 0,
+                    streamAttachmentRequired = current.streamAttachmentRequired || changed))
+            }
+            "channels_count" -> {
+                val count = fields.lastOrNull()?.toIntOrNull()?.coerceIn(0, 2) ?: 0
+                val changed = current.channelsCount > 0 && current.channelsCount != count
+                if (changed) receivers.replaceAll { _, value -> value.copy(iqRunning = false, audioRunning = false,
+                    lastError = "Channel capability changed · explicit stream reattachment required") }
+                publishLocked(current.copy(channelsCount = count,
+                    capabilityChanges = current.capabilityChanges + if (changed) 1 else 0,
+                    streamAttachmentRequired = current.streamAttachmentRequired || changed))
+            }
             "vfo" -> receiver()?.let { (index, value) ->
                 val channel = fields.getOrNull(1)?.toIntOrNull() ?: 0
                 val hz = fields.getOrNull(2)?.toLongOrNull()?.takeIf { it in 100_000L..10_500_000_000L } ?: return@let
@@ -392,14 +453,17 @@ private class AndroidTciBackend(
             "audio_start" -> receiver()?.let { (index, value) -> receivers[index] = value.copy(audioRunning = true) }
             "audio_stop" -> receiver()?.let { (index, value) -> receivers[index] = value.copy(audioRunning = false) }
             "ready" -> {
+                if (current.state != TciConnectionState.HANDSHAKE || current.protocol == "UNKNOWN") {
+                    publishLocked(current.copy(malformedFrames = current.malformedFrames + 1,
+                        lastError = "Malformed or stale TCI ready status"))
+                    return
+                }
                 val count = current.declaredReceiverCount.coerceAtLeast(1)
                 repeat(count) { receivers.getOrPut(it) { TciReceiverSnapshot("tci:$it", it, "RX ${it + 1}") } }
                 val preferred = profile.preferredInitialReceiver.coerceAtMost(count - 1)
-                current = current.copy(state = TciConnectionState.READY, activeReceiverId = "tci:$preferred", listeningReceiverId = "tci:$preferred", receiveOnly = true)
+                current = current.copy(state = TciConnectionState.READY, activeReceiverId = "tci:$preferred", listeningReceiverId = "tci:$preferred",
+                    receiveOnly = true, streamAttachmentRequired = true, reconnectState = "CONTROL READY · EXPLICIT STREAM ATTACHMENT REQUIRED")
                 ready.complete(true)
-                val rate = command(NativeTci.IQ_RATE, number = profile.preferredIqSampleRate.toLong())
-                send(rate + command(NativeTci.IQ_START, preferred))
-                receivers[preferred] = receivers.getValue(preferred).copy(iqRunning = true)
             }
             "start" -> Unit
             else -> publishLocked(current.copy(unknownCommands = current.unknownCommands + 1))
@@ -419,6 +483,7 @@ private class AndroidTciBackend(
         val accepted = send(command(kind, index))
         if (accepted) synchronized(lock) {
             receivers[index]?.let { receivers[index] = if (iq) it.copy(iqRunning = start) else it.copy(audioRunning = start) }
+            if (start) publishLocked(current.copy(streamAttachmentRequired = false))
             publishReceiversLocked()
         }
         return accepted
@@ -481,14 +546,18 @@ private class AndroidTciBackend(
     }
 
     private fun disconnected() = synchronized(lock) {
+        socket = null
         coalescedWrites.clear()
         sentReadbacks.clear()
         receivers.replaceAll { _, value -> value.copy(iqRunning = false, audioRunning = false) }
-        publishLocked(current.copy(state = TciConnectionState.DISCONNECTED, receivers = receivers.values.toList(), pendingReadbacks = emptySet()))
+        publishLocked(current.copy(generation = generation.incrementAndGet(), state = TciConnectionState.DISCONNECTED,
+            receivers = receivers.values.toList(), pendingReadbacks = emptySet(), streamAttachmentRequired = true,
+            reconnectState = "DISCONNECTED · EXPLICIT CONNECT REQUIRED"))
         if (!ready.isCompleted) ready.complete(false)
     }
 
     private fun fail(message: String) = synchronized(lock) {
+        socket = null
         publishLocked(current.copy(state = TciConnectionState.ERROR, lastError = message.take(180)))
         if (!ready.isCompleted) ready.complete(false)
     }

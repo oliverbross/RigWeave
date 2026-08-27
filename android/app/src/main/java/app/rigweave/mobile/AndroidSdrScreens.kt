@@ -90,6 +90,7 @@ fun TciRadioCockpit(
     rxAudio: TciRxAudioController,
     scanner: ReceiveOnlyScannerController,
     operational: SdrOperationalV2,
+    workbench: AndroidSdrWorkbenchV4,
     localReceivers: LocalReceiverController,
     memories: List<RadioPreset>,
     dispatch: (RadioPlatformAction) -> Unit,
@@ -133,10 +134,13 @@ fun TciRadioCockpit(
                     state.receivers.firstOrNull()?.sampleRate ?: 0)
                 ReceiverCockpit(state, rxAudio, operational, dispatch)
             }
-            TciCockpitPage.PANADAPTER -> TciPanadapterPanel(state, panadapter, dispatch, operational = operational,
+            TciCockpitPage.PANADAPTER -> TciPanadapterPanel(state, panadapter, dispatch, operational = operational, workbench = workbench,
                 localReceivers = localReceivers, openDigi = openDigi)
             TciCockpitPage.SCANNER -> ScannerPanel(scanner, memories, panadapter.frame, state, dispatch, operational)
-            TciCockpitPage.CALIBRATION -> TxAudioCalibrationPanel(operational, state)
+            TciCockpitPage.CALIBRATION -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SdrWorkbenchCalibrationPanel(workbench, state)
+                TxAudioCalibrationPanel(operational, state)
+            }
         }
         if (!state.ready && debugLab?.active != true) SdrEmptyState(
             "TCI data unavailable",
@@ -311,7 +315,8 @@ private fun StreamHealthRail(state: TciRuntimeSnapshot, modifier: Modifier) {
 @Composable
 fun TciPanadapterPanel(state: TciRuntimeSnapshot, controller: PanadapterController, dispatch: (RadioPlatformAction) -> Unit,
     scanner: ReceiveOnlyScannerController? = null, operational: SdrOperationalV2? = null,
-    localReceivers: LocalReceiverController? = null, memories: List<RadioPreset> = emptyList(), openDigi: () -> Unit = {}) {
+    workbench: AndroidSdrWorkbenchV4? = null, localReceivers: LocalReceiverController? = null,
+    memories: List<RadioPreset> = emptyList(), openDigi: () -> Unit = {}) {
     var dual by remember { mutableStateOf(true) }
     var fit by remember { mutableStateOf(true) }
     var peak by remember { mutableStateOf(true) }
@@ -346,7 +351,7 @@ fun TciPanadapterPanel(state: TciRuntimeSnapshot, controller: PanadapterControll
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 SkimmerMode.entries.forEach { mode -> FilterChip(mode in v2.skimmer.enabledModes,
                     { v2.skimmer.setEnabled(mode, mode !in v2.skimmer.enabledModes) }, { Text("${mode.name} SKIMMER") }) }
-                SdrTruthChip("${v2.timeShift.snapshot.playback} · ${v2.timeShift.snapshot.bufferedSeconds}s · ${v2.timeShift.snapshot.bytes / 1024} KiB", true)
+                SdrTruthChip("${workbench?.historicalLabel ?: v2.timeShift.snapshot.playback} · ${v2.timeShift.snapshot.bufferedSeconds}s · ${v2.timeShift.snapshot.bytes / 1024} KiB", true)
                 SdrTruthChip("${v2.skimmer.markers.size} MARKERS · ${v2.skimmer.decodeMillis} ms", v2.skimmer.decodeMillis < 250)
             }
             if (v2.timeShift.snapshot.length != TimeShiftLength.OFF && v2.timeShift.snapshot.frameCount > 0) {
@@ -383,23 +388,24 @@ fun TciPanadapterPanel(state: TciRuntimeSnapshot, controller: PanadapterControll
             if (sideBySide) Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 displays.forEach { display ->
                     val centerHz = state.receivers.firstOrNull { it.backendIndex == display.receiverIndex }?.effectiveRxHz
-                    TciSpectrumInstrument(display, centerHz, fit, peak, palette, floor, top, displayMode, operational, localReceivers, dispatch, Modifier.weight(1f))
+                    TciSpectrumInstrument(display, centerHz, fit, peak, palette, floor, top, displayMode, operational, workbench, localReceivers, dispatch, Modifier.weight(1f))
                 }
             } else Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 displays.forEach { display ->
                     val centerHz = state.receivers.firstOrNull { it.backendIndex == display.receiverIndex }?.effectiveRxHz
-                    TciSpectrumInstrument(display, centerHz, fit, peak, palette, floor, top, displayMode, operational, localReceivers, dispatch, Modifier.weight(1f))
+                    TciSpectrumInstrument(display, centerHz, fit, peak, palette, floor, top, displayMode, operational, workbench, localReceivers, dispatch, Modifier.weight(1f))
                 }
             }
         }
         operational?.skimmer?.selectedMarker?.let { marker -> MarkerInspector(marker, operational, dispatch, openDigi) }
+        if (workbench != null) SdrWorkbenchControlPanel(workbench, state, controller, localReceivers, dispatch)
     }
 }
 
 @Composable
 private fun TciSpectrumInstrument(display: TciPanadapterDisplay, centerHz: Long?, fit: Boolean, peak: Boolean, palette: Int,
     manualFloor: Float, manualTop: Float, displayMode: String, operational: SdrOperationalV2?,
-    localReceivers: LocalReceiverController?, dispatch: (RadioPlatformAction) -> Unit, modifier: Modifier) {
+    workbench: AndroidSdrWorkbenchV4?, localReceivers: LocalReceiverController?, dispatch: (RadioPlatformAction) -> Unit, modifier: Modifier) {
     val frame = display.frame
     val reviewFrame = operational?.timeShift?.selectedFrame?.takeIf {
         operational.timeShift.snapshot.playback != TimeShiftPlayback.LIVE && it.receiver == display.receiverIndex
@@ -440,7 +446,11 @@ private fun TciSpectrumInstrument(display: TciPanadapterDisplay, centerHz: Long?
                         val hz = center - display.sampleRate / 2L + (display.sampleRate * offset.x / size.width.coerceAtLeast(1)).toLong()
                         val marker = operational?.skimmer?.markers?.minByOrNull { kotlin.math.abs(it.frequencyHz - hz) }
                             ?.takeIf { kotlin.math.abs(it.frequencyHz - hz) <= display.sampleRate / 30L }
-                        if (marker != null) operational?.skimmer?.select(marker.id) else { pointerHz = hz; localReviewHz = hz }
+                        if (marker != null) operational?.skimmer?.select(marker.id) else {
+                            pointerHz = hz; localReviewHz = hz
+                            if (workbench?.measurement?.inspector?.markerAHz == null) workbench?.measurement?.setMarkerA(hz)
+                            else workbench?.measurement?.setMarkerB(hz)
+                        }
                     }
                 }
                 .pointerInput(centerHz, localReceivers?.snapshot?.receivers) {
@@ -513,6 +523,19 @@ private fun TciSpectrumInstrument(display: TciPanadapterDisplay, centerHz: Long?
                                 Offset(x, 0f), Offset(x, size.height), 2.dp.toPx())
                         }
                     }
+                if (centerHz != null && workbench != null) {
+                    listOf(workbench.measurement.inspector.markerAHz to SdrHealthy, workbench.measurement.inspector.markerBHz to Color.Cyan).forEach { (frequency, color) ->
+                        frequency?.let { markerHz ->
+                            val x = size.width * ((markerHz - (centerHz - display.sampleRate / 2.0)) / display.sampleRate).toFloat()
+                            if (x in 0f..size.width) drawLine(color, Offset(x, 0f), Offset(x, size.height), 2.dp.toPx())
+                        }
+                    }
+                    workbench.measurement.monitors.forEach { monitor ->
+                        val x = size.width * ((monitor.frequencyHz - (centerHz - display.sampleRate / 2.0)) / display.sampleRate).toFloat()
+                        if (x in 0f..size.width) drawLine((if (monitor.occupied) SdrDanger else SdrMuted).copy(alpha = .8f),
+                            Offset(x, size.height * .55f), Offset(x, size.height), 1.dp.toPx())
+                    }
+                }
             }
             if (displayMode != "SPECTRUM") WaterfallCanvas(display.waterfallRows, fittedFloor, fittedTop, palette,
                 Modifier.fillMaxWidth().weight(if (displayMode == "BOTH") .56f else 1f))
@@ -659,16 +682,18 @@ fun ScannerPanel(scanner: ReceiveOnlyScannerController, memories: List<RadioPres
 }
 
 @Composable
-fun RfIntelligenceWorkspace(controller: RfObservationController, existing: @Composable () -> Unit) {
+fun RfIntelligenceWorkspace(controller: RfObservationController, workbench: AndroidSdrWorkbenchV4,
+    existing: @Composable () -> Unit) {
     var page by remember { mutableStateOf("INTELLIGENCE") }
     Column(Modifier.fillMaxSize().background(SdrChassis)) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            listOf("INTELLIGENCE", "RF MAP", "RF GLOBE").forEach { value -> FilterChip(page == value, { page = value }, { Text(value) }) }
+            listOf("INTELLIGENCE", "SPECTRUM", "RF MAP", "RF GLOBE").forEach { value -> FilterChip(page == value, { page = value }, { Text(value) }) }
         }
         Box(Modifier.weight(1f)) {
             when (page) {
                 "RF MAP" -> RfMapGlobeScreen(controller, globe = false)
                 "RF GLOBE" -> RfMapGlobeScreen(controller, globe = true)
+                "SPECTRUM" -> SpectrumSurveyPanel(workbench)
                 else -> existing()
             }
         }
@@ -845,9 +870,10 @@ fun TxAudioCalibrationPanel(operational: SdrOperationalV2, state: TciRuntimeSnap
 
 @Composable
 fun SdrSettingsPanel(runtime: TciRuntimeState, rxAudio: TciRxAudioController, scanner: ReceiveOnlyScannerController,
-    operational: SdrOperationalV2, localReceivers: LocalReceiverController, rf: RfObservationController,
+    operational: SdrOperationalV2, workbench: AndroidSdrWorkbenchV4, localReceivers: LocalReceiverController, rf: RfObservationController,
     announcements: SpokenAnnouncementController, bandStacks: BandStackStore, debugLab: DebugSdrLab?) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SdrWorkbenchSettingsPanel(workbench, operational)
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = SdrRaised)) {
             Column(Modifier.padding(12.dp)) { LocalReceiverSettingsPanel(localReceivers) }
         }
@@ -927,6 +953,12 @@ fun SdrSettingsPanel(runtime: TciRuntimeState, rxAudio: TciRxAudioController, sc
             Text("BAND STACKS", color = SdrAmber, fontWeight = FontWeight.Bold)
             Text("Bounded depth · ${bandStacks.depth}", color = SdrMuted)
             Slider(bandStacks.depth.toFloat(), { bandStacks.updateDepth(it.toInt()) }, valueRange = 1f..12f, steps = 10)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(bandStacks.perModeStacks, { bandStacks.updateOptions(it, bandStacks.cycleDirection) })
+                Text("Separate stacks per mode")
+                BandStackCycleDirection.entries.forEach { direction -> FilterChip(bandStacks.cycleDirection == direction,
+                    { bandStacks.updateOptions(bandStacks.perModeStacks, direction) }, { Text(direction.name) }) }
+            }
             Text("Band stacks store frequency, mode, filter, receiver and timestamp. Recall is explicit and never starts a connection.", color = SdrHold)
         } }
     }
@@ -934,10 +966,12 @@ fun SdrSettingsPanel(runtime: TciRuntimeState, rxAudio: TciRxAudioController, sc
 
 @Composable
 fun SdrHealthPanel(runtime: TciRuntimeState, rxAudio: TciRxAudioController, panadapter: PanadapterController, scanner: ReceiveOnlyScannerController,
-    operational: SdrOperationalV2, localReceivers: LocalReceiverController, rf: RfObservationController, announcements: SpokenAnnouncementController) {
+    operational: SdrOperationalV2, workbench: AndroidSdrWorkbenchV4, localReceivers: LocalReceiverController,
+    rf: RfObservationController, announcements: SpokenAnnouncementController) {
     val tci = runtime.snapshot
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("ANDROID SDR HEALTH", color = SdrAmber, fontWeight = FontWeight.Bold)
+        SdrWorkbenchHealthPanel(workbench, tci)
         LocalReceiverHealthPanel(localReceivers)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             SdrHealthCard("TCI", "${tci.state} · ${tci.protocol} ${tci.protocolVersion}", tci.ready, Modifier.weight(1f))

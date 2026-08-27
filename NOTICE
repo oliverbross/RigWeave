@@ -194,3 +194,11 @@ SSB/CW/AM/SAM/FM, tone, RDS and recording implementation is independently
 written RigWeave GPL-3.0-only code. No SDRoxide source, UI, asset, recording,
 test I/Q, model, codec or binary was incorporated. See
 docs/android/SDROXIDE_LOCAL_RECEIVER_PROVENANCE_V3.md.
+
+The Android SDR Operator Workbench v4 review reverified SDRoxide v1.5.3 at
+commit a680935b10f33768a499435e8bd37f779fa640ae and tree
+4697195080495da4a727b14234b85af89c10ecda under GPL-3.0. The capture/replay,
+measurement, survey, scanner, monitor, calibration and TCI-lifecycle code is
+independently written RigWeave GPL-3.0-only code. No SDRoxide source, UI,
+asset, recording, I/Q fixture, model, dependency or binary is incorporated.
+See docs/android/SDROXIDE_ANDROID_V4_PROVENANCE.md.

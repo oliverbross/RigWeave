@@ -402,7 +402,8 @@ class LocalReceiverController(
     private fun loop() {
         while (active.get()) {
             val frame = try { queue.poll(250, TimeUnit.MILLISECONDS) } catch (_: InterruptedException) { return } ?: continue
-            val receivers = latestReceivers.filter { it.enabled && it.sourceId == frame.source && it.sourceReceiver == frame.receiver }
+            val receivers = latestReceivers.filter { it.enabled && it.sourceReceiver == frame.receiver &&
+                (it.sourceId == frame.source || frame.source == "REPLAY") }
             receivers.forEach { state -> process(state, frame) }
         }
     }

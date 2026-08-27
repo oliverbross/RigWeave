@@ -83,3 +83,9 @@ TCI profiles store display name, host, port, TLS choice, preferred I/Q rate, ini
 ## Android local receiver v3 data
 
 Raw live I/Q and demodulated audio remain only in bounded memory unless the operator explicitly starts a recording. `rigweave-local-sdr-v3.db` schema 1 stores recording metadata and relative app-private filenames, never audio blobs or QSO rows. PCM16 WAV and bounded JSON sidecars live under app-private files with a 250 MB maximum default cap, atomic finalisation, orphan cleanup and delete support. Support output excludes recordings, raw I/Q, RDS RadioText, operator notes and raw station metadata. Safe mode/filter/DSP preferences may restore; listening, offsets, recording, scanner capture, SAM acquisition and RDS sessions do not.
+
+## Android SDR Workbench v4 data
+
+Explicit raw I/Q captures live under app-private `files/sdr/iq-captures` as capped float32 data plus metadata. Spectrum Survey schema 2 stores derived aggregate counts/levels only in `rigweave-spectrum-survey.sqlite`; it has no raw sample, audio, decoded conversation, RadioText, QSO or credential column. Capture, replay, tracker, monitor, scanner and TCI stream state never restore active. Safe caps/retention/calibration preferences may restore.
+
+Support bundles exclude raw I/Q, IQ/audio recordings, decoded conversations, RDS RadioText, operator notes, private paths, raw TCI payloads and private station metadata. Only bounded sanitized state, counts, sizes, latency and truth labels may be included.

@@ -101,3 +101,7 @@ Android adds receiver-targeted TCI readback/control, explicit receiver links, a 
 ## Android Local SDR Receiver v3
 
 Compatible TCI, QMX/QMX+, KX3/KX2 external stereo and generic proven I/Q sources can feed up to two receive-only local virtual receivers. Shared C++ demodulation provides USB/LSB/CW/DIGU/DIGL/DSB/AM/SAM/NFM/WFM/SPECTRUM, CTCSS/DCS and validated RDS/RBDS metadata. Local audio reuses the existing two-input mixer and RX DSP. Panadapter click-to-listen, bounded PCM16 recording, time-shift pre-roll, Scanner audio hit, Settings, Health and `DEMO · NO RADIO` fixtures are Android-visible. No local action owns or implicitly changes a transmitter or physical radio.
+
+## Android SDR Operator Workbench v4
+
+Android adds production portable float32 I/Q capture/offline replay, Panadapter v6 history and Marker A/B tools, calibrated/relative measurements, signal tracking with local-receiver-only follow, bounded Spectrum Survey, historical scanner ordering, four channel monitors, memory/band-stack metadata and receive calibration. Replay is receive-only, detaches live TCI, never moves a physical VFO and disables audio outside 1×. Derived survey/capture storage is app-private and separate from canonical QSO ownership.

@@ -159,3 +159,9 @@ TCI safe setters coalesce to the latest generation; two audio queues are capped 
 ## Android Local SDR Receiver v3 bounds
 
 One local-I/Q queue holds eight blocks and one worker services at most two checked native handles. JNI input caps at four million floats. Output is fixed at 48 kHz and reuses the existing two eight-frame audio queues and one AudioTrack. Time-shift audio is retained only by the existing owner for its selected 0/30/60/120-second window. Recording is one file, 30 minutes and 250 MB maximum total. Health exposes rate, NCO, filter, mode, DSP time, queue/drop, SAM/tone/RDS and recording counters without raw data. Golden churn covers 1,000 resets and 500 mode/rate changes; full platform and device soaks remain separate gates.
+
+## Android SDR Workbench v4 bounds
+
+One explicit I/Q file records at a time, each at most ten minutes; total capture storage is at most 2 GiB. Replay has one worker and four fixed speed choices. Spectrum Survey uses one serialized aggregator, indexed 15-minute/1 kHz aggregates, 7/30/90-day retention, at most 500,000 rows and 128 MiB. Display analysis consumes reduced traces; tracker is singular and channel monitors cap at four. Scanner dwell remains between the operator minimum and twice that value.
+
+The deterministic v4 profile covers three ten-minute capture segments (30 minutes total), ten-minute seek, two local receivers during replay, four monitors, 100,000 survey aggregation inputs across 30 simulated days, 1,000 tracker selections, 1,000 replay/live switches, adaptive scanner ordering and TCI reconnect/stale-frame stress. It records RSS/PSS/native heap, threads, file descriptors, throughput, dropped blocks, seek/query/aggregation latency and database size. Generated captures/database are deleted after the profile; final measured values belong to exact-SHA evidence and are not tablet guarantees.

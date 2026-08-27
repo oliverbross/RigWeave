@@ -107,3 +107,16 @@ Twelve Android-visible areas are source-complete: TCI, multi-receiver, I/Q, RX a
 | Settings, Health, privacy and debug lab | SOURCE_COMPLETE | Debug state is `DEMO · NO RADIO` |
 | Windows/macOS feature/UI | UNCHANGED | Shared-core regression only |
 | Hosted/protected tablet/live | PENDING | Exact-SHA and conditional device evidence recorded separately |
+
+## Android SDR Operator Workbench v4 candidate
+
+| Area | Status | Evidence boundary |
+|---|---|---|
+| Capture/replay/history | SOURCE_COMPLETE | Atomic float32 I/Q, offline seek/speeds and historical truth; live/audio acceptance separate. |
+| Measurements/tracker/monitors/calibration | SOURCE_COMPLETE | Relative until user-calibrated; local follow only; four monitors; no tone invention. |
+| Spectrum Survey/Intelligence/scanner | SOURCE_COMPLETE | Schema-2 derived aggregates with retention/caps; history is not current RF. |
+| Memories/band stacks/Settings/Health/privacy | SOURCE_COMPLETE | Validated import/export and bounded metadata; private payload exclusions. |
+| SDRoxide final parity | SOURCE_COMPLETE | Final classified-family matrix has `IMPLEMENT_V4=0`; excluded/deferred rows remain deliberate. |
+| Desktop feature/UI | UNCHANGED | Regression evidence only. |
+| Hosted exact SHA/packages | PENDING_UNTIL_FINAL_SHA | Mandatory workflow and final hashes cannot precede the immutable commit. |
+| Protected tablet/unlocked visual/live RF/audio | CONDITIONAL_PENDING | Never inferred from debug/build/package evidence. |

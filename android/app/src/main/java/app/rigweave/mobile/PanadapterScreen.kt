@@ -65,6 +65,7 @@ fun PanadapterScreen(
     spots: List<AndroidDXSpot>,
     compact: Boolean,
     localReceivers: LocalReceiverController? = null,
+    workbench: AndroidSdrWorkbenchV4? = null,
     onControls: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
@@ -100,6 +101,10 @@ fun PanadapterScreen(
     }
 
     LaunchedEffect(radio.revision) { controller.observeRadioState(radio) }
+    LaunchedEffect(markerAHz, markerBHz) {
+        workbench?.measurement?.setMarkerA(markerAHz.takeIf { it > 0 })
+        workbench?.measurement?.setMarkerB(markerBHz.takeIf { it > 0 })
+    }
     DisposableEffect(Unit) { onDispose { controller.stop() } }
     DisposableEffect(controller.lifecycle, controller.settings.keepScreenAwake) {
         view.keepScreenOn = controller.lifecycle == PanadapterLifecycle.LIVE && controller.settings.keepScreenAwake
@@ -124,6 +129,7 @@ fun PanadapterScreen(
             onStop = { controller.stop() }, onInspector = { inspector = true }, onDiagnostics = { diagnostics = true })
         PanadapterTruthStrip(controller)
         localReceivers?.let { LocalReceiverRail(it, "STEREO I/Q", 0, center, provenSpan) }
+        if (workbench != null) SdrStereoWorkbenchStrip(workbench, controller, radio, localReceivers)
 
         if (radio.transmitting) {
             Surface(color = PanDanger, modifier = Modifier.fillMaxWidth()) {
@@ -188,6 +194,7 @@ fun PanadapterScreen(
             onImmersive = { immersive = !immersive },
             compact = compact)
         localReceivers?.let { LocalReceiverTapActions(it, "STEREO I/Q", 0, center, provenSpan, markerAHz.takeIf { value -> value > 0 }) }
+        if (workbench != null) SdrStereoWorkbenchStrip(workbench, controller, radio, localReceivers)
         if (message.isNotBlank()) Text(message, color = if (message.contains("blocked", true) || message.contains("denied", true)) PanDanger else PanHold,
             fontSize = 11.sp, maxLines = 1)
     }

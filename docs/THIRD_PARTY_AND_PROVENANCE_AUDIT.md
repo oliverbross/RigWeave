@@ -35,3 +35,7 @@ The v2 audit reverified `v1.5.3` at commit `a680935b10f33768a499435e8bd37f779fa6
 ## Android Local SDR Receiver v3
 
 The v3 start audit found no newer stable SDRoxide release. Receive modes, tone/data decode, recording and Scanner behavior were reviewed at the same immutable pin. All new DSP/JNI/Kotlin/Compose/storage code is independently written and adds no third-party dependency or payload. The adaptation ledger is in `docs/android/SDROXIDE_LOCAL_RECEIVER_PROVENANCE_V3.md`.
+
+## Android SDR Operator Workbench v4
+
+The v4 final-family audit again found stable SDRoxide `v1.5.3` at commit `a680935b10f33768a499435e8bd37f779fa640ae`, tree `4697195080495da4a727b14234b85af89c10ecda`, GPL-3.0 licence digest `3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986`. All new Kotlin/Compose/SQLite code is independently written. No upstream source, asset, recording, I/Q fixture, model, binary, package or runtime dependency is incorporated. The read-only watcher cannot mutate code or pins.

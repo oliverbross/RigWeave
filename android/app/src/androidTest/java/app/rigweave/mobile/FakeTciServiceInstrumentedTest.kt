@@ -50,15 +50,39 @@ class FakeTciServiceInstrumentedTest {
             }
         }
     }
+
+    @Test fun repeatedReconnectRequiresExplicitStreamAttachmentAndDoesNotRestoreTransmit() {
+        FakeTciService(100).use { service ->
+            val runtime = TciRuntimeState()
+            val profile = RadioConnectionProfile(
+                id = RadioProfileId("test.tci.reconnect"), name = "TCI reconnect stress",
+                backendKind = RadioBackendKind.NATIVE_TCI, modelId = RadioModelId("TCI:TEST"),
+                manufacturer = "TEST", model = "FAKE", transport = RadioTransportType.TCI,
+                host = "127.0.0.1", port = service.port, readOnly = false, automaticSafeReconnect = false,
+            )
+            val backend = runBlocking { AndroidTciBackendFactory(runtime).create(profile) }
+            try {
+                repeat(100) {
+                    assertTrue(runBlocking { backend.connect() })
+                    assertTrue(runtime.snapshot.receiveOnly)
+                    assertTrue(runtime.snapshot.streamAttachmentRequired)
+                    assertFalse(runtime.snapshot.receivers.any { receiver -> receiver.iqRunning || receiver.audioRunning })
+                    runBlocking { backend.disconnect() }
+                }
+                assertTrue(service.connected.await(10, TimeUnit.SECONDS))
+            } finally { backend.close() }
+        }
+    }
 }
 
-private class FakeTciService : AutoCloseable {
+private class FakeTciService(private val connectionCount: Int = 1) : AutoCloseable {
     private val server = ServerSocket(0, 1)
     val port: Int = server.localPort
-    val connected = CountDownLatch(1)
+    val connected = CountDownLatch(connectionCount)
     private val worker = Thread({
         runCatching {
-            server.accept().use { socket ->
+            repeat(connectionCount) {
+                server.accept().use { socket ->
                 val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.US_ASCII))
                 var key = ""
                 while (true) {
@@ -86,7 +110,8 @@ private class FakeTciService : AutoCloseable {
                 output.write(bytes)
                 output.flush()
                 connected.countDown()
-                Thread.sleep(500)
+                Thread.sleep(10)
+                }
             }
         }
     }, "RigWeave-Fake-TCI").apply { isDaemon = true; start() }

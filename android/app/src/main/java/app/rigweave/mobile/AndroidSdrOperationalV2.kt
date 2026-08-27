@@ -42,9 +42,26 @@ data class RecordOnHitPolicy(
         totalBytes = totalBytes.coerceIn(4L shl 20, 2L shl 30))
 }
 
-data class ScanMemory(val frequencyHz: Long, val mode: String, val filterHz: Int = 2_700) {
+data class ScanMemory(
+    val frequencyHz: Long,
+    val mode: String,
+    val filterHz: Int = 2_700,
+    val name: String = "",
+    val group: String = "",
+    val expectedCtcssHz: Float? = null,
+    val expectedDcs: Int? = null,
+    val scanEnabled: Boolean = true,
+    val priority: Boolean = false,
+    val note: String = "",
+    val locationGrid: String = "",
+    val lastHeardEpoch: Long = 0,
+    val activityScore: Float = 0f,
+) {
     fun validated() = copy(frequencyHz = frequencyHz.coerceIn(100_000, 10_500_000_000),
-        mode = mode.uppercase().take(12).ifBlank { "USB" }, filterHz = filterHz.coerceIn(50, 100_000))
+        mode = mode.uppercase().take(12).ifBlank { "USB" }, filterHz = filterHz.coerceIn(50, 100_000),
+        name = name.take(60), group = group.take(40), expectedCtcssHz = expectedCtcssHz?.coerceIn(50f, 300f),
+        expectedDcs = expectedDcs?.coerceIn(0, 777), note = note.take(240), locationGrid = locationGrid.uppercase().take(10),
+        lastHeardEpoch = lastHeardEpoch.coerceAtLeast(0), activityScore = activityScore.coerceIn(0f, 100f))
 }
 
 data class ScanBank(
@@ -589,7 +606,12 @@ class SdrOperationalV2(context: Context) : AutoCloseable {
             val memories = row.optJSONArray("memories") ?: JSONArray()
             ScanBank(row.getString("id"), row.getString("name"), row.optBoolean("enabled", true),
                 List(memories.length().coerceAtMost(2_000)) { item -> memories.getJSONObject(item).let { memory ->
-                    ScanMemory(memory.getLong("hz"), memory.getString("mode"), memory.optInt("filter", 2_700)) } },
+                    ScanMemory(memory.getLong("hz"), memory.getString("mode"), memory.optInt("filter", 2_700),
+                        memory.optString("name"), memory.optString("group"),
+                        memory.optDouble("ctcss").takeIf { !memory.isNull("ctcss") }?.toFloat(),
+                        memory.optInt("dcs").takeIf { !memory.isNull("dcs") }, memory.optBoolean("scan", true),
+                        memory.optBoolean("priority"), memory.optString("note"), memory.optString("grid"),
+                        memory.optLong("last_heard"), memory.optDouble("activity").toFloat()) } },
                 priority = row.optJSONObject("priority")?.let { priority ->
                     ScanMemory(priority.getLong("hz"), priority.getString("mode"), priority.optInt("filter", 2_700))
                 },
@@ -607,7 +629,11 @@ class SdrOperationalV2(context: Context) : AutoCloseable {
             .put("threshold", bank.thresholdDb.toDouble()).put("dwell", bank.dwellMillis).put("resume", bank.resumePolicy.name)
             .put("priority", bank.priority?.let { JSONObject().put("hz", it.frequencyHz).put("mode", it.mode).put("filter", it.filterHz) })
             .put("record", bank.recordOnHit.name).put("memories", JSONArray(bank.memories.map { memory -> JSONObject()
-                .put("hz", memory.frequencyHz).put("mode", memory.mode).put("filter", memory.filterHz) })) })
+                .put("hz", memory.frequencyHz).put("mode", memory.mode).put("filter", memory.filterHz)
+                .put("name", memory.name).put("group", memory.group).put("ctcss", memory.expectedCtcssHz)
+                .put("dcs", memory.expectedDcs).put("scan", memory.scanEnabled).put("priority", memory.priority)
+                .put("note", memory.note).put("grid", memory.locationGrid).put("last_heard", memory.lastHeardEpoch)
+                .put("activity", memory.activityScore) })) })
         preferences.edit().putString("scan_banks_v2", rows.toString()).apply()
     }
 

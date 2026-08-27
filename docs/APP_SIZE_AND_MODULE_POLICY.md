@@ -82,3 +82,7 @@ Local final-source packages pass: arm64 APK 64,855,821 bytes (`8ad0b7629a89c9660
 ## Android Local SDR Receiver v3 budget
 
 V3 adds source code and one small metadata schema only. Synthetic I/Q is generated at runtime; no fixture, recording, RDS dataset, SDRoxide asset, neural model or codec library is packaged. Gates remain arm64 APK at most 130 MB, four-ABI AAB at most 60 MB and preferred AAB delta at most 2 MB from the v2 56,261,966-byte baseline. Final exact-SHA sizes and hashes replace estimates.
+
+## Android SDR Workbench v4 budget
+
+Frozen v3 baselines are arm64 APK 65,104,138 bytes and four-ABI AAB 56,431,306 bytes. V4 adds Kotlin/Compose code and an empty-on-install SQLite schema; recordings and survey rows are runtime app-private data. No I/Q/audio fixture, SDRoxide asset, model, map, codec or new native dependency is packaged. Hard gates remain arm64 APK at most 130 MB and four-ABI AAB at most 60 MB, with preferred AAB delta at most 2 MB. Exact final-SHA sizes/hashes supersede this policy row.
