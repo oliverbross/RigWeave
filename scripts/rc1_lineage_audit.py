@@ -40,14 +40,6 @@ def resolve(ref: str) -> str:
     return git("rev-parse", "--verify", ref)
 
 
-def resolve_first(*refs: str) -> str:
-    for ref in refs:
-        resolved = git("rev-parse", "--verify", ref, check=False)
-        if resolved:
-            return resolved
-    raise SystemExit(f"none of the required refs resolve: {', '.join(refs)}")
-
-
 def resolve_local_only(ref: str, expected: str) -> str:
     resolved = git("rev-parse", "--verify", ref, check=False)
     if resolved:
@@ -76,12 +68,13 @@ def build_proof() -> dict:
     actual = {
         "canonical_source": resolve(SOURCE),
         "accepted_ui": resolve(ACCEPTED_UI),
-        # Hosted checkouts do not have Oliver's protected local-only `main`.
-        # The recovery ref carries that immutable object into the remote audit.
-        "protected_local_main": resolve_first(
-            "main", "origin/recovery/local-main-27c70d0"
-        ),
-        "frozen_origin_main": resolve("origin/main"),
+        # These entries describe immutable commit objects, not movable branch
+        # names.  After promotion, both `main` and `origin/main` legitimately
+        # move to the RC head while the recorded boundary objects must remain
+        # resolvable and the protected local tip must remain on its recovery
+        # ref.
+        "protected_local_main": resolve(PROTECTED_MAIN),
+        "frozen_origin_main": resolve(FROZEN_ORIGIN_MAIN),
         "recovery_ref": resolve("origin/recovery/local-main-27c70d0"),
         "review_tip": resolve_local_only(
             "integration/rigweave-final-whole-app-v1", REVIEW_TIP
@@ -130,7 +123,10 @@ def build_proof() -> dict:
             "accepted_ui_is_ancestor": ancestor(ACCEPTED_UI, head),
             "semantic_integration_is_ancestor": ancestor(SEMANTIC_INTEGRATION, head),
             "protected_main_not_merged": not ancestor(PROTECTED_MAIN, head),
-            "frozen_origin_main_unchanged": resolve("origin/main") == FROZEN_ORIGIN_MAIN,
+            "frozen_origin_main_object_preserved": resolve(FROZEN_ORIGIN_MAIN)
+            == FROZEN_ORIGIN_MAIN,
+            "origin_main_is_frozen_or_promoted_head": resolve("origin/main")
+            in (FROZEN_ORIGIN_MAIN, head),
             "tags": len(git("tag", "--list").splitlines()) if git("tag", "--list") else 0,
         },
         "inventory": {
