@@ -12,4 +12,3 @@ Safe sequence:
 6. Use Global Stop on any ambiguity; reconnect requires fresh lease actions.
 
 Do not place private keys, session ids, exact private addresses, raw media, QSO/provider content, or voice assets in support records. Config export contains public/alias metadata only and restores service OFF, remote disconnected, and all arms cleared.
-

@@ -11,4 +11,3 @@ Targets:
 - Android: Remote Stations route, pairing, certificate pinning, backend integration, remote banner, media sinks, and Global Stop.
 
 This source/build candidate does not prove real network quality, authenticated live service, audible audio, physical CAT/PTT/Tune/RF, or rotator movement.
-

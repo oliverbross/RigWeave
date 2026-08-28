@@ -10,4 +10,3 @@
 OBSERVER receives permitted read-only projections/media. OPERATOR may request writer/TX/rotator leases, subject to station policy and physical authority. ADMIN adds local administration eligibility; it does not bypass leases, interlocks, or physical acceptance.
 
 Pairing secrets/private keys are never exported. Forgetting an Android profile removes connection metadata but deliberately does not delete the shared Keystore identity. Restore is disconnected and disarmed.
-

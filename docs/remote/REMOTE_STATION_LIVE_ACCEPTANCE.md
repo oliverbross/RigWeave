@@ -15,4 +15,3 @@ Required separate operator evidence:
 - Global Stop from local and remote surfaces.
 
 For Debug Remote Lab or screenshots, every image must visibly say `DEMO · NO RADIO`. No live remote RF/PTT/Tune or rotator movement is authorised by this document.
-

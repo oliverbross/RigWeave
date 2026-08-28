@@ -7,4 +7,3 @@ Lifecycle: server `HELLO`; client signed `AUTH`; server `ACK/AUTHENTICATED`; per
 Channels: STATE, SPOTS, HEALTH, AUDIO_RX, AUDIO_TX, SPECTRUM, WATERFALL, optional IQ, DIGI, KEYER, VOICE, ROTATOR, optional LOG_EVENT. v1 implements state, RX audio, derived spectrum, and guarded TX-audio rejection. Unsupported channels remain unavailable—not silently emulated.
 
 Limits: 8 sessions, 64 KiB control, 256 KiB media. Heartbeat 5 seconds; station session expiry 15 seconds. Writer/TX/rotator lease TTL is 1–30 seconds.
-

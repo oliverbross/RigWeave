@@ -18,4 +18,3 @@
 | Debug Lab | Android local fixture | `DebugRemoteLabV6` | always `DEMO · NO RADIO` |
 
 The station never becomes a canonical log. Android retains its QSO database and Wavelog outbox.
-

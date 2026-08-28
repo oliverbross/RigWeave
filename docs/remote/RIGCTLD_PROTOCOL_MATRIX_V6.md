@@ -18,4 +18,3 @@ Reference: Hamlib 4.7.2 `rigctld` protocol. The in-process compatibility server 
 Normal one-letter and long forms, the implemented extended separator form, CR/LF input, bounded pipelining, and reconnect are covered at parser/service level. Fixture results never establish WSJT-X, fldigi, radio, audio, or RF acceptance.
 
 Primary reference: https://hamlib.sourceforge.net/html/rigctld.1.html
-

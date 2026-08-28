@@ -20,4 +20,3 @@ Trust boundaries: untrusted LAN/VPN, station TLS endpoint, Android client, stati
 Residual risks: a compromised already-unlocked station process or Android process can use authority already available to that process; VPN security is external; first pairing offer must be transferred over an operator-trusted visual/out-of-band path. Remote TX is unavailable in this source candidate because the desktop owner has no verified PTT/Tune capability.
 
 Private keys remain in Android Keystore or the desktop platform credential vault. Config/export stores public certificates, public keys, roles, aliases, and bounded metrics only. There is no remote command shell or custom encryption.
-

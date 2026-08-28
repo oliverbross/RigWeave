@@ -15,4 +15,3 @@ Reference: official ExpertSDR3 TCI repository, https://github.com/ExpertSDR3/TCI
 | TCI IQ/audio/spot exchange | UNAVAILABLE_PROTOCOL | native remote media is separate; no fabricated TCI stream |
 
 Input is bounded to 4096 bytes per read, malformed/unknown commands are rejected, and the bridge cannot invoke an arbitrary shell.
-

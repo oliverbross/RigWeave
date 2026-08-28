@@ -14,4 +14,3 @@ Audit date: 2026-08-28. Audited immutable upstream: SDRoxide `v1.5.3`, commit `a
 No SDRoxide code, UI, assets, screenshots, recordings, account system, or server shell were copied. `core/src/remote.cpp`, station service code, Android code, tests, and documentation are original GPL-3.0-only RigWeave work.
 
 Primary source: https://github.com/dividebysandwich/sdroxide/releases/tag/v1.5.3
-

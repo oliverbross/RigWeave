@@ -13,4 +13,3 @@ Reasons:
 Frame header: `RWR1`, protocol version, typed channel, flags, 32-bit sequence, 64-bit timestamp, 64-bit generation, 32-bit payload size. Maximum payload is 256 KiB. Control JSON is capped at 64 KiB. RX PCM payload begins with a big-endian sample rate and contains little-endian signed 16-bit samples. Spectrum is a derived 0–255 trace capped at 2048 bins and is labelled as derived, never raw I/Q.
 
 Raw I/Q, Opus, adaptive bitrate, station-side resampling, and persistence are future reviewed options. No media buffer is exported or restored.
-

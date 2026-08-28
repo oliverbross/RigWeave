@@ -12,4 +12,3 @@ Reviewed references:
 - Opus licence/source reviewed; Opus was not selected or packaged.
 
 No external UI, assets, screenshots, recordings, account systems, private keys, demo identities, or server shell were copied or packaged. Generated TLS identities are runtime-private data, not repository assets.
-
