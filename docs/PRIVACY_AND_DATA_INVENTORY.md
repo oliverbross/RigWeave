@@ -97,3 +97,5 @@ Profiles may store conservative TX limits, per-mode level preferences, monitor p
 ## Secure Remote Station v6 data
 
 Station TLS/signing private keys and paired public-key records are stored through the existing desktop credential-vault boundary. Android keeps its P-256 device key non-exportable in Android Keystore and stores only bounded station metadata and certificate fingerprints. Pairing offers, challenges, sessions and leases are transient. Support/Health output is limited to sanitized identities, roles, counts, ages, latency, sequence and drop metrics; it excludes private keys, credentials, raw control frames, audio/IQ payloads and private paths.
+
+SwiftUI stores its P-256 private key and device identifier in Apple Keychain. Qt stores client identity through Windows Credential Manager, macOS Keychain, or Linux Secret Service and refuses persistence when the platform store is unavailable. Opus/PCM audio and raw I/Q are transient bounded memory; no payload is persisted or included in backups, logs, support bundles, packages, or release assets.

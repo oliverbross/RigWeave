@@ -2,7 +2,7 @@
 
 RigWeave is a radio-native portable operating cockpit that connects discovery, tuning, operating, logging, synchronisation, and progress without requiring fabricated state or permanent network access.
 
-The current repository contains native SwiftUI iOS and Jetpack Compose Android clients over a shared C++17 core, plus a Windows Qt/QML Desktop Alpha integrated on its candidate branch. The desktop client is not yet promoted to `main`, physically accepted, or claimed to match Android feature coverage. Elecraft KX3/KX2 remains the established mobile radio family; desktop Hamlib operation stays explicit and fail-closed.
+The RC1 integration repository contains native SwiftUI iPhone/iPad and Jetpack Compose Android clients over a shared C++17 core, plus one Qt/QML desktop application for macOS, Windows, and Linux and a standalone station service. Source parity and packaging do not imply physical radio, WAN, signing, or store acceptance. Elecraft KX3/KX2 remains the established mobile radio family; desktop Hamlib operation stays explicit and fail-closed.
 
 Candidate integration scope and evidence boundaries are recorded in `docs/ANDROID_WINDOWS_INTEGRATION_V1.md` and `docs/MULTIPLATFORM_CANDIDATE_READINESS.md`.
 
@@ -11,11 +11,11 @@ Candidate integration scope and evidence boundaries are recorded in `docs/ANDROI
 | Layer | Current truth | Main paths |
 |---|---|---|
 | Shared core | KX3/KX2 CAT parsing and safety classes, ADIF, CTY, spot/DX analysis, operator intelligence, panadapter DSP, Wavelog retry policy, and bounded WSJT-X parsing behind a C ABI | core/include, core/portable, core/src |
-| Apple | SwiftUI app, Objective-C++ bridge, base USBDriverKit KXUSB transport, local SQLite/ADIF, callbook, Wavelog, cluster/DX, and physical-I/Q panadapter | ios/RigWeave, ios/CP210xDriver |
+| Apple | Adaptive iPhone/iPad SwiftUI app, Objective-C++ bridge, base USBDriverKit KXUSB transport, local SQLite/ADIF, callbook, Wavelog, cluster/DX, physical-I/Q panadapter, and pinned Remote Station client | ios/RigWeave, ios/CP210xDriver |
 | Android | Compose app, JNI bridge, USB serial, local SQLite/ADIF, callbook, Wavelog, CW and SSB voice macros, hardware-backed KX3 EQ Studio, DX/Neural DX surfaces, MapLibre maps, audio monitoring, and a dedicated KX3 stereo-I/Q panadapter behind one exclusive audio-owner contract | android/app/src/main |
-| Planned | Further KX3/KX2 Studio hardening and platform parity, Portable Chase/Activate, Sync and Progress, FlexRadio SmartLink, Qt/QML desktop, then QMX and broader integrations | docs/ROADMAP.md |
+| Desktop/Linux | Qt/QML app and stationd with singular functional owners, secure Remote Station host/client, system credential vaults, and bounded packages | desktop |
 
-The Apple Xcode targets are configured for device family 2 (iPad), deployment target iOS 17, and should not be described as proven iPhone support.
+The Apple Xcode target supports device families 1 and 2 (iPhone and iPad) at deployment target iOS 17. Simulator builds establish adaptive source/UI coverage; signed physical-device acceptance remains separate.
 
 ## Build
 
@@ -138,4 +138,4 @@ Public Apple distribution presents an unresolved GPLv3/platform risk. No App Sto
 
 ## Multiplatform RC1
 
-`integration/rigweave-multiplatform-rc1` converges the accepted Android, iOS, Windows and macOS source on one exact-SHA release contract. Start with [`docs/release/RIGWEAVE_MULTIPLATFORM_RC1.md`](docs/release/RIGWEAVE_MULTIPLATFORM_RC1.md). Whole-repository ancestry, singular owners, schema/configuration safety, source/SBOM distribution and package digests are executable gates. Physical, authenticated, signing and distribution acceptance remains separate and pending.
+`integration/rigweave-v0.1.0-rc1-final` converges the accepted Android, iPhone/iPad, macOS, Windows, Linux, and station-service source on one exact-SHA release contract. Start with [`docs/release/RIGWEAVE_V0_1_0_RC1.md`](docs/release/RIGWEAVE_V0_1_0_RC1.md). Whole-repository ancestry, singular owners, schema/configuration safety, source/SBOM distribution and package digests are executable gates. Physical, authenticated, signing and RF acceptance remain separate.

@@ -14,12 +14,24 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMAS = {"qso": 16, "neural": 5, "contest": 2, "digi": 2, "groups_io": 2, "dx_chaser": 1}
 EXPECTED_NAMES = {
-    "android_apk": "RigWeave-Android-arm64-v8a-{sha}.apk",
-    "android_aab": "RigWeave-Android-four-ABI-{sha}.aab",
-    "windows_zip": "RigWeave-Windows-x64-portable-{sha}.zip",
-    "windows_setup": "RigWeave-Windows-x64-setup-{sha}.exe",
-    "macos_zip": "RigWeave-macOS-arm64-unsigned-{sha}.zip",
-    "source": "RigWeave-source-{sha}.tar.gz",
+    "android_apk": "RigWeave-Android-arm64-v0.1.0-rc.1.apk",
+    "android_aab": "RigWeave-Android-four-ABI-v0.1.0-rc.1.aab",
+    "ios_simulator": "RigWeave-iOS-Simulator-v0.1.0-rc.1.zip",
+    "ios_xcarchive": "RigWeave-iOS-unsigned-XCArchive-v0.1.0-rc.1.zip",
+    "windows_zip": "RigWeave-Windows-x64-portable-v0.1.0-rc.1.zip",
+    "windows_setup": "RigWeave-Windows-x64-setup-v0.1.0-rc.1.exe",
+    "macos_zip": "RigWeave-macOS-arm64-unsigned-v0.1.0-rc.1.zip",
+    "linux_tar": "RigWeave-Linux-x86_64-v0.1.0-rc.1.tar.gz",
+    "linux_deb": "RigWeave-Linux-x86_64-v0.1.0-rc.1.deb",
+    "stationd_x64": "RigWeave-stationd-Linux-x86_64-v0.1.0-rc.1.tar.gz",
+    "stationd_arm64": "RigWeave-stationd-Linux-aarch64-v0.1.0-rc.1.tar.gz",
+    "source": "RigWeave-source-v0.1.0-rc.1.tar.gz",
+}
+SIZE_CEILINGS = {
+    "android_apk": 130 * 1024 * 1024, "android_aab": 60 * 1024 * 1024,
+    "windows_zip": 150 * 1024 * 1024, "windows_setup": 110 * 1024 * 1024,
+    "macos_zip": 200 * 1024 * 1024, "linux_tar": 180 * 1024 * 1024,
+    "linux_deb": 150 * 1024 * 1024, "source": 100 * 1024 * 1024,
 }
 
 
@@ -53,9 +65,11 @@ def main() -> None:
 
     source_name = EXPECTED_NAMES["source"].format(sha=sha)
     subprocess.check_call(
-        ["git", "archive", "--format=tar.gz", f"--prefix=RigWeave-{sha}/", "-o", str(output / source_name), sha],
+        ["git", "archive", "--format=tar.gz", "--prefix=RigWeave-0.1.0-rc.1/", "-o", str(output / source_name), sha],
         cwd=ROOT,
     )
+    if (output / source_name).stat().st_size > SIZE_CEILINGS["source"]:
+        raise SystemExit(f"artifact exceeds size gate: {source_name}")
 
     files = []
     for name in git("ls-tree", "-r", "--name-only", sha).splitlines():
@@ -75,6 +89,8 @@ def main() -> None:
         ("RigWeave", "NOASSERTION"), ("Hamlib", "4.7.2"), ("SDRoxide", "vendored-record"),
         ("mfsk-core", "vendored"), ("tempo-sstv", "vendored"), ("SGP4", "vendored"),
         ("ITUHFProp", "vendored"), ("CTY", "data-snapshot"), ("BandPlans", "data-snapshot"),
+        ("Xiph.Org Opus", "1.5.2-ddbe48383984d56acd9e1ab6a090c54ca6b735a6"),
+        ("libsecret", "system-dynamic"),
     ]
     sbom = {
         "spdxVersion": "SPDX-2.3",
@@ -102,15 +118,21 @@ def main() -> None:
             raise SystemExit(f"artifact not found: {source}")
         destination = output / EXPECTED_NAMES[kind].format(sha=sha)
         shutil.copy2(source, destination)
+        ceiling = SIZE_CEILINGS.get(kind)
+        if ceiling and destination.stat().st_size > ceiling:
+            raise SystemExit(f"artifact exceeds size gate: {destination.name}")
         collected[kind] = destination.name
 
     build = {
         "contract": "RIGWEAVE_RC1_BUILD_MANIFEST_V1", "sha": sha, "channel": args.channel,
-        "build_utc": build_utc, "schemas": SCHEMAS, "platforms": ["Android", "iOS", "Windows", "macOS"],
+        "build_utc": build_utc, "schemas": SCHEMAS,
+        "platforms": ["Android", "iPhone/iPad", "Windows", "macOS", "Linux x86_64", "Linux arm64 stationd"],
         "expected_artifacts": {key: value.format(sha=sha) for key, value in EXPECTED_NAMES.items()},
         "collected_artifacts": collected,
     }
     (output / "BUILD_MANIFEST.json").write_text(json.dumps(build, indent=2, sort_keys=True) + "\n")
+    shutil.copy2(ROOT / "NOTICE", output / "THIRD_PARTY_NOTICES.txt")
+    shutil.copy2(ROOT / "docs/release/RIGWEAVE_V0_1_0_RC1.md", output / "RELEASE_NOTES.md")
 
     artifacts = sorted(path for path in output.iterdir() if path.is_file() and path.name != "SHA256SUMS.txt")
     sums = "".join(f"{digest(path)}  {path.name}\n" for path in artifacts)

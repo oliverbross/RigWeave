@@ -123,3 +123,7 @@ V5 requires the immutable upstream/protocol audit, one-owner TX checker, native 
 ## Secure Remote Station v6 gate
 
 V6 requires the frozen protocol/security/media contracts, Windows/macOS/Linux stationd packages without private identities, Android client compilation and packages, protocol/security/scale sanitizers, unchanged platform regressions, a clean pushed exact SHA and the authoritative hosted workflow. Protected-tablet install is conditional and preservation-gated. Signing, deployment, authenticated public-internet operation, physical audio/CAT/PTT/Tune/RF, real WSJT-X/fldigi and rotator motion remain separate.
+
+## Final 0.1.0 RC1 publication gate
+
+Publication additionally requires the full Linux GUI packages, native arm64 stationd, iPhone/iPad simulator and unsigned XCArchive, SwiftUI/Qt remote clients, Opus/raw-IQ tests, Android control-surface compilation, all exact-SHA hosted jobs, the protected-tablet in-place gate, fast-forward main promotion, release asset re-download/hash verification, and safe cleanup. Failure of any hard gate prevents main promotion and prerelease publication.

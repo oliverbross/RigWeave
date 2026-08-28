@@ -2,7 +2,7 @@
 
 ## Positioning
 
-The integration candidate adds a Windows Qt/QML Alpha foundation while preserving hardened Android and native SwiftUI iOS. Windows Alpha is local-first and fail-closed; it is not promoted, physically accepted, or represented as Android parity.
+The 0.1.0 RC1 integration provides hardened Android, adaptive native SwiftUI iPhone/iPad, and one local-first Qt/QML desktop application for macOS, Windows, and Linux. Source parity is fail-closed and does not imply physical, authenticated-WAN, RF, signing, or store acceptance.
 
 > RigWeave is a radio-native portable operating cockpit that connects discovery, tuning, operating, logging, synchronisation, and progress without requiring fabricated state or permanent network access.
 
@@ -10,7 +10,7 @@ RigWeave is local-first. Radio control and local logging must remain useful with
 
 ## Current product
 
-- Native Apple mobile client using SwiftUI. The current target and physical evidence are iPad-focused; iPhone support is not claimed.
+- Native adaptive Apple mobile client using SwiftUI for iPhone and iPad; simulator evidence is complete while signed physical-device acceptance remains separate.
 - Native Android client using Jetpack Compose, including a dedicated KX3 receive-I/Q panadapter with explicit stereo-route proof, shared native DSP, CAT-synchronized spectrum/waterfall, calibration, diagnostics and bounded replay. Its software/device path is integrated and fail-closed; physical KX3 quadrature-I/Q RF acceptance is deferred.
 - Shared C++17 core exposed through a C ABI.
 - Deep Elecraft KX3/KX2 integration: observed CAT state, radio controls, transport adapters, safety classification, logging, real spectrum paths, and DX intelligence.
@@ -113,3 +113,5 @@ Android adds an acceptance-gated TCI transmit authority for existing Digi/SSTV, 
 ## Secure Remote Station v6
 
 RigWeave Desktop and the standalone `rigweave-stationd` expose a versioned TLS 1.3 Remote Station service for Windows, macOS and Linux. The Android app discovers or manually pairs with a pinned station, then reuses its existing Radio, Panadapter, Digi, Keyer, Voice and Rotator owners through explicit observer/operator/admin roles and exclusive writer/TX/rotator leases. Global Stop and local pre-emption remain authoritative; debug media is labelled `DEMO · NO RADIO`, and source/build evidence is not public-internet, audio, motion or RF acceptance.
+
+The RC1 closes client parity with native SwiftUI and Qt clients, adaptive Opus RX with PCM16 fallback, and optional host-disabled one-client raw I/Q. Device identities live in Android Keystore, Apple Keychain, Windows Credential Manager, macOS Keychain, or Linux Secret Service. Remote PTT, TUNE and movement remain unavailable without explicit policy and physical acceptance.

@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
   pull_request:
   push:
-    branches: [main, feature/rigweave-final-convergence-v1]
+    branches: [main, feature/rigweave-final-convergence-v1, integration/rigweave-v0.1.0-rc1-final]
 
 permissions:
   contents: read
@@ -107,8 +107,8 @@ jobs:
       - name: Stage exact-SHA Android packages
         run: |
           mkdir -p build/rc1/android
-          cp android/app/build/outputs/apk/debug/app-debug.apk "build/rc1/android/RigWeave-Android-arm64-v8a-${{ github.sha }}.apk"
-          cp android/app/build/outputs/bundle/debug/app-debug.aab "build/rc1/android/RigWeave-Android-four-ABI-${{ github.sha }}.aab"
+          cp android/app/build/outputs/apk/debug/app-debug.apk "build/rc1/android/RigWeave-Android-arm64-v0.1.0-rc.1.apk"
+          cp android/app/build/outputs/bundle/debug/app-debug.aab "build/rc1/android/RigWeave-Android-four-ABI-v0.1.0-rc.1.aab"
           sha256sum build/rc1/android/* > build/rc1/android/SHA256SUMS.txt
       - name: Upload exact-SHA Android packages
         uses: actions/upload-artifact@v4
@@ -124,8 +124,22 @@ jobs:
       - run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
       - name: Run Apple fast-entry golden tests
         run: swiftc ios/RigWeave/FastEntry.swift ios/Tests/FastEntryGoldenTests.swift -o /tmp/rigweave-fast-entry-tests && /tmp/rigweave-fast-entry-tests
-      - run: xcodebuild -project ios/RigWeave.xcodeproj -scheme RigWeave -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
-      - run: xcodebuild -project ios/RigWeave.xcodeproj -scheme RigWeave -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+      - name: Build iPhone/iPad simulator app
+        run: xcodebuild -project ios/RigWeave.xcodeproj -scheme RigWeave -destination 'generic/platform=iOS Simulator' -derivedDataPath build/apple/simulator -skipUnavailableActions CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+      - name: Build unsigned iPhone/iPad XCArchive
+        run: xcodebuild -project ios/RigWeave.xcodeproj -scheme RigWeave -destination 'generic/platform=iOS' -archivePath build/apple/RigWeave.xcarchive -skipUnavailableActions CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO archive
+      - name: Package explicit unsigned Apple outputs
+        run: |
+          mkdir -p build/rc1/apple
+          ditto -c -k --sequesterRsrc build/apple/simulator/Build/Products/Debug-iphonesimulator/RigWeave.app build/rc1/apple/RigWeave-iOS-Simulator-v0.1.0-rc.1.zip
+          ditto -c -k --sequesterRsrc build/apple/RigWeave.xcarchive build/rc1/apple/RigWeave-iOS-unsigned-XCArchive-v0.1.0-rc.1.zip
+          ! find build/rc1/apple -type f | grep -Ei '(mobileprovision|\.p12$|private|identity)'
+          shasum -a 256 build/rc1/apple/*.zip > build/rc1/apple/SHA256SUMS.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: RigWeave-Apple-${{ github.sha }}
+          path: build/rc1/apple
+          if-no-files-found: error
 
   migration-matrix:
     runs-on: ubuntu-latest

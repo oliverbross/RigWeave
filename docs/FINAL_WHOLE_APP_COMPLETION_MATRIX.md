@@ -140,3 +140,14 @@ Twelve Android-visible areas are source-complete: TCI, multi-receiver, I/Q, RX a
 | State, spectrum/waterfall and RX audio | SOURCE_COMPLETE | Derived spectrum remains labelled derived; optional IQ and TX media are bounded and capability-gated. |
 | TCI, rigctld, Digi/Keyer/Voice, TX and rotator paths | SOURCE_COMPLETE | All mutations pass existing authorities; unsupported capability fails closed. |
 | Physical/authenticated/RF/rotator-motion acceptance | PENDING | Never inferred from deterministic fixtures, builds, packages or device launch. |
+
+## Final 0.1.0 RC1 parity closure
+
+| Final domain | Status | Evidence boundary |
+|---|---|---|
+| Linux full GUI and stationd | SOURCE_COMPLETE | Native x86_64 GUI/package and arm64 stationd hosted gates required. |
+| SwiftUI and Qt Remote Station clients | SOURCE_COMPLETE | Pinned TLS, secure identity, safe controls, RX audio/spectrum; WAN/live acceptance pending. |
+| Adaptive Opus / PCM fallback / optional raw I/Q | SOURCE_COMPLETE | Protocol tests and packages required; physical audio/IQ pending. |
+| Android MIDI/HID controls | SOURCE_COMPLETE | Build/tests complete; specific physical controllers pending. |
+
+Final totals: `FOUNDATION_WIRED = 0`, `MISSING = 0`.

@@ -176,8 +176,8 @@ jobs:
         shell: pwsh
         run: |
           $m = Get-Content artifacts/windows/artifact-measurements.json | ConvertFrom-Json
-          if ($m.portable.bytes -gt 125829120) { throw 'Portable ZIP exceeds 120 MiB' }
-          if ($m.installer.bytes -gt 125829120) { throw 'Installer exceeds 120 MiB' }
+          if ($m.portable.bytes -gt 157286400) { throw 'Portable ZIP exceeds 150 MiB' }
+          if ($m.installer.bytes -gt 115343360) { throw 'Installer exceeds 110 MiB' }
           if ($m.unpackedBytes -gt 367001600) { throw 'Unpacked package exceeds 350 MiB' }
       - name: Stage exact-SHA Windows packages
         shell: pwsh
@@ -185,8 +185,8 @@ jobs:
           $portable = Get-ChildItem artifacts/windows -File -Filter 'RigWeave-Windows-x64-portable.zip' | Select-Object -First 1
           $installer = Get-ChildItem artifacts/windows -File -Filter '*.exe' | Select-Object -First 1
           if (!$portable -or !$installer) { throw 'Expected Windows packages were not produced' }
-          Rename-Item $portable.FullName "RigWeave-Windows-x64-portable-${{ github.sha }}.zip"
-          Rename-Item $installer.FullName "RigWeave-Windows-x64-setup-${{ github.sha }}.exe"
+          Rename-Item $portable.FullName "RigWeave-Windows-x64-portable-v0.1.0-rc.1.zip"
+          Rename-Item $installer.FullName "RigWeave-Windows-x64-setup-v0.1.0-rc.1.exe"
           Get-ChildItem artifacts/windows -File | Where-Object Name -Match '^RigWeave-Windows-x64-' |
             Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([IO.Path]::GetFileName($_.Path))" } |
             Set-Content artifacts/windows/SHA256SUMS.txt

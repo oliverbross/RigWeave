@@ -1,6 +1,7 @@
 name: RigWeave Multiplatform RC1
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     branches:
@@ -12,6 +13,10 @@ on:
       - feature/android-sdr-workbench-v4
       - feature/android-tci-transmit-control-v5
       - integration/rigweave-multiplatform-rc1
+      - integration/rigweave-v0.1.0-rc1-final
+      - main
+    tags:
+      - 'v0.1.0-rc.1'
 
 permissions:
   contents: read
@@ -27,6 +32,79 @@ jobs:
 
   macos-desktop:
     uses: ./.github/workflows/desktop-cross-platform.yml
+
+  linux-x64-full-gui:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: {fetch-depth: 0}
+      - name: Verify exact checked-out SHA
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - name: Install Linux desktop and Secret Service dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libssl-dev libsecret-1-dev xvfb dpkg-dev
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: '6.11.2'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          modules: 'qtmultimedia qtserialport qtwebsockets qtlocation qtpositioning'
+          cache: true
+      - name: Build full GUI and station daemon
+        run: cmake -S desktop -B build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DRIGWEAVE_BUILD_TESTS=ON && cmake --build build/linux --parallel 2
+      - name: Test full Linux desktop offscreen
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QTEST_FUNCTION_TIMEOUT: '1900000'
+        run: ctest --test-dir build/linux --output-on-failure
+      - name: Package and clean-install smoke
+        run: |
+          cmake --install build/linux --prefix build/linux-install
+          QT_QPA_PLATFORM=offscreen build/linux-install/bin/RigWeaveDesktop --ui-stress-report build/linux-ui-stress.json
+          cpack --config build/linux/CPackConfig.cmake -B build/packages
+          tar -C build/linux-install -czf build/packages/RigWeave-Linux-x86_64-v0.1.0-rc.1.tar.gz .
+          cp build/linux/rigweave-stationd build/packages/rigweave-stationd
+          tar -C build/packages -czf build/packages/RigWeave-stationd-Linux-x86_64-v0.1.0-rc.1.tar.gz rigweave-stationd
+          ! find build/linux-install -type f | grep -Ei '(private|identity|\.pem$|credentials)'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: RigWeave-Linux-x86_64-${{ github.sha }}
+          path: |
+            build/packages
+            build/linux-ui-stress.json
+          if-no-files-found: error
+
+  linux-arm64-stationd:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify native ARM64 runner and exact SHA
+        run: test "$(uname -m)" = aarch64 && test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - name: Install ARM64 dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libssl-dev libsecret-1-dev
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: '6.11.2'
+          host: linux_arm64
+          target: desktop
+          arch: linux_gcc_arm64
+          modules: 'qtmultimedia qtserialport qtwebsockets qtlocation qtpositioning'
+          cache: true
+      - name: Build and package stationd natively
+        run: |
+          cmake -S desktop -B build/linux-arm64 -G Ninja -DCMAKE_BUILD_TYPE=Release -DRIGWEAVE_BUILD_TESTS=OFF -DRIGWEAVE_BUILD_NATIVE_DIGI=OFF
+          cmake --build build/linux-arm64 --target rigweave-stationd --parallel 2
+          mkdir -p build/arm64-package
+          cp build/linux-arm64/rigweave-stationd COPYING NOTICE build/arm64-package/
+          ! find build/arm64-package -type f | grep -Ei '(private|identity|\.pem$|credentials)'
+          tar -C build/arm64-package -czf build/RigWeave-stationd-Linux-arm64-v0.1.0-rc.1.tar.gz rigweave-stationd COPYING NOTICE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: RigWeave-stationd-Linux-arm64-${{ github.sha }}
+          path: build/RigWeave-stationd-Linux-arm64-v0.1.0-rc.1.tar.gz
+          if-no-files-found: error
 
   parity-audits:
     runs-on: ubuntu-latest
@@ -45,6 +123,8 @@ jobs:
       - name: Contract, provenance, watcher and privacy gates
         run: |
           python3 scripts/check_rc1_convergence.py
+          python3 scripts/check_final_rc1_release.py
+          python3 -m unittest scripts/test_check_final_rc1_release.py
           python3 scripts/check_hamlib_upstream.py
           python3 scripts/check_sdroxide_upstream.py
           python3 scripts/check_local_sdr_receiver_v3.py

@@ -94,3 +94,7 @@ Exact v4 baselines are arm64 APK 59,321,767 bytes and four-ABI AAB 56,593,563 by
 ## Secure Remote Station v6 budget
 
 V6 adds Kotlin, C++/Qt, QML, protocol tests and documentation only. It bundles no certificate, private identity, audio/IQ recording, radio firmware, SDRoxide payload, model or new codec. Android retains the 130 MB arm64 APK and 60 MB four-ABI AAB caps; stationd packages are exact-SHA, unsigned, and scanned to exclude private identity material.
+
+## Final RC package ceilings
+
+The pinned Opus library is source-built and measured in every final package. Ceilings are: Android arm64 APK 130 MB, Android AAB 60 MB, Windows portable 150 MB, Windows installer 110 MB, macOS ZIP 200 MB, Linux portable 180 MB, Linux DEB 150 MB, and source archive 100 MB unless the recorded vendored GPL source inventory justifies the measured excess. Release staging rejects private keys, credentials, databases, recordings, and large demo media.
