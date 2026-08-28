@@ -18,6 +18,11 @@ class AndroidSdrWorkbenchV4AuditTest(unittest.TestCase):
         self.assertEqual(["| Recording | IMPLEMENT_V4 | missing |"],
                          checker.implement_v4_rows("| Recording | IMPLEMENT_V4 | missing |"))
 
+    def test_workbench_strip_count_fail_closed(self) -> None:
+        call = "SdrStereoWorkbenchStrip(workbench, controller, radio, localReceivers)"
+        self.assertEqual(1, checker.workbench_strip_calls(call))
+        self.assertEqual(2, checker.workbench_strip_calls(f"{call}\n{call}"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -194,7 +194,6 @@ fun PanadapterScreen(
             onImmersive = { immersive = !immersive },
             compact = compact)
         localReceivers?.let { LocalReceiverTapActions(it, "STEREO I/Q", 0, center, provenSpan, markerAHz.takeIf { value -> value > 0 }) }
-        if (workbench != null) SdrStereoWorkbenchStrip(workbench, controller, radio, localReceivers)
         if (message.isNotBlank()) Text(message, color = if (message.contains("blocked", true) || message.contains("denied", true)) PanDanger else PanHold,
             fontSize = 11.sp, maxLines = 1)
     }

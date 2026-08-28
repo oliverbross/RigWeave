@@ -42,6 +42,15 @@ class PanadapterRulesTest {
         assertFalse(canPanadapterQsy(live, effectivePanadapterCenter(live, 13_000)))
     }
 
+    @Test fun standaloneStereoIqCaptureDoesNotRequireCat() {
+        assertEquals(null, panadapterCaptureRadioBlocker(RadioState(connected = false)))
+        assertEquals(null, panadapterCaptureRadioBlocker(RadioState(connected = true, model = "KX3")))
+        assertEquals("Receive I/Q cannot start while the KX3 is transmitting",
+            panadapterCaptureRadioBlocker(RadioState(connected = true, model = "KX3", transmitting = true)))
+        assertEquals("Connected CAT radio is not a KX3; disconnect CAT to use standalone relative I/Q",
+            panadapterCaptureRadioBlocker(RadioState(connected = true, model = "OTHER")))
+    }
+
     @Test fun legacyDisplayDefaultsMigrateToRfHonestSettings() {
         val migrated = PanadapterSettings.decode(
             "v=1;rate=96000;flatness=true;auto_level=false;wf_min=-120;wf_max=-45",
