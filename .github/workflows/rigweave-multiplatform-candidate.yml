@@ -61,7 +61,7 @@ jobs:
       - name: Package and clean-install smoke
         run: |
           cmake --install build/linux --prefix build/linux-install
-          QT_QPA_PLATFORM=offscreen build/linux-install/bin/RigWeaveDesktop --ui-stress-report build/linux-ui-stress.json
+          QT_QPA_PLATFORM=offscreen build/linux-install/RigWeaveDesktop --ui-stress-report build/linux-ui-stress.json
           cpack --config build/linux/CPackConfig.cmake -B build/packages
           tar -C build/linux-install -czf build/packages/RigWeave-Linux-x86_64-v0.1.0-rc.1.tar.gz .
           cp build/linux/rigweave-stationd build/packages/rigweave-stationd
@@ -92,6 +92,7 @@ jobs:
           host: linux_arm64
           target: desktop
           arch: linux_gcc_arm64
+          archives: 'icu qtbase qtdeclarative qtsvg'
           modules: 'qtmultimedia qtserialport qtwebsockets qtlocation qtpositioning'
           cache: true
       - name: Preserve a partial ARM64 Qt download before retry
@@ -107,6 +108,7 @@ jobs:
           host: linux_arm64
           target: desktop
           arch: linux_gcc_arm64
+          archives: 'icu qtbase qtdeclarative qtsvg'
           modules: 'qtmultimedia qtserialport qtwebsockets qtlocation qtpositioning'
           cache: false
           extra: '--base https://mirrors.dotsrc.org/qtproject --timeout 30'
