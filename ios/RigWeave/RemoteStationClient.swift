@@ -247,7 +247,8 @@ final class RemoteStationModel: NSObject, ObservableObject, URLSessionWebSocketD
     nonisolated func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust,
-              let certificate = SecTrustGetCertificateAtIndex(trust, 0) else { completionHandler(.cancelAuthenticationChallenge, nil); return }
+              let certificates = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+              let certificate = certificates.first else { completionHandler(.cancelAuthenticationChallenge, nil); return }
         let digest = SHA256.hash(data: SecCertificateCopyData(certificate) as Data).map { String(format: "%02x", $0) }.joined()
         Task { @MainActor in
             if digest.caseInsensitiveCompare(self.pinnedCertificate) == .orderedSame { completionHandler(.useCredential, URLCredential(trust: trust)) }
@@ -343,7 +344,7 @@ private final class RemotePCMAudioPlayer {
         guard let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: sampleRate, channels: 1, interleaved: true),
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(data.count / 2)) else { return }
         if rate != sampleRate { if engine.isRunning { engine.stop() }; engine.disconnectNodeOutput(player); engine.connect(player, to: engine.mainMixerNode, format: format); try? engine.start(); player.play(); rate = sampleRate }
-        buffer.frameLength = buffer.frameCapacity; data.copyBytes(to: UnsafeMutableBufferPointer(start: buffer.int16ChannelData?[0], count: data.count / 2)); player.scheduleBuffer(buffer)
+        buffer.frameLength = buffer.frameCapacity; _ = data.copyBytes(to: UnsafeMutableBufferPointer(start: buffer.int16ChannelData?[0], count: data.count / 2)); player.scheduleBuffer(buffer)
     }
     func stop() { player.stop(); engine.stop(); rate = 0 }
 }
