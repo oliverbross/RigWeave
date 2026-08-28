@@ -317,7 +317,9 @@ bool RemoteStationClient::ensureIdentity(QString *publicKeyPem) {
   if (!key) {
     EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, nullptr);
     if (!ctx || EVP_PKEY_keygen_init(ctx) <= 0 || EVP_PKEY_CTX_set_ec_paramgen_curve_nid(ctx, NID_X9_62_prime256v1) <= 0 || EVP_PKEY_keygen(ctx, &key) <= 0) {
-      if (ctx) EVP_PKEY_CTX_free(ctx); return false;
+      if (ctx)
+        EVP_PKEY_CTX_free(ctx);
+      return false;
     }
     EVP_PKEY_CTX_free(ctx); BIO *bio = BIO_new(BIO_s_mem()); PEM_write_bio_PrivateKey(bio, key, nullptr, nullptr, 0, nullptr, nullptr);
     BUF_MEM *memory{}; BIO_get_mem_ptr(bio, &memory); privatePem = QString::fromUtf8(memory->data, static_cast<int>(memory->length)); BIO_free(bio);
@@ -328,9 +330,13 @@ bool RemoteStationClient::ensureIdentity(QString *publicKeyPem) {
 }
 
 QByteArray RemoteStationClient::sign(const QByteArray &challenge) const {
-  if (!m_vault) return {}; const QString pem = m_vault->read("remote-client-p256-" + m_deviceId).value_or(QString{});
+  if (!m_vault)
+    return {};
+  const QString pem = m_vault->read("remote-client-p256-" + m_deviceId).value_or(QString{});
   const QByteArray utf8 = pem.toUtf8(); BIO *bio = BIO_new_mem_buf(utf8.constData(), utf8.size()); EVP_PKEY *key = PEM_read_bio_PrivateKey(bio, nullptr, nullptr, nullptr); BIO_free(bio);
-  if (!key) return {}; EVP_MD_CTX *ctx = EVP_MD_CTX_new(); size_t size{}; QByteArray result;
+  if (!key)
+    return {};
+  EVP_MD_CTX *ctx = EVP_MD_CTX_new(); size_t size{}; QByteArray result;
   if (EVP_DigestSignInit(ctx, nullptr, EVP_sha256(), nullptr, key) > 0 && EVP_DigestSign(ctx, nullptr, &size,
       reinterpret_cast<const uchar *>(challenge.constData()), challenge.size()) > 0) {
     result.resize(static_cast<qsizetype>(size));

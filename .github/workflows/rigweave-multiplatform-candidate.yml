@@ -84,7 +84,24 @@ jobs:
         run: test "$(uname -m)" = aarch64 && test "$(git rev-parse HEAD)" = "${{ github.sha }}"
       - name: Install ARM64 dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libssl-dev libsecret-1-dev
-      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+      - id: qt_arm64_primary
+        continue-on-error: true
+        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: '6.11.2'
+          host: linux_arm64
+          target: desktop
+          arch: linux_gcc_arm64
+          modules: 'qtmultimedia qtserialport qtwebsockets qtlocation qtpositioning'
+          cache: true
+      - name: Preserve a partial ARM64 Qt download before retry
+        if: steps.qt_arm64_primary.outcome == 'failure'
+        run: |
+          if [ -d "$GITHUB_WORKSPACE/../Qt" ]; then
+            mv "$GITHUB_WORKSPACE/../Qt" "$RUNNER_TEMP/qt-arm64-partial"
+          fi
+      - if: steps.qt_arm64_primary.outcome == 'failure'
+        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.11.2'
           host: linux_arm64

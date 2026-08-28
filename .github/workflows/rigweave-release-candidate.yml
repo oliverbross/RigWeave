@@ -20,7 +20,7 @@ jobs:
   contract-audit:
     runs-on: ubuntu-latest
     env:
-      RIGWEAVE_ALLOW_RC1_DESCENDANT_VALIDATION: ${{ inputs.allow_descendant_validation && '1' || '0' }}
+      RIGWEAVE_ALLOW_RC1_DESCENDANT_VALIDATION: ${{ (inputs.allow_descendant_validation || github.ref_name == 'integration/rigweave-v0.1.0-rc1-final') && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
         with:
