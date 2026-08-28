@@ -108,7 +108,8 @@ jobs:
           target: desktop
           arch: linux_gcc_arm64
           modules: 'qtmultimedia qtserialport qtwebsockets qtlocation qtpositioning'
-          cache: true
+          cache: false
+          extra: '--base https://mirrors.dotsrc.org/qtproject --timeout 30'
       - name: Build and package stationd natively
         run: |
           cmake -S desktop -B build/linux-arm64 -G Ninja -DCMAKE_BUILD_TYPE=Release -DRIGWEAVE_BUILD_TESTS=OFF -DRIGWEAVE_BUILD_NATIVE_DIGI=OFF

@@ -22,7 +22,10 @@
 #elif defined(Q_OS_MACOS)
 #include <Security/Security.h>
 #elif defined(Q_OS_LINUX)
+#pragma push_macro("signals")
+#undef signals
 #include <libsecret/secret.h>
+#pragma pop_macro("signals")
 #endif
 
 namespace rigweave::desktop {
@@ -30,6 +33,19 @@ namespace {
 QMutex logMutex;
 std::unique_ptr<QFile> logFile;
 QString logDirectory;
+
+#ifdef Q_OS_LINUX
+const SecretSchema &credentialSchema() {
+  static const SecretSchema schema = [] {
+    SecretSchema value{};
+    value.name = "app.rigweave.desktop";
+    value.flags = SECRET_SCHEMA_NONE;
+    value.attributes[0] = {"alias", SECRET_SCHEMA_ATTRIBUTE_STRING};
+    return value;
+  }();
+  return schema;
+}
+#endif
 
 QString cleanMessage(QString value) {
   value.replace(QRegularExpression(QStringLiteral(
@@ -307,9 +323,7 @@ bool SystemCredentialVault::write(const QString &alias, const QString &label,
 #elif defined(Q_OS_LINUX)
   GError *failure{};
   const QByteArray key = alias.toUtf8(), display = label.toUtf8(), value = secret.toUtf8();
-  static const SecretSchema schema = {"app.rigweave.desktop", SECRET_SCHEMA_NONE,
-      {{"alias", SECRET_SCHEMA_ATTRIBUTE_STRING}, {nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING}}};
-  const gboolean stored = secret_password_store_sync(&schema, SECRET_COLLECTION_DEFAULT,
+  const gboolean stored = secret_password_store_sync(&credentialSchema(), SECRET_COLLECTION_DEFAULT,
       display.constData(), value.constData(), nullptr, &failure, "alias", key.constData(), nullptr);
   if (!stored) {
     if (error) *error = failure ? QString::fromUtf8(failure->message) : QStringLiteral("Secret Service is unavailable; credentials cannot persist");
@@ -372,9 +386,7 @@ std::optional<QString> SystemCredentialVault::read(const QString &alias,
 #elif defined(Q_OS_LINUX)
   GError *failure{};
   const QByteArray key = alias.toUtf8();
-  static const SecretSchema schema = {"app.rigweave.desktop", SECRET_SCHEMA_NONE,
-      {{"alias", SECRET_SCHEMA_ATTRIBUTE_STRING}, {nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING}}};
-  gchar *value = secret_password_lookup_sync(&schema, nullptr, &failure, "alias", key.constData(), nullptr);
+  gchar *value = secret_password_lookup_sync(&credentialSchema(), nullptr, &failure, "alias", key.constData(), nullptr);
   if (failure) {
     if (error) *error = QString::fromUtf8(failure->message);
     g_error_free(failure);
@@ -421,9 +433,7 @@ bool SystemCredentialVault::remove(const QString &alias, QString *error) {
 #elif defined(Q_OS_LINUX)
   GError *failure{};
   const QByteArray key = alias.toUtf8();
-  static const SecretSchema schema = {"app.rigweave.desktop", SECRET_SCHEMA_NONE,
-      {{"alias", SECRET_SCHEMA_ATTRIBUTE_STRING}, {nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING}}};
-  const gboolean removed = secret_password_clear_sync(&schema, nullptr, &failure, "alias", key.constData(), nullptr);
+  const gboolean removed = secret_password_clear_sync(&credentialSchema(), nullptr, &failure, "alias", key.constData(), nullptr);
   if (failure) {
     if (error) *error = QString::fromUtf8(failure->message);
     g_error_free(failure);
