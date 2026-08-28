@@ -6,13 +6,13 @@ The SBOM records RigWeave plus the single pinned Hamlib 4.7.2 authority, SDRoxid
 
 The upstream `mfsk-core` external corpus under `embedded-poc/assets/golden` is not vendored and is not silently downloaded. RC validation runs the full vendored library catalogue plus RigWeave's checked-in public-recording, FFI and golden contracts.
 
-Binary artifact naming is exact-SHA based:
+Binary release asset naming is versioned; each hosted artifact container and manifest records the exact source SHA:
 
-- `RigWeave-Android-arm64-v8a-<sha>.apk`
-- `RigWeave-Android-four-ABI-<sha>.aab`
-- `RigWeave-Windows-x64-portable-<sha>.zip`
-- `RigWeave-Windows-x64-setup-<sha>.exe`
-- `RigWeave-macOS-arm64-unsigned-<sha>.zip`
+- `RigWeave-Android-arm64-v0.1.0-rc.1.apk`
+- `RigWeave-Android-four-ABI-v0.1.0-rc.1.aab`
+- `RigWeave-Windows-x64-portable-v0.1.0-rc.1.zip`
+- `RigWeave-Windows-x64-setup-v0.1.0-rc.1.exe`
+- `RigWeave-macOS-arm64-unsigned-v0.1.0-rc.1.zip`
 
 Artifacts are unsigned RC evidence. Creation does not publish or distribute them.
 

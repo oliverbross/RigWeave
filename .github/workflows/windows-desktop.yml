@@ -182,11 +182,9 @@ jobs:
       - name: Stage exact-SHA Windows packages
         shell: pwsh
         run: |
-          $portable = Get-ChildItem artifacts/windows -File -Filter 'RigWeave-Windows-x64-portable.zip' | Select-Object -First 1
-          $installer = Get-ChildItem artifacts/windows -File -Filter '*.exe' | Select-Object -First 1
+          $portable = Get-Item artifacts/windows/RigWeave-Windows-x64-portable-v0.1.0-rc.1.zip -ErrorAction SilentlyContinue
+          $installer = Get-Item artifacts/windows/RigWeave-Windows-x64-setup-v0.1.0-rc.1.exe -ErrorAction SilentlyContinue
           if (!$portable -or !$installer) { throw 'Expected Windows packages were not produced' }
-          Rename-Item $portable.FullName "RigWeave-Windows-x64-portable-v0.1.0-rc.1.zip"
-          Rename-Item $installer.FullName "RigWeave-Windows-x64-setup-v0.1.0-rc.1.exe"
           Get-ChildItem artifacts/windows -File | Where-Object Name -Match '^RigWeave-Windows-x64-' |
             Get-FileHash -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([IO.Path]::GetFileName($_.Path))" } |
             Set-Content artifacts/windows/SHA256SUMS.txt
