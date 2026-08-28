@@ -1,5 +1,6 @@
 package app.rigweave.mobile.bandmap
 
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -64,5 +65,17 @@ class TabletAcceptanceSweep1BandMapTest {
         assertFalse(plan.regulatoryAuthority)
         assertEquals(listOf("CW", "DATA", "SSB / PHONE"), plan.segments.map { it.label })
         assertTrue(plan.segments.zipWithNext().all { (left, right) -> left.upperHz == right.lowerHz })
+    }
+
+    @Test fun callAndDxccStatusesStayBesideTheCallsignWithIndependentConfiguredColours() {
+        val source = File("src/main/java/app/rigweave/mobile/bandmap/BandMapScreen.kt").readText()
+            .substringAfter("@Composable private fun SpotLabel")
+            .substringBefore("if (stackOpen)")
+
+        assertTrue("Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically)" in source)
+        assertTrue("spotStatusColour(SPOT_STATUS_CS, status?.callStatus)" in source)
+        assertTrue("spotStatusColour(SPOT_STATUS_DS, status?.dxccStatus)" in source)
+        assertFalse("add(\"CS " in source)
+        assertFalse("add(\"DS " in source)
     }
 }

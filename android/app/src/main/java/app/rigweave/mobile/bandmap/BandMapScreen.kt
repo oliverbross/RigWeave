@@ -478,19 +478,25 @@ internal fun BandMapScreen(
     val spot = ranked.spot
     var stackOpen by remember(stackMembers.map { it.spot.id }) { mutableStateOf(false) }
     val accent = when { spot.contest.newMultipliers.isNotEmpty() -> MapMagenta; spot.need.entity == BandMapNeedTruth.NEEDED -> MapGreen; spot.chaser.eligible == true -> MapCyan; else -> MapAmber }
-    Column(Modifier.padding(1.dp).clickable { if (stackMembers.size > 1) stackOpen = true else select(ranked) }.padding(horizontal = 3.dp, vertical = 1.dp)
+    Column(Modifier.fillMaxWidth().padding(1.dp).clickable { if (stackMembers.size > 1) stackOpen = true else select(ranked) }.padding(horizontal = 3.dp, vertical = 1.dp)
         .semantics { contentDescription = "${spot.callsign}, ${spot.band}, ${spot.frequencyHz} hertz, call status ${status?.callStatus ?: "unknown"}, entity status ${status?.dxccStatus ?: "unknown"}, priority ${ranked.score}" }) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(spot.callsign, color = Color(app.spotStatusColour(SPOT_STATUS_CS, status?.callStatus)),
-                fontWeight = FontWeight.Bold, fontSize = labelSizeSp.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (stackMembers.size > 1) Text(" +${stackMembers.size - 1}", color = MapMagenta, fontWeight = FontWeight.Black, fontSize = (labelSizeSp - 2).coerceAtLeast(8).sp)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                Text(spot.callsign, color = Color(app.spotStatusColour(SPOT_STATUS_CS, status?.callStatus)), modifier = Modifier.weight(1f, fill = false),
+                    fontWeight = FontWeight.Bold, fontSize = labelSizeSp.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (stackMembers.size > 1) Text(" +${stackMembers.size - 1}", color = MapMagenta, fontWeight = FontWeight.Black, fontSize = (labelSizeSp - 2).coerceAtLeast(8).sp)
+            }
+            if (BandMapLabelMetadata.CALL_STATUS in metadata) Text(status?.callStatus ?: "?",
+                color = Color(app.spotStatusColour(SPOT_STATUS_CS, status?.callStatus)), fontWeight = FontWeight.Bold,
+                fontSize = (labelSizeSp - 2).coerceAtLeast(8).sp, modifier = Modifier.padding(start = 4.dp))
+            if (BandMapLabelMetadata.DXCC_STATUS in metadata) Text(status?.dxccStatus ?: "?",
+                color = Color(app.spotStatusColour(SPOT_STATUS_DS, status?.dxccStatus)), fontWeight = FontWeight.Bold,
+                fontSize = (labelSizeSp - 2).coerceAtLeast(8).sp, modifier = Modifier.padding(start = 4.dp))
         }
         if (showFrequency) Text(formatBandMapFrequency(spot.frequencyHz), color = MapMuted, fontSize = (labelSizeSp - 2).coerceAtLeast(8).sp)
         val observation = spot.observations.maxByOrNull(BandMapSourceObservation::observedEpoch)
         val details = buildList {
             if (BandMapLabelMetadata.AGE in metadata) add("${((Instant.now().epochSecond - spot.newestObservationEpoch).coerceAtLeast(0) / 60)}m")
-            if (BandMapLabelMetadata.CALL_STATUS in metadata) add("CS ${status?.callStatus ?: "?"}")
-            if (BandMapLabelMetadata.DXCC_STATUS in metadata) add("DS ${status?.dxccStatus ?: "?"}")
             if (BandMapLabelMetadata.BEARING in metadata) observation?.bearingDegrees?.let { add("$it°") }
             if (BandMapLabelMetadata.DISTANCE in metadata) observation?.distanceKm?.let { add("$it km") }
             if (BandMapLabelMetadata.MODE in metadata) add(spot.submode.ifBlank { spot.modeFamily.name })

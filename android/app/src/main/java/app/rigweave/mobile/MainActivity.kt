@@ -313,16 +313,12 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         }, tciAuthority = tciTransmit,
         tciSelected = { app.selectedRadioProfile.backendKind == RadioBackendKind.NATIVE_TCI }) }
     var usbDetail by remember { mutableStateOf("No USB CAT adapter opened") }
-    val navigationPrefs = remember { context.getSharedPreferences("navigation", android.content.Context.MODE_PRIVATE) }
-    var destination by rememberSaveable {
-        mutableStateOf(runCatching {
-            Destination.valueOf(navigationPrefs.getString("destination", Destination.HOME.name).orEmpty())
-        }.getOrDefault(Destination.HOME))
-    }
+    // A fresh activity always opens on the safe, non-operational Home surface.
+    // Runtime navigation remains local UI state and must not survive a relaunch.
+    var destination by remember { mutableStateOf(Destination.HOME) }
     val eqVisible = selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT &&
         eqDestinationVisible(app.eqVisibilityPolicy, app.radioFamily)
     var integratedDigiPage by rememberSaveable { mutableStateOf(IntegratedDigiPage.DIGI) }
-    LaunchedEffect(destination) { navigationPrefs.edit().putString("destination", destination.name).apply() }
     LaunchedEffect(groupsIo.enabled, destination) {
         if (!groupsIo.enabled && destination == Destination.GROUPS_IO) destination = Destination.SETTINGS
     }

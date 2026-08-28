@@ -77,6 +77,17 @@ private val SdrRaised = Color(0xFF283139)
 private val SdrInk = Color(0xFFF4F0E7)
 private val SdrMuted = Color(0xFFA5ADB2)
 private val SdrAmber = Color(0xFFE9A72B)
+
+// Deliberately coarse, non-evidence coastline reference used only to orient the
+// offline RF globe. RF observations and paths remain the sole evidence layer.
+private val RfReferenceCoastlines = listOf(
+    listOf(72.0 to -168.0, 70.0 to -140.0, 55.0 to -125.0, 48.0 to -130.0, 32.0 to -117.0, 20.0 to -97.0, 25.0 to -82.0, 45.0 to -75.0, 53.0 to -60.0, 70.0 to -80.0, 72.0 to -110.0, 75.0 to -140.0, 72.0 to -168.0),
+    listOf(12.0 to -81.0, 10.0 to -70.0, 0.0 to -50.0, -10.0 to -35.0, -25.0 to -45.0, -55.0 to -55.0, -45.0 to -72.0, -20.0 to -76.0, 12.0 to -81.0),
+    listOf(36.0 to -10.0, 50.0 to 0.0, 60.0 to 20.0, 70.0 to 40.0, 72.0 to 70.0, 65.0 to 100.0, 50.0 to 130.0, 55.0 to 150.0, 45.0 to 170.0, 35.0 to 145.0, 20.0 to 120.0, 5.0 to 105.0, 8.0 to 80.0, 25.0 to 65.0, 30.0 to 45.0, 40.0 to 30.0, 35.0 to 15.0, 36.0 to -10.0),
+    listOf(37.0 to -17.0, 35.0 to 10.0, 31.0 to 32.0, 12.0 to 50.0, -10.0 to 40.0, -35.0 to 25.0, -35.0 to 10.0, -20.0 to -5.0, 10.0 to -17.0, 37.0 to -17.0),
+    listOf(-11.0 to 112.0, -10.0 to 130.0, -28.0 to 153.0, -40.0 to 145.0, -34.0 to 118.0, -11.0 to 112.0),
+    listOf(82.0 to -52.0, 74.0 to -20.0, 60.0 to -42.0, 62.0 to -64.0, 76.0 to -72.0, 82.0 to -52.0),
+)
 private val SdrHold = Color(0xFFF4C94E)
 private val SdrHealthy = Color(0xFF42C77B)
 private val SdrDanger = Color(0xFFE4544D)
@@ -763,11 +774,12 @@ fun RfIntelligenceWorkspace(controller: RfObservationController, workbench: Andr
 fun DigiRfPathWrapper(controller: RfObservationController, existing: @Composable () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.weight(1f)) { existing() }
-        Card(Modifier.fillMaxWidth().height(112.dp).padding(horizontal = 8.dp, vertical = 5.dp), colors = CardDefaults.cardColors(containerColor = SdrPanel)) {
-            Column(Modifier.fillMaxSize().padding(6.dp)) {
-                Text("DIGI / WSPR SELECTED PATH · sequence visualisation is not RF proof", color = SdrAmber, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Card(Modifier.fillMaxWidth().height(176.dp).padding(horizontal = 8.dp, vertical = 5.dp), colors = CardDefaults.cardColors(containerColor = SdrPanel)) {
+            Column(Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 8.dp)) {
+                Text("SIGNAL PATH PREVIEW · DIGI / WSPR", color = SdrAmber, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text("Sequence visualization only — not a geographic map or RF proof.", color = SdrMuted, fontSize = 12.sp)
                 RfCanvas(controller.filtered.take(32), globe = false, centerLat = 0.0, centerLon = 0.0,
-                    zoom = 1f, longPath = false, Modifier.weight(1f).fillMaxWidth())
+                    zoom = 1f, longPath = false, Modifier.weight(1f).fillMaxWidth().padding(top = 6.dp))
             }
         }
     }
@@ -806,9 +818,31 @@ fun RfMapGlobeScreen(controller: RfObservationController, globe: Boolean) {
 @Composable
 private fun RfCanvas(rows: List<RfObservation>, globe: Boolean, centerLat: Double, centerLon: Double, zoom: Float,
     longPath: Boolean, modifier: Modifier) {
-    Canvas(modifier.semantics { contentDescription = if (globe) "Interactive RF globe with paths, control points, grayline and filters" else "Interactive flat RF map with paths, control points, grayline and filters" }) {
+    Canvas(modifier.semantics { contentDescription = if (globe) "Interactive RF globe with coastline reference, paths, control points and filters" else "Interactive flat RF map with paths, control points and filters" }) {
         drawRect(Color(0xFF071014))
-        if (globe) drawCircle(Color(0xFF102C35), radius = minOf(size.width, size.height) * .46f * zoom.coerceAtMost(1.15f), center = center)
+        if (globe) {
+            val globeRadius = minOf(size.width, size.height) * .46f * zoom.coerceAtMost(1.15f)
+            drawCircle(Color(0xFF102C35), radius = globeRadius, center = center)
+            val reference = Color(0xFF6B9691).copy(alpha = .48f)
+            fun drawReference(points: List<Pair<Double, Double>>, widthDp: Float) {
+                var previous: Offset? = null
+                points.forEach { (latitude, longitude) ->
+                    val projected = projectRf(latitude, longitude, true, centerLat, centerLon, zoom, size.width, size.height)
+                    val prior = previous
+                    if (projected != null && prior != null && (projected - prior).getDistance() < globeRadius * .42f) {
+                        drawLine(reference, prior, projected, widthDp.dp.toPx(), StrokeCap.Round)
+                    }
+                    previous = projected
+                }
+            }
+            (-60..60 step 30).forEach { latitude ->
+                drawReference((-180..180 step 4).map { latitude.toDouble() to it.toDouble() }, .55f)
+            }
+            (-150..180 step 30).forEach { longitude ->
+                drawReference((-90..90 step 3).map { it.toDouble() to longitude.toDouble() }, .55f)
+            }
+            RfReferenceCoastlines.forEach { drawReference(it, 1.35f) }
+        }
         val visible = rows.takeLast(4_096)
         visible.forEach { row ->
             val color = when (row.evidence) { RfEvidenceClass.OBSERVED -> SdrHealthy; RfEvidenceClass.HISTORICAL -> SdrMuted; RfEvidenceClass.OUTLOOK -> SdrHold }
@@ -834,7 +868,6 @@ private fun RfCanvas(rows: List<RfObservation>, globe: Boolean, centerLat: Doubl
         val stationRow = rows.lastOrNull()
         val station = stationRow?.let { projectRf(it.receiverLatitude, it.receiverLongitude, globe, centerLat, centerLon, zoom, size.width, size.height) }
         if (station != null) drawCircle(SdrAmber, 6.dp.toPx(), station)
-        drawLine(SdrHold.copy(alpha = .3f), Offset(0f, size.height * .45f), Offset(size.width, size.height * .62f), 18.dp.toPx())
     }
 }
 

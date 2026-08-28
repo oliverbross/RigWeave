@@ -21,12 +21,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import app.rigweave.mobile.rotator.RotatorAction
 import app.rigweave.mobile.rotator.RotatorWorkspace
 import kotlinx.coroutines.launch
 
 private data class PendingRotatorMotion(val action: RotatorAction, val azimuth: Double?, val elevation: Double?)
+private val RotatorInk = Color(0xFFF4F0E7)
+private val RotatorMuted = Color(0xFFA5ADB2)
 
 @Composable
 fun IntegratedRotatorScreen(runtime: AndroidRotatorRuntime) {
@@ -36,7 +40,8 @@ fun IntegratedRotatorScreen(runtime: AndroidRotatorRuntime) {
     val profiles = runtime.profiles
     Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (profiles.isEmpty()) {
-            Text("No rotator profile is configured. Import or restore a Rotator configuration section in Settings; restoration never connects or moves hardware.")
+            Text("NO ROTATOR PROFILE", color = RotatorInk, fontWeight = FontWeight.Bold)
+            Text("Import or restore a Rotator configuration section in Settings; restoration never connects or moves hardware.", color = RotatorMuted)
             return@Column
         }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

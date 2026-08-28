@@ -7,10 +7,38 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.time.Instant
 import java.time.ZoneOffset
 
 class TabletAcceptanceSweep1CoreTest {
+    @Test
+    fun freshActivityAlwaysStartsAtHome() {
+        val source = File("src/main/java/app/rigweave/mobile/MainActivity.kt").readText()
+
+        assertTrue(source.contains("var destination by remember { mutableStateOf(Destination.HOME) }"))
+        assertFalse(source.contains("getSharedPreferences(\"navigation\""))
+        assertFalse(source.contains("putString(\"destination\""))
+    }
+
+    @Test
+    fun digiSignalPathPreviewIsReadableAndSelfExplainingOnTablet() {
+        val source = File("src/main/java/app/rigweave/mobile/AndroidSdrScreens.kt").readText()
+
+        assertTrue(source.contains("fillMaxWidth().height(176.dp)"))
+        assertTrue(source.contains("SIGNAL PATH PREVIEW · DIGI / WSPR"))
+        assertTrue(source.contains("not a geographic map or RF proof"))
+    }
+
+    @Test
+    fun rfGlobeHasOrientationReferenceAndNoUnboundedBrownStripe() {
+        val source = File("src/main/java/app/rigweave/mobile/AndroidSdrScreens.kt").readText()
+
+        assertTrue(source.contains("RfReferenceCoastlines.forEach"))
+        assertTrue(source.contains("coastline reference, paths, control points and filters"))
+        assertFalse(source.contains("Offset(0f, size.height * .45f), Offset(size.width, size.height * .62f)"))
+    }
+
     @Test fun parallelPortableProviderFailureIsCapturedWithoutCancellingTheCaller() = runBlocking {
         var siblingCompleted = false
         val result = capturePortableProviderPair(
@@ -119,5 +147,11 @@ class TabletAcceptanceSweep1CoreTest {
         assertTrue(text.row.endsWith("1h ago"))
         assertTrue("2026-08-23 12:00:00 UTC" in text.detail)
         assertEquals("TIME UNKNOWN", groupsIoTimestampText(0).row)
+    }
+
+    @Test fun rotatorEmptyStateKeepsReadableFlightlineContrastAndSafeRecoveryCopy() {
+        val source = File("src/main/java/app/rigweave/mobile/IntegratedRotatorScreen.kt").readText()
+        assertTrue("Text(\"NO ROTATOR PROFILE\", color = RotatorInk" in source)
+        assertTrue("restoration never connects or moves hardware.\", color = RotatorMuted" in source)
     }
 }
