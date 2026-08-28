@@ -84,6 +84,8 @@ private:
   void sendSpectrum(const QString &receiverId);
   void sendAudio(const QString &receiverId, quint32 sampleRate,
                  const QVector<float> &values);
+  void sendIq(const QString &receiverId, quint32 sampleRate,
+              const QVector<float> &values);
   void acceptRigctld();
   void consumeRigctld(QTcpSocket *socket);
   void acceptTci();
@@ -114,6 +116,8 @@ private:
   remote::SessionAuthority m_authority;
   QHash<QWebSocket *, QString> m_socketSessions;
   QHash<QWebSocket *, QString> m_socketChallenges;
+  QHash<QWebSocket *, QVariantMap> m_mediaPreferences;
+  QWebSocket *m_rawIqClient{};
   QSet<QWebSocket *> m_openSockets;
   QHash<QString, PendingDevice> m_pendingDevices;
   QVariantMap m_pairedDevices;
@@ -130,12 +134,21 @@ private:
   bool m_lanEnabled{};
   bool m_remoteTxPolicy{};
   bool m_rotatorPolicy{};
+  bool m_rawIqHostEnabled{};
+  quint32 m_rawIqMaxSampleRate{96'000};
+  int m_audioChannels{1};
   bool m_debugNonSecureLoopback{};
   qint64 m_externalWriterExpiryMs{};
   quint64 m_generation{1};
   quint32 m_mediaSequence{};
+  quint32 m_audioSequence{};
   quint64 m_rejectedFrames{};
   quint64 m_rejectedRequests{};
+  quint64 m_mediaDrops{};
+  void *m_opusEncoder{};
+  quint32 m_opusSampleRate{};
+  int m_opusChannels{1};
+  QVector<float> m_opusPending;
   static constexpr const char *TlsKeyAlias = "rigweave.remote.station.tls-key";
   static constexpr const char *SigningKeyAlias = "rigweave.remote.station.signing-key";
 };

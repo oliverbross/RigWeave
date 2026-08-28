@@ -23,6 +23,7 @@ namespace rigweave::desktop {
 DesktopApplication::DesktopApplication(QObject *parent)
     : QObject(parent), m_rfObservations(this), m_cluster(&m_spots, this),
       m_remote(&m_credentials, &m_radio, &m_rotator, &m_panadapter, this),
+      m_remoteClient(&m_credentials, &m_panadapter, this),
       m_parity(this), m_keyer(this), m_notifications(this),
       m_supportBundle(&m_paths, this) {
   connect(
@@ -97,6 +98,11 @@ bool DesktopApplication::initialize(QString *error) {
                                      error))
     return false;
   m_configuration->setSection("remoteStation", m_remote.configuration());
+  if (!m_remoteClient.restoreConfiguration(
+          m_configuration->section("remoteStationClient"), error))
+    return false;
+  m_configuration->setSection("remoteStationClient",
+                              m_remoteClient.configuration());
   if (!m_rfObservations.restoreConfiguration(
           m_configuration->section("display").value("rfObservations").toMap(),
           error))
@@ -124,6 +130,12 @@ bool DesktopApplication::initialize(QString *error) {
     if (m_configuration)
       m_configuration->setSection("remoteStation", m_remote.configuration());
   });
+  connect(&m_remoteClient, &RemoteStationClient::configurationChanged, this,
+          [this] {
+            if (m_configuration)
+              m_configuration->setSection("remoteStationClient",
+                                          m_remoteClient.configuration());
+          });
   connect(&m_rfObservations, &RfObservationModel::filtersChanged, this, [this] {
     if (!m_configuration)
       return;
@@ -201,6 +213,7 @@ void DesktopApplication::expose(QQmlApplicationEngine &engine) {
   context->setContextProperty("Rotator", &m_rotator);
   context->setContextProperty("Panadapter", &m_panadapter);
   context->setContextProperty("RemoteStation", &m_remote);
+  context->setContextProperty("RemoteClient", &m_remoteClient);
   context->setContextProperty("Parity", &m_parity);
   context->setContextProperty("Keyer", &m_keyer);
   context->setContextProperty("Notifications", &m_notifications);
@@ -506,6 +519,7 @@ QVariantMap DesktopApplication::health() const {
       {"wavelog", m_wavelog ? m_wavelog->state() : "Unavailable"},
       {"cluster", m_cluster.state()},
       {"radio", m_radio.health()},
+      {"remoteClient", m_remoteClient.health()},
       {"rotator", m_rotator.state()},
       {"panadapter", m_panadapter.health()},
       {"rfObservations",
@@ -603,6 +617,7 @@ void DesktopApplication::shutdown() {
   m_keyer.stop();
   m_notifications.clearBanner();
   m_remote.stop();
+  m_remoteClient.disconnectClient();
   m_panadapter.stop();
   m_rotator.stop();
   m_rotator.disconnectRotator();

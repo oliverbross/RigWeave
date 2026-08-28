@@ -122,11 +122,20 @@ import kotlin.math.abs
 import app.rigweave.mobile.hamclock.*
 
 class MainActivity : ComponentActivity() {
+    private lateinit var controlSurfaces: ControlSurfaceController
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         StabilityDiagnostics.install(this)
-        setContent { RigWeaveTheme { RigWeaveApp() } }
+        controlSurfaces = ControlSurfaceController(this)
+        setContent { RigWeaveTheme { RigWeaveApp(controlSurfaces) } }
     }
+    override fun onKeyDown(keyCode: Int, event: AndroidKeyEvent): Boolean =
+        controlSurfaces.handleKeyEvent(event) || super.onKeyDown(keyCode, event)
+    override fun onKeyUp(keyCode: Int, event: AndroidKeyEvent): Boolean =
+        controlSurfaces.handleKeyEvent(event) || super.onKeyUp(keyCode, event)
+    override fun onGenericMotionEvent(event: android.view.MotionEvent): Boolean =
+        controlSurfaces.handleMotionEvent(event) || super.onGenericMotionEvent(event)
+    override fun onDestroy() { controlSurfaces.close(); super.onDestroy() }
 }
 
 private val Chassis = Color(0xFF111519)
@@ -150,7 +159,7 @@ private enum class Destination(val label: String) {
 }
 private enum class SettingsSection(val label: String) {
     RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
-    AUDIO("Audio"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), ROTATOR("Rotator"), INTEGRATIONS("Integrations"), COLOURS("Colours"),
+    AUDIO("Audio"), CONTROLS("Controls"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), ROTATOR("Rotator"), INTEGRATIONS("Integrations"), COLOURS("Colours"),
     HEALTH("Health"), DIAG("Diag"), ABOUT("About")
 }
 private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Station"), GENERAL("General"), NOTES("Notes"), QSL("QSL") }
@@ -185,7 +194,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     return GeneralRadioCommand(raw, frequency, mode)
 }
 
-@Composable private fun RigWeaveApp() {
+@Composable private fun RigWeaveApp(controlSurfaces: ControlSurfaceController) {
     val context = LocalContext.current
     val core = remember {
         NativeHandleOwner(
@@ -619,13 +628,13 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
         }
         tciRuntime.rxAudioSink = tciRxAudio::push
         remoteRuntime.spectrumSink = { bins, sequence, _ -> panadapter.pushRemoteDerivedSpectrum(bins, sequence) }
-        remoteRuntime.audioPcm16Sink = { rate, pcm, _, _ ->
+        remoteRuntime.audioPcm16Sink = { rate, channels, pcm, _, _ ->
             val values = FloatArray(pcm.size / 2) { index ->
                 val low = pcm[index * 2].toInt() and 0xff
                 val high = pcm[index * 2 + 1].toInt()
                 ((high shl 8) or low).toShort() / 32768f
             }
-            tciRxAudio.push(0, rate, 1, values)
+            tciRxAudio.push(0, rate, channels, values)
         }
     }
     val operatorStop = remember { OperatorStopRouter(digi, keyer, repeatCq, contest, chaser) {
@@ -654,6 +663,20 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
             command.frequencyHz?.let { frequency -> scope.launch {
                 radioPlatform.dispatch(RadioPlatformAction(RadioActionClass.SAFE_SET, "frequency", longValue = frequency))
             } }
+        }
+    }
+    SideEffect {
+        controlSurfaces.actionPort = object : ControlSurfaceActionPort {
+            override fun globalStop() = operatorStop.stopAll("CONTROL_SURFACE_GLOBAL_STOP")
+            override fun frequencyDelta(steps: Int) {
+                val current = radio.frequencyHz.takeIf { it > 0 } ?: return
+                send("FA${(current + steps * 10L).coerceAtLeast(0).toString().padStart(11, '0')};")
+            }
+            override fun absoluteFrequency(normalized: Float) {
+                val target = (1_800_000L + normalized.coerceIn(0f, 1f) * 52_200_000L).toLong()
+                send("FA${target.toString().padStart(11, '0')};")
+            }
+            override fun nextWorkspace() { destination = Destination.entries[(destination.ordinal + 1) % Destination.entries.size] }
         }
     }
     LaunchedEffect(transport, selectedProfile.id) {
@@ -933,7 +956,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 }
             }
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
-                panadapter, tciRxAudio, tciRuntime, tciTransmit, scanner, sdrOperationalV2, sdrWorkbenchV4, localReceivers, rfObservations, bandStacks, announcements, debugSdrLab,
+                panadapter, tciRxAudio, tciRuntime, tciTransmit, scanner, sdrOperationalV2, sdrWorkbenchV4, localReceivers, rfObservations, bandStacks, announcements, debugSdrLab, controlSurfaces,
                 portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, remoteRuntime, remoteFactory,
                 { station -> pendingRemoteAutoConnect = station.radioProfile().id; app.upsertRemoteStation(station) },
                 selectedProfile, platformSnapshot, hamlibModels, rotator,
@@ -976,7 +999,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
-                panadapter, tciRxAudio, tciRuntime, tciTransmit, scanner, sdrOperationalV2, sdrWorkbenchV4, localReceivers, rfObservations, bandStacks, announcements, debugSdrLab,
+                panadapter, tciRxAudio, tciRuntime, tciTransmit, scanner, sdrOperationalV2, sdrWorkbenchV4, localReceivers, rfObservations, bandStacks, announcements, debugSdrLab, controlSurfaces,
                 portable, activation, pendingPortableDraft, { pendingPortableDraft = null }, foreground, app, remoteRuntime, remoteFactory,
                 { station -> pendingRemoteAutoConnect = station.radioProfile().id; app.upsertRemoteStation(station) },
                 selectedProfile, platformSnapshot, hamlibModels, rotator,
@@ -1055,7 +1078,7 @@ private fun navIcon(item: Destination) = when (item) {
     tciRxAudio: TciRxAudioController,
     tciRuntime: TciRuntimeState, tciTransmit: TciTransmitAuthority, scanner: ReceiveOnlyScannerController, sdrOperationalV2: SdrOperationalV2, sdrWorkbenchV4: AndroidSdrWorkbenchV4,
     localReceivers: LocalReceiverController, rfObservations: RfObservationController,
-    bandStacks: BandStackStore, announcements: SpokenAnnouncementController, debugSdrLab: DebugSdrLab?,
+    bandStacks: BandStackStore, announcements: SpokenAnnouncementController, debugSdrLab: DebugSdrLab?, controlSurfaces: ControlSurfaceController,
     portable: PortableController, activation: PotaActivationController, portableDraft: PortableLogDraft?, consumePortableDraft: () -> Unit, foreground: Boolean, app: AppController,
     remoteRuntime: RemoteRuntimeState, remoteFactory: RemoteStationBackendFactory,
     selectRemoteStation: (RemoteStationProfile) -> Unit,
@@ -1376,7 +1399,7 @@ private fun navIcon(item: Destination) = when (item) {
             Box(Modifier.weight(1f)) { SettingsScreen(radio, detail, database, mutations, features, neuralDx, wavelog, syncHub, callbook, cty, audio, panadapter, app,
                 transport, flex, digi, voiceStore, voiceAudio, voiceTx, groupsIo, operatingContext, keyerProfiles, keyer, repeatCq,
                  bandMaps, contest, chaser, hamlibModels, rotator, tciRuntime, tciTransmit, tciRxAudio, scanner, sdrOperationalV2, sdrWorkbenchV4,
-                localReceivers, rfObservations, bandStacks, announcements, debugSdrLab,
+                 localReceivers, rfObservations, bandStacks, announcements, debugSdrLab, controlSurfaces,
                 openEq, openContest, openSync, openDigi, openGroupsIo, openRotator,
                 disconnectPlatform, connect, direct) }
         }
@@ -4726,6 +4749,7 @@ private fun statusColourForeground(argb: Int): Color {
     sdrOperationalV2: SdrOperationalV2, sdrWorkbenchV4: AndroidSdrWorkbenchV4,
     localReceivers: LocalReceiverController, rfObservations: RfObservationController,
     bandStacks: BandStackStore, announcements: SpokenAnnouncementController, debugSdrLab: DebugSdrLab?,
+    controlSurfaces: ControlSurfaceController,
     openEq: () -> Unit, openContest: () -> Unit, openSync: () -> Unit, openDigi: () -> Unit, openGroupsIo: () -> Unit,
     openRotator: () -> Unit, disconnectRadio: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
@@ -5795,6 +5819,9 @@ private fun statusColourForeground(argb: Int): Color {
                     DeveloperCopy(Modifier.fillMaxWidth())
                 }
             }
+        }
+        if (section == SettingsSection.CONTROLS) SettingsCard("MIDI / HID CONTROL SURFACES") {
+            ControlSurfaceSettingsPanel(controlSurfaces)
         }
     }
     restorePayload?.let { payload -> AlertDialog(onDismissRequest = { restorePayload = null; recoveryPreview = null }, title = { Text("RESTORE REVIEW") },

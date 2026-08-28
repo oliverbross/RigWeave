@@ -5,10 +5,10 @@ import UniformTypeIdentifiers
 enum Destination: String, CaseIterable, Identifiable {
     case home = "Home", radio = "Radio", spots = "Spots", dx = "Neural DX", log = "Log"
     case intelligence = "Log Intelligence", sync = "Sync", operations = "Operations"
-    case panadapter = "Panadapter", lookup = "Lookup", groupsIo = "Groups.io", settings = "Settings"
+    case panadapter = "Panadapter", remote = "Remote Stations", lookup = "Lookup", groupsIo = "Groups.io", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
-        switch self { case .home: "house"; case .radio: "antenna.radiowaves.left.and.right"; case .spots: "dot.radiowaves.up.forward"; case .dx: "globe.americas"; case .log: "list.clipboard"; case .intelligence: "chart.bar.xaxis"; case .sync: "arrow.triangle.2.circlepath"; case .operations: "location.north.circle"; case .panadapter: "waveform.path.ecg.rectangle"; case .lookup: "person.text.rectangle"; case .groupsIo: "person.3.sequence"; case .settings: "gearshape" }
+        switch self { case .home: "house"; case .radio: "antenna.radiowaves.left.and.right"; case .spots: "dot.radiowaves.up.forward"; case .dx: "globe.americas"; case .log: "list.clipboard"; case .intelligence: "chart.bar.xaxis"; case .sync: "arrow.triangle.2.circlepath"; case .operations: "location.north.circle"; case .panadapter: "waveform.path.ecg.rectangle"; case .remote: "network"; case .lookup: "person.text.rectangle"; case .groupsIo: "person.3.sequence"; case .settings: "gearshape" }
     }
 }
 
@@ -65,6 +65,7 @@ struct ContentView: View {
         case .sync: SyncCentreView(route: route)
         case .operations: OperationsView(route: route)
         case .panadapter: PanadapterView()
+        case .remote: RemoteStationsView()
         case .lookup: LookupView()
         case .groupsIo: GroupsIoView()
         case .settings: SettingsView()

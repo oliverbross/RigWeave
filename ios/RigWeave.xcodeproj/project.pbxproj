@@ -30,6 +30,7 @@
 		A10000000000000000000018 /* WavelogNativeV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001C /* WavelogNativeV2.swift */; };
 		A10000000000000000000019 /* FastEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001D /* FastEntry.swift */; };
 		A1000000000000000000001A /* FastEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001E /* FastEntryView.swift */; };
+		R10000000000000000000001 /* RemoteStationClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = R20000000000000000000001 /* RemoteStationClient.swift */; };
 		A10000000000000000000013 /* Settings.bundle in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* Settings.bundle */; };
 		A10000000000000000000014 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* IOKit.framework */; };
 		A10000000000000000000015 /* KXUSBDriverClient.mm in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* KXUSBDriverClient.mm */; };
@@ -106,6 +107,7 @@
 		A2000000000000000000001C /* WavelogNativeV2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WavelogNativeV2.swift; sourceTree = "<group>"; };
 		A2000000000000000000001D /* FastEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FastEntry.swift; sourceTree = "<group>"; };
 		A2000000000000000000001E /* FastEntryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FastEntryView.swift; sourceTree = "<group>"; };
+		R20000000000000000000001 /* RemoteStationClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteStationClient.swift; sourceTree = "<group>"; };
 		A20000000000000000000017 /* Settings.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = Settings.bundle; sourceTree = "<group>"; };
 		A20000000000000000000018 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
 		A20000000000000000000019 /* KXUSBDriverClient.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = KXUSBDriverClient.mm; sourceTree = "<group>"; };
@@ -179,6 +181,7 @@
 				A2000000000000000000001C /* WavelogNativeV2.swift */,
 				A2000000000000000000001D /* FastEntry.swift */,
 				A2000000000000000000001E /* FastEntryView.swift */,
+				R20000000000000000000001 /* RemoteStationClient.swift */,
 				A20000000000000000000016 /* CallbookService.swift */,
 				G20000000000000000000001 /* GroupsIoFeature.swift */,
 				A20000000000000000000017 /* Settings.bundle */,
@@ -280,12 +283,10 @@
 				A40000000000000000000001 /* Sources */,
 				A40000000000000000000002 /* Frameworks */,
 				A40000000000000000000003 /* Resources */,
-				A40000000000000000000007 /* Embed System Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				A90000000000000000000002 /* PBXTargetDependency */,
 			);
 			name = RigWeave;
 			productName = RigWeave;
@@ -415,6 +416,7 @@
 				A10000000000000000000018 /* WavelogNativeV2.swift in Sources */,
 				A10000000000000000000019 /* FastEntry.swift in Sources */,
 				A1000000000000000000001A /* FastEntryView.swift in Sources */,
+				R10000000000000000000001 /* RemoteStationClient.swift in Sources */,
 				A10000000000000000000012 /* CallbookService.swift in Sources */,
 				G10000000000000000000001 /* GroupsIoFeature.swift in Sources */,
 				A10000000000000000000006 /* core.cpp in Sources */,
@@ -535,7 +537,7 @@
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CODE_SIGN_ENTITLEMENTS = RigWeave/RigWeave.entitlements;
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 38;
+				CURRENT_PROJECT_VERSION = 39;
 				DEVELOPMENT_TEAM = 4WCMQ4U946;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -575,7 +577,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = RigWeave/RigWeave.entitlements;
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 38;
+				CURRENT_PROJECT_VERSION = 39;
 				DEVELOPMENT_TEAM = 4WCMQ4U946;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = (
@@ -616,7 +618,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = CP210xDriver/CP210xDriver.Debug.entitlements;
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 38;
+				CURRENT_PROJECT_VERSION = 39;
 				DEVELOPMENT_TEAM = 4WCMQ4U946;
 				DRIVERKIT_DEPLOYMENT_TARGET = 22.0;
 				GCC_ENABLE_CPP_EXCEPTIONS = NO;
@@ -643,7 +645,7 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = CP210xDriver/CP210xDriver.entitlements;
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 38;
+				CURRENT_PROJECT_VERSION = 39;
 				DEVELOPMENT_TEAM = 4WCMQ4U946;
 				DRIVERKIT_DEPLOYMENT_TARGET = 22.0;
 				GCC_ENABLE_CPP_EXCEPTIONS = NO;

@@ -19,6 +19,7 @@ WorkspaceCanvas {
         RowLayout {
             anchors.fill: parent
             StatusChip { text: Radio.state; kind: Radio.state.startsWith("Connected") ? "healthy" : "neutral" }
+            StatusChip { text: "Remote " + RemoteClient.state; kind: RemoteClient.connected ? "healthy" : "neutral" }
             Label { text: "Explicit connect only · capability and readback are authoritative · PTT/TUNE unavailable"; color: "#e3c765"; Layout.fillWidth: true; elide: Text.ElideRight }
             Button { text: "Disconnect"; enabled: Radio.state.startsWith("Connected"); onClicked: Radio.disconnectRadio() }
             Button { text: "EMERGENCY RX"; palette.button: "#8f1d24"; palette.buttonText: "white"; font.weight: Font.Bold; onClicked: Desktop.globalStop() }

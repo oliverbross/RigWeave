@@ -8,6 +8,7 @@ struct RigWeaveApp: App {
     @StateObject private var logbook = QSOStore()
     @StateObject private var features = FeatureModel()
     @StateObject private var groupsIo = GroupsIoController()
+    @StateObject private var remote = RemoteStationModel()
     @State private var hardwareSelfTestStarted = false
 
     var body: some Scene {
@@ -17,6 +18,7 @@ struct RigWeaveApp: App {
                 .environmentObject(logbook)
                 .environmentObject(features)
                 .environmentObject(groupsIo)
+                .environmentObject(remote)
                 .preferredColorScheme(.dark)
                 .task { features.bind(logbook: logbook) }
                 .task {

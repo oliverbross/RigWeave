@@ -140,9 +140,10 @@ WorkspaceCanvas {
                         Label { text: "Listen address / port" }
                         RowLayout { TextField { id: remoteAddress; text: remoteGroup.cfg.listenAddress || "127.0.0.1"; Layout.fillWidth: true }
                             SpinBox { id: remotePort; from: 1; to: 65535; value: remoteGroup.cfg.port || 7443 } }
+                        Label { text: "Observed RX channels" } SpinBox { id: remoteChannels; from: 1; to: 2; value: remoteGroup.cfg.audioChannels || 1 }
                         CheckBox { id: remoteTci; text: "TCI server · OFF / loopback / read-only default"; checked: remoteGroup.cfg.tciEnabled }
                         CheckBox { id: remoteRigctld; text: "rigctld server · OFF / loopback / read-only default"; checked: remoteGroup.cfg.rigctldEnabled }
-                        Button { text: "Save safe settings"; enabled: !RemoteStation.running; onClicked: RemoteStation.applyLocalSettings({enabled:remoteEnabled.checked,stationName:remoteName.text,listenAddress:remoteAddress.text,port:remotePort.value,lanEnabled:remoteLan.checked,tciEnabled:remoteTci.checked,rigctldEnabled:remoteRigctld.checked}) }
+                        Button { text: "Save safe settings"; enabled: !RemoteStation.running; onClicked: RemoteStation.applyLocalSettings({enabled:remoteEnabled.checked,stationName:remoteName.text,listenAddress:remoteAddress.text,port:remotePort.value,lanEnabled:remoteLan.checked,tciEnabled:remoteTci.checked,rigctldEnabled:remoteRigctld.checked,audioChannels:remoteChannels.value}) }
                         RowLayout { Button { text: RemoteStation.running ? "Stop + Global Stop" : "Start service"; onClicked: RemoteStation.running ? RemoteStation.stop() : RemoteStation.startFromUi() }
                             Button { text: "Arm bridge writer · 30 s"; enabled: RemoteStation.running; onClicked: RemoteStation.armThirdPartyWriter(30000) }
                             Button { text: "Global Stop"; onClicked: RemoteStation.globalStop() } }
@@ -165,6 +166,47 @@ WorkspaceCanvas {
                             Label { text: remoteGroup.paired.length ? remoteGroup.paired[0].deviceId + " · " + remoteGroup.paired[0].role : "None"; color: "#aeb5ba"; Layout.fillWidth: true }
                             Button { text: "Revoke"; enabled: remoteGroup.paired.length > 0; onClicked: { RemoteStation.revokeDevice(remoteGroup.paired[0].deviceId); remoteGroup.paired=RemoteStation.pairedDevices() } }
                         }
+                    }
+                }
+                GroupBox {
+                    id: remoteClientGroup
+                    visible: root.currentCategory === "remote"
+                    title: "Remote Station client"
+                    Layout.fillWidth: true
+                    property string offer: ""
+                    GridLayout {
+                        anchors.fill: parent; columns: 2
+                        Label { text: "State" }
+                        RowLayout { StatusChip { text: RemoteClient.state; kind: RemoteClient.connected ? "healthy" : "neutral" }
+                            Label { text: RemoteClient.certificatePinned ? "Certificate pinned" : "Not connected"; color: RemoteClient.certificatePinned ? "#4ec47b" : "#aeb5ba" } }
+                        Label { text: "Paired station" }
+                        ComboBox { Layout.fillWidth: true; model: RemoteClient.profiles; textRole: "name"; valueRole: "stationId"
+                            onActivated: RemoteClient.selectedStationId = currentValue }
+                        Label { text: "Session" }
+                        RowLayout { Button { text: RemoteClient.connected ? "Disconnect" : "Connect"; onClicked: RemoteClient.connected ? RemoteClient.disconnectClient() : RemoteClient.connectSelected() }
+                            Button { text: RemoteClient.writerLease ? "Writer held" : "Acquire writer"; enabled: RemoteClient.connected && !RemoteClient.writerLease; onClicked: RemoteClient.acquireWriter() }
+                            Button { text: "GLOBAL STOP"; enabled: RemoteClient.connected; onClicked: RemoteClient.globalStop() } }
+                        Label { text: "Profile / media" }
+                        RowLayout {
+                            Button { text: "Remove selected"; enabled: !RemoteClient.connected && RemoteClient.selectedStationId.length > 0; onClicked: RemoteClient.removeSelectedProfile() }
+                            CheckBox { text: "Request raw I/Q"; enabled: RemoteClient.connected; onToggled: if (enabled) RemoteClient.configureMedia(checked) }
+                        }
+                        Label { text: "Station state" }
+                        Label { text: (RemoteClient.frequencyHz ? RemoteClient.frequencyHz + " Hz" : "No frequency") + " · " + (RemoteClient.mode || "No mode"); color: "#f2efe7" }
+                        Label { text: "Safe controls" }
+                        RowLayout { TextField { id: remoteFrequency; placeholderText: "Frequency Hz"; inputMethodHints: Qt.ImhDigitsOnly }
+                            Button { text: "Set frequency"; enabled: RemoteClient.writerLease; onClicked: RemoteClient.setRemoteFrequency(remoteFrequency.text) }
+                            TextField { id: remoteMode; placeholderText: "Mode" }
+                            Button { text: "Set mode"; enabled: RemoteClient.writerLease; onClicked: RemoteClient.setRemoteMode(remoteMode.text) } }
+                        Label { text: "Pairing offer" }
+                        ColumnLayout { Layout.fillWidth: true
+                            TextArea { id: clientOffer; Layout.fillWidth: true; placeholderText: "Paste station pairing-offer JSON"; wrapMode: TextEdit.WrapAnywhere }
+                            RowLayout { ComboBox { id: clientRole; model: ["OBSERVER", "OPERATOR", "ADMIN"] }
+                                Button { text: "Submit signed request"; enabled: clientOffer.text.length > 0; onClicked: RemoteClient.importPairingOffer(clientOffer.text, clientRole.currentText) } }
+                        }
+                        Label { text: "RX / TX safety" }
+                        Label { Layout.fillWidth: true; text: "Pinned TLS · signed P-256 identity · Opus/PCM RX audio · optional raw I/Q. PTT, TUNE and rotator movement remain unavailable until policy and physical acceptance permit them."; color: "#e3c765"; wrapMode: Text.WordWrap }
+                        Label { text: "Status" } Label { Layout.fillWidth: true; text: RemoteClient.status; color: "#aeb5ba"; wrapMode: Text.WordWrap }
                     }
                 }
                 GroupBox {

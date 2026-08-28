@@ -13,6 +13,7 @@ WorkspaceCanvas {
     }
     CanvasPanel { panelKey:"connection"; title:"Rotator connection"; defaultY:108; defaultWidth:parent?parent.width:1200; defaultHeight:104
         RowLayout { anchors.fill:parent
+            StatusChip { text:"Remote "+RemoteClient.state; kind:RemoteClient.connected?"healthy":"neutral" }
             ComboBox { id:protocol; model:Parity.nativeRotatorProtocols; textRole:"title"; valueRole:"key"; Layout.preferredWidth:230 }
             TextField {
                 id:modelId

@@ -217,3 +217,10 @@ protocol, station service, Android client, TCI/rigctld adapters and test
 fixtures are independently written RigWeave GPL-3.0-only code and use the
 project's existing Qt, OpenSSL and OkHttp dependencies. See
 docs/remote/REMOTE_PROVENANCE_V6.md.
+
+RigWeave 0.1.0 RC1 builds the official Xiph.Org libopus v1.5.2 source pinned at
+ddbe48383984d56acd9e1ab6a090c54ca6b735a6 for Remote Station RX audio. Opus is
+used under its BSD-style licence; its source licence and copyright text are
+included in the source/compliance bundle. Linux credential persistence uses the
+system libsecret/Secret Service library dynamically and fails closed when no
+service is available.

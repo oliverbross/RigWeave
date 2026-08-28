@@ -8,6 +8,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(FetchContent)
 
 option(RIGWEAVE_BUILD_TESTS "Build focused desktop tests" ON)
 option(RIGWEAVE_REQUIRE_HAMLIB "Fail configuration when the pinned Hamlib build is unavailable" OFF)
@@ -17,6 +18,23 @@ find_package(Qt6 6.11.2 EXACT REQUIRED COMPONENTS
     Core Gui Quick QuickControls2 Qml Network Sql SerialPort Multimedia WebSockets
     Concurrent Svg Positioning Location Test QuickTest Widgets)
 find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto SSL)
+
+# Official Xiph.Org libopus, pinned to the peeled v1.5.2 commit. Remote RX
+# media uses this single codec authority; PCM16 remains a LAN/debug fallback.
+set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(opus
+    GIT_REPOSITORY https://github.com/xiph/opus.git
+    GIT_TAG ddbe48383984d56acd9e1ab6a090c54ca6b735a6
+    GIT_SHALLOW FALSE)
+FetchContent_MakeAvailable(opus)
+
+if(UNIX AND NOT APPLE)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LIBSECRET REQUIRED IMPORTED_TARGET libsecret-1)
+endif()
 
 if(RIGWEAVE_REQUIRE_HAMLIB)
     find_package(RigWeaveHamlib REQUIRED)
@@ -38,6 +56,7 @@ set(RIGWEAVE_DESKTOP_SERVICE_SOURCES
     src/network/WavelogSync.cpp
     src/network/ClusterController.cpp
     src/network/RemoteStationService.cpp
+    src/network/RemoteStationClient.cpp
     src/platform/DesktopPlatform.cpp
     src/platform/DesktopEngagementControllers.cpp
     src/platform/DesktopParityPlatform.cpp
@@ -60,7 +79,7 @@ target_link_libraries(rigweave_desktop_services PUBLIC
     rigweave_core Qt6::Core Qt6::Gui Qt6::Quick Qt6::QuickControls2 Qt6::Qml
     Qt6::Network Qt6::Sql Qt6::SerialPort Qt6::Multimedia Qt6::WebSockets
     Qt6::Concurrent Qt6::Svg Qt6::Positioning Qt6::Location Qt6::Widgets
-    OpenSSL::Crypto OpenSSL::SSL)
+    OpenSSL::Crypto OpenSSL::SSL opus)
 if(RigWeaveHamlib_FOUND)
     target_link_libraries(rigweave_desktop_services PUBLIC RigWeave::Hamlib)
     target_compile_definitions(rigweave_desktop_services PRIVATE RIGWEAVE_HAVE_HAMLIB=1)
@@ -76,6 +95,10 @@ if(WIN32)
         configure_file("${_openssl_dll_path}" "${CMAKE_CURRENT_BINARY_DIR}/${_openssl_dll}" COPYONLY)
         install(FILES "${_openssl_dll_path}" DESTINATION .)
     endforeach()
+elseif(APPLE)
+    target_link_libraries(rigweave_desktop_services PUBLIC "-framework Security")
+elseif(UNIX)
+    target_link_libraries(rigweave_desktop_services PUBLIC PkgConfig::LIBSECRET)
 endif()
 rigweave_target_warnings(rigweave_desktop_services)
 target_compile_definitions(rigweave_desktop_services PRIVATE
@@ -194,9 +217,18 @@ endif()
 
 set(CPACK_PACKAGE_NAME "RigWeave")
 set(CPACK_PACKAGE_VENDOR "RigWeave")
-set(CPACK_PACKAGE_VERSION "1.0.0-parity.1")
+set(CPACK_PACKAGE_VERSION "0.1.0")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "RigWeave")
-set(CPACK_PACKAGE_FILE_NAME "RigWeave-Windows-x64-setup")
+if(WIN32)
+    set(CPACK_PACKAGE_FILE_NAME "RigWeave-Windows-x64-setup-v0.1.0-rc.1")
+    set(CPACK_GENERATOR "NSIS")
+elseif(UNIX AND NOT APPLE)
+    set(CPACK_PACKAGE_FILE_NAME "RigWeave-Linux-x86_64-v0.1.0-rc.1")
+    set(CPACK_GENERATOR "TGZ;DEB")
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "RigWeave")
+    set(CPACK_DEBIAN_PACKAGE_SECTION "hamradio")
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+endif()
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/../COPYING")
 set(CPACK_NSIS_DISPLAY_NAME "RigWeave Windows Desktop")
 set(CPACK_NSIS_PACKAGE_NAME "RigWeave Windows Desktop")
@@ -208,5 +240,4 @@ set(CPACK_NSIS_CREATE_ICONS_EXTRA
     "CreateShortCut '$SMPROGRAMS\\\\RigWeave Windows Desktop.lnk' '$INSTDIR\\\\RigWeaveDesktop.exe'")
 set(CPACK_NSIS_DELETE_ICONS_EXTRA
     "Delete '$SMPROGRAMS\\\\RigWeave Windows Desktop.lnk'")
-set(CPACK_GENERATOR "NSIS")
 include(CPack)

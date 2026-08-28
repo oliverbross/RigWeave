@@ -19,6 +19,10 @@
 // MinGW's wincred.h requires the base Windows types and import macros first.
 #include <windows.h>
 #include <wincred.h>
+#elif defined(Q_OS_MACOS)
+#include <Security/Security.h>
+#elif defined(Q_OS_LINUX)
+#include <libsecret/secret.h>
 #endif
 
 namespace rigweave::desktop {
@@ -270,13 +274,56 @@ bool SystemCredentialVault::write(const QString &alias, const QString &label,
     return false;
   }
   return true;
+#elif defined(Q_OS_MACOS)
+  const QByteArray bytes = secret.toUtf8();
+  const CFStringRef service = CFSTR("app.rigweave.desktop");
+  const CFStringRef account = alias.toCFString();
+  const CFStringRef display = label.toCFString();
+  const CFDataRef value = CFDataCreate(kCFAllocatorDefault,
+      reinterpret_cast<const UInt8 *>(bytes.constData()), bytes.size());
+  const void *queryKeys[] = {kSecClass, kSecAttrService, kSecAttrAccount};
+  const void *queryValues[] = {kSecClassGenericPassword, service, account};
+  const CFDictionaryRef query = CFDictionaryCreate(kCFAllocatorDefault,
+      queryKeys, queryValues, 3, &kCFTypeDictionaryKeyCallBacks,
+      &kCFTypeDictionaryValueCallBacks);
+  SecItemDelete(query);
+  const void *keys[] = {kSecClass, kSecAttrService, kSecAttrAccount,
+                        kSecAttrLabel, kSecValueData,
+                        kSecAttrAccessible};
+  const void *values[] = {kSecClassGenericPassword, service, account,
+                          display, value,
+                          kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly};
+  const CFDictionaryRef item = CFDictionaryCreate(kCFAllocatorDefault, keys,
+      values, 6, &kCFTypeDictionaryKeyCallBacks,
+      &kCFTypeDictionaryValueCallBacks);
+  const OSStatus status = SecItemAdd(item, nullptr);
+  CFRelease(item); CFRelease(query); CFRelease(value); CFRelease(display);
+  CFRelease(account);
+  if (status != errSecSuccess) {
+    if (error) *error = QStringLiteral("macOS Keychain rejected the credential (%1)").arg(status);
+    return false;
+  }
+  return true;
+#elif defined(Q_OS_LINUX)
+  GError *failure{};
+  const QByteArray key = alias.toUtf8(), display = label.toUtf8(), value = secret.toUtf8();
+  static const SecretSchema schema = {"app.rigweave.desktop", SECRET_SCHEMA_NONE,
+      {{"alias", SECRET_SCHEMA_ATTRIBUTE_STRING}, {nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING}}};
+  const gboolean stored = secret_password_store_sync(&schema, SECRET_COLLECTION_DEFAULT,
+      display.constData(), value.constData(), nullptr, &failure, "alias", key.constData(), nullptr);
+  if (!stored) {
+    if (error) *error = failure ? QString::fromUtf8(failure->message) : QStringLiteral("Secret Service is unavailable; credentials cannot persist");
+    if (failure) g_error_free(failure);
+    return false;
+  }
+  return true;
 #else
   Q_UNUSED(alias);
   Q_UNUSED(label);
   Q_UNUSED(secret);
   if (error)
     *error =
-        "macOS Keychain adapter is a compiled platform stub in Windows Alpha";
+        "No supported platform credential store is available; credentials cannot persist";
   return false;
 #endif
 }
@@ -298,6 +345,45 @@ std::optional<QString> SystemCredentialVault::read(const QString &alias,
   const QString value = QString::fromUtf8(bytes);
   CredFree(credential);
   return value;
+#elif defined(Q_OS_MACOS)
+  const CFStringRef account = alias.toCFString();
+  const void *keys[] = {kSecClass, kSecAttrService, kSecAttrAccount,
+                        kSecReturnData, kSecMatchLimit};
+  const void *values[] = {kSecClassGenericPassword,
+      CFSTR("app.rigweave.desktop"), account, kCFBooleanTrue,
+      kSecMatchLimitOne};
+  const CFDictionaryRef query = CFDictionaryCreate(kCFAllocatorDefault, keys,
+      values, 5, &kCFTypeDictionaryKeyCallBacks,
+      &kCFTypeDictionaryValueCallBacks);
+  CFTypeRef data{};
+  const OSStatus status = SecItemCopyMatching(query, &data);
+  CFRelease(query); CFRelease(account);
+  if (status == errSecItemNotFound) return std::nullopt;
+  if (status != errSecSuccess) {
+    if (error) *error = QStringLiteral("macOS Keychain read failed (%1)").arg(status);
+    return std::nullopt;
+  }
+  const auto valueData = static_cast<CFDataRef>(data);
+  const QString value = QString::fromUtf8(
+      reinterpret_cast<const char *>(CFDataGetBytePtr(valueData)),
+      static_cast<int>(CFDataGetLength(valueData)));
+  CFRelease(data);
+  return value;
+#elif defined(Q_OS_LINUX)
+  GError *failure{};
+  const QByteArray key = alias.toUtf8();
+  static const SecretSchema schema = {"app.rigweave.desktop", SECRET_SCHEMA_NONE,
+      {{"alias", SECRET_SCHEMA_ATTRIBUTE_STRING}, {nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING}}};
+  gchar *value = secret_password_lookup_sync(&schema, nullptr, &failure, "alias", key.constData(), nullptr);
+  if (failure) {
+    if (error) *error = QString::fromUtf8(failure->message);
+    g_error_free(failure);
+    return std::nullopt;
+  }
+  if (!value) return std::nullopt;
+  const QString result = QString::fromUtf8(value);
+  secret_password_free(value);
+  return result;
 #else
   Q_UNUSED(alias);
   Q_UNUSED(error);
@@ -316,10 +402,39 @@ bool SystemCredentialVault::remove(const QString &alias, QString *error) {
     return false;
   }
   return true;
+#elif defined(Q_OS_MACOS)
+  const CFStringRef account = alias.toCFString();
+  const void *keys[] = {kSecClass, kSecAttrService, kSecAttrAccount};
+  const void *values[] = {kSecClassGenericPassword,
+      CFSTR("app.rigweave.desktop"), account};
+  const CFDictionaryRef query = CFDictionaryCreate(kCFAllocatorDefault, keys,
+      values, 3, &kCFTypeDictionaryKeyCallBacks,
+      &kCFTypeDictionaryValueCallBacks);
+  const OSStatus status = SecItemDelete(query);
+  CFRelease(query); CFRelease(account);
+  if (status == errSecItemNotFound) return true;
+  if (status != errSecSuccess) {
+    if (error) *error = QStringLiteral("macOS Keychain delete failed (%1)").arg(status);
+    return false;
+  }
+  return true;
+#elif defined(Q_OS_LINUX)
+  GError *failure{};
+  const QByteArray key = alias.toUtf8();
+  static const SecretSchema schema = {"app.rigweave.desktop", SECRET_SCHEMA_NONE,
+      {{"alias", SECRET_SCHEMA_ATTRIBUTE_STRING}, {nullptr, SECRET_SCHEMA_ATTRIBUTE_STRING}}};
+  const gboolean removed = secret_password_clear_sync(&schema, nullptr, &failure, "alias", key.constData(), nullptr);
+  if (failure) {
+    if (error) *error = QString::fromUtf8(failure->message);
+    g_error_free(failure);
+    return false;
+  }
+  Q_UNUSED(removed);
+  return true;
 #else
   Q_UNUSED(alias);
   if (error)
-    *error = "macOS Keychain adapter is not wired in Windows Alpha";
+    *error = "No supported platform credential store is available";
   return false;
 #endif
 }

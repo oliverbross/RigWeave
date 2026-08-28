@@ -2,6 +2,8 @@
 package app.rigweave.mobile
 
 import android.content.Context
+import android.media.MediaCodec
+import android.media.MediaFormat
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
@@ -36,6 +38,7 @@ import java.time.Instant
 import java.util.Base64
 import java.util.Locale
 import java.util.UUID
+import java.util.TreeMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.Executor
@@ -110,7 +113,80 @@ class RemoteRuntimeState {
     var snapshot by mutableStateOf(RemoteRuntimeSnapshot())
         internal set
     @Volatile var spectrumSink: ((bins: ByteArray, sequence: Long, generation: Long) -> Unit)? = null
-    @Volatile var audioPcm16Sink: ((sampleRate: Int, pcm: ByteArray, sequence: Long, generation: Long) -> Unit)? = null
+    @Volatile var audioPcm16Sink: ((sampleRate: Int, channels: Int, pcm: ByteArray, sequence: Long, generation: Long) -> Unit)? = null
+    @Volatile var rawIqSink: ((sampleRate: Int, iq: FloatArray, sequence: Long, generation: Long) -> Unit)? = null
+}
+
+private class RemoteOpusJitterDecoder(
+    private val output: (sampleRate: Int, channels: Int, pcm: ByteArray, sequence: Long, generation: Long) -> Unit,
+) : AutoCloseable {
+    private data class Frame(val rate: Int, val channels: Int, val packet: ByteArray, val generation: Long)
+    private val queued = TreeMap<Long, Frame>()
+    private var expected: Long? = null
+    private var codec: MediaCodec? = null
+    private var sampleRate = 0
+    private var channelCount = 0
+    private var timestampUs = 0L
+
+    fun offer(sequence: Long, rate: Int, channels: Int, packet: ByteArray, generation: Long) {
+        if (packet.isEmpty() || queued.size >= 8) return
+        queued[sequence] = Frame(rate, channels, packet, generation)
+        if (expected == null) expected = sequence
+        while (queued.size >= 2) {
+            val next = expected ?: queued.firstKey()
+            val frame = queued.remove(next)
+            if (frame == null) {
+                val first = queued.firstKey()
+                if (first > next) {
+                    val missing = queued.firstEntry().value
+                    val silence = ByteArray((missing.rate / 50) * missing.channels * 2)
+                    output(missing.rate, missing.channels, silence, next, missing.generation)
+                    expected = next + 1
+                    continue
+                }
+                expected = first
+                continue
+            }
+            decode(next, frame)
+            expected = next + 1
+        }
+    }
+
+    private fun ensureCodec(rate: Int, channels: Int): MediaCodec? {
+        if (codec != null && sampleRate == rate && channelCount == channels) return codec
+        codec?.let { runCatching { it.stop() }; it.release() }; codec = null
+        val value = runCatching { MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_AUDIO_OPUS) }.getOrNull() ?: return null
+        val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_OPUS, rate, channels)
+        val head = ByteBuffer.allocate(19).order(ByteOrder.LITTLE_ENDIAN).apply {
+            put("OpusHead".toByteArray(Charsets.US_ASCII)); put(1); put(channels.toByte()); putShort(0); putInt(rate); putShort(0); put(0); flip()
+        }
+        format.setByteBuffer("csd-0", head)
+        return runCatching { value.configure(format, null, null, 0); value.start(); sampleRate = rate; channelCount = channels; value }
+            .getOrElse { value.release(); null }.also { codec = it }
+    }
+
+    private fun decode(sequence: Long, frame: Frame) {
+        val value = ensureCodec(frame.rate, frame.channels) ?: return
+        val input = value.dequeueInputBuffer(10_000)
+        if (input < 0) return
+        value.getInputBuffer(input)?.apply { clear(); put(frame.packet) }
+        value.queueInputBuffer(input, 0, frame.packet.size, timestampUs, 0)
+        timestampUs += 20_000
+        val info = MediaCodec.BufferInfo()
+        while (true) {
+            val outputIndex = value.dequeueOutputBuffer(info, 0)
+            if (outputIndex < 0) break
+            val pcm = ByteArray(info.size)
+            value.getOutputBuffer(outputIndex)?.apply { position(info.offset); limit(info.offset + info.size); get(pcm) }
+            value.releaseOutputBuffer(outputIndex, false)
+            if (pcm.isNotEmpty()) output(frame.rate, frame.channels, pcm, sequence, frame.generation)
+        }
+    }
+
+    override fun close() {
+        queued.clear()
+        codec?.let { runCatching { it.stop() }; it.release() }; codec = null
+    }
 }
 
 class RemoteIdentity(private val alias: String = "rigweave.remote.device.p256") {
@@ -283,6 +359,10 @@ class RemoteStationBackend(
     @Volatile private var currentRadio = RadioRuntimeSnapshot(profileId = profile.id,
         backendKind = RadioBackendKind.REMOTE_STATION, modelId = profile.modelId)
     @Volatile private var closed = false
+    private val opus = RemoteOpusJitterDecoder { rate, channels, pcm, sequence, frameGeneration ->
+        runtime.audioPcm16Sink?.invoke(rate, channels, pcm, sequence, frameGeneration)
+        runtime.snapshot = runtime.snapshot.copy(audioSequence = sequence)
+    }
 
     override val snapshot: RadioRuntimeSnapshot get() = currentRadio
 
@@ -329,6 +409,12 @@ class RemoteStationBackend(
     suspend fun acquireTransmit(ttlMillis: Int = 5_000) = lease("TX", ttlMillis)
     suspend fun acquireRotator(ttlMillis: Int = 5_000) = lease("ROTATOR", ttlMillis)
 
+    suspend fun configureMedia(preset: String = "BALANCED", capKbps: Int = 64,
+                               pcmLanFallback: Boolean = false, rawIq: Boolean = false): Boolean =
+        sendRequest("MEDIA_CONFIG", JSONObject().put("audioCodec", if (pcmLanFallback) "PCM16" else "OPUS")
+            .put("audioPreset", preset.uppercase(Locale.US)).put("audioCapKbps", capKbps.coerceIn(12, 128))
+            .put("rawIq", rawIq).put("lowDataMode", false), 3_000)
+
     private suspend fun lease(kind: String, ttlMillis: Int): Boolean {
         runtime.snapshot = when (kind) {
             "TX" -> runtime.snapshot.copy(txLease = RemoteLeaseState.REQUESTING)
@@ -362,7 +448,7 @@ class RemoteStationBackend(
         heartbeat?.cancel(false); heartbeat = null
         socket?.cancel(); socket = null
         requests.values.forEach { it.complete(false) }; requests.clear()
-        decode.shutdownNow(); heartbeatExecutor.shutdownNow(); client.dispatcher.executorService.shutdown()
+        opus.close(); decode.shutdownNow(); heartbeatExecutor.shutdownNow(); client.dispatcher.executorService.shutdown()
         currentRadio = currentRadio.copy(connected = false)
         onClosed(this)
     }
@@ -409,9 +495,15 @@ class RemoteStationBackend(
                         runtime.snapshot = runtime.snapshot.copy(state = RemoteConnectionState.READY,
                             sessionId = payload.getString("sessionId"), generation = message.optString("generation").toLongOrNull() ?: generation.get(),
                             role = runCatching { RemoteRole.valueOf(payload.optString("role")) }.getOrDefault(remote.role),
-                            radioRoster = payload.optJSONArray("radioRoster")?.let { array ->
+                             radioRoster = payload.optJSONArray("radioRoster")?.let { array ->
                                 (0 until array.length()).mapNotNull { array.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) }
-                            }.orEmpty(), lastError = null)
+                             }.orEmpty(), lastError = null)
+                        val mediaRequest = UUID.randomUUID().toString()
+                        webSocket.send(JSONObject().put("version", 1).put("type", "MEDIA_CONFIG")
+                            .put("stationId", remote.stationId).put("sessionId", payload.getString("sessionId"))
+                            .put("requestId", mediaRequest).put("generation", runtime.snapshot.generation.toString())
+                            .put("payload", JSONObject().put("audioCodec", "OPUS").put("audioPreset", "BALANCED")
+                                .put("audioCapKbps", 64).put("rawIq", false).put("lowDataMode", false)).toString())
                         startHeartbeat(webSocket)
                         ready.complete(true)
                     }
@@ -466,7 +558,7 @@ class RemoteStationBackend(
         if (data.short.toInt() != 1) return drop()
         val channel = data.get().toInt() and 0xff
         if (data.get().toInt() != 0) return drop()
-        data.short; if (data.short.toInt() != 0) return drop()
+        val flags = data.short.toInt() and 0xffff; if (data.short.toInt() != 0) return drop()
         val sequence = data.int.toLong() and 0xffffffffL
         data.long
         val frameGeneration = data.long
@@ -477,13 +569,29 @@ class RemoteStationBackend(
             5 -> {
                 if (payload.size < 4) return drop()
                 val rate = ByteBuffer.wrap(payload, 0, 4).order(ByteOrder.BIG_ENDIAN).int
-                if (rate !in 8_000..192_000 || (payload.size - 4) % 2 != 0) return drop()
-                runtime.audioPcm16Sink?.invoke(rate, payload.copyOfRange(4, payload.size), sequence, frameGeneration)
-                runtime.snapshot = runtime.snapshot.copy(audioSequence = sequence)
+                if (rate !in 8_000..192_000) return drop()
+                if (flags and 1 != 0) {
+                    val channels = payload[4].toInt()
+                    if (payload.size < 11 || channels !in 1..2 || payload[5].toInt() != 20) return drop()
+                    val audioSequence = ByteBuffer.wrap(payload, 6, 4).order(ByteOrder.BIG_ENDIAN).int.toLong() and 0xffffffffL
+                    opus.offer(audioSequence, rate, channels, payload.copyOfRange(10, payload.size), frameGeneration)
+                } else {
+                    if ((payload.size - 4) % 2 != 0) return drop()
+                    runtime.audioPcm16Sink?.invoke(rate, 1, payload.copyOfRange(4, payload.size), sequence, frameGeneration)
+                    runtime.snapshot = runtime.snapshot.copy(audioSequence = sequence)
+                }
             }
             7, 8 -> {
                 runtime.spectrumSink?.invoke(payload, sequence, frameGeneration)
                 runtime.snapshot = runtime.snapshot.copy(spectrumSequence = sequence)
+            }
+            9 -> {
+                if (payload.size < 5 || payload[4].toInt() != 2 || (payload.size - 5) % 4 != 0) return drop()
+                val rate = ByteBuffer.wrap(payload, 0, 4).order(ByteOrder.BIG_ENDIAN).int
+                if (rate !in 16_000..192_000) return drop()
+                val floats = FloatArray((payload.size - 5) / 4)
+                ByteBuffer.wrap(payload, 5, payload.size - 5).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer().get(floats)
+                runtime.rawIqSink?.invoke(rate, floats, sequence, frameGeneration)
             }
             else -> Unit
         }

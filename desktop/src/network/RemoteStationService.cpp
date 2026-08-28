@@ -20,9 +20,12 @@
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
+#include <opus.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstring>
 #include <memory>
 
 namespace rigweave::desktop {
@@ -172,9 +175,15 @@ RemoteStationService::RemoteStationService(DesktopCredentialVault *vault,
   if (m_radio)
     connect(m_radio, &DesktopRadioController::rxAudioFrame,
             this, &RemoteStationService::sendAudio);
+  if (m_radio)
+    connect(m_radio, &DesktopRadioController::iqFrame,
+            this, &RemoteStationService::sendIq);
 }
 
-RemoteStationService::~RemoteStationService() { stop(); }
+RemoteStationService::~RemoteStationService() {
+  stop();
+  if (m_opusEncoder) opus_encoder_destroy(static_cast<OpusEncoder *>(m_opusEncoder));
+}
 
 QVariantMap RemoteStationService::configuration() const {
   return {{"schema", 1}, {"enabled", m_serviceEnabled}, {"stationId", m_stationId},
@@ -183,6 +192,9 @@ QVariantMap RemoteStationService::configuration() const {
           {"rigctldEnabled", m_rigctldEnabled}, {"rigctldPort", m_rigctldPort},
           {"tciEnabled", m_tciEnabled}, {"tciPort", m_tciPort},
           {"remoteTxPolicy", false}, {"rotatorPolicy", false},
+          {"rawIqEnabled", m_rawIqHostEnabled},
+          {"rawIqMaxSampleRate", m_rawIqMaxSampleRate},
+          {"audioChannels", m_audioChannels},
           {"pairedDevices", m_pairedDevices}};
 }
 
@@ -206,6 +218,12 @@ bool RemoteStationService::restoreConfiguration(const QVariantMap &config,
   m_tciPort = static_cast<quint16>(config.value("tciPort", 50001).toUInt());
   m_remoteTxPolicy = false;
   m_rotatorPolicy = false;
+  // Raw I/Q is deliberately never restored. A local operator must enable it
+  // for the current service lifetime and one client must request it again.
+  m_rawIqHostEnabled = false;
+  m_rawIqMaxSampleRate = qBound(16'000U,
+      config.value("rawIqMaxSampleRate", 96'000).toUInt(), 192'000U);
+  m_audioChannels = qBound(1, config.value("audioChannels", 1).toInt(), 2);
   m_pairedDevices = config.value("pairedDevices").toMap();
   for (auto it = m_pairedDevices.cbegin(); it != m_pairedDevices.cend(); ++it) {
     if (!it.value().canConvert<QVariantMap>()) continue;
@@ -229,11 +247,14 @@ bool RemoteStationService::applyLocalSettings(const QVariantMap &settings) {
                              QStringLiteral("listenAddress"), QStringLiteral("port"),
                              QStringLiteral("lanEnabled"), QStringLiteral("rigctldEnabled"),
                              QStringLiteral("rigctldPort"), QStringLiteral("tciEnabled"),
-                             QStringLiteral("tciPort")}) {
+                              QStringLiteral("tciPort"), QStringLiteral("rawIqMaxSampleRate"),
+                              QStringLiteral("audioChannels")}) {
     if (settings.contains(key)) next[key] = settings.value(key);
   }
   QString error;
   const bool restored = restoreConfiguration(next, &error);
+  if (restored && settings.contains("rawIqEnabled"))
+    m_rawIqHostEnabled = settings.value("rawIqEnabled").toBool();
   if (!restored) emit this->error(error);
   emit stateChanged();
   return restored;
@@ -342,6 +363,9 @@ void RemoteStationService::stop() {
   for (QWebSocket *socket : m_socketSessions.keys()) socket->close(QWebSocketProtocol::CloseCodeGoingAway, "Station service stopped");
   m_socketSessions.clear();
   m_socketChallenges.clear();
+  m_mediaPreferences.clear();
+  m_rawIqClient = nullptr;
+  m_opusPending.clear();
   m_openSockets.clear();
   m_webSocketServer.close(); m_rigctldServer.close(); m_tciServer.close();
   stopDiscovery();
@@ -486,6 +510,8 @@ void RemoteStationService::acceptWebSocket() {
     connect(socket, &QWebSocket::disconnected, this, [this, socket] {
       const QString session = m_socketSessions.take(socket);
       m_socketChallenges.remove(socket);
+      m_mediaPreferences.remove(socket);
+      if (m_rawIqClient == socket) m_rawIqClient = nullptr;
       m_openSockets.remove(socket);
       if (!session.isEmpty()) m_authority.closeSession(session.toStdString());
       socket->deleteLater(); emit sessionsChanged();
@@ -553,7 +579,7 @@ void RemoteStationService::handleText(QWebSocket *socket, const QString &message
     m_socketSessions[socket] = QString::fromStdString(*session);
     sendReply(socket, request, true, "AUTHENTICATED", {{"sessionId", QString::fromStdString(*session)},
         {"role", device.value("role").toString()}, {"radioRoster", QJsonArray::fromVariantList(radioRoster())},
-        {"capabilities", QJsonArray{"STATE", "SPOTS", "HEALTH", "AUDIO_RX", "SPECTRUM", "WATERFALL", "DIGI", "KEYER", "VOICE", "ROTATOR"}}});
+        {"capabilities", QJsonArray{"STATE", "SPOTS", "HEALTH", "AUDIO_RX_OPUS", "AUDIO_RX_PCM16", "SPECTRUM", "WATERFALL", "IQ_OPTIONAL", "DIGI", "KEYER", "VOICE", "ROTATOR"}}});
     emit sessionsChanged(); return;
   }
   const QString session = m_socketSessions.value(socket);
@@ -562,6 +588,28 @@ void RemoteStationService::handleText(QWebSocket *socket, const QString &message
     const bool ok = m_authority.heartbeat(session.toStdString(), payload.value("foreground").toBool(), m_generation,
         static_cast<quint64>(QDateTime::currentMSecsSinceEpoch()));
     sendReply(socket, request, ok, ok ? "HEARTBEAT" : "STALE_GENERATION"); return;
+  }
+  if (type == "MEDIA_CONFIG") {
+    const QString codec = payload.value("audioCodec").toString("OPUS").toUpper();
+    const QString preset = payload.value("audioPreset").toString("BALANCED").toUpper();
+    const int cap = qBound(12, payload.value("audioCapKbps").toInt(64), 128);
+    const bool rawIq = payload.value("rawIq").toBool(false);
+    const bool lowData = payload.value("lowDataMode").toBool(false);
+    if (!QStringList{"OPUS", "PCM16"}.contains(codec) ||
+        !QStringList{"LOW", "BALANCED", "HIGH"}.contains(preset) || lowData) {
+      sendReply(socket, request, false, "MEDIA_CONFIGURATION_REJECTED"); return;
+    }
+    if (rawIq && (!m_rawIqHostEnabled || (m_rawIqClient && m_rawIqClient != socket))) {
+      sendReply(socket, request, false, "RAW_IQ_UNAVAILABLE"); return;
+    }
+    if (m_rawIqClient == socket && !rawIq) m_rawIqClient = nullptr;
+    if (rawIq) m_rawIqClient = socket;
+    m_mediaPreferences[socket] = {{"audioCodec", codec}, {"audioPreset", preset},
+                                  {"audioCapKbps", cap}, {"rawIq", rawIq}};
+    sendReply(socket, request, true, "MEDIA_CONFIGURED",
+        {{"audioCodec", codec}, {"audioPreset", preset}, {"audioCapKbps", cap},
+         {"rawIq", rawIq}, {"frameMs", 20}});
+    return;
   }
   if (type == "LEASE") {
     const QString kind = payload.value("kind").toString();
@@ -672,21 +720,105 @@ void RemoteStationService::sendSpectrum(const QString &receiverId) {
 void RemoteStationService::sendAudio(const QString &, quint32 sampleRate,
                                      const QVector<float> &values) {
   if (values.isEmpty() || values.size() > 192'000) return;
-  remote::MediaFrame media{remote::Channel::AudioRx, 0, ++m_mediaSequence,
+  QList<QWebSocket *> opusSockets, pcmSockets;
+  int bitrate = 128'000;
+  QString preset = "HIGH";
+  for (auto it = m_socketSessions.cbegin(); it != m_socketSessions.cend(); ++it) {
+    const QVariantMap preference = m_mediaPreferences.value(it.key(),
+        {{"audioCodec", "OPUS"}, {"audioPreset", "BALANCED"}, {"audioCapKbps", 64}});
+    if (preference.value("audioCodec").toString() == "PCM16") pcmSockets << it.key();
+    else {
+      opusSockets << it.key();
+      bitrate = qMin(bitrate, preference.value("audioCapKbps", 64).toInt() * 1000);
+      if (preference.value("audioPreset").toString() == "LOW") preset = "LOW";
+      else if (preference.value("audioPreset").toString() == "BALANCED" && preset != "LOW") preset = "BALANCED";
+    }
+  }
+  if (opusSockets.isEmpty() && pcmSockets.isEmpty()) return;
+  if (!pcmSockets.isEmpty()) {
+    remote::MediaFrame media{remote::Channel::AudioRx, 0, ++m_mediaSequence,
       static_cast<quint64>(QDateTime::currentMSecsSinceEpoch()), m_generation, {}};
-  media.payload.reserve(static_cast<std::size_t>(values.size() * 2 + 4));
-  media.payload.push_back(static_cast<std::uint8_t>(sampleRate >> 24));
-  media.payload.push_back(static_cast<std::uint8_t>(sampleRate >> 16));
-  media.payload.push_back(static_cast<std::uint8_t>(sampleRate >> 8));
-  media.payload.push_back(static_cast<std::uint8_t>(sampleRate));
+    media.payload.reserve(static_cast<std::size_t>(values.size() * 2 + 4));
+    media.payload.push_back(static_cast<std::uint8_t>(sampleRate >> 24));
+    media.payload.push_back(static_cast<std::uint8_t>(sampleRate >> 16));
+    media.payload.push_back(static_cast<std::uint8_t>(sampleRate >> 8));
+    media.payload.push_back(static_cast<std::uint8_t>(sampleRate));
+    for (float value : values) {
+      const qint16 pcm = static_cast<qint16>(qBound(-32768, qRound(value * 32767.0f), 32767));
+      media.payload.push_back(static_cast<std::uint8_t>(pcm & 0xff));
+      media.payload.push_back(static_cast<std::uint8_t>((pcm >> 8) & 0xff));
+    }
+    const auto bytes = remote::encodeMedia(media);
+    const QByteArray payload(reinterpret_cast<const char *>(bytes.data()), static_cast<int>(bytes.size()));
+    for (QWebSocket *socket : pcmSockets)
+      if (socket->bytesToWrite() < 512 * 1024) socket->sendBinaryMessage(payload); else ++m_mediaDrops;
+  }
+  if (opusSockets.isEmpty() || !QStringList{"16000", "24000", "48000"}.contains(QString::number(sampleRate))) return;
+  if (!m_opusEncoder || m_opusSampleRate != sampleRate || m_opusChannels != m_audioChannels) {
+    if (m_opusEncoder) opus_encoder_destroy(static_cast<OpusEncoder *>(m_opusEncoder));
+    int error{};
+    m_opusEncoder = opus_encoder_create(static_cast<opus_int32>(sampleRate), m_audioChannels, OPUS_APPLICATION_AUDIO, &error);
+    m_opusSampleRate = error == OPUS_OK ? sampleRate : 0;
+    m_opusChannels = error == OPUS_OK ? m_audioChannels : 1;
+    m_opusPending.clear();
+  }
+  auto *encoder = static_cast<OpusEncoder *>(m_opusEncoder);
+  if (!encoder) { ++m_mediaDrops; return; }
+  const int presetRate = preset == "LOW" ? 16'000 : preset == "BALANCED" ? 32'000 : 64'000;
+  bitrate = qMin(bitrate, presetRate);
+  if (std::any_of(opusSockets.cbegin(), opusSockets.cend(), [](QWebSocket *s) { return s->bytesToWrite() > 256 * 1024; }))
+    bitrate = qMax(12'000, bitrate / 2);
+  opus_encoder_ctl(encoder, OPUS_SET_BITRATE(bitrate));
+  opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(preset == "LOW" ? 3 : preset == "HIGH" ? 9 : 6));
+  opus_encoder_ctl(encoder, OPUS_SET_PACKET_LOSS_PERC(10));
+  opus_encoder_ctl(encoder, OPUS_SET_INBAND_FEC(1));
+  m_opusPending += values;
+  const int frameSamples = static_cast<int>(sampleRate / 50);
+  const int frameValues = frameSamples * m_audioChannels;
+  while (m_opusPending.size() >= frameValues) {
+    std::array<unsigned char, 4096> packet{};
+    const int encoded = opus_encode_float(encoder, m_opusPending.constData(), frameSamples,
+                                           packet.data(), static_cast<opus_int32>(packet.size()));
+    m_opusPending.remove(0, frameValues);
+    if (encoded <= 0) { ++m_mediaDrops; continue; }
+    remote::MediaFrame media{remote::Channel::AudioRx, 1, ++m_mediaSequence,
+        static_cast<quint64>(QDateTime::currentMSecsSinceEpoch()), m_generation, {}};
+    const quint32 audioSequence = ++m_audioSequence;
+    media.payload = {static_cast<std::uint8_t>(sampleRate >> 24), static_cast<std::uint8_t>(sampleRate >> 16),
+        static_cast<std::uint8_t>(sampleRate >> 8), static_cast<std::uint8_t>(sampleRate),
+        static_cast<std::uint8_t>(m_audioChannels), 20,
+        static_cast<std::uint8_t>(audioSequence >> 24), static_cast<std::uint8_t>(audioSequence >> 16),
+        static_cast<std::uint8_t>(audioSequence >> 8), static_cast<std::uint8_t>(audioSequence)};
+    media.payload.insert(media.payload.end(), packet.begin(), packet.begin() + encoded);
+    const auto bytes = remote::encodeMedia(media);
+    const QByteArray payload(reinterpret_cast<const char *>(bytes.data()), static_cast<int>(bytes.size()));
+    for (QWebSocket *socket : opusSockets)
+      if (socket->bytesToWrite() < 512 * 1024) socket->sendBinaryMessage(payload); else ++m_mediaDrops;
+  }
+}
+
+void RemoteStationService::sendIq(const QString &, quint32 sampleRate,
+                                  const QVector<float> &values) {
+  QWebSocket *socket = m_rawIqClient;
+  if (!socket || !m_rawIqHostEnabled || sampleRate > m_rawIqMaxSampleRate ||
+      values.isEmpty() || values.size() > 65'000 || values.size() % 2 != 0 ||
+      socket->bytesToWrite() >= 256 * 1024) { if (socket) ++m_mediaDrops; return; }
+  remote::MediaFrame media{remote::Channel::IqOptional, 0, ++m_mediaSequence,
+      static_cast<quint64>(QDateTime::currentMSecsSinceEpoch()), m_generation, {}};
+  media.payload = {static_cast<std::uint8_t>(sampleRate >> 24), static_cast<std::uint8_t>(sampleRate >> 16),
+      static_cast<std::uint8_t>(sampleRate >> 8), static_cast<std::uint8_t>(sampleRate), 2};
+  media.payload.reserve(5 + static_cast<std::size_t>(values.size()) * sizeof(float));
   for (float value : values) {
-    const qint16 pcm = static_cast<qint16>(qBound(-32768, qRound(value * 32767.0f), 32767));
-    media.payload.push_back(static_cast<std::uint8_t>(pcm & 0xff));
-    media.payload.push_back(static_cast<std::uint8_t>((pcm >> 8) & 0xff));
+    quint32 bits{};
+    static_assert(sizeof(bits) == sizeof(value));
+    std::memcpy(&bits, &value, sizeof(bits));
+    media.payload.push_back(static_cast<std::uint8_t>(bits));
+    media.payload.push_back(static_cast<std::uint8_t>(bits >> 8));
+    media.payload.push_back(static_cast<std::uint8_t>(bits >> 16));
+    media.payload.push_back(static_cast<std::uint8_t>(bits >> 24));
   }
   const auto bytes = remote::encodeMedia(media);
-  const QByteArray payload(reinterpret_cast<const char *>(bytes.data()), static_cast<int>(bytes.size()));
-  for (QWebSocket *socket : m_socketSessions.keys()) socket->sendBinaryMessage(payload);
+  socket->sendBinaryMessage(QByteArray(reinterpret_cast<const char *>(bytes.data()), static_cast<int>(bytes.size())));
 }
 
 void RemoteStationService::acceptRigctld() {
@@ -799,10 +931,13 @@ QVariantMap RemoteStationService::health() const {
       {"sessions", sessions()}, {"pairedDeviceCount", pairedDevices().size()},
       {"rejectedFrames", QVariant::fromValue<qulonglong>(m_rejectedFrames)},
       {"rejectedRequests", QVariant::fromValue<qulonglong>(m_rejectedRequests)},
+      {"mediaDrops", QVariant::fromValue<qulonglong>(m_mediaDrops)},
       {"writerLimit", 1}, {"txLimit", 1}, {"rotatorLimit", 1},
+      {"rawIqClientLimit", 1}, {"rawIqHostEnabled", m_rawIqHostEnabled},
+      {"rawIqActive", m_rawIqClient != nullptr},
       {"thirdPartyWriterArmed", m_externalWriterExpiryMs > QDateTime::currentMSecsSinceEpoch()},
       {"remoteTx", "Disabled until physical acceptance and explicit session arm"},
-      {"audioCodec", "PCM16 mono/stereo for LAN/VPN; Opus not packaged in v1 candidate"}};
+      {"audioCodec", "Opus 20 ms adaptive within operator cap; PCM16 LAN/debug fallback"}};
 }
 void RemoteStationService::setState(QString state) { if (m_state == state) return; m_state = std::move(state); emit stateChanged(); }
 
