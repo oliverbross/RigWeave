@@ -348,6 +348,10 @@ internal fun BandMapScreen(
             val density = LocalDensity.current
             val heightPx = with(density) { maxHeight.toPx() }
             val labelStartPx = with(density) { when (controller.settings.laneSize) { 1 -> 42.dp; 3 -> 54.dp; else -> 46.dp }.toPx() }
+            val maximumLabelWidth = when (controller.settings.laneSize) { 1 -> 126.dp; 3 -> 236.dp; else -> 168.dp }
+            val availableLabelWidth = (maxWidth - with(density) { labelStartPx.toDp() } - 4.dp)
+                .coerceAtLeast(72.dp)
+                .coerceAtMost(maximumLabelWidth)
             val labelHeightPx = with(density) { (controller.settings.spotLabelSizeSp * 3.5f).dp.toPx() }
             val minimumLabelSpacingPx = with(density) { (controller.settings.spotLabelSizeSp * 4.4f).dp.toPx().roundToInt() }
             val placements = BandMapLayoutEngine.place(rows.map { it.spot }, segment, heightPx.roundToInt().coerceAtLeast(1), minimumLabelSpacingPx)
@@ -401,7 +405,7 @@ internal fun BandMapScreen(
             }
             rows.forEach { ranked -> placements.firstOrNull { it.id == ranked.spot.id }?.let { placed ->
                 Box(Modifier.offset { IntOffset(labelStartPx.roundToInt(), labelY(placed).roundToInt()) }
-                    .widthIn(max = when (controller.settings.laneSize) { 1 -> 126.dp; 3 -> 236.dp; else -> 168.dp })) {
+                    .width(availableLabelWidth)) {
                     SpotLabel(ranked, statuses[ranked.spot.id], app, select, controller.settings.labelMetadata,
                         labelSizeSp = controller.settings.spotLabelSizeSp,
                         showFrequency = false,

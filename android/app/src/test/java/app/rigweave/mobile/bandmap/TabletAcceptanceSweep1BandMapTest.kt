@@ -77,5 +77,11 @@ class TabletAcceptanceSweep1BandMapTest {
         assertTrue("spotStatusColour(SPOT_STATUS_DS, status?.dxccStatus)" in source)
         assertFalse("add(\"CS " in source)
         assertFalse("add(\"DS " in source)
+
+        val verticalLane = File("src/main/java/app/rigweave/mobile/bandmap/BandMapScreen.kt").readText()
+            .substringAfter("@Composable private fun VerticalLane")
+            .substringBefore("@Composable internal fun CompactRadioBandMap")
+        assertTrue("val availableLabelWidth = (maxWidth" in verticalLane)
+        assertTrue(".width(availableLabelWidth)" in verticalLane)
     }
 }
