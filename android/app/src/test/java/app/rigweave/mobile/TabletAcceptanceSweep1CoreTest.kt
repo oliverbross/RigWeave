@@ -25,9 +25,10 @@ class TabletAcceptanceSweep1CoreTest {
     fun digiSignalPathPreviewIsReadableAndSelfExplainingOnTablet() {
         val source = File("src/main/java/app/rigweave/mobile/AndroidSdrScreens.kt").readText()
 
-        assertTrue(source.contains("fillMaxWidth().height(176.dp)"))
-        assertTrue(source.contains("SIGNAL PATH PREVIEW · DIGI / WSPR"))
-        assertTrue(source.contains("not a geographic map or RF proof"))
+        assertTrue(source.contains("fillMaxWidth().height(320.dp)"))
+        assertTrue(source.contains("RF SIGNAL PATH MAP · DIGI / WSPR"))
+        assertTrue(source.contains("Geographic observations only · drag, pinch and zoom · selection never tunes."))
+        assertTrue(source.contains("RfEvidenceBasemap(controller.filtered.take(200)"))
     }
 
     @Test

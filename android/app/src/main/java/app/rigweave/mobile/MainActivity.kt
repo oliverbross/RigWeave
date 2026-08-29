@@ -1320,8 +1320,8 @@ private fun navIcon(item: Destination) = when (item) {
                     }
                     Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(if (showCompactBandMap) 8.dp else 0.dp)) {
                         if (showCompactBandMap) CompactRadioBandMap(bandMaps, database, cty, operatingContext, app, workspaceAction,
-                            Modifier.fillMaxHeight().weight(.1f))
-                        Box(Modifier.fillMaxHeight().weight(if (showCompactBandMap) .9f else 1f)) {
+                            Modifier.fillMaxHeight().weight(.2f))
+                        Box(Modifier.fillMaxHeight().weight(if (showCompactBandMap) .8f else 1f)) {
                         if (selectedProfile.backendKind == RadioBackendKind.NATIVE_FLEX) FlexRadioScreen(flex, openLogbook)
                         else if (selectedProfile.backendKind == RadioBackendKind.NATIVE_TCI) TciRadioCockpit(
                             tciRuntime, platformSnapshot, panadapter, tciRxAudio, scanner, sdrOperationalV2, sdrWorkbenchV4, localReceivers,
@@ -1373,10 +1373,7 @@ private fun navIcon(item: Destination) = when (item) {
         Destination.PANADAPTER -> if (selectedProfile.backendKind == RadioBackendKind.NATIVE_TCI)
             TciPanadapterPanel(tciRuntime.snapshot, panadapter, dispatchPlatform, scanner, sdrOperationalV2, sdrWorkbenchV4,
                 localReceivers, app.presets, openDigi)
-        else if (app.panadapterEnabled && selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT)
-            PanadapterScreen(panadapter, radio, features.liveSpots, compact, localReceivers, sdrWorkbenchV4)
-        else RadioScreen(radio, detail, app, database, mutations, wavelog, callbook, cty, features, voiceStore, voiceTx,
-            connect, send, direct, requestVoice, clearCwDecode, portableDraft, consumePortableDraft, portable::notifyQsoChanged)
+        else PanadapterScreen(panadapter, radio, features.liveSpots, compact, localReceivers, sdrWorkbenchV4)
         Destination.EQ -> if (selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT) EqStudioScreen(eqStudio, radio, compact, closeEq)
             else EqUnavailableScreen("EQ is unavailable for ${app.radioFamily.displayName}; SHOW only exposes this setup state and sends no CAT command.", openSettings)
         Destination.LOGBOOK -> Column(Modifier.fillMaxSize()) {
@@ -5971,24 +5968,43 @@ private fun SettingsSectionPicker(selected: SettingsSection, onSelected: (Settin
         "SYSTEM" to listOf(SettingsSection.INTEGRATIONS, SettingsSection.COLOURS, SettingsSection.HEALTH,
             SettingsSection.DIAG, SettingsSection.ABOUT),
     )
+    var activeGroup by rememberSaveable { mutableStateOf<String?>(null) }
     Surface(
         Modifier.fillMaxWidth(),
         color = Color(0xFF20282E),
         shape = RoundedCornerShape(12.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF354047)),
     ) {
-        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            groups.forEach { (label, sections) ->
-                Text(label, color = Amber, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    sections.forEach { item ->
-                        FilterChip(
-                            selected = selected == item,
-                            onClick = { onSelected(item) },
-                            label = { Text(item.label) },
-                            modifier = Modifier.heightIn(min = 48.dp),
-                        )
-                    }
+        val selectedGroup = groups.firstOrNull { it.first == activeGroup }
+        if (selectedGroup == null) {
+            Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                groups.forEach { (label, sections) ->
+                    FilterChip(
+                        selected = false,
+                        onClick = { activeGroup = label; onSelected(sections.first()) },
+                        label = { Text(label) },
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                    )
+                }
+            }
+        } else {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                FilterChip(
+                    selected = false,
+                    onClick = { activeGroup = null },
+                    label = { Text("← BACK TO SETTINGS") },
+                    modifier = Modifier.heightIn(min = 48.dp),
+                )
+                selectedGroup.second.forEach { item ->
+                    FilterChip(
+                        selected = selected == item,
+                        onClick = { onSelected(item) },
+                        label = { Text(item.label) },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    )
                 }
             }
         }

@@ -251,11 +251,14 @@ internal class BandMapController(
                     inputs.providerHealth.mapKeys { it.key.name }.mapValues { if (it.value) "AVAILABLE" else "UNAVAILABLE" }),
                 buildList {
                     if (!inputs.needs.complete) add("Needs projection unavailable")
-                    if (inputs.observations.isEmpty()) add(if (inputs.providerHealth[BandMapSource.DX_CLUSTER] == false)
-                        "Cluster disconnected · no current source observations" else "Connected but no spots received")
+                    if (inputs.observations.isEmpty()) {
+                        val unavailable = inputs.providerHealth.filterValues { !it }.keys.sortedBy(Enum<*>::name)
+                            .joinToString { it.name.replace('_', ' ') }
+                        add(if (unavailable.isNotBlank()) "No current spots · unavailable sources: $unavailable"
+                            else "Sources connected · no current spots received")
+                    }
                     else if (ranked.isEmpty()) add(if (afterBandMode.isEmpty()) "Unsupported band or mode · reset filters"
                         else "Spots received but all filtered · reset filters")
-                    if (inputs.providerHealth.values.any { !it }) add("One or more sources degraded")
                 })
             if (generation == issuedGeneration.get() && !closed) withContext(Dispatchers.Main.immediate) { if (generation == issuedGeneration.get()) snapshot = result }
         }

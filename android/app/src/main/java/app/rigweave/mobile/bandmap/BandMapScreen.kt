@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -151,16 +152,35 @@ internal fun BandMapScreen(
         PresetAndLayoutControls(controller, contestSnapshot.activeSession != null)
         if (snapshot.unavailableReasons.isNotEmpty()) Text(snapshot.unavailableReasons.joinToString(" · "), color = MapAmber, fontSize = 12.sp)
         Box(Modifier.weight(1f)) {
-            when (visibleSnapshot.layout) {
-                BandMapLayoutMode.GRID_OVERVIEW -> BandGrid(visibleSnapshot, controller, statuses, app, openSpot)
-                BandMapLayoutMode.MULTI_HORIZONTAL -> HorizontalBandRows(visibleSnapshot, controller, statuses, app, openSpot)
-                BandMapLayoutMode.SINGLE_EXPANDED -> SingleExpanded(visibleSnapshot, controller, statuses, app, operatingContext, openSpot)
-                BandMapLayoutMode.MULTI_VERTICAL -> VerticalBandColumns(visibleSnapshot, controller, statuses, app, openSpot)
+            if (visibleSnapshot.rankedSpots.isEmpty()) BandMapEmptyState(visibleSnapshot, controller)
+            else when (visibleSnapshot.layout) {
+                    BandMapLayoutMode.GRID_OVERVIEW -> BandGrid(visibleSnapshot, controller, statuses, app, openSpot)
+                    BandMapLayoutMode.MULTI_HORIZONTAL -> HorizontalBandRows(visibleSnapshot, controller, statuses, app, openSpot)
+                    BandMapLayoutMode.SINGLE_EXPANDED -> SingleExpanded(visibleSnapshot, controller, statuses, app, operatingContext, openSpot)
+                    BandMapLayoutMode.MULTI_VERTICAL -> VerticalBandColumns(visibleSnapshot, controller, statuses, app, openSpot)
             }
         }
     }
-    selected?.let { ranked -> SpotDetail(ranked, statuses[ranked.spot.id], app, snapshot.contextGeneration, controller, onAction, { controller.toggleMark(ranked.spot, it) }) { selected = null; controller.select(null) } }
+    selected?.let { ranked -> SpotDetail(ranked, statuses[ranked.spot.id], cty.lookup(ranked.spot.callsign)?.country.orEmpty(), app,
+        snapshot.contextGeneration, controller, onAction, { controller.toggleMark(ranked.spot, it) }) { selected = null; controller.select(null) } }
     if (filterOpen) FilterDialog(controller, app) { filterOpen = false }
+}
+
+@Composable private fun BandMapEmptyState(snapshot: BandMapUiSnapshot, controller: BandMapController) {
+    Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center) {
+        Text("NO BAND-MAP SPOTS TO DISPLAY", color = MapAmber, fontWeight = FontWeight.Black)
+        Text(snapshot.unavailableReasons.joinToString(" · ").ifBlank {
+            "Current sources are available, but the active preset or status filters exclude every spot."
+        }, color = MapMuted, textAlign = TextAlign.Center, modifier = Modifier.padding(vertical = 8.dp))
+        Text("${snapshot.diagnostic.sourceObservations} received · ${snapshot.diagnostic.afterSourceFilter} after source checks · " +
+            "${snapshot.diagnostic.afterBandModeFilter} after band/mode · ${snapshot.diagnostic.afterIntelligenceFilter} after context",
+            color = MapCyan, fontSize = 11.sp, textAlign = TextAlign.Center)
+        Button({ controller.updateSettings { current ->
+            current.copy(activePresetId = "all-current", callStatusFilters = emptySet(), dxccStatusFilters = emptySet(),
+                selectedLayout = current.presets.firstOrNull { it.id == "all-current" }?.layout ?: BandMapLayoutMode.MULTI_VERTICAL)
+        } }, modifier = Modifier.padding(top = 12.dp)) { Text("RESET TO ALL CURRENT") }
+    }
 }
 
 @Composable private fun BandMapHeader(snapshot: BandMapUiSnapshot, keyer: BandMapKeyerContext, openFilters: () -> Unit) {
@@ -270,11 +290,20 @@ internal fun BandMapScreen(
             } } }) {
             val density = LocalDensity.current
             val widthPx = with(density) { maxWidth.toPx() }
+            val heightPx = with(density) { maxHeight.toPx() }
             val laneStepPx = with(density) { when (controller.settings.laneSize) { 1 -> 22.dp; 3 -> 42.dp; else -> 34.dp }.toPx() }
             val minimumLabelSpacingPx = with(density) {
                 ((controller.settings.spotLabelSizeSp * if (expanded) 10 else 9).coerceIn(82, 150)).dp.toPx().roundToInt()
             }
-            val placements = BandMapLayoutEngine.place(rows.map { it.spot }, segment, widthPx.roundToInt().coerceAtLeast(1), minimumLabelSpacingPx)
+            val labelTopPx = with(density) { 26.dp.toPx() }
+            val estimatedLabelHeightPx = with(density) {
+                (if (controller.settings.labelMetadata.isEmpty()) 24.dp else 40.dp).toPx()
+            }
+            val axisTopPx = heightPx - with(density) { 34.dp.toPx() }
+            val maximumLanes = (((axisTopPx - labelTopPx - estimatedLabelHeightPx) / laneStepPx).toInt() + 1).coerceIn(1, 6)
+            val placements = BandMapLayoutEngine.place(
+                rows.map { it.spot }, segment, widthPx.roundToInt().coerceAtLeast(1), minimumLabelSpacingPx, maximumLanes,
+            )
             val markerColors = placements.associate { placed -> placed.id to Color(app.spotStatusColour(SPOT_STATUS_DS, statuses[placed.id]?.dxccStatus)) }
             Canvas(Modifier.fillMaxSize()) {
                 val y = size.height - 22.dp.toPx(); drawLine(MapGrid, Offset(0f, y), Offset(size.width, y), 2f)
@@ -354,9 +383,13 @@ internal fun BandMapScreen(
                 .coerceAtMost(maximumLabelWidth)
             val labelHeightPx = with(density) { (controller.settings.spotLabelSizeSp * 3.5f).dp.toPx() }
             val minimumLabelSpacingPx = with(density) { (controller.settings.spotLabelSizeSp * 4.4f).dp.toPx().roundToInt() }
-            val placements = BandMapLayoutEngine.place(rows.map { it.spot }, segment, heightPx.roundToInt().coerceAtLeast(1), minimumLabelSpacingPx)
-            val markerColors = placements.associate { placed -> placed.id to Color(app.spotStatusColour(SPOT_STATUS_DS, statuses[placed.id]?.dxccStatus)) }
             val labelTopPx = with(density) { (if (showScaleControls) 52.dp else 8.dp).toPx() }
+            val labelCapacity = ((heightPx - labelTopPx) / labelHeightPx).toInt().coerceIn(1, 12)
+            val placements = BandMapLayoutEngine.fitToCapacity(
+                BandMapLayoutEngine.place(rows.map { it.spot }, segment, heightPx.roundToInt().coerceAtLeast(1), minimumLabelSpacingPx),
+                labelCapacity,
+            )
+            val markerColors = placements.associate { placed -> placed.id to Color(app.spotStatusColour(SPOT_STATUS_DS, statuses[placed.id]?.dxccStatus)) }
             val labelPositions = BandMapLayoutEngine.resolveVerticalLabels(placements, heightPx, labelHeightPx, labelTopPx)
             fun labelY(placed: BandMapPlacedSpot) = labelPositions[placed.id] ?: labelTopPx
             Canvas(Modifier.fillMaxSize()) {
@@ -447,9 +480,14 @@ internal fun BandMapScreen(
             { selected = it; controller.select(it.spot.id) }, Modifier.fillMaxWidth().weight(1f), operatingContext, showScaleControls = false)
     }
     selected?.let { ranked ->
+        val status = statuses[ranked.spot.id]
+        val dxccName = cty.lookup(ranked.spot.callsign)?.country.orEmpty()
         AlertDialog(onDismissRequest = { selected = null; controller.select(null) },
             title = { Text(ranked.spot.callsign) },
-            text = { Text("${formatBandMapFrequency(ranked.spot.frequencyHz)} · ${ranked.spot.modeFamily.name}\nReviewing this action never transmits.") },
+            text = { Text("${formatBandMapFrequency(ranked.spot.frequencyHz)} · ${ranked.spot.modeFamily.name}\n" +
+                "Callsign: ${spotStatusMeaning(SPOT_STATUS_CS, status?.callStatus)}\n" +
+                "DXCC: ${dxccName.ifBlank { "Entity name unavailable" }} · ${spotStatusMeaning(SPOT_STATUS_DS, status?.dxccStatus)}\n" +
+                "Reviewing this action never transmits.") },
             confirmButton = { Button({
                 controller.workspaceAction(ranked.spot, WorkspaceDestination.RADIO, snapshot.contextGeneration)?.let(onAction)
                 selected = null; controller.select(null)
@@ -490,10 +528,10 @@ internal fun BandMapScreen(
                     fontWeight = FontWeight.Bold, fontSize = labelSizeSp.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (stackMembers.size > 1) Text(" +${stackMembers.size - 1}", color = MapMagenta, fontWeight = FontWeight.Black, fontSize = (labelSizeSp - 2).coerceAtLeast(8).sp)
             }
-            if (BandMapLabelMetadata.CALL_STATUS in metadata) Text(status?.callStatus ?: "?",
+            if (BandMapLabelMetadata.CALL_STATUS in metadata) Text(bandMapStatusBadge("CS", status?.callStatus),
                 color = Color(app.spotStatusColour(SPOT_STATUS_CS, status?.callStatus)), fontWeight = FontWeight.Bold,
                 fontSize = (labelSizeSp - 2).coerceAtLeast(8).sp, modifier = Modifier.padding(start = 4.dp))
-            if (BandMapLabelMetadata.DXCC_STATUS in metadata) Text(status?.dxccStatus ?: "?",
+            if (BandMapLabelMetadata.DXCC_STATUS in metadata) Text(bandMapStatusBadge("DS", status?.dxccStatus),
                 color = Color(app.spotStatusColour(SPOT_STATUS_DS, status?.dxccStatus)), fontWeight = FontWeight.Bold,
                 fontSize = (labelSizeSp - 2).coerceAtLeast(8).sp, modifier = Modifier.padding(start = 4.dp))
         }
@@ -515,6 +553,9 @@ internal fun BandMapScreen(
             TextButton({ stackOpen = false; select(member) }, modifier = Modifier.fillMaxWidth()) { Text("${member.spot.callsign} · ${formatBandMapFrequency(member.spot.frequencyHz)}") }
         } } }, confirmButton = { TextButton({ stackOpen = false }) { Text("CLOSE") } })
 }
+
+internal fun bandMapStatusBadge(label: String, value: String?): String =
+    "$label ${value?.trim()?.takeIf(String::isNotEmpty) ?: "—"}"
 
 @Composable private fun MiniFrequencyAxis(segment: BandMapSegment) {
     BoxWithConstraints(Modifier.fillMaxWidth().height(32.dp)) {
@@ -561,16 +602,16 @@ private fun segmentColor(kind: BandMapOperatingSegmentKind): Color = when (kind)
     BandMapOperatingSegmentKind.CUSTOM -> MapText
 }
 
-@Composable private fun SpotDetail(ranked: BandMapRankedSpot, status: SpotLogStatus?, app: AppController, contextGeneration: Long, controller: BandMapController,
+@Composable private fun SpotDetail(ranked: BandMapRankedSpot, status: SpotLogStatus?, dxccName: String, app: AppController, contextGeneration: Long, controller: BandMapController,
     onAction: (WorkspaceAction) -> Unit, mark: (BandMapMarkKind) -> Unit, dismiss: () -> Unit) {
     val spot = ranked.spot
     AlertDialog(onDismissRequest = dismiss, title = { Text("${spot.callsign} · ${spot.band} · ${"%.3f".format(spot.frequencyHz / 1_000_000.0)} MHz") },
         text = { LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
             item { Text(ranked.explanation, color = MapAmber, fontWeight = FontWeight.Bold) }
-            item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("CS ${status?.callStatus ?: "—"}", color = Color(app.spotStatusColour(SPOT_STATUS_CS, status?.callStatus)), fontWeight = FontWeight.Bold)
-                Text("DS ${status?.dxccStatus ?: "—"}", color = Color(app.spotStatusColour(SPOT_STATUS_DS, status?.dxccStatus)), fontWeight = FontWeight.Bold)
-            } }
+            item { Text("Callsign status · ${spotStatusMeaning(SPOT_STATUS_CS, status?.callStatus)}",
+                color = Color(app.spotStatusColour(SPOT_STATUS_CS, status?.callStatus)), fontWeight = FontWeight.Bold) }
+            item { Text("DXCC entity · ${dxccName.ifBlank { "Name unavailable" }} · ${spotStatusMeaning(SPOT_STATUS_DS, status?.dxccStatus)}",
+                color = Color(app.spotStatusColour(SPOT_STATUS_DS, status?.dxccStatus)), fontWeight = FontWeight.Bold) }
             item { Text("Sources: ${spot.observations.joinToString { "${it.source.name} ${it.spotterCallsign}" }}") }
             item { Text("Need: entity ${spot.need.entity} · band ${spot.need.band} · mode ${spot.need.mode} · slot ${spot.need.bandMode}") }
             item { Text("Contest: ${if (spot.contest.active) "active" else "inactive"} · dupe ${spot.contest.duplicate ?: "unknown"} · multipliers ${spot.contest.newMultipliers.ifEmpty { setOf("none") }}") }
@@ -594,6 +635,20 @@ private fun segmentColor(kind: BandMapOperatingSegmentKind): Color = when (kind)
                 if (spot.portablePrograms.isNotEmpty()) OutlinedButton({ controller.workspaceAction(spot, WorkspaceDestination.PORTABLE, contextGeneration)?.let(onAction) }) { Text("ACTIVATION") }
             } }
         } }, confirmButton = { TextButton(dismiss) { Text("CLOSE") } })
+}
+
+internal fun spotStatusMeaning(dimension: String, value: String?): String = when (dimension to value) {
+    SPOT_STATUS_CS to "NC" -> "New callsign — never worked"
+    SPOT_STATUS_CS to "NB" -> "New band for this callsign"
+    SPOT_STATUS_CS to "NM" -> "New mode on this band"
+    SPOT_STATUS_CS to "W" -> "Worked, not confirmed on this band and mode"
+    SPOT_STATUS_CS to "C" -> "Confirmed on this band and mode"
+    SPOT_STATUS_DS to "ATNO" -> "All-time new DXCC entity"
+    SPOT_STATUS_DS to "W/NB" -> "New band for a worked, unconfirmed DXCC entity"
+    SPOT_STATUS_DS to "C/NB" -> "New band for a confirmed DXCC entity"
+    SPOT_STATUS_DS to "W" -> "Worked DXCC entity on this band, not confirmed"
+    SPOT_STATUS_DS to "C" -> "Confirmed DXCC entity on this band"
+    else -> "Status unavailable"
 }
 
 @Composable private fun FilterDialog(controller: BandMapController, app: AppController, dismiss: () -> Unit) {

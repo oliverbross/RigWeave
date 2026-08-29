@@ -11,6 +11,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.location.LocationManager
 import android.net.Uri
+import android.view.MotionEvent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -296,7 +297,7 @@ private fun operationStatusColor(status: String): Color = when (status) {
     val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) lastKnownPoint(context)?.let { selected -> point = selected; grid = maidenheadGrid(selected.latitude, selected.longitude) }
     }
-    LaunchedEffect(grid, radius, portable.pota.parkMetadata, portable.sotaCatalogue.metadata, portable.wwffSpots) {
+    LaunchedEffect(grid, radius, portable.pota.parkMetadata, portable.sotaCatalogue.metadata, portable.wwffSpots, portable.catalogues.statuses) {
         val origin = maidenheadCenter(grid) ?: return@LaunchedEffect
         point = origin
         catalogueBusy = true
@@ -313,13 +314,18 @@ private fun operationStatusColor(status: String): Color = when (status) {
                     if (row.latitude == null || row.longitude == null) null else ActivationCatalogReference("POTA", row.reference, row.name, row.grid, GeoPoint(row.latitude, row.longitude), row.active, POTA_PARK_URL)
                 } + sotaResult.rows.mapNotNull { row ->
                     if (row.latitude == null || row.longitude == null) null else ActivationCatalogReference("SOTA", row.code, row.name, row.grid, GeoPoint(row.latitude, row.longitude), row.active, SOTA_SUMMITS_URL)
+                } + portable.catalogues.all(PortableCatalogueProgram.WWFF).mapNotNull { row ->
+                    val latitude = row.latitudeMin ?: return@mapNotNull null
+                    val longitude = row.longitudeMin ?: return@mapNotNull null
+                    ActivationCatalogReference("WWFF", row.reference, row.name, "", GeoPoint(latitude, longitude), true,
+                        row.officialUrl.ifBlank { PortableCatalogueRegistry.WWFF_DIRECTORY })
                 } + portable.wwffSpots.flatMap { spot -> spot.references.filter { it.program == PortableProgram.WWFF }.mapNotNull { reference ->
                     val latitude = reference.latitude ?: spot.latitude ?: return@mapNotNull null
                     val longitude = reference.longitude ?: spot.longitude ?: return@mapNotNull null
                     ActivationCatalogReference("WWFF", reference.code, reference.name.ifBlank { "Live-discovered reference" }, "",
                         GeoPoint(latitude, longitude), spot.activeAt(Instant.now().epochSecond), WWFF_SPOTS_URL)
                 } }.distinctBy { it.reference }
-            }
+            }.distinctBy { "${it.program}:${it.reference}" }
         } finally { catalogueBusy = false }
     }
     LaunchedEffect(catalogueRows, point, radius, program, pota, sota, wwff, catalogueSort) {
@@ -381,7 +387,8 @@ private fun operationStatusColor(status: String): Color = when (status) {
                 PortableFeedKind.EMPTY -> "EMPTY"
                 else -> "ERROR"
             }
-            Text("WWFF LIVE SPOTS · $wwffLive · ${portable.wwffStatus.count} active · ${nearbyRows.count { it.program == "WWFF" }} viewport references\nWWFF DIRECTORY · NEEDS API KEY OR AUTHORISED IMPORT · live-discovered references remain a partial cache", color = if (wwffLive == "AVAILABLE") OpsHealthy else OpsDanger)
+            val wwffDirectory = portable.catalogues.statuses.getValue(PortableCatalogueProgram.WWFF)
+            Text("WWFF LIVE SPOTS · $wwffLive · ${portable.wwffStatus.count} active · ${nearbyRows.count { it.program == "WWFF" }} nearby references\nWWFF DIRECTORY · ${wwffDirectory.state.name.replace('_', ' ')} · ${wwffDirectory.rowCount} references · official nightly CSV / app-private last-good", color = if (wwffDirectory.rowCount > 0) OpsHealthy else OpsDanger)
             if (catalogueBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
         } } }
         item { Text("NEARBY REFERENCES · ${nearbyRows.size}", color = OpsAmber, fontWeight = FontWeight.Black) }
@@ -414,7 +421,14 @@ private data class PlanningMapReference(val program:String,val code:String,val n
     val context=LocalContext.current
     val lifecycle=LocalLifecycleOwner.current.lifecycle
     val currentSelect by rememberUpdatedState(select)
-    val mapView=remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null) } }
+    val mapView=remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply {
+        onCreate(null)
+        setOnTouchListener { view, event ->
+            if (event.actionMasked == MotionEvent.ACTION_UP) view.performClick()
+            view.parent?.requestDisallowInterceptTouchEvent(event.actionMasked !in setOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL))
+            false
+        }
+    } }
     val callbackLifecycle=remember(mapView) { LifecycleGeneration() }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var styled by remember { mutableStateOf(false) }
@@ -425,19 +439,28 @@ private data class PlanningMapReference(val program:String,val code:String,val n
     DisposableEffect(mapView,lifecycle) {
         val callbackGeneration=callbackLifecycle.next()
         var disposed=false
+        var started=false;var resumed=false;var destroyed=false
+        fun start(){if(!started&&!destroyed){mapView.onStart();started=true}}
+        fun resume(){start();if(!resumed&&!destroyed){mapView.onResume();resumed=true}}
+        fun pause(){if(resumed&&!destroyed){mapView.onPause();resumed=false}}
+        fun stop(){pause();if(started&&!destroyed){mapView.onStop();started=false}}
+        fun destroy(){if(!destroyed){stop();mapView.onDestroy();destroyed=true}}
         val observer=LifecycleEventObserver { _,event -> when(event) {
-            Lifecycle.Event.ON_START -> mapView.onStart()
-            Lifecycle.Event.ON_RESUME -> mapView.onResume()
-            Lifecycle.Event.ON_PAUSE -> mapView.onPause()
-            Lifecycle.Event.ON_STOP -> mapView.onStop()
-            else -> Unit
+            Lifecycle.Event.ON_START -> start();Lifecycle.Event.ON_RESUME -> resume()
+            Lifecycle.Event.ON_PAUSE -> pause();Lifecycle.Event.ON_STOP -> stop()
+            Lifecycle.Event.ON_DESTROY -> destroy();else -> Unit
         } }
         lifecycle.addObserver(observer)
+        if(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))start()
+        if(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))resume()
         mapView.getMapAsync { ready ->
             if(disposed || !callbackLifecycle.isCurrent(callbackGeneration)) return@getMapAsync
             map=ready
-            ready.uiSettings.isAttributionEnabled=true
-            ready.uiSettings.isLogoEnabled=true
+            ready.uiSettings.apply {
+                isAttributionEnabled=true;isLogoEnabled=true;isCompassEnabled=true
+                isZoomGesturesEnabled=true;isScrollGesturesEnabled=true;isRotateGesturesEnabled=true;isTiltGesturesEnabled=false
+            }
+            ready.setMinZoomPreference(.8);ready.setMaxZoomPreference(14.0)
             ready.setStyle(Style.Builder().fromUri("https://tiles.openfreemap.org/styles/liberty")) {
                 if(callbackLifecycle.isCurrent(callbackGeneration)) styled=true
             }
@@ -456,7 +479,7 @@ private data class PlanningMapReference(val program:String,val code:String,val n
                 else { currentSelect(GeoPoint(location.latitude,location.longitude)); true }
             }
         }
-        onDispose { disposed=true;callbackLifecycle.retire();lifecycle.removeObserver(observer); mapView.onPause(); mapView.onStop(); mapView.onDestroy(); map=null }
+        onDispose { disposed=true;callbackLifecycle.retire();lifecycle.removeObserver(observer);map=null;destroy() }
     }
     val referenceHash=references.joinToString { "${it.program}:${it.code}:${it.point.latitude}:${it.point.longitude}" }
     LaunchedEffect(map,styled,point,grid,radius,referenceHash,resetKey) {

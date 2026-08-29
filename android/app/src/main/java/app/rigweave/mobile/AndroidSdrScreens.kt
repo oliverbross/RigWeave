@@ -774,12 +774,12 @@ fun RfIntelligenceWorkspace(controller: RfObservationController, workbench: Andr
 fun DigiRfPathWrapper(controller: RfObservationController, existing: @Composable () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.weight(1f)) { existing() }
-        Card(Modifier.fillMaxWidth().height(176.dp).padding(horizontal = 8.dp, vertical = 5.dp), colors = CardDefaults.cardColors(containerColor = SdrPanel)) {
+        Card(Modifier.fillMaxWidth().height(320.dp).padding(horizontal = 8.dp, vertical = 5.dp), colors = CardDefaults.cardColors(containerColor = SdrPanel)) {
             Column(Modifier.fillMaxSize().padding(horizontal = 10.dp, vertical = 8.dp)) {
-                Text("SIGNAL PATH PREVIEW · DIGI / WSPR", color = SdrAmber, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Text("Sequence visualization only — not a geographic map or RF proof.", color = SdrMuted, fontSize = 12.sp)
-                RfCanvas(controller.filtered.take(32), globe = false, centerLat = 0.0, centerLon = 0.0,
-                    zoom = 1f, longPath = false, Modifier.weight(1f).fillMaxWidth().padding(top = 6.dp))
+                Text("RF SIGNAL PATH MAP · DIGI / WSPR", color = SdrAmber, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text("Geographic observations only · drag, pinch and zoom · selection never tunes.", color = SdrMuted, fontSize = 12.sp)
+                RfEvidenceBasemap(controller.filtered.take(200), controller.filters.longPath, globe = false,
+                    Modifier.weight(1f).fillMaxWidth().padding(top = 6.dp))
             }
         }
     }

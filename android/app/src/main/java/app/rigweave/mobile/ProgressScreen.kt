@@ -1019,7 +1019,7 @@ private fun shortChartLabel(value:String)=when{
     var savedLatitude by rememberSaveable { mutableStateOf(0.0) }
     var savedLongitude by rememberSaveable { mutableStateOf(0.0) }
     var savedZoom by rememberSaveable { mutableStateOf(1.0) }
-    var labelMode by rememberSaveable { mutableStateOf(ProgressContactLabelMode.PREFIX) }
+    var labelMode by rememberSaveable { mutableStateOf(ProgressContactLabelMode.DXCC_NAME) }
     val currentLabelMode by rememberUpdatedState(labelMode)
     DisposableEffect(mapView, lifecycle) {
         val callbackGeneration = callbackLifecycle.next()
@@ -1128,7 +1128,7 @@ private fun installProgressContactLayers(style: Style) {
     }
 }
 
-private enum class ProgressContactLabelMode(val label: String) { PREFIX("PREFIX"), COUNTRY("COUNTRY NAME"), CALLSIGN("CALLSIGN UNAVAILABLE"), GRID("GRID"), NONE("NONE") }
+private enum class ProgressContactLabelMode(val label: String) { DXCC_NAME("DXCC NAME"), GRID("GRID"), NONE("NONE") }
 
 internal fun deduplicatedProgressLabelRows(rows: List<ProgressContactPoint>, viewportCentre: GeoPoint? = null): Set<ProgressContactPoint> =
     rows.groupBy { it.dxcc.ifBlank { it.country }.trim().uppercase(Locale.US).ifBlank { "UNKNOWN:${it.grid}" } }.values.mapNotNull { group ->
@@ -1138,14 +1138,13 @@ internal fun deduplicatedProgressLabelRows(rows: List<ProgressContactPoint>, vie
 
 private fun progressContactFeatures(rows: List<ProgressContactPoint>, mode: ProgressContactLabelMode,
     viewportCentre: GeoPoint? = null): FeatureCollection {
-    val representatives = if (mode in setOf(ProgressContactLabelMode.PREFIX, ProgressContactLabelMode.COUNTRY))
+    val representatives = if (mode == ProgressContactLabelMode.DXCC_NAME)
         deduplicatedProgressLabelRows(rows, viewportCentre) else rows.toSet()
     return FeatureCollection.fromFeatures(rows.map { row ->
     val label = if (row !in representatives) "" else when (mode) {
-        ProgressContactLabelMode.PREFIX -> row.dxcc.split(',').firstOrNull()?.trim().orEmpty().ifBlank { row.country.take(8).uppercase(Locale.US) }
-        ProgressContactLabelMode.COUNTRY -> row.country.split(',').firstOrNull()?.trim().orEmpty()
+        ProgressContactLabelMode.DXCC_NAME -> row.country.split(',').firstOrNull()?.trim().orEmpty().ifBlank { "DXCC name unavailable" }
         ProgressContactLabelMode.GRID -> row.grid
-        ProgressContactLabelMode.CALLSIGN, ProgressContactLabelMode.NONE -> ""
+        ProgressContactLabelMode.NONE -> ""
     }
     Feature.fromGeometry(Point.fromLngLat(row.longitude, row.latitude)).apply {
         addStringProperty("label", label)

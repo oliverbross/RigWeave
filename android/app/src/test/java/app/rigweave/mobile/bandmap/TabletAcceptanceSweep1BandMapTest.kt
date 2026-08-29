@@ -60,6 +60,33 @@ class TabletAcceptanceSweep1BandMapTest {
         assertTrue(ordered.all { it in 52f..956f })
     }
 
+    @Test fun crowdedVerticalLabelsAreGroupedToTheVisibleCapacityWithoutEdgePileup() {
+        val placements = (0 until 12).map { index -> BandMapPlacedSpot("p$index", index / 11f, index % 6) }
+        val fitted = BandMapLayoutEngine.fitToCapacity(placements, capacity = 4)
+        val positions = BandMapLayoutEngine.resolveVerticalLabels(fitted, heightPx = 240f, labelHeightPx = 48f, topPx = 48f)
+        val ordered = fitted.map { positions.getValue(it.id) }
+
+        assertEquals(4, fitted.size)
+        assertEquals(12, fitted.flatMap { it.memberIds }.distinct().size)
+        assertTrue(ordered.zipWithNext().all { (left, right) -> right - left >= 48f })
+        assertTrue(ordered.all { it in 48f..192f })
+    }
+
+    @Test fun horizontalPlacementHonoursTheNumberOfReadableCascadingLanes() {
+        val segment = BandMapSegment("20m", lowerHz = 14_000_000, upperHz = 14_350_000)
+        val placed = BandMapLayoutEngine.place((0 until 20).map(::spot), segment, pixels = 800, maximumLanes = 2)
+
+        assertEquals(2, placed.size)
+        assertTrue(placed.all { it.lane in 0..1 })
+        assertEquals(20, placed.flatMap { it.memberIds }.distinct().size)
+    }
+
+    @Test fun tappedSpotStatusesAreExpandedIntoOperatorLanguage() {
+        assertEquals("New mode on this band", spotStatusMeaning("CS", "NM"))
+        assertEquals("Confirmed DXCC entity on this band", spotStatusMeaning("DS", "C"))
+        assertEquals("All-time new DXCC entity", spotStatusMeaning("DS", "ATNO"))
+    }
+
     @Test fun iaruDisplayPlanIsGuidanceNotRegulatoryAuthority() {
         val plan = BandMapDisplayPlans.forBand("20m", BandMapIaruRegion.REGION_1)
         assertFalse(plan.regulatoryAuthority)

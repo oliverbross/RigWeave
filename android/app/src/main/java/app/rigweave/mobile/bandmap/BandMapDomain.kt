@@ -469,11 +469,18 @@ internal object BandMapLayoutEngine {
         }.toList().take(64)
     }
 
-    fun place(spots: List<BandMapSpot>, segment: BandMapSegment, pixels: Int, minimumSpacing: Int = 22): List<BandMapPlacedSpot> {
+    fun place(
+        spots: List<BandMapSpot>,
+        segment: BandMapSegment,
+        pixels: Int,
+        minimumSpacing: Int = 22,
+        maximumLanes: Int = 6,
+    ): List<BandMapPlacedSpot> {
         val ordered = spots.filter { it.frequencyHz in segment.lowerHz..segment.upperHz }
             .sortedWith(compareBy<BandMapSpot>(BandMapSpot::frequencyHz).thenBy(BandMapSpot::callsign))
-        val laneLast = IntArray(6) { Int.MIN_VALUE / 2 }
-        val laneOutput = IntArray(6) { -1 }
+        val laneCount = maximumLanes.coerceIn(1, 12)
+        val laneLast = IntArray(laneCount) { Int.MIN_VALUE / 2 }
+        val laneOutput = IntArray(laneCount) { -1 }
         val result = mutableListOf<BandMapPlacedSpot>()
         ordered.forEach { spot ->
             val primary = (coordinate(spot.frequencyHz, segment) * pixels).roundToInt()
@@ -483,11 +490,26 @@ internal object BandMapLayoutEngine {
                 laneOutput[lane] = result.size
                 result += BandMapPlacedSpot(spot.id, primary.toFloat() / pixels.coerceAtLeast(1), lane)
             } else {
-                val index = laneOutput[5]
-                if (index >= 0) result[index] = result[index].copy(memberIds = (result[index].memberIds + spot.id).take(20))
+                val index = laneOutput[laneCount - 1]
+                if (index >= 0) result[index] = result[index].copy(memberIds = (result[index].memberIds + spot.id).distinct().take(20))
             }
         }
         return result
+    }
+
+    fun fitToCapacity(placements: List<BandMapPlacedSpot>, capacity: Int): List<BandMapPlacedSpot> {
+        val slotCount = capacity.coerceAtLeast(1)
+        if (placements.size <= slotCount) return placements
+        return (0 until slotCount).map { slot ->
+            val from = slot * placements.size / slotCount
+            val until = (slot + 1) * placements.size / slotCount
+            val group = placements.subList(from, until.coerceAtLeast(from + 1))
+            val representative = group[group.size / 2]
+            representative.copy(
+                primary = group.map(BandMapPlacedSpot::primary).average().toFloat(),
+                memberIds = group.flatMap(BandMapPlacedSpot::memberIds).distinct().take(100),
+            )
+        }
     }
 
     fun resolveVerticalLabels(placements: List<BandMapPlacedSpot>, heightPx: Float, labelHeightPx: Float, topPx: Float): Map<String, Float> {

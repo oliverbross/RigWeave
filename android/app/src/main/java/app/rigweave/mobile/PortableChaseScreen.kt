@@ -358,12 +358,15 @@ internal fun PortableChaseScreen(
                         Text(status.reason, color = PortableMuted)
                         Text(status.source, color = PortableBlue, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    if (programme == PortableCatalogueProgram.IOTA) Button(registry::refreshIota, enabled = !status.busy) { Text(if (status.rowCount > 0) "UPDATE" else "DOWNLOAD") }
-                    else OutlinedButton({ importer.launch(arrayOf("text/csv", "text/comma-separated-values", "application/octet-stream")) }) { Text("IMPORT") }
+                    when (programme) {
+                        PortableCatalogueProgram.IOTA -> Button(registry::refreshIota, enabled = !status.busy) { Text(if (status.rowCount > 0) "UPDATE" else "DOWNLOAD") }
+                        PortableCatalogueProgram.WWFF -> Button(registry::refreshWwff, enabled = !status.busy) { Text(if (status.rowCount > 0) "UPDATE" else "DOWNLOAD") }
+                        else -> OutlinedButton({ importer.launch(arrayOf("text/csv", "text/comma-separated-values", "application/octet-stream")) }) { Text("IMPORT") }
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton({ inAppBrowser?.open(status.source) }) { Icon(Icons.Outlined.OpenInNew, null); Spacer(Modifier.width(5.dp)); Text("OFFICIAL SOURCE") }
-                    Text("No scraping · no bundled directory · private last-good only", color = PortableMuted, fontSize = 11.sp,
+                    Text("Official download where available · no scraping · private last-good only", color = PortableMuted, fontSize = 11.sp,
                         modifier = Modifier.align(Alignment.CenterVertically))
                 }
             }
@@ -403,10 +406,13 @@ internal fun PortableChaseScreen(
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 Text("WWFF CATALOGUE · ${catalogue.state.name.replace('_', ' ')}", color = if (catalogue.rowCount > 0) PortableHealthy else PortableDanger, fontWeight = FontWeight.Black)
                 Text("${catalogue.rowCount} catalogue references · ${catalogue.digest.take(12).ifBlank { "no digest" }}", color = PortableMuted)
-                Text(if (catalogue.rowCount > 0) "Authorised user-selected app-private directory is available in More catalogues."
-                    else "The official directory is not downloaded or scraped. Oliver Bross OM0RX may select his authorised CSV in More catalogues; live Spotline remains separate.", color = PortableMuted)
+                Text(if (catalogue.rowCount > 0) "Official nightly directory is searchable offline in More catalogues."
+                    else "Download the official nightly CSV copy; no API key is required and the last-good copy stays app-private.", color = PortableMuted)
                 Text("Live provider: ${controller.wwffStatus.kind.name} · ${controller.wwffStatus.count} active · source attribution WWFF Spotline/agendas", color = PortableMuted, fontSize = 11.sp)
-                Button({ inAppBrowser?.open("https://wwff.co/directory/") }) { Icon(Icons.Outlined.OpenInNew, null); Spacer(Modifier.width(6.dp)); Text("Open official WWFF Directory") }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(controller.catalogues::refreshWwff, enabled = !catalogue.busy) { Text(if (catalogue.rowCount > 0) "UPDATE DIRECTORY" else "DOWNLOAD DIRECTORY") }
+                    OutlinedButton({ inAppBrowser?.open("https://wwff.co/directory/") }) { Icon(Icons.Outlined.OpenInNew, null); Spacer(Modifier.width(6.dp)); Text("OFFICIAL DIRECTORY") }
+                }
             }
         }
     }
@@ -426,7 +432,7 @@ internal fun PortableChaseScreen(
 }
 
 @Composable private fun PortableNativeMap(rows: List<PortableOpportunity>, selectedId: String?, select: (String) -> Unit, modifier: Modifier) {
-    val context = LocalContext.current; val lifecycle = LocalLifecycleOwner.current.lifecycle; val currentSelect by rememberUpdatedState(select); val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null); setOnTouchListener { view, event -> if (event.actionMasked == MotionEvent.ACTION_UP) view.performClick(); view.parent?.requestDisallowInterceptTouchEvent(event.actionMasked !in setOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)); false } } }; val markerSelections = remember { mutableMapOf<Long, String>() }; var map by remember { mutableStateOf<MapLibreMap?>(null) }; var styleReady by remember { mutableStateOf(false) }; var userMoved by remember { mutableStateOf(false) }
+    val context = LocalContext.current; val lifecycle = LocalLifecycleOwner.current.lifecycle; val currentSelect by rememberUpdatedState(select); val currentRows by rememberUpdatedState(rows); val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply { onCreate(null); setOnTouchListener { view, event -> if (event.actionMasked == MotionEvent.ACTION_UP) view.performClick(); view.parent?.requestDisallowInterceptTouchEvent(event.actionMasked !in setOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)); false } } }; val markerSelections = remember { mutableMapOf<Long, String>() }; var map by remember { mutableStateOf<MapLibreMap?>(null) }; var styleReady by remember { mutableStateOf(false) }; var userMoved by remember { mutableStateOf(false) }
     val callbackLifecycle = remember(mapView) { LifecycleGeneration() }
     DisposableEffect(mapView, lifecycle) {
         val callbackGeneration = callbackLifecycle.next()
@@ -461,7 +467,21 @@ internal fun PortableChaseScreen(
                 markerSelections[marker.id]?.let(currentSelect)
                 true
             }
-            ready.addOnMapClickListener { point -> val feature = ready.queryRenderedFeatures(ready.projection.toScreenLocation(point), PORTABLE_SELECTED_LABEL_LAYER, PORTABLE_LABEL_LAYER).firstOrNull(); feature?.getStringProperty("spot_id")?.let(currentSelect); feature != null }
+            ready.addOnMapClickListener { point ->
+                val touch = ready.projection.toScreenLocation(point)
+                val featureId = ready.queryRenderedFeatures(touch, PORTABLE_SELECTED_LABEL_LAYER, PORTABLE_LABEL_LAYER)
+                    .firstOrNull()?.getStringProperty("spot_id")
+                val hitRadius = 48f * context.resources.displayMetrics.density
+                val nearestId = currentRows.mapNotNull { row ->
+                    val latitude = row.spot.latitude ?: return@mapNotNull null
+                    val longitude = row.spot.longitude ?: return@mapNotNull null
+                    val markerPoint = ready.projection.toScreenLocation(LatLng(latitude, longitude))
+                    val dx = markerPoint.x - touch.x; val dy = markerPoint.y - touch.y
+                    row.spot.id to (dx * dx + dy * dy)
+                }.minByOrNull { it.second }?.takeIf { it.second <= hitRadius * hitRadius }?.first
+                (featureId ?: nearestId)?.let(currentSelect)
+                featureId != null || nearestId != null
+            }
         }
         onDispose { disposed = true; callbackLifecycle.retire(); lifecycle.removeObserver(observer); map?.setOnMarkerClickListener(null); styleReady = false; map = null; destroy() }
     }
