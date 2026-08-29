@@ -251,7 +251,7 @@ class BandStackStore(context: Context) {
     }
 
     private fun load(): Map<String, List<BandStackEntry>> = runCatching {
-        val root = JSONObject(prefs.getString("band_stacks_v1", "{}"))
+        val root = JSONObject(prefs.getString("band_stacks_v1", "{}").orEmpty().ifBlank { "{}" })
         root.keys().asSequence().associateWith { band ->
             val rows = root.getJSONArray(band)
             List(rows.length().coerceAtMost(12)) { index -> rows.getJSONObject(index).let { row ->
@@ -484,7 +484,7 @@ class SpokenAnnouncementController(
         engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) { scope.launch { speaking = true } }
             override fun onDone(utteranceId: String?) = releaseAudioFocus()
-            @Deprecated("Android TTS callback")
+            @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
             override fun onError(utteranceId: String?) = releaseAudioFocus()
         })
     }
@@ -549,7 +549,7 @@ class SpokenAnnouncementController(
     }
 
     private fun load(): AnnouncementSettings = runCatching {
-        val row = JSONObject(prefs.getString("announcements_v1", "{}"))
+        val row = JSONObject(prefs.getString("announcements_v1", "{}").orEmpty().ifBlank { "{}" })
         AnnouncementSettings(row.optBoolean("enabled"), row.optBoolean("frequency", true), row.optBoolean("band_mode", true),
             row.optBoolean("allocation", true), row.optBoolean("swr", true), row.optBoolean("digi"), row.optBoolean("route", true),
             row.optDouble("rate", 1.0).toFloat(), row.optString("voice"))

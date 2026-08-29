@@ -5872,7 +5872,7 @@ private fun statusColourForeground(argb: Int): Color {
             Text("Thank you to the authors, maintainers, radio amateurs, testers, standards communities and data providers whose careful work makes interoperable amateur-radio software possible.", color = Muted)
             val buildSummary = "Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\n" +
                 "Build SHA ${BuildConfig.BUILD_SHA}\nBuild channel ${BuildConfig.BUILD_CHANNEL}\n" +
-                "QSO schema 16 · projection contract 5\n" +
+                "QSO schema 17 · projection contract 6\n" +
                 "OpenHamClock stable 26.5.0 · d4a50eaaa61d · checked 2026-08-22"
             Surface(color = Raised, shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
