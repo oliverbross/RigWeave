@@ -991,8 +991,8 @@ private fun hamClockStyleJson(basemap: HamClockBasemap): String {
     }""".trimIndent()
 }
 
-private const val OPEN_FREE_MAP_LIGHT_STYLE = "https://tiles.openfreemap.org/styles/liberty"
-private const val OPEN_FREE_MAP_DARK_STYLE = "https://tiles.openfreemap.org/styles/dark"
+internal const val OPEN_FREE_MAP_LIGHT_STYLE = "https://tiles.openfreemap.org/styles/liberty"
+internal const val OPEN_FREE_MAP_DARK_STYLE = "https://tiles.openfreemap.org/styles/dark"
 
 private fun HamClockMapPoint.reference() = HamClockMapFeatureRef(layerId, contextId, selection, callsign, frequencyHz, mode)
 

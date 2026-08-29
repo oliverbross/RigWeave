@@ -213,7 +213,7 @@ private fun ChannelMonitorRail(workbench: AndroidSdrWorkbenchV4, centerHz: Long?
 }
 
 @Composable
-fun SpectrumSurveyPanel(workbench: AndroidSdrWorkbenchV4) {
+fun SpectrumSurveyPanel(workbench: AndroidSdrWorkbenchV4, rfController: RfObservationController) {
     var selectedBand by remember { mutableStateOf<String?>(null) }
     var selectedSource by remember { mutableStateOf<String?>(null) }
     var selectedReceiver by remember { mutableStateOf<Int?>(null) }
@@ -230,7 +230,18 @@ fun SpectrumSurveyPanel(workbench: AndroidSdrWorkbenchV4) {
             listOf<Int?>(null, 0, 1).forEach { receiver -> FilterChip(selectedReceiver == receiver, { selectedReceiver = receiver }, { Text(receiver?.let { "RX ${it + 1}" } ?: "ALL RX") }) }
             FilterChip(false, {}, { Text("DATE · RETENTION") }); FilterChip(false, {}, { Text("HOUR · ALL") }); FilterChip(false, {}, { Text("SCAN BANK · ALL") })
         }
-        OccupancyHeatmap(rows, Modifier.fillMaxWidth().height(280.dp))
+        if (rows.isEmpty()) {
+            Column(Modifier.fillMaxWidth().height(300.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text("NO SPECTRUM AGGREGATES YET · GEOGRAPHIC RF CONTEXT", color = WorkbenchAmber,
+                    fontWeight = FontWeight.Bold)
+                Text("This map shows bounded RF observations only. It does not fabricate occupancy or replace the frequency × UTC heatmap.",
+                    color = WorkbenchMuted, fontSize = 11.sp)
+                RfEvidenceBasemap(rfController.filtered, rfController.filters.longPath, globe = false,
+                    Modifier.weight(1f).fillMaxWidth())
+            }
+        } else {
+            OccupancyHeatmap(rows, Modifier.fillMaxWidth().height(280.dp))
+        }
         val byBand = rows.groupBy(SpectrumAggregate::band).mapValues { (_, values) -> values.map(SpectrumAggregate::occupancyPercent).average() }
         Text("BAND COMPARISON", color = WorkbenchAmber, fontWeight = FontWeight.Bold)
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {

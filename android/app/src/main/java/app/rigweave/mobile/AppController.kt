@@ -93,6 +93,10 @@ internal fun resolveSpotStatusColour(configured: Map<String, Int>, dimension: St
     status?.takeIf(String::isNotBlank)?.let { configured["$dimension:$it"] ?: defaultSpotStatusColour(dimension, it) }
         ?: 0xFFF4F0E7.toInt()
 
+internal const val WORKSPACE_SCREEN_VISIBILITY_PREF = "hidden_workspace_screens_v1"
+internal val lockedWorkspaceScreenKeys = setOf("HOME", "SETTINGS")
+internal fun normalizeHiddenWorkspaceScreens(keys: Set<String>): Set<String> = keys - lockedWorkspaceScreenKeys
+
 class AppController(private val context: Context) {
     private val prefs = context.getSharedPreferences("rigweave-app", Context.MODE_PRIVATE)
     private val configurationRecovery = ConfigurationRecovery(context.applicationContext)
@@ -131,6 +135,9 @@ class AppController(private val context: Context) {
     var cqRepeatSeconds by mutableStateOf(prefs.getInt("cq_repeat", 3).coerceIn(CQ_REPEAT_MIN_SECONDS, CQ_REPEAT_MAX_SECONDS)); private set
     var favoriteBands by mutableStateOf(prefs.getString("favorites", "7.020,7.030,7.100,7.200,14.060,21.060")!!.split(",")); private set
     var spotStatusColours by mutableStateOf(loadSpotStatusColours()); private set
+    var hiddenWorkspaceScreens by mutableStateOf(normalizeHiddenWorkspaceScreens(
+        prefs.getStringSet(WORKSPACE_SCREEN_VISIBILITY_PREF, emptySet()).orEmpty().toSet()
+    )); private set
     val macroLabels = mutableStateListOf<String>().apply {
         repeat(CW_MACRO_COUNT) { index -> add(sanitizeCwMacroLabel(prefs.getString("macro_label_$index", defaultCwMacroLabel(index))
             ?: defaultCwMacroLabel(index))) }
@@ -291,6 +298,21 @@ class AppController(private val context: Context) {
     fun updateRotatorEnabled(value: Boolean) {
         rotatorEnabled = value
         prefs.edit().putBoolean("rotator_destination_enabled", value).apply()
+    }
+
+    fun isWorkspaceScreenVisible(key: String): Boolean = key in lockedWorkspaceScreenKeys || key !in hiddenWorkspaceScreens
+
+    fun updateWorkspaceScreenVisible(key: String, visible: Boolean) {
+        if (key in lockedWorkspaceScreenKeys) return
+        hiddenWorkspaceScreens = normalizeHiddenWorkspaceScreens(
+            if (visible) hiddenWorkspaceScreens - key else hiddenWorkspaceScreens + key
+        )
+        prefs.edit().putStringSet(WORKSPACE_SCREEN_VISIBILITY_PREF, hiddenWorkspaceScreens.toSet()).apply()
+    }
+
+    fun showAllWorkspaceScreens() {
+        hiddenWorkspaceScreens = emptySet()
+        prefs.edit().putStringSet(WORKSPACE_SCREEN_VISIBILITY_PREF, emptySet()).apply()
     }
 
     fun updateTransmitArmed(value: Boolean) { transmitArmed = value }

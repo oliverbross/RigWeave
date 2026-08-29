@@ -763,7 +763,7 @@ fun RfIntelligenceWorkspace(controller: RfObservationController, workbench: Andr
             when (page) {
                 "RF MAP" -> RfMapGlobeScreen(controller, globe = false)
                 "RF GLOBE" -> RfMapGlobeScreen(controller, globe = true)
-                "SPECTRUM" -> SpectrumSurveyPanel(workbench)
+                "SPECTRUM" -> SpectrumSurveyPanel(workbench, controller)
                 else -> existing()
             }
         }
@@ -788,28 +788,21 @@ fun DigiRfPathWrapper(controller: RfObservationController, existing: @Composable
 @Composable
 fun RfMapGlobeScreen(controller: RfObservationController, globe: Boolean) {
     var filtersOpen by remember { mutableStateOf(false) }
-    var centerLat by remember { mutableDoubleStateOf(-12.0) }
-    var centerLon by remember { mutableDoubleStateOf(130.0) }
-    var zoom by remember { mutableFloatStateOf(1f) }
     Column(Modifier.fillMaxSize().background(SdrChassis).padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Column { Text(if (globe) "INTERACTIVE ORTHOGRAPHIC RF GLOBE" else "RF EVIDENCE MAP", color = SdrAmber, fontWeight = FontWeight.Black)
+            Column { Text(if (globe) "RF GLOBE · MAPLIBRE WORLD VIEW" else "RF EVIDENCE MAP", color = SdrAmber, fontWeight = FontWeight.Black)
                 Text("${controller.filtered.size}/${controller.observations.size} bounded observations · filter ${controller.filterMillis} ms", color = SdrMuted) }
             Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 OutlinedButton({ filtersOpen = true }) { Text("FILTERS") }
                 OutlinedButton(controller::resetFilters) { Text("RESET FILTERS") }
             }
         }
-        Box(Modifier.weight(1f).fillMaxWidth().pointerInput(globe) {
-            detectTransformGestures { _, pan, gestureZoom, _ ->
-                centerLon = normalizeUiLongitude(centerLon - pan.x / size.width * 180 / zoom)
-                centerLat = (centerLat + pan.y / size.height * 90 / zoom).coerceIn(-90.0, 90.0)
-                zoom = (zoom * gestureZoom).coerceIn(.7f, 6f)
-            }
-        }) { RfCanvas(controller.filtered, globe, centerLat, centerLon, zoom, controller.filters.longPath, Modifier.fillMaxSize()) }
+        RfEvidenceBasemap(controller.filtered, controller.filters.longPath, globe,
+            Modifier.weight(1f).fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
             Text("OBSERVED", color = SdrHealthy); Text("HISTORICAL", color = SdrMuted); Text("EMPIRICAL OUTLOOK", color = SdrHold)
-            Text("COARSE locations are hollow · selection never tunes", color = SdrMuted)
+            Text(if (globe) "Same live basemap as Home · global view, not a 3D projection · selection never tunes"
+                else "COARSE locations are hollow · selection never tunes", color = SdrMuted)
         }
     }
     if (filtersOpen) RfFilterDialog(controller, { filtersOpen = false })

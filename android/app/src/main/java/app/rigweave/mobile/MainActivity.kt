@@ -159,7 +159,7 @@ private enum class Destination(val label: String) {
 }
 private enum class SettingsSection(val label: String) {
     RADIO("Radio"), LOG("Log"), CLUSTER("Cluster"), MACROS("Macros"), ALERTS("Alerts"),
-    AUDIO("Audio"), CONTROLS("Controls"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), ROTATOR("Rotator"), INTEGRATIONS("Integrations"), COLOURS("Colours"),
+    AUDIO("Audio"), CONTROLS("Controls"), SCREENS("Screens"), DIGI("Digi"), CONTEST("Contest"), BAND_MAPS("Band Maps"), ROTATOR("Rotator"), INTEGRATIONS("Integrations"), COLOURS("Colours"),
     HEALTH("Health"), DIAG("Diag"), ABOUT("About")
 }
 private enum class QsoEditorTab(val label: String) { QSO("QSO"), STATION("Station"), GENERAL("General"), NOTES("Notes"), QSL("QSL") }
@@ -319,6 +319,9 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
     val eqVisible = selectedProfile.backendKind == RadioBackendKind.NATIVE_ELECRAFT &&
         eqDestinationVisible(app.eqVisibilityPolicy, app.radioFamily)
     var integratedDigiPage by rememberSaveable { mutableStateOf(IntegratedDigiPage.DIGI) }
+    LaunchedEffect(app.hiddenWorkspaceScreens, destination) {
+        if (!app.isWorkspaceScreenVisible(destination.name)) destination = Destination.HOME
+    }
     LaunchedEffect(groupsIo.enabled, destination) {
         if (!groupsIo.enabled && destination == Destination.GROUPS_IO) destination = Destination.SETTINGS
     }
@@ -672,7 +675,21 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 val target = (1_800_000L + normalized.coerceIn(0f, 1f) * 52_200_000L).toLong()
                 send("FA${target.toString().padStart(11, '0')};")
             }
-            override fun nextWorkspace() { destination = Destination.entries[(destination.ordinal + 1) % Destination.entries.size] }
+            override fun nextWorkspace() {
+                val available = Destination.entries.filterNot { item ->
+                    item == Destination.SYNC || !app.isWorkspaceScreenVisible(item.name) ||
+                        (item == Destination.GROUPS_IO && !groupsIoDestinationVisible(groupsIo.enabled, compact = false)) ||
+                        (item == Destination.BAND_MAPS && (!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible)) ||
+                        (item == Destination.ROTATOR && !app.rotatorEnabled) ||
+                        (item == Destination.PANADAPTER &&
+                            ((app.selectedRadioProfile.backendKind != RadioBackendKind.NATIVE_TCI && !app.panadapterEnabled) ||
+                                app.radioFamily == RadioFamily.FLEXRADIO)) ||
+                        (item == Destination.EQ && !eqVisible) ||
+                        (item == Destination.CONTEST && !contestDestinationVisible(app.contestEnabled))
+                }
+                val current = available.indexOf(destination).takeIf { it >= 0 } ?: 0
+                destination = available[(current + 1) % available.size]
+            }
         }
     }
     LaunchedEffect(transport, selectedProfile.id) {
@@ -938,7 +955,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Destination.entries.filterNot { item ->
-                        item == Destination.SYNC ||
+                        item == Destination.SYNC || !app.isWorkspaceScreenVisible(item.name) ||
                         (item == Destination.GROUPS_IO && !groupsIoDestinationVisible(groupsIo.enabled, compact = false)) ||
                         (item == Destination.BAND_MAPS && (!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible)) ||
                         (item == Destination.ROTATOR && !app.rotatorEnabled) ||
@@ -991,7 +1008,7 @@ internal fun parseGeneralRadioCommand(raw: String): GeneralRadioCommand {
                 { id -> dispatchWorkspaceAction(WorkspaceAction(WorkspaceDestination.LOGBOOK, qsoId = id,
                     source = "Home QSO marker", reason = "Open exact QSO")) })
         } else Scaffold(modifier = Modifier.padding(top = keyerStripInset), bottomBar = { NavigationBar(containerColor = Panel) {
-            Destination.entries.filterNot { it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.OPERATIONS || it == Destination.GROUPS_IO || (it == Destination.ROTATOR && !app.rotatorEnabled) || (it == Destination.CONTEST && !contestDestinationVisible(app.contestEnabled)) || (it == Destination.BAND_MAPS && (!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible)) }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
+            Destination.entries.filterNot { !app.isWorkspaceScreenVisible(it.name) || it == Destination.DIGI || it == Destination.EQ || it == Destination.PANADAPTER || it == Destination.PORTABLE || it == Destination.PROGRESS || it == Destination.SYNC || it == Destination.OPERATIONS || it == Destination.GROUPS_IO || (it == Destination.ROTATOR && !app.rotatorEnabled) || (it == Destination.CONTEST && !contestDestinationVisible(app.contestEnabled)) || (it == Destination.BAND_MAPS && (!bandMaps.settings.enabled || !bandMaps.settings.navigationVisible)) }.forEach { item -> NavigationBarItem(destination == item || (item == Destination.RADIO && destination == Destination.DIGI), { destination = item },
                 { Icon(navIcon(item), item.label) }, label = { Text(item.label, fontSize = 9.sp) }) }
         } }) { padding -> Box(Modifier.padding(padding)) {
             Screen(destination, radio, usbDetail, database, mutations, progress, operations, publicProviders, hamClockSettings, features, neuralDx, wavelog, wavelogNative, syncHub, callbook, cty, audio,
@@ -4959,6 +4976,49 @@ private fun statusColourForeground(argb: Int): Color {
         Header("Complete station settings", state)
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             SettingsSection.entries.forEach { item -> FilterChip(section == item, { section = item }, { Text(item.label) }) }
+        }
+        if (section == SettingsSection.SCREENS) SettingsCard("VISIBLE SCREENS") {
+            Text("Choose which workspaces appear in RigWeave navigation. Changes apply immediately and remain after relaunch.", color = Muted)
+            Text("Home and Settings are always available so the app cannot be left without navigation.", color = Amber)
+            val customizable = Destination.entries.filterNot {
+                it == Destination.HOME || it == Destination.SETTINGS || it == Destination.SYNC
+            }
+            customizable.forEach { item ->
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 54.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(item.label, fontWeight = FontWeight.SemiBold)
+                        Text(when (item) {
+                            Destination.RADIO -> "Radio control and live spot lane"
+                            Destination.REMOTE -> "Remote station connections"
+                            Destination.DIGI -> "Digital modes and decoder"
+                            Destination.CONTEST -> "Contest logging workspace"
+                            Destination.BAND_MAPS -> "Band activity and spot maps"
+                            Destination.PANADAPTER -> "Radio spectrum and waterfall"
+                            Destination.EQ -> "Elecraft audio equalizer"
+                            Destination.LOGBOOK -> "Local and synchronized QSOs"
+                            Destination.PROGRESS -> "Log and RF intelligence"
+                            Destination.PRESETS -> "Saved frequency presets"
+                            Destination.DX -> "DX details and chasing"
+                            Destination.PORTABLE -> "Portable operating tools"
+                            Destination.OPERATIONS -> "Satellite and operating utilities"
+                            Destination.ROTATOR -> "Rotator control workspace"
+                            Destination.GROUPS_IO -> "Groups.io messages"
+                            else -> item.label
+                        }, color = Muted)
+                    }
+                    Switch(
+                        checked = app.isWorkspaceScreenVisible(item.name),
+                        onCheckedChange = { app.updateWorkspaceScreenVisible(item.name, it) },
+                        modifier = Modifier.testTag("screen-visibility-${item.name.lowercase()}")
+                    )
+                }
+                HorizontalDivider(color = Color(0xFF354047))
+            }
+            OutlinedButton(app::showAllWorkspaceScreens, modifier = Modifier.fillMaxWidth()) { Text("SHOW ALL SCREENS") }
         }
         if (section == SettingsSection.RADIO) SettingsCard("RADIO PROFILES") {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
