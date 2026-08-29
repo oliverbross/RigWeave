@@ -8,6 +8,16 @@ The 0.1.0 RC1 integration provides hardened Android, adaptive native SwiftUI iPh
 
 RigWeave is local-first. Radio control and local logging must remain useful without a cloud service. Online enrichment may improve the operating loop but must degrade independently and honestly.
 
+## Platform
+
+- **Android:** Primary mature tablet/mobile client; this release line is Android 1.0.0.
+- **iOS/iPadOS:** Native SwiftUI client.
+- **Windows:** Qt desktop client and station service.
+- **macOS:** Qt desktop client and station service.
+- **Linux:** Qt desktop client and station service.
+
+The Android application version is 1.0.0. The overall RigWeave suite remains on the existing RC release line until separately released.
+
 ## Current product
 
 - Native adaptive Apple mobile client using SwiftUI for iPhone and iPad; simulator evidence is complete while signed physical-device acceptance remains separate.

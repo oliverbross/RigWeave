@@ -188,6 +188,13 @@ recording, test I/Q, model, or runtime payload is incorporated. Provenance and
 the audited GPL-3.0 licence digest are recorded in
 docs/android/SDROXIDE_ANDROID_V2_PROVENANCE.md.
 
+The Android 1.0 final upstream review also inspected SDRoxide v1.5.4 at commit
+1f62978036aaa0e3e9f80bca5db4c19102962fd7 and tree
+77a8a562e7c44d7cc9a77cec3169aeba13bc83d3. Its repository licence digest is
+unchanged. The review updates the read-only watcher pin only; no v1.5.4 code,
+vendor content, asset, package, recording, fixture, model, or dependency is
+incorporated by RigWeave.
+
 The Android Local SDR Receiver v3 review reverified the same immutable SDRoxide
 v1.5.3 commit and tree for receive/demodulation behavior. Its local receiver,
 SSB/CW/AM/SAM/FM, tone, RDS and recording implementation is independently

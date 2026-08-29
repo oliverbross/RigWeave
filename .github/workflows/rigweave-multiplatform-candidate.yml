@@ -12,6 +12,7 @@ on:
       - feature/android-local-sdr-receiver-v3
       - feature/android-sdr-workbench-v4
       - feature/android-tci-transmit-control-v5
+      - integration/android-v1-final
       - integration/rigweave-multiplatform-rc1
       - integration/rigweave-v0.1.0-rc1-final
       - main
@@ -42,7 +43,7 @@ jobs:
       - name: Verify exact checked-out SHA
         run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
       - name: Install Linux desktop and Secret Service dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libssl-dev libsecret-1-dev xvfb dpkg-dev
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libssl-dev pkg-config libglib2.0-dev libsecret-1-dev xvfb dpkg-dev
       - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.11.2'
@@ -83,7 +84,7 @@ jobs:
       - name: Verify native ARM64 runner and exact SHA
         run: test "$(uname -m)" = aarch64 && test "$(git rev-parse HEAD)" = "${{ github.sha }}"
       - name: Install ARM64 dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libssl-dev libsecret-1-dev
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libssl-dev pkg-config libglib2.0-dev libsecret-1-dev
       - id: qt_arm64_primary
         continue-on-error: true
         uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
@@ -147,6 +148,7 @@ jobs:
           python3 -m unittest scripts/test_check_final_rc1_release.py
           python3 scripts/check_hamlib_upstream.py
           python3 scripts/check_sdroxide_upstream.py
+          python3 -m unittest scripts/test_check_sdroxide_upstream.py
           python3 scripts/check_local_sdr_receiver_v3.py
           python3 -m unittest scripts/test_check_local_sdr_receiver_v3.py
           python3 scripts/check_android_sdr_workbench_v4.py

@@ -10,3 +10,5 @@
 No upstream code or asset is vendored, copied, linked, packaged, or fetched during build. Protocol and UI behavior were reviewed, then independently implemented inside existing RigWeave owners. The only new runtime dependency is official OkHttp `5.3.0` for Android WebSocket transport.
 
 The production pin is `docs/upstream/SDROXIDE.json`. `scripts/check_sdroxide_upstream.py` is read-only and reports review-required drift without mutating the repository.
+
+The final Android 1.0 consolidation reviewed the later stable `v1.5.4` release at commit `1f62978036aaa0e3e9f80bca5db4c19102962fd7`, tree `77a8a562e7c44d7cc9a77cec3169aeba13bc83d3`, with the same GPL-3.0 licence digest. That review updates only the watcher pin and provenance ledger: no v1.5.4 source, asset, vendor subtree, package, model, recording, fixture, dependency, or behaviour was imported. The implementation provenance above remains the original `v1.5.3` behaviour review.

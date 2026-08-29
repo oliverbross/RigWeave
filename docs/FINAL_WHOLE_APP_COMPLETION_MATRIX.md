@@ -1,5 +1,19 @@
 # Final whole-application completion matrix
 
+## Android 1.0 final consolidation
+
+| Layer | Status | Evidence boundary |
+|---|---|---|
+| Frozen input ancestry | PASS | Tablet `b1c01df…` is already an ancestor of hardening `cf9e78d…`; no duplicate merge. |
+| Accepted tablet behavior | SOURCE_COMPLETE | Basemaps, compact configured CS/DS status, Screens persistence, route reachability, and lifecycle fixes remain covered by focused tests. |
+| Android hardening | SOURCE_COMPLETE | Version 1.0.0/code 40, schema 17/projection 6, grouped Hamlib, real Rotator profiles, consolidated Settings, adaptive navigation, R8, lifecycle, and accessibility retained. |
+| Linux Secret Service | SOURCE_FIXED; HOSTED_PENDING | Required pkg-config, GLib, and libsecret development packages are explicit in Linux workflows. |
+| SDRoxide v1.5.4 watcher | REVIEWED; HOSTED_PENDING | Exact release/commit/tree/licence and all 127 changed paths reviewed; no import; watcher is mandatory. |
+| Local regression | PASS_PRE_FREEZE | 762 Android JVM tests/103 suites; lint and packages; native normal/ASan/UBSan 8/8 each; Rust and both Apple gates; 67,223-row host SQL benchmark. |
+| Exact-SHA packages and hosted validation | PENDING | Must be built and rerun at the immutable pushed final SHA. |
+| Protected tablet | DEVICE_ACCEPTANCE_PENDING | Fresh backup, signer-safe `adb install -r`, unlocked matrix, performance, 45-minute soak, and relaunch cycles required. |
+| Main/release | BLOCKED_BY_GATES | No main advance, tag movement, v1.0.0 publication, store action, or production signing before acceptance. |
+
 ## Multiplatform candidate delta
 
 Hardened Android and Windows Desktop Alpha are integrated without changing either source branch or `main`. Windows has a bounded local service graph, schema-16 semantic contract, fake-service Wavelog coverage and hosted packaging path; full desktop parity and physical/live acceptance remain incomplete. Native SwiftUI iOS and macOS Qt proof are separate build layers.

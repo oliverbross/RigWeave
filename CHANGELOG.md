@@ -1,5 +1,14 @@
 # Changelog
 
+## Android 1.0 final candidate (unreleased)
+
+- Preserves every accepted RC1 tablet-sweep correction inside the Android 1.0 hardening architecture.
+- Retains grouped Hamlib selection, real Rotator configuration, consolidated feature Settings, adaptive navigation, database/index optimization, lifecycle fixes, R8 shrinking, and accessibility repairs.
+- Fixes Linux Secret Service build dependencies and makes the reviewed SDRoxide watcher gate mandatory.
+- Adds a privacy-preserving, reproducible 67,223-row SQLite projection benchmark for Android performance regression evidence.
+- Adds explicit cross-platform product metadata while keeping the RigWeave suite on the existing RC release line.
+- Does not move `v0.1.0-rc.1`, publish `v1.0.0`, deploy to a store, or claim CAT/PTT/TUNE/RF/audio/rotator acceptance.
+
 ## 0.1.0-rc.1
 
 - Consolidated accepted Android, iPhone/iPad, macOS, Windows, Linux, and station-service lineages.

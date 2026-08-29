@@ -1,5 +1,11 @@
 # Release Candidate Readiness
 
+## Android 1.0 final consolidation
+
+The final Android branch starts from `cf9e78d010ee673baf4f5aae44a422bba040c6ca`; accepted tablet SHA `b1c01df63e877b901b2e534c8ba7647f77613402` is already its ancestor. All sweep behaviors are retained without a second merge. Linux now installs the explicit libsecret/pkg-config/GLib development contract, and SDRoxide v1.5.4 is fully reviewed at immutable commit/tree with no code or package import. The SDRoxide watcher is mandatory and has three focused fail-closed tests.
+
+Local pre-freeze gates pass: 762 Android JVM tests in 103 suites, lint, APK/AAB and instrumentation packaging, normal/ASan/UBSan native CTest 8/8 each, the complete Rust workspace, both Apple gates, source/release contracts, and the live reviewed SDRoxide identity. The 67,223-row private-copy host benchmark records callsign 1.389 ms median, worked log 68.133 ms, Logbook page 0.161 ms, and Intelligence aggregate 227.829 ms. Readiness remains `PENDING` until final-SHA package audits, the authoritative exact-SHA multi-platform workflow, and the complete protected-tablet backup/install/unlocked-visual/performance/45-minute-soak/relaunch matrix pass. Main promotion is prohibited before those gates.
+
 ## Android hardened + Windows Alpha integration
 
 Candidate promotion is gated by the exact-SHA multiplatform workflow, Android APK/AAB audits, native/sanitizer tests, unsigned iOS builds, and Windows/macOS Qt build/test/package jobs. Physical Windows, authenticated Wavelog, live cluster and hardware/RF evidence remain pending and are not inferred from hosted builds.
@@ -28,7 +34,7 @@ The Sweep 1 feature branch passes the local 557-test Android JVM suite, APK/AAB 
 - OpenHamClock stable `d4a50eaaa61d3432a1de5f80cbe61790739930a5`: unchanged. Preview `99913f2df574b8588ddaff703581b8f341f46761` contains an already-reviewed satellite display/test delta and is not absorbed.
 - Nexus current `f0869a11…` (1.7.6): watcher review remains required for digital/audio/UI changes. Excluded modem/radio/desktop/notch/compressor/WinKeyer code is not imported.
 
-The workflow's watcher job is advisory because upstream movement requires human semantic review. Release readiness cannot be inferred from that job alone.
+Upstream movement requires human semantic review. The final Android 1.0 workflow treats the reviewed SDRoxide identity as mandatory; other explicitly review-only watchers retain their documented fail-closed dispositions. Release readiness cannot be inferred from an advisory or masked watcher result.
 
 ## External boundary
 

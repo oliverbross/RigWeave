@@ -176,7 +176,6 @@ jobs:
 
   upstream-watchers:
     runs-on: ubuntu-latest
-    continue-on-error: true
     env:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
@@ -184,6 +183,7 @@ jobs:
       - run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
       - run: python3 scripts/check_wavelog_upstream.py --verify-pinned-paths
       - run: python3 scripts/check_sdroxide_upstream.py
+      - run: python3 -m unittest scripts/test_check_sdroxide_upstream.py
       - run: python3 scripts/check_openhamclock_upstream.py
         continue-on-error: true
       - run: python3 scripts/check_nexus_upstream.py
