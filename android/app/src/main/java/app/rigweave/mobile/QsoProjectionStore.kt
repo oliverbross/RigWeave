@@ -40,7 +40,8 @@ internal object QsoProjectionStore {
             band_norm TEXT NOT NULL DEFAULT '', band_rx_norm TEXT NOT NULL DEFAULT '', mode_norm TEXT NOT NULL DEFAULT '',
             submode_norm TEXT NOT NULL DEFAULT '', mode_family TEXT NOT NULL DEFAULT '', station_profile_id TEXT NOT NULL DEFAULT '',
             station_callsign_norm TEXT NOT NULL DEFAULT '', operator_norm TEXT NOT NULL DEFAULT '', my_grid_norm TEXT NOT NULL DEFAULT '', name_norm TEXT NOT NULL DEFAULT '',
-            qth_norm TEXT NOT NULL DEFAULT '', email_norm TEXT NOT NULL DEFAULT '', country_norm TEXT NOT NULL DEFAULT '', grid_norm TEXT NOT NULL DEFAULT '',
+            qth_norm TEXT NOT NULL DEFAULT '', email_norm TEXT NOT NULL DEFAULT '', country_norm TEXT NOT NULL DEFAULT '',
+            country_display TEXT NOT NULL DEFAULT '', grid_norm TEXT NOT NULL DEFAULT '',
             dxcc TEXT NOT NULL DEFAULT '', continent TEXT NOT NULL DEFAULT '', cq_zone TEXT NOT NULL DEFAULT '', itu_zone TEXT NOT NULL DEFAULT '',
             state_norm TEXT NOT NULL DEFAULT '', region_norm TEXT NOT NULL DEFAULT '', county_norm TEXT NOT NULL DEFAULT '', dok_norm TEXT NOT NULL DEFAULT '', iota_norm TEXT NOT NULL DEFAULT '',
             sota_ref_norm TEXT NOT NULL DEFAULT '', wwff_ref_norm TEXT NOT NULL DEFAULT '', pota_ref_norm TEXT NOT NULL DEFAULT '',
@@ -102,6 +103,16 @@ internal object QsoProjectionStore {
     }
 
     fun migrateV6(db: SQLiteDatabase) {
+        val columns = buildSet {
+            db.rawQuery("PRAGMA table_info(qso_projection)", null).use { cursor ->
+                while (cursor.moveToNext()) add(cursor.getString(1))
+            }
+        }
+        if ("country_display" !in columns) {
+            db.execSQL("ALTER TABLE qso_projection ADD COLUMN country_display TEXT NOT NULL DEFAULT ''")
+            db.execSQL("""UPDATE qso_projection SET country_display=COALESCE(
+                (SELECT q.country FROM qso q WHERE q.id=qso_projection.qso_id),'')""".trimIndent())
+        }
         createIndexes(db)
         putMeta(db, META_VERSION, VERSION.toString())
     }
@@ -143,7 +154,8 @@ internal object QsoProjectionStore {
             put("band_norm", norm(qso.band.ifBlank { bandForFrequency(qso.frequencyHz) })); put("band_rx_norm", norm(qso.bandRx))
             put("mode_norm", norm(qso.mode)); put("submode_norm", norm(qso.submode)); put("mode_family", modeFamily(qso))
             put("station_profile_id", qso.stationProfileId); put("station_callsign_norm", norm(qso.stationCallsign)); put("operator_norm", norm(qso.operatorCallsign)); put("my_grid_norm", norm(qso.myGrid))
-            put("name_norm", norm(qso.name)); put("qth_norm", norm(qso.qth)); put("email_norm", norm(qso.email)); put("country_norm", norm(qso.country)); put("grid_norm", norm(qso.grid))
+            put("name_norm", norm(qso.name)); put("qth_norm", norm(qso.qth)); put("email_norm", norm(qso.email))
+            put("country_norm", norm(qso.country)); put("country_display", qso.country); put("grid_norm", norm(qso.grid))
             put("dxcc", normalizeDxcc(qso.dxcc)); put("continent", normalizeContinent(qso.continent)); put("cq_zone", qso.cqZone.trim()); put("itu_zone", qso.ituZone.trim())
             put("state_norm", norm(qso.state)); put("region_norm", norm(qso.region)); put("county_norm", norm(qso.county)); put("dok_norm", norm(qso.dok)); put("iota_norm", norm(qso.iota))
             put("sota_ref_norm", norm(qso.sotaRef)); put("wwff_ref_norm", norm(qso.wwffRef)); put("pota_ref_norm", norm(qso.potaRef))

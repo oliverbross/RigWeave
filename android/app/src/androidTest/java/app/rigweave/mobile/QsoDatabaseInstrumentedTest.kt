@@ -314,7 +314,7 @@ class QsoDatabaseInstrumentedTest {
         assertTrue(database.deliveries().isEmpty())
     }
 
-    @Test fun schemaSixteenReopenPreservesCanonicalQsoAndRepairsProjection() {
+    @Test fun schemaSixteenReopenMigratesToSeventeenAndRepairsProjection() {
         val qso = Qso(
             id = "schema-16-reopen", callsign = "OM0RX", frequencyHz = 14_060_000, mode = "CW",
             rstSent = "599", rstReceived = "579", createdAt = 1_700_000_250,
@@ -328,13 +328,14 @@ class QsoDatabaseInstrumentedTest {
         database.writableDatabase.delete("qso_projection", "qso_id=?", arrayOf(qso.id))
         assertEquals(1, database.verifyProjection().canonicalRows)
         assertEquals(0, database.projectionHealth().projectionRows)
+        database.writableDatabase.execSQL("PRAGMA user_version=16")
 
         database.close()
         database = QsoDatabase(context, databaseName)
 
         database.readableDatabase.rawQuery("PRAGMA user_version", null).use { cursor ->
             assertTrue(cursor.moveToFirst())
-            assertEquals(16, cursor.getInt(0))
+            assertEquals(17, cursor.getInt(0))
         }
         assertEquals("OM0RX", database.qso(qso.id)?.stationCallsign)
         database.readableDatabase.rawQuery(

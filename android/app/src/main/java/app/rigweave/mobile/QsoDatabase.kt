@@ -324,7 +324,7 @@ class QsoDatabase(context: Context, databaseName: String = "rigweave.sqlite") : 
     fun all(): List<Qso> = query("")
     fun workedLog(stationId: String?, resolveEntity: (String) -> String): List<WorkedLogQso> {
         val scope = projectionStationScope(stationId = stationId)
-        val sql = """SELECT callsign_norm,country_norm,frequency_hz,mode_norm,created_at,band_norm,submode_norm
+        val sql = """SELECT callsign_norm,country_display,frequency_hz,mode_norm,created_at,band_norm,submode_norm
             FROM qso_projection p WHERE ${scope.first} ORDER BY created_at""".trimIndent()
         val rows = mutableListOf<WorkedLogQso>()
         readableDatabase.rawQuery(sql, scope.second.toTypedArray()).use { cursor ->
