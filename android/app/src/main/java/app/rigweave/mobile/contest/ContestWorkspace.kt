@@ -4,7 +4,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -149,9 +150,9 @@ data class ContestWorkspaceCallbacks(
 )
 
 @Composable fun ContestWorkspace(state: ContestWorkspaceState, callbacks: ContestWorkspaceCallbacks, modifier: Modifier = Modifier) {
-    val wide = LocalConfiguration.current.screenWidthDp >= 900
+    val wide = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() } >= 900.dp
     Column(modifier.fillMaxSize().semantics { contentDescription = "Contest workspace" }) {
-        ScrollableTabRow(
+        PrimaryScrollableTabRow(
             selectedTabIndex = ContestWorkspacePage.entries.indexOf(state.page),
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface,

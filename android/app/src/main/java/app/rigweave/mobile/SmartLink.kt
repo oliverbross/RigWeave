@@ -345,6 +345,8 @@ class SmartLinkBrokerClient(private val config: SmartLinkConfig) : AutoCloseable
     }
 }
 
+// Flex radios use a self-signed certificate; continuity is enforced separately by the per-radio TOFU fingerprint store.
+@android.annotation.SuppressLint("CustomX509TrustManager")
 private class ScopedRadioTrustManager : X509TrustManager {
     override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
     override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) =

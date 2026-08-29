@@ -128,7 +128,7 @@ private class RemoteOpusJitterDecoder(
     private var channelCount = 0
     private var timestampUs = 0L
 
-    fun offer(sequence: Long, rate: Int, channels: Int, packet: ByteArray, generation: Long) {
+    @Synchronized fun offer(sequence: Long, rate: Int, channels: Int, packet: ByteArray, generation: Long) {
         if (packet.isEmpty() || queued.size >= 8) return
         queued[sequence] = Frame(rate, channels, packet, generation)
         if (expected == null) expected = sequence
@@ -138,7 +138,7 @@ private class RemoteOpusJitterDecoder(
             if (frame == null) {
                 val first = queued.firstKey()
                 if (first > next) {
-                    val missing = queued.firstEntry().value
+                    val missing = queued.firstEntry()?.value ?: break
                     val silence = ByteArray((missing.rate / 50) * missing.channels * 2)
                     output(missing.rate, missing.channels, silence, next, missing.generation)
                     expected = next + 1
@@ -183,7 +183,7 @@ private class RemoteOpusJitterDecoder(
         }
     }
 
-    override fun close() {
+    @Synchronized override fun close() {
         queued.clear()
         codec?.let { runCatching { it.stop() }; it.release() }; codec = null
     }
@@ -296,6 +296,8 @@ class RemoteStationDiscovery(context: Context) : AutoCloseable {
     override fun close() { listener?.let { runCatching { manager.stopServiceDiscovery(it) } }; listener = null }
 }
 
+// This transport intentionally trusts one operator-reviewed SHA-256 leaf fingerprint instead of the public CA set.
+@android.annotation.SuppressLint("CustomX509TrustManager")
 private class FingerprintTrustManager(private val expected: String) : X509TrustManager {
     override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
     override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) =
@@ -613,9 +615,9 @@ class RemoteStationBackend(
 
     private fun startHeartbeat(webSocket: WebSocket) {
         heartbeat?.cancel(false)
-        heartbeat = heartbeatExecutor.scheduleAtFixedRate({
+        heartbeat = heartbeatExecutor.scheduleWithFixedDelay({
             val snapshot = runtime.snapshot
-            val session = snapshot.sessionId ?: return@scheduleAtFixedRate
+            val session = snapshot.sessionId ?: return@scheduleWithFixedDelay
             val requestId = UUID.randomUUID().toString()
             heartbeatSentAt.clear()
             heartbeatSentAt[requestId] = System.currentTimeMillis()

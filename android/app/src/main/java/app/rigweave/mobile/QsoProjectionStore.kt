@@ -20,7 +20,7 @@ data class ProjectionHealth(
 }
 
 internal object QsoProjectionStore {
-    const val VERSION = 5
+    const val VERSION = 6
     private const val META_VERSION = "version"
     private const val META_STATE = "state"
     private const val META_CURSOR_TIME = "cursor_time"
@@ -101,6 +101,11 @@ internal object QsoProjectionStore {
         putMeta(db, META_VERSION, VERSION.toString())
     }
 
+    fun migrateV6(db: SQLiteDatabase) {
+        createIndexes(db)
+        putMeta(db, META_VERSION, VERSION.toString())
+    }
+
     private fun createIndexes(db: SQLiteDatabase) {
         listOf(
             "CREATE INDEX IF NOT EXISTS qso_projection_time_idx ON qso_projection(created_at DESC,qso_id)",
@@ -109,6 +114,7 @@ internal object QsoProjectionStore {
             "CREATE INDEX IF NOT EXISTS qso_projection_band_time_idx ON qso_projection(band_norm,created_at DESC)",
             "CREATE INDEX IF NOT EXISTS qso_projection_mode_time_idx ON qso_projection(mode_family,submode_norm,created_at DESC)",
             "CREATE INDEX IF NOT EXISTS qso_projection_station_time_idx ON qso_projection(station_profile_id,created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS qso_projection_station_callsign_idx ON qso_projection(station_profile_id,callsign_norm)",
             "CREATE INDEX IF NOT EXISTS qso_projection_station_call_idx ON qso_projection(station_callsign_norm,created_at DESC)",
             "CREATE INDEX IF NOT EXISTS qso_projection_operator_idx ON qso_projection(operator_norm,created_at DESC)",
             "CREATE INDEX IF NOT EXISTS qso_projection_dxcc_bm_idx ON qso_projection(dxcc,band_norm,mode_family,created_at DESC)",

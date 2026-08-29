@@ -7,9 +7,12 @@ import app.rigweave.mobile.groupsio.GroupsIoNewMessageAlert
 import app.rigweave.mobile.groupsio.groupsIoDestinationVisible
 import app.rigweave.mobile.keyer.*
 import app.rigweave.mobile.dxchaser.DxChaserActionType
+import app.rigweave.mobile.dxchaser.DxChaserPolicySettings
 import app.rigweave.mobile.bandmap.*
 import app.rigweave.mobile.radio.hamlib.HamlibConnectionController
 import app.rigweave.mobile.radio.hamlib.HamlibModelDescriptor
+import app.rigweave.mobile.radio.hamlib.hamlibManufacturerGroups
+import app.rigweave.mobile.radio.hamlib.searchHamlibModels
 import app.rigweave.mobile.rotator.*
 
 import android.Manifest
@@ -1118,7 +1121,9 @@ private fun navIcon(item: Destination) = when (item) {
         RadioBackendKind.HAMLIB_EMBEDDED, RadioBackendKind.HAMLIB_NETWORK, RadioBackendKind.NATIVE_TCI, RadioBackendKind.REMOTE_STATION,
     )
     var compactPanadapter by rememberSaveable { mutableStateOf(false) }
-    val intelligencePortableSpots = portable.pota.spots.map(PotaSpot::toPortable) + portable.sotaSpots + portable.wwffSpots
+    val intelligencePortableSpots = remember(portable.pota.spots, portable.sotaSpots, portable.wwffSpots) {
+        portable.pota.spots.map(PotaSpot::toPortable) + portable.sotaSpots + portable.wwffSpots
+    }
     // BandMapController is an application-scoped authority. Feed it here so Radio and
     // Contest remain live even when the dedicated Band Maps destination has never opened.
     val bandMapDatabaseRevision = database.changeToken()
@@ -1180,10 +1185,16 @@ private fun navIcon(item: Destination) = when (item) {
         rfObservations.submit(clusterRows + rbnRows + signalRows(neuralDx.mySignal.reports, "PSK") +
             signalRows(neuralDx.wsprPersonal.reports, "WSPR"))
     }
-    val deliveredStates = setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED)
-    val intelligenceAttention = syncHub.records.count { it.state !in deliveredStates }
-    val intelligenceLogAuthority = "${wavelog.logMode.name}|${wavelog.stationId}|${wavelog.selectedStation?.callsign.orEmpty()}"
-    LaunchedEffect(destination, progress.filters, database.changeToken(), features.liveSpots, intelligencePortableSpots,
+    val deliveredStates = remember {
+        setOf(DeliveryState.ACCEPTED, DeliveryState.ACCEPTED_DUPLICATE, DeliveryState.ACCEPTED_MODIFIED)
+    }
+    val intelligenceAttention = remember(syncHub.records) {
+        syncHub.records.count { it.state !in deliveredStates }
+    }
+    val intelligenceLogAuthority = remember(wavelog.logMode, wavelog.stationId, wavelog.selectedStation?.callsign) {
+        "${wavelog.logMode.name}|${wavelog.stationId}|${wavelog.selectedStation?.callsign.orEmpty()}"
+    }
+    LaunchedEffect(destination, progress.filters, bandMapDatabaseRevision, features.liveSpots, intelligencePortableSpots,
         intelligenceAttention, cty.dataRevision, progress.goalStore.goals, intelligenceLogAuthority) {
         progress.refresh(progress.filters, features.liveSpots, intelligencePortableSpots, intelligenceAttention, cty,
             portable.sotaCatalogue, intelligenceLogAuthority)
@@ -1413,7 +1424,7 @@ private fun navIcon(item: Destination) = when (item) {
                 transport, flex, digi, voiceStore, voiceAudio, voiceTx, groupsIo, operatingContext, keyerProfiles, keyer, repeatCq,
                  bandMaps, contest, chaser, hamlibModels, rotator, tciRuntime, tciTransmit, tciRxAudio, scanner, sdrOperationalV2, sdrWorkbenchV4,
                  localReceivers, rfObservations, bandStacks, announcements, debugSdrLab, controlSurfaces,
-                openEq, openContest, openSync, openDigi, openGroupsIo, openRotator,
+                openEq, openSync, openGroupsIo, openRotator,
                 disconnectPlatform, connect, direct) }
         }
         }
@@ -4763,15 +4774,17 @@ private fun statusColourForeground(argb: Int): Color {
     localReceivers: LocalReceiverController, rfObservations: RfObservationController,
     bandStacks: BandStackStore, announcements: SpokenAnnouncementController, debugSdrLab: DebugSdrLab?,
     controlSurfaces: ControlSurfaceController,
-    openEq: () -> Unit, openContest: () -> Unit, openSync: () -> Unit, openDigi: () -> Unit, openGroupsIo: () -> Unit,
+    openEq: () -> Unit, openSync: () -> Unit, openGroupsIo: () -> Unit,
     openRotator: () -> Unit, disconnectRadio: () -> Unit,
     reconnect: () -> Unit, direct: (String) -> Unit) {
     val inAppBrowser = LocalInAppBrowserState.current
     var section by remember { mutableStateOf(SettingsSection.RADIO) }
     var hamlibSearch by remember { mutableStateOf("") }
+    var hamlibManufacturer by rememberSaveable { mutableStateOf("") }
     var showRadioWizard by remember { mutableStateOf(false) }
     var showTciWizard by remember { mutableStateOf(false) }
     var showRotatorWizard by remember { mutableStateOf(false) }
+    var editingRotatorProfile by remember { mutableStateOf<RotatorDeviceProfile?>(null) }
     var showAlertProfileHelp by remember { mutableStateOf(false) }
     var host by remember { mutableStateOf(features.clusterHost) }; var port by remember { mutableStateOf(features.clusterPort.toString()) }
     var fallbackHost by remember { mutableStateOf(features.fallbackHost) }; var fallbackPort by remember { mutableStateOf(features.fallbackPort.toString()) }
@@ -4812,6 +4825,7 @@ private fun statusColourForeground(argb: Int): Color {
     var pendingImportSlot by remember { mutableStateOf<Int?>(null) }
     var pendingRecordSlot by remember { mutableStateOf<Int?>(null) }
     var pendingDeleteSlot by remember { mutableStateOf<Int?>(null) }
+    var pendingDeleteRotatorProfile by remember { mutableStateOf<RotatorDeviceProfile?>(null) }
     val settingsScope = rememberCoroutineScope()
     var pendingCatKey by remember { mutableStateOf<String?>(null) }
     var catSelectionDirty by remember { mutableStateOf(false) }
@@ -4927,13 +4941,13 @@ private fun statusColourForeground(argb: Int): Color {
             }
             item {
                 OutlinedButton({
-                    hamlibModels.firstOrNull()?.let { app.selectHamlibModel(it.id, it.manufacturer, it.model) }
                     hamlibSearch = ""
                     showRadioWizard = false
+                    systemMessage = "Choose a manufacturer and model from the Hamlib catalogue below. No radio was selected or connected."
                 }, enabled = hamlibModels.isNotEmpty(), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                     Column(Modifier.fillMaxWidth()) {
                         Text("Hamlib radio", fontWeight = FontWeight.Bold)
-                        Text("Generic compatibility · searchable ${hamlibModels.size}-model registry · selection stays disconnected",
+                        Text("Generic compatibility · ${hamlibModels.size} models grouped by manufacturer · selection stays disconnected",
                             style = MaterialTheme.typography.bodySmall)
                     }
                 }
@@ -4943,28 +4957,19 @@ private fun statusColourForeground(argb: Int): Color {
         dismissButton = { TextButton({ showRadioWizard = false }) { Text("CANCEL") } },
     )
     if (showTciWizard) TciProfileDialog(app) { showTciWizard = false }
-    if (showRotatorWizard) AlertDialog(
-        onDismissRequest = { showRotatorWizard = false },
-        title = { Text("Add rotator") },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            Text("Profile creation never connects, moves, parks, or arms automation.")
-            Button({
-                rotator.upsertProfile(RotatorDeviceProfile(
-                    name = "rotctld (review endpoint)", backend = RotatorBackend.REMOTE_ROTCTLD,
-                    protocol = RotatorProtocolKind.ROTCTLD, transport = RotatorTransportKind.ROTCTLD,
-                    tcp = TcpSettings("127.0.0.1", 4533, lanOptIn = false),
-                ))
+    if (showRotatorWizard) RotatorProfileDialog(
+        runtime = rotator,
+        existing = editingRotatorProfile,
+        onDismiss = { showRotatorWizard = false; editingRotatorProfile = null },
+        onSave = { profile ->
+            settingsScope.launch {
+                if (rotator.state?.profileId == profile.id && rotator.state?.connected == true) rotator.disconnect()
+                rotator.upsertProfile(profile)
+                systemMessage = "${profile.name} saved · disconnected and automation disarmed"
                 showRotatorWizard = false
-            }, modifier = Modifier.fillMaxWidth()) { Text("ADD ROTCTLD PROFILE") }
-            listOf("NATIVE · GS-232 / EASYCOMM / SPID", "EMBEDDED HAMLIB ROTATOR", "ARCO · PUBLISHED COMPATIBILITY MODE").forEach { family ->
-                OutlinedButton({ systemMessage = "$family selected · open the Rotator workspace to choose the required model and stable transport identity"; showRotatorWizard = false },
-                    modifier = Modifier.fillMaxWidth()) { Text(family) }
+                editingRotatorProfile = null
             }
-            Text("Native GS-232/EasyComm/SPID and ARCO compatibility require selecting a stable attached serial identity. Embedded Hamlib requires an explicit model/transport. Complete those reviewed parameters in the Rotator workspace.",
-                color = Muted)
-        } },
-        confirmButton = {},
-        dismissButton = { TextButton({ showRotatorWizard = false }) { Text("CANCEL") } },
+        },
     )
     if (showAlertProfileHelp) AlertDialog(
         onDismissRequest = { showAlertProfileHelp = false },
@@ -4974,9 +4979,7 @@ private fun statusColourForeground(argb: Int): Color {
     )
     SettingsPage {
         Header("Complete station settings", state)
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            SettingsSection.entries.forEach { item -> FilterChip(section == item, { section = item }, { Text(item.label) }) }
-        }
+        SettingsSectionPicker(section) { section = it }
         if (section == SettingsSection.SCREENS) SettingsCard("VISIBLE SCREENS") {
             Text("Choose which workspaces appear in RigWeave navigation. Changes apply immediately and remain after relaunch.", color = Muted)
             Text("Home and Settings are always available so the app cannot be left without navigation.", color = Amber)
@@ -5060,27 +5063,63 @@ private fun statusColourForeground(argb: Int): Color {
             }
             SdrSettingsPanel(tciRuntime, tciRxAudio, scanner, sdrOperationalV2, sdrWorkbenchV4, localReceivers, rfObservations, announcements, bandStacks, debugSdrLab)
             Text("Native profiles are preferred when RigWeave has a dedicated integration. Unknown or future stored identifiers restore disconnected.", color = Muted)
+            Text("EMBEDDED HAMLIB CATALOGUE", color = Amber, fontWeight = FontWeight.Bold)
+            Text("Browse by manufacturer or search by model, backend, connection type, or exact Hamlib ID. Choosing a model never connects it.", color = Muted)
+            val manufacturerGroups = remember(hamlibModels) { hamlibManufacturerGroups(hamlibModels) }
+            val selectedManufacturer = manufacturerGroups.firstOrNull { it.manufacturer == hamlibManufacturer }
+                ?: manufacturerGroups.firstOrNull()
+            LaunchedEffect(selectedManufacturer?.manufacturer) {
+                if (selectedManufacturer != null && hamlibManufacturer != selectedManufacturer.manufacturer) {
+                    hamlibManufacturer = selectedManufacturer.manufacturer
+                }
+            }
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                manufacturerGroups.forEach { group ->
+                    FilterChip(
+                        selected = selectedManufacturer?.manufacturer == group.manufacturer && hamlibSearch.isBlank(),
+                        onClick = { hamlibManufacturer = group.manufacturer; hamlibSearch = "" },
+                        label = { Text("${group.manufacturer} · ${group.models.size}") },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    )
+                }
+            }
             OutlinedTextField(
                 hamlibSearch,
                 { hamlibSearch = it.take(80) },
-                label = { Text("Search ${hamlibModels.size} embedded Hamlib models") },
+                label = { Text("Search all ${hamlibModels.size} models") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            val modelMatches = remember(hamlibSearch, hamlibModels) {
-                val needle = hamlibSearch.trim()
-                hamlibModels.asSequence().filter { needle.isBlank() || it.label.contains(needle, true) || it.id.toString() == needle }
-                    .take(24).toList()
+            val modelMatches = remember(hamlibSearch, hamlibModels, selectedManufacturer) {
+                if (hamlibSearch.isBlank()) selectedManufacturer?.models.orEmpty().take(60)
+                else searchHamlibModels(hamlibModels, hamlibSearch, 60)
             }
-            if (hamlibSearch.isNotBlank()) Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                if (hamlibSearch.isBlank()) "${selectedManufacturer?.manufacturer.orEmpty()} · ${selectedManufacturer?.models?.size ?: 0} models"
+                else "SEARCH RESULTS · ${modelMatches.size}",
+                color = Hold,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 modelMatches.forEach { model ->
-                    FilterChip(
-                        app.selectedRadioProfile.hamlibModelId == model.id,
-                        { app.selectHamlibModel(model.id, model.manufacturer, model.model) },
-                        { Text("${model.label} · ${model.id} · ${model.status}") },
-                    )
+                    val selected = app.selectedRadioProfile.hamlibModelId == model.id
+                    OutlinedButton(
+                        onClick = {
+                            app.selectHamlibModel(model.id, model.manufacturer, model.model)
+                            systemMessage = "${model.label} selected · disconnected until you choose CONNECT"
+                        },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
+                    ) {
+                        Column(Modifier.fillMaxWidth()) {
+                            Text(if (selected) "${model.model} · ACTIVE" else model.model, fontWeight = FontWeight.Bold)
+                            Text("${model.manufacturer} · ID ${model.id} · ${model.status} · ${model.portType}", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
                 }
-                if (modelMatches.isEmpty()) Text("No configured Hamlib model matches this search.", color = Muted)
+                if (modelMatches.isEmpty()) Text("No embedded Hamlib model matches this search.", color = Muted)
+                if (hamlibSearch.isBlank() && (selectedManufacturer?.models?.size ?: 0) > modelMatches.size) {
+                    Text("Showing the first ${modelMatches.size} models. Search to narrow this manufacturer.", color = Muted)
+                }
             }
             Text("EQ DESTINATION", color = Amber, fontWeight = FontWeight.Bold)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -5143,7 +5182,7 @@ private fun statusColourForeground(argb: Int): Color {
             }
             val contestPrefs = app.contestGlobalPreferences
             Text("GLOBAL CONTEST PREFERENCES", color = Amber, fontWeight = FontWeight.Bold)
-            Text("Session definition, edition, name, dates, station/operator, exchange, serial and live role remain in the Contest setup.", color = Muted)
+            Text("Global defaults and the complete contest-session setup are together here.", color = Muted)
             Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 listOf("RUN", "SEARCH_AND_POUNCE").forEach { role -> FilterChip(contestPrefs.defaultRole == role,
                     { app.updateContestGlobalPreferences(contestPrefs.copy(defaultRole = role)) }, { Text(if (role == "RUN") "DEFAULT RUN" else "DEFAULT S&P") }) }
@@ -5174,16 +5213,15 @@ private fun statusColourForeground(argb: Int): Color {
             Text("N1MM default · DISABLED · loopback-only unless trusted-LAN is separately reviewed · current ${contestPrefs.n1mmPolicy}", color = Hold)
             Text("Session ${contestRuntime.activeSession.state} · N1MM ${if (contestRuntime.snapshot().n1mmEnabled) "configured" else "disabled"} · " +
                 if (contestRuntime.snapshot().n1mmArmed) "ARMED" else "SAFE", color = Hold)
-            Button(openContest, enabled = app.contestEnabled, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                Text("OPEN CONTEST SETUP / NETWORK")
-            }
+            HorizontalDivider(color = Color(0xFF354047))
+            IntegratedContestSettings(contestRuntime, Modifier.fillMaxWidth())
         }
         if (section == SettingsSection.DIGI) SettingsCard("NEXUS DIGI") {
-            Button(openDigi, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) { Text("OPEN DIGI / DX CHASER") }
-            Text("DX Chaser ${chaserRuntime.snapshot.session.state} · detailed controls live in the DX Chaser tab.", color = Muted)
-            Text("Digital-mode setup is shared with the Digi cockpit so mode capabilities, USB audio health, waterfall calibration, UDP interoperability, and storage diagnostics always describe the active session.", color = Muted)
-            Button(onClick = openDigi) { Text("OPEN DIGI SETUP") }
-            Text("Opening setup never enables or arms transmit. Digi TX remains a separate session switch plus one-shot arm.", color = Muted)
+            Text("Digital-mode health, audio route, waterfall, UDP interoperability, retention, and DX Chaser policy are together here.", color = Muted)
+            Text("Settings never enable or arm transmit. Digi TX remains a separate session switch plus one-shot arm.", color = Hold)
+            DigiSetupPanel(digi, state, Modifier.fillMaxWidth(), scrollable = false)
+            Text("DX CHASER · ${chaserRuntime.snapshot.session.state}", color = Amber, fontWeight = FontWeight.Bold)
+            DxChaserPolicySettings(chaserRuntime.settings, chaserRuntime::updateSettings)
         }
         if (section == SettingsSection.ROTATOR) SettingsCard("ROTATOR PROFILES") {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -5194,13 +5232,11 @@ private fun statusColourForeground(argb: Int): Color {
                 Switch(app.rotatorEnabled, app::updateRotatorEnabled)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button({ showRotatorWizard = true }) { Text("ADD ROTATOR") }
-                OutlinedButton(openRotator) { Text("OPEN ROTATOR WORKSPACE") }
-                OutlinedButton({ systemMessage = "Band assignments are managed per profile; creation never moves hardware" },
-                    enabled = rotator.profiles.isNotEmpty()) { Text("MANAGE BAND ASSIGNMENTS") }
+                Button({ editingRotatorProfile = null; showRotatorWizard = true }) { Text("ADD ROTATOR") }
+                OutlinedButton(openRotator, enabled = rotator.profiles.isNotEmpty()) { Text("ROTATOR CONTROLS") }
             }
             Text("Configured profiles · ${rotator.profiles.size}", color = if (rotator.profiles.isNotEmpty()) Healthy else Muted)
-            if (rotator.profiles.isEmpty()) Text("No rotator is configured. Add a reviewed native, rotctld, embedded-Hamlib, or ARCO compatibility profile. Creating it remains disconnected and disarmed.", color = Muted)
+            if (rotator.profiles.isEmpty()) Text("No rotator is configured. Add a reviewed native, rotctld, or embedded-Hamlib profile. Creating it remains disconnected and disarmed.", color = Muted)
             rotator.profiles.forEach { profile ->
                 val connected = rotator.state?.profileId == profile.id && rotator.state?.connected == true
                 Card(Modifier.fillMaxWidth()) { Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -5211,10 +5247,10 @@ private fun statusColourForeground(argb: Int): Color {
                     Text("${profile.backend} · ${profile.protocol} · ${profile.transport} · position ${rotator.state?.azimuthDeg?.let { "%.1f°".format(it) } ?: "unknown"}", color = Muted)
                     Text("${rotator.store.snapshot().bandAssignments.count { it.rotatorProfileId == profile.id }} band assignments · automation OFF until explicitly armed", color = Muted)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        TextButton({ systemMessage = "Edit ${profile.name} in the Rotator workspace" }) { Text("EDIT") }
+                        TextButton({ editingRotatorProfile = profile; showRotatorWizard = true }) { Text("EDIT") }
                         if (connected) TextButton({ settingsScope.launch { rotator.disconnect() } }) { Text("DISCONNECT") }
                         else TextButton({ settingsScope.launch { rotator.connect(profile.id) } }) { Text("CONNECT") }
-                        TextButton({ settingsScope.launch { rotator.deleteProfile(profile.id) } }) { Text("DELETE") }
+                        TextButton({ pendingDeleteRotatorProfile = profile }) { Text("DELETE") }
                     }
                 } }
             }
@@ -5909,6 +5945,54 @@ private fun statusColourForeground(argb: Int): Color {
         text = { Text("Delete ${voiceStore.slots.getOrNull(slot)?.label ?: "M${slot + 1}"} from private tablet storage? This cannot be undone.") },
         confirmButton = { Button({ voiceAudio.delete(slot); pendingDeleteSlot = null }, colors = ButtonDefaults.buttonColors(containerColor = Danger)) { Text("DELETE") } },
         dismissButton = { TextButton({ pendingDeleteSlot = null }) { Text("CANCEL") } }) }
+    pendingDeleteRotatorProfile?.let { profile -> AlertDialog(
+        onDismissRequest = { pendingDeleteRotatorProfile = null },
+        title = { Text("Delete rotator profile?") },
+        text = { Text("Delete ${profile.name}? Its band assignments will also be removed. No hardware will be moved or armed.") },
+        confirmButton = { Button({
+            settingsScope.launch {
+                if (rotator.state?.profileId == profile.id && rotator.state?.connected == true) rotator.disconnect()
+                rotator.deleteProfile(profile.id)
+                systemMessage = "${profile.name} deleted · disconnected and automation disarmed"
+                pendingDeleteRotatorProfile = null
+            }
+        }, colors = ButtonDefaults.buttonColors(containerColor = Danger)) { Text("DELETE") } },
+        dismissButton = { TextButton({ pendingDeleteRotatorProfile = null }) { Text("CANCEL") } },
+    ) }
+}
+
+@Composable
+private fun SettingsSectionPicker(selected: SettingsSection, onSelected: (SettingsSection) -> Unit) {
+    val groups = listOf(
+        "STATION" to listOf(SettingsSection.RADIO, SettingsSection.LOG, SettingsSection.CLUSTER,
+            SettingsSection.MACROS, SettingsSection.ALERTS, SettingsSection.AUDIO, SettingsSection.CONTROLS),
+        "WORKSPACES" to listOf(SettingsSection.SCREENS, SettingsSection.DIGI, SettingsSection.CONTEST,
+            SettingsSection.BAND_MAPS, SettingsSection.ROTATOR),
+        "SYSTEM" to listOf(SettingsSection.INTEGRATIONS, SettingsSection.COLOURS, SettingsSection.HEALTH,
+            SettingsSection.DIAG, SettingsSection.ABOUT),
+    )
+    Surface(
+        Modifier.fillMaxWidth(),
+        color = Color(0xFF20282E),
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF354047)),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            groups.forEach { (label, sections) ->
+                Text(label, color = Amber, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    sections.forEach { item ->
+                        FilterChip(
+                            selected = selected == item,
+                            onClick = { onSelected(item) },
+                            label = { Text(item.label) },
+                            modifier = Modifier.heightIn(min = 48.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 private fun clusterAge(seconds: Long): String = when {

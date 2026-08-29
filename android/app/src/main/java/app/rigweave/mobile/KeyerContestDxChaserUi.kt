@@ -43,43 +43,60 @@ internal fun IntegratedContestWorkspace(
                 OutlinedButton({ runtime.pause("OPERATOR STOP") }, enabled = state.session.state == ContestSessionState.RUNNING) { Text("STOP") }
             }
         }
-        ContestWorkspace(state, ContestWorkspaceCallbacks(
-            onPage = runtime::setPage,
-            onDefinition = runtime::selectDefinition,
-            onNewSession = runtime::newSession,
-            onCloneSession = runtime::cloneSession,
-            onSession = runtime::updateSession,
-            onSaveSession = runtime::saveSession,
-            onPauseSession = { runtime.pause() },
-            onCloseSession = runtime::closeSession,
-            onCallsign = runtime::updateCallsign,
-            onRstSent = runtime::updateRstSent,
-            onRstReceived = runtime::updateRstReceived,
-            onExchange = runtime::setExchange,
-            onExchangeField = runtime::setExchangeField,
-            onLog = { runtime.logCurrent() },
-            onClear = runtime::clearEntry,
-            onEditQso = runtime::updateQso,
-            onDeleteQso = runtime::deleteQso,
-            onMergeToLogbook = { runtime.mergeToLogbook() },
-            onRole = runtime::changeRole,
-            onStartSession = runtime::startSession,
-            onKeyerIntent = { runtime.dispatchKeyer(it) },
-            onEnterMessage = runtime::sendCurrentMessage,
-            onLayout = runtime::updateLayout,
-            onNetworkConfig = runtime::configureNetwork,
-            onNetworkStart = { runtime.setNetworkArmed(true) },
-            onNetworkStop = { runtime.setNetworkArmed(false) },
-            onPeerTrust = runtime::setPeerTrust,
-            onTrustedModeReview = runtime::reviewTrustedMode,
-            onExport = runtime::previewExport,
-            onOpenLogbook = onOpenLogbook,
-            onOpenSettings = onOpenSettings,
-            onRefreshScp = runtime::refreshScp,
-            onDeleteScp = runtime::deleteScp,
-        ), Modifier.weight(1f))
+        ContestWorkspace(state, contestCallbacks(runtime, onOpenLogbook, onOpenSettings), Modifier.weight(1f))
     }
 }
+
+@Composable
+internal fun IntegratedContestSettings(runtime: ContestRuntime, modifier: Modifier = Modifier) {
+    ContestSetupScreen(
+        state = runtime.workspaceState().copy(page = ContestWorkspacePage.SETUP),
+        callbacks = contestCallbacks(runtime, {}, {}),
+        modifier = modifier,
+        showSettingsShortcut = false,
+        scrollable = false,
+    )
+}
+
+private fun contestCallbacks(
+    runtime: ContestRuntime,
+    onOpenLogbook: () -> Unit,
+    onOpenSettings: () -> Unit,
+) = ContestWorkspaceCallbacks(
+    onPage = runtime::setPage,
+    onDefinition = runtime::selectDefinition,
+    onNewSession = runtime::newSession,
+    onCloneSession = runtime::cloneSession,
+    onSession = runtime::updateSession,
+    onSaveSession = runtime::saveSession,
+    onPauseSession = { runtime.pause() },
+    onCloseSession = runtime::closeSession,
+    onCallsign = runtime::updateCallsign,
+    onRstSent = runtime::updateRstSent,
+    onRstReceived = runtime::updateRstReceived,
+    onExchange = runtime::setExchange,
+    onExchangeField = runtime::setExchangeField,
+    onLog = { runtime.logCurrent() },
+    onClear = runtime::clearEntry,
+    onEditQso = runtime::updateQso,
+    onDeleteQso = runtime::deleteQso,
+    onMergeToLogbook = { runtime.mergeToLogbook() },
+    onRole = runtime::changeRole,
+    onStartSession = runtime::startSession,
+    onKeyerIntent = { runtime.dispatchKeyer(it) },
+    onEnterMessage = runtime::sendCurrentMessage,
+    onLayout = runtime::updateLayout,
+    onNetworkConfig = runtime::configureNetwork,
+    onNetworkStart = { runtime.setNetworkArmed(true) },
+    onNetworkStop = { runtime.setNetworkArmed(false) },
+    onPeerTrust = runtime::setPeerTrust,
+    onTrustedModeReview = runtime::reviewTrustedMode,
+    onExport = runtime::previewExport,
+    onOpenLogbook = onOpenLogbook,
+    onOpenSettings = onOpenSettings,
+    onRefreshScp = runtime::refreshScp,
+    onDeleteScp = runtime::deleteScp,
+)
 
 @Composable
 fun IntegratedDigiWorkspace(

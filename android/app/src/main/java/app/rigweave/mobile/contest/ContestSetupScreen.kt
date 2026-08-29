@@ -14,13 +14,20 @@ import java.time.format.DateTimeFormatter
 
 private val contestUtc = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").withZone(ZoneOffset.UTC)
 
-@Composable internal fun ContestSetupScreen(state: ContestWorkspaceState, callbacks: ContestWorkspaceCallbacks) {
+@Composable internal fun ContestSetupScreen(
+    state: ContestWorkspaceState,
+    callbacks: ContestWorkspaceCallbacks,
+    modifier: Modifier = Modifier,
+    showSettingsShortcut: Boolean = true,
+    scrollable: Boolean = true,
+) {
     var search by remember { mutableStateOf("") }
     val editable = state.session.state in setOf(ContestSessionState.DRAFT, ContestSessionState.READY, ContestSessionState.STOPPED)
     val definitions = state.definitions.filter {
         search.isBlank() || listOf(it.humanName, it.adifContestId, it.cabrilloContestName).any { value -> value.contains(search, true) }
     }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val contentModifier = modifier.fillMaxWidth().let { if (scrollable) it.fillMaxSize().verticalScroll(rememberScrollState()) else it }.padding(16.dp)
+    Column(contentModifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.weight(1f)) {
                 Text("CONTEST SESSION", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
@@ -29,7 +36,7 @@ private val contestUtc = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm 'UTC'").w
             }
             OutlinedButton(callbacks.onNewSession) { Text("NEW") }
             OutlinedButton(callbacks.onCloneSession) { Text("CLONE") }
-            OutlinedButton(callbacks.onOpenSettings) { Text("SETTINGS") }
+            if (showSettingsShortcut) OutlinedButton(callbacks.onOpenSettings) { Text("SETTINGS") }
         }
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {

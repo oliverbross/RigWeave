@@ -235,21 +235,20 @@ class WavelogSyncStore(private val database: QsoDatabase) {
         "wavelog_outbox", "binding_id=? AND local_qso_id=? AND operation='CREATE' AND attempt_count=0 AND state<>'ACCEPTED'",
         arrayOf(bindingId, localQsoId)) > 0
 
-    fun cancelUnattemptedCreate(bindingId: String, localQsoId: String): Boolean = database.writableDatabase.delete(
-        "wavelog_outbox", "binding_id=? AND local_qso_id=? AND operation='CREATE' AND attempt_count=0 AND state<>'ACCEPTED'",
-        arrayOf(bindingId, localQsoId)) > 0
+    fun cancelUnattemptedCreate(bindingId: String, localQsoId: String): Boolean =
+        cancelUnsentCreate(bindingId, localQsoId)
 
     fun cancelWrites(bindingId: String, localQsoId: String, reason: String) {
         database.writableDatabase.execSQL(
             "UPDATE wavelog_outbox SET state='ACCEPTED',next_attempt_at=NULL,last_error=?,error_class='NONE',updated_at=? " +
                 "WHERE binding_id=? AND local_qso_id=? AND operation IN ('CREATE','UPDATE') AND state<>'ACCEPTED'",
-            arrayOf(reason.take(500), System.currentTimeMillis() / 1_000, bindingId, localQsoId),
+            arrayOf<Any?>(reason.take(500), System.currentTimeMillis() / 1_000, bindingId, localQsoId),
         )
     }
 
     fun updateOutbox(entry: WavelogOutboxEntry) {
         database.writableDatabase.execSQL("UPDATE wavelog_outbox SET state=?,attempt_count=?,next_attempt_at=?,last_error=?,error_class=?,updated_at=? WHERE id=?",
-            arrayOf(entry.state.name, entry.attemptCount, entry.nextAttemptAt, entry.lastError.take(500),
+            arrayOf<Any?>(entry.state.name, entry.attemptCount, entry.nextAttemptAt, entry.lastError.take(500),
                 entry.errorClass.name, entry.updatedAt, entry.id))
     }
 
@@ -275,7 +274,7 @@ class WavelogSyncStore(private val database: QsoDatabase) {
 
     fun saveCheckpoint(checkpoint: WavelogSyncCheckpoint) {
         database.writableDatabase.execSQL("INSERT OR REPLACE INTO wavelog_checkpoint(binding_id,kind,page,high_water,overlap_hash,completed,updated_at) VALUES(?,?,?,?,?,?,?)",
-            arrayOf(checkpoint.bindingId, checkpoint.kind, checkpoint.page, checkpoint.highWater, checkpoint.overlapHash, if (checkpoint.completed) 1 else 0, checkpoint.updatedAt))
+            arrayOf<Any?>(checkpoint.bindingId, checkpoint.kind, checkpoint.page, checkpoint.highWater, checkpoint.overlapHash, if (checkpoint.completed) 1 else 0, checkpoint.updatedAt))
     }
 
     fun checkpoint(bindingId: String, kind: String): WavelogSyncCheckpoint? = database.readableDatabase.rawQuery(
@@ -305,7 +304,7 @@ class WavelogSyncStore(private val database: QsoDatabase) {
 
     fun saveConflict(conflict: WavelogConflict) {
         database.writableDatabase.execSQL("INSERT OR REPLACE INTO wavelog_conflict(id,binding_id,local_qso_id,remote_qso_id,baseline_canonical,local_canonical,remote_canonical,conflicting_fields_json,state,created_at,resolved_at,resolution_intent,resolution_canonical,resolution_outbox_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            arrayOf(conflict.id, conflict.bindingId, conflict.localQsoId, conflict.remoteQsoId, conflict.baselineCanonical,
+            arrayOf<Any?>(conflict.id, conflict.bindingId, conflict.localQsoId, conflict.remoteQsoId, conflict.baselineCanonical,
                 conflict.localCanonical, conflict.remoteCanonical, JSONArray(conflict.conflictingFields.toList()).toString(),
                 conflict.state.name, conflict.createdAt, conflict.resolvedAt, conflict.resolutionIntent?.name,
                 conflict.resolutionCanonical, conflict.resolutionOutboxId))
@@ -339,19 +338,19 @@ class WavelogSyncStore(private val database: QsoDatabase) {
     fun completeConflictForOutbox(outboxId: String) {
         database.writableDatabase.execSQL(
             "UPDATE wavelog_conflict SET state=resolution_intent,resolved_at=? WHERE resolution_outbox_id=? AND state='OPEN' AND resolution_intent IS NOT NULL",
-            arrayOf(System.currentTimeMillis() / 1_000, outboxId),
+            arrayOf<Any?>(System.currentTimeMillis() / 1_000, outboxId),
         )
     }
 
     fun resolveConflict(id: String, state: WavelogConflictState) {
         require(state != WavelogConflictState.OPEN)
         database.writableDatabase.execSQL("UPDATE wavelog_conflict SET state=?,resolved_at=? WHERE id=? AND state='OPEN'",
-            arrayOf(state.name, System.currentTimeMillis() / 1_000, id))
+            arrayOf<Any?>(state.name, System.currentTimeMillis() / 1_000, id))
     }
 
     fun saveTombstone(tombstone: WavelogTombstone, baselineCanonical: String) {
         database.writableDatabase.execSQL("INSERT OR REPLACE INTO wavelog_tombstone(binding_id,local_qso_id,remote_qso_id,canonical_hash,baseline_canonical,deleted_at,acknowledged_at,delete_intent) VALUES(?,?,?,?,?,?,?,?)",
-            arrayOf(tombstone.bindingId, tombstone.localQsoId, tombstone.remoteQsoId, tombstone.canonicalHash,
+            arrayOf<Any?>(tombstone.bindingId, tombstone.localQsoId, tombstone.remoteQsoId, tombstone.canonicalHash,
                 baselineCanonical, tombstone.deletedAt, tombstone.acknowledgedAt, tombstone.intent.name))
     }
 
@@ -373,7 +372,7 @@ class WavelogSyncStore(private val database: QsoDatabase) {
 
     fun acknowledgeTombstone(bindingId: String, localQsoId: String) {
         database.writableDatabase.execSQL("UPDATE wavelog_tombstone SET acknowledged_at=? WHERE binding_id=? AND local_qso_id=?",
-            arrayOf(System.currentTimeMillis() / 1_000, bindingId, localQsoId))
+            arrayOf<Any?>(System.currentTimeMillis() / 1_000, bindingId, localQsoId))
     }
 
     fun removeTombstone(bindingId: String, localQsoId: String) {

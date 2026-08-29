@@ -725,8 +725,14 @@ private fun SstvDock(controller: DigiController) {
 }
 
 @Composable
-private fun DigiSetupPanel(controller: DigiController, radio: RadioState, modifier: Modifier) {
-    Column(modifier.padding(10.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+internal fun DigiSetupPanel(
+    controller: DigiController,
+    radio: RadioState,
+    modifier: Modifier,
+    scrollable: Boolean = true,
+) {
+    val contentModifier = modifier.padding(10.dp).let { if (scrollable) it.verticalScroll(rememberScrollState()) else it }
+    Column(contentModifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         CockpitPane("DIGI SETUP & HEALTH", controller.audioHealth.state.name, NexusCyan, Modifier.fillMaxWidth().heightIn(min = 420.dp)) {
             val health = controller.audioHealth
             Text("STATION · ${radio.identity} · ${radio.model} · ${radio.frequencyText}", color = NexusText, fontFamily = FontFamily.Monospace)

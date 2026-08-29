@@ -344,14 +344,14 @@ class TciRxAudioController(
     }
 
     private fun load(key: String): RxDspSettings = runCatching {
-        val row = JSONObject(preferences.getString(key, "{}"))
+        val row = JSONObject(preferences.getString(key, "{}").orEmpty().ifBlank { "{}" })
         RxDspSettings(row.optBoolean("blanker", true), row.optBoolean("notch"), row.optDouble("nr", .28).toFloat(),
             row.optBoolean("agc", true), row.optInt("hang", 250), row.optDouble("squelch", -105.0).toFloat(),
             row.optDouble("gain", .8).toFloat(), row.optDouble("mix", 0.0).toFloat())
     }.getOrDefault(RxDspSettings())
 
     private fun loadMixer(): RxMixerSettings = runCatching {
-        val row = JSONObject(preferences.getString("mixer_v2", "{}"))
+        val row = JSONObject(preferences.getString("mixer_v2", "{}").orEmpty().ifBlank { "{}" })
         RxMixerSettings(
             mode = runCatching { RxMixerMode.valueOf(row.optString("mode", RxMixerMode.RECEIVER_A.name)) }.getOrDefault(RxMixerMode.RECEIVER_A),
             receiverA = ReceiverMixSettings(row.optDouble("a_gain", 1.0).toFloat(), row.optBoolean("a_mute"),

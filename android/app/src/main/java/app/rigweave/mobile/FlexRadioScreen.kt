@@ -116,6 +116,7 @@ fun FlexRadioScreen(controller: FlexRadioController, openLog: () -> Unit) {
 }
 
 @Composable
+@android.annotation.SuppressLint("SetJavaScriptEnabled")
 private fun SmartLinkAuthDialog(authorizationUri: Uri, onRedirect: (Uri) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val allowedHost = authorizationUri.host
@@ -123,6 +124,7 @@ private fun SmartLinkAuthDialog(authorizationUri: Uri, onRedirect: (Uri) -> Unit
     val callbackGeneration = remember(authorizationUri) { callbackLifecycle.next() }
     val webView = remember(authorizationUri) {
         WebView(context).apply {
+            // Auth0 requires JavaScript; navigation remains HTTPS-only and locked to the authorization host below.
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.allowFileAccess = false

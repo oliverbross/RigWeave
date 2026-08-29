@@ -298,6 +298,7 @@ internal fun PotaChaseScreen(
     val mapView = remember { MapLibre.getInstance(context.applicationContext); MapView(context).apply {
         onCreate(null)
         setOnTouchListener { view, event ->
+            if (event.actionMasked == MotionEvent.ACTION_UP) view.performClick()
             view.parent?.requestDisallowInterceptTouchEvent(event.actionMasked !in setOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL))
             false
         }

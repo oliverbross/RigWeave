@@ -50,8 +50,8 @@ fun DxChaserScreen(
     onCrossBandReview: (DxChaserCrossBandOpportunity) -> Unit,
     settings: DxChaserSettingsDocument = DxChaserSettingsDocument(),
     onSettingsChanged: (DxChaserSettingsDocument) -> Unit = {},
-    onImportRarity: () -> Unit = {},
-    onClearRarity: () -> Unit = {},
+    onImportRarity: (() -> Unit)? = null,
+    onClearRarity: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Surface(modifier.fillMaxSize(), color = ChaserBackground) {
@@ -62,7 +62,7 @@ fun DxChaserScreen(
                     contentPadding = PaddingValues(bottom = 20.dp)) {
                     item { SessionCard(snapshot, onStartAssist, onStartChase, onStartDryRun, onStop) }
                     item { TargetCard(snapshot.currentTarget) }
-                    item { PolicyCard(settings, onSettingsChanged, onImportRarity, onClearRarity) }
+                    item { DxChaserPolicySettings(settings, onSettingsChanged, onImportRarity, onClearRarity) }
                     item { HistoryCard(snapshot) }
                     item { DiagnosticsCard(snapshot) }
                     item { SafetyTruthCard(snapshot) }
@@ -76,7 +76,7 @@ fun DxChaserScreen(
                 item { TargetCard(snapshot.currentTarget) }
                 item { CandidateList(snapshot, onCandidate, Modifier.height(480.dp)) }
                 item { CrossBandList(snapshot.crossBandOpportunities, onCrossBandReview) }
-                item { PolicyCard(settings, onSettingsChanged, onImportRarity, onClearRarity) }
+                item { DxChaserPolicySettings(settings, onSettingsChanged, onImportRarity, onClearRarity) }
                 item { HistoryCard(snapshot) }
                 item { DiagnosticsCard(snapshot) }
                 item { SafetyTruthCard(snapshot) }
@@ -196,8 +196,8 @@ private fun SafetyTruthCard(snapshot: DxChaserReadOnlySnapshot) = ChaserCard {
 }
 
 @Composable
-private fun PolicyCard(settings: DxChaserSettingsDocument, onChanged: (DxChaserSettingsDocument) -> Unit,
-    onImportRarity: () -> Unit, onClearRarity: () -> Unit) = ChaserCard {
+internal fun DxChaserPolicySettings(settings: DxChaserSettingsDocument, onChanged: (DxChaserSettingsDocument) -> Unit,
+    onImportRarity: (() -> Unit)? = null, onClearRarity: (() -> Unit)? = null) = ChaserCard {
     Text("POLICY", color = ChaserMuted, fontWeight = FontWeight.Bold)
     Text(settings.profile.name.replace('_', ' '), color = ChaserCyan, fontWeight = FontWeight.Bold)
     Text("${settings.selectedBands.joinToString()} · ${settings.selectedModes.joinToString()} · min ${settings.minimumSnr} dB",
@@ -219,9 +219,9 @@ private fun PolicyCard(settings: DxChaserSettingsDocument, onChanged: (DxChaserS
         color = ChaserMuted, style = MaterialTheme.typography.labelSmall)
     Text("Evidence current ${settings.currentEvidenceContribution} · outlook ${settings.empiricalOutlookContribution} · rarity ${settings.rarityContribution}",
         color = ChaserMuted, style = MaterialTheme.typography.labelSmall)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = onImportRarity) { Text("IMPORT RARITY") }
-        OutlinedButton(onClick = onClearRarity) { Text("CLEAR") }
+    if (onImportRarity != null || onClearRarity != null) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        onImportRarity?.let { OutlinedButton(onClick = it) { Text("IMPORT RARITY") } }
+        onClearRarity?.let { OutlinedButton(onClick = it) { Text("CLEAR") } }
     }
 }
 

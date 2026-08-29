@@ -74,8 +74,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -194,7 +195,7 @@ internal fun HamClockHomeScreen(
     var spotStatuses by remember { mutableStateOf<Map<String, SpotLogStatus>>(emptyMap()) }
     var recentQsos by remember { mutableStateOf<List<HamClockRecentQso>>(emptyList()) }
     var recentQsoRevision by remember { mutableStateOf(0L) }
-    val compactScreen = LocalConfiguration.current.screenWidthDp < 900
+    val compactScreen = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() } < 900.dp
     fun saveDashboardProfile(name: String, replaceProfileId: String? = null) {
         settingsCoordinator.saveProfile(name, replaceProfileId)
     }

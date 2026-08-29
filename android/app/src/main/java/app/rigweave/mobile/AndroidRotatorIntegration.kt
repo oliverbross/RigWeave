@@ -24,12 +24,14 @@ import app.rigweave.mobile.rotator.RotatorPlatformController
 import app.rigweave.mobile.rotator.RotatorProfileStore
 import app.rigweave.mobile.rotator.RotatorProtocol
 import app.rigweave.mobile.rotator.RotatorProtocolKind
+import app.rigweave.mobile.rotator.RotatorHamlibModelDescriptor
 import app.rigweave.mobile.rotator.RotatorResponseRule
 import app.rigweave.mobile.rotator.RotatorSettingsCodec
 import app.rigweave.mobile.rotator.RotatorSettingsDocument
 import app.rigweave.mobile.rotator.RotatorStateSnapshot
 import app.rigweave.mobile.rotator.RotatorTcpTransport
 import app.rigweave.mobile.rotator.RotatorTransport
+import app.rigweave.mobile.rotator.RotatorTransportKind
 import app.rigweave.mobile.rotator.RotatorWireCommand
 import app.rigweave.mobile.rotator.SpidProtocol
 import app.rigweave.mobile.rotator.EmbeddedHamlibRotatorDriver
@@ -91,7 +93,12 @@ class AndroidRotatorRuntime(
     private val registry = RotatorBackendRegistry().apply {
         register(RotatorBackend.NATIVE) { profile ->
             val protocol = protocol(profile)
-            NativeRotatorDriver(profile, protocol, { serial.open(profile.id, requireNotNull(profile.serial)) }, capabilities(profile))
+            val transport: suspend () -> RotatorTransport = when (profile.transport) {
+                RotatorTransportKind.SERIAL -> { { serial.open(profile.id, requireNotNull(profile.serial)) } }
+                RotatorTransportKind.TCP -> { { RotatorTcpTransport(requireNotNull(profile.tcp)) } }
+                else -> error("native rotator transport is unsupported")
+            }
+            NativeRotatorDriver(profile, protocol, transport, capabilities(profile))
         }
         register(RotatorBackend.REMOTE_ROTCTLD) { profile ->
             RemoteRotctldDriver(profile, { RotatorTcpTransport(requireNotNull(profile.tcp)) }, capabilities(profile))
@@ -115,6 +122,12 @@ class AndroidRotatorRuntime(
         private set
     val automation: RotatorAutomationSession get() = controller.automationSession()
     val profiles: List<RotatorDeviceProfile> get() = store.snapshot().profiles
+
+    fun refreshSerialCandidates(): List<RotatorSerialCandidate> = usbTransport.refreshCandidates().map {
+        RotatorSerialCandidate(it.label, usbIdentityDigest(it.stableKey))
+    }
+
+    suspend fun hamlibModels(): List<RotatorHamlibModelDescriptor> = hamlib.enumerateModels()
 
     fun upsertProfile(profile: RotatorDeviceProfile) {
         store.upsert(profile)
@@ -196,6 +209,8 @@ class AndroidRotatorRuntime(
         RotatorProtocolKind.SPID_ROT1 -> SpidProtocol(false)
         RotatorProtocolKind.SPID_ROT2 -> SpidProtocol(true)
         RotatorProtocolKind.ARCO_COMPATIBLE -> error("Select ARCO's published GS-232 or EasyComm compatibility mode")
-        else -> error("Protocol ${profile.protocol} is not a native serial protocol")
+        else -> error("Protocol ${profile.protocol} is not a supported native protocol")
     }
 }
+
+data class RotatorSerialCandidate(val label: String, val stableIdentityHash: String)
