@@ -72,6 +72,22 @@ class TabletAcceptanceSweep1BandMapTest {
         assertTrue(ordered.all { it in 48f..192f })
     }
 
+    @Test fun nearIdenticalVerticalFrequenciesBecomeOneReadableChooserStack() {
+        val segment = BandMapSegment("20m", lowerHz = 14_000_000, upperHz = 14_150_000)
+        val input = listOf(spot(1, 14_031_000), spot(2, 14_032_000), spot(3, 14_050_000))
+        val placed = BandMapLayoutEngine.place(
+            input,
+            segment,
+            pixels = 1_400,
+            minimumSpacing = 90,
+            maximumLanes = 1,
+        )
+
+        assertEquals(2, placed.size)
+        assertEquals(listOf("spot-1", "spot-2"), placed.first().memberIds)
+        assertEquals(listOf("spot-3"), placed.last().memberIds)
+    }
+
     @Test fun horizontalPlacementHonoursTheNumberOfReadableCascadingLanes() {
         val segment = BandMapSegment("20m", lowerHz = 14_000_000, upperHz = 14_350_000)
         val placed = BandMapLayoutEngine.place((0 until 20).map(::spot), segment, pixels = 800, maximumLanes = 2)
@@ -110,5 +126,10 @@ class TabletAcceptanceSweep1BandMapTest {
             .substringBefore("@Composable internal fun CompactRadioBandMap")
         assertTrue("val availableLabelWidth = (maxWidth" in verticalLane)
         assertTrue(".width(availableLabelWidth)" in verticalLane)
+        assertTrue("maximumLanes = 1" in verticalLane)
+
+        val radioScreen = File("src/main/java/app/rigweave/mobile/MainActivity.kt").readText()
+        assertTrue("Modifier.fillMaxHeight().weight(.14f)" in radioScreen)
+        assertTrue("weight(if (showCompactBandMap) .86f else 1f)" in radioScreen)
     }
 }

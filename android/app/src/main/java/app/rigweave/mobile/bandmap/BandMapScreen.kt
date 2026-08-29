@@ -386,7 +386,13 @@ internal fun BandMapScreen(
             val labelTopPx = with(density) { (if (showScaleControls) 52.dp else 8.dp).toPx() }
             val labelCapacity = ((heightPx - labelTopPx) / labelHeightPx).toInt().coerceIn(1, 12)
             val placements = BandMapLayoutEngine.fitToCapacity(
-                BandMapLayoutEngine.place(rows.map { it.spot }, segment, heightPx.roundToInt().coerceAtLeast(1), minimumLabelSpacingPx),
+                BandMapLayoutEngine.place(
+                    rows.map { it.spot },
+                    segment,
+                    heightPx.roundToInt().coerceAtLeast(1),
+                    minimumLabelSpacingPx,
+                    maximumLanes = 1,
+                ),
                 labelCapacity,
             )
             val markerColors = placements.associate { placed -> placed.id to Color(app.spotStatusColour(SPOT_STATUS_DS, statuses[placed.id]?.dxccStatus)) }

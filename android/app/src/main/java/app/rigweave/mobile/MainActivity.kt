@@ -1320,8 +1320,8 @@ private fun navIcon(item: Destination) = when (item) {
                     }
                     Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(if (showCompactBandMap) 8.dp else 0.dp)) {
                         if (showCompactBandMap) CompactRadioBandMap(bandMaps, database, cty, operatingContext, app, workspaceAction,
-                            Modifier.fillMaxHeight().weight(.2f))
-                        Box(Modifier.fillMaxHeight().weight(if (showCompactBandMap) .8f else 1f)) {
+                            Modifier.fillMaxHeight().weight(.14f))
+                        Box(Modifier.fillMaxHeight().weight(if (showCompactBandMap) .86f else 1f)) {
                         if (selectedProfile.backendKind == RadioBackendKind.NATIVE_FLEX) FlexRadioScreen(flex, openLogbook)
                         else if (selectedProfile.backendKind == RadioBackendKind.NATIVE_TCI) TciRadioCockpit(
                             tciRuntime, platformSnapshot, panadapter, tciRxAudio, scanner, sdrOperationalV2, sdrWorkbenchV4, localReceivers,
