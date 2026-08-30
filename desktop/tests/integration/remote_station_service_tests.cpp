@@ -86,6 +86,39 @@ private slots:
     QVERIFY(!error.isEmpty());
   }
 
+  void localHubObserverIdentityStaysInVaultAndSignsBoundedChallenges() {
+    MemoryVault vault;
+    RemoteStationService service(&vault, nullptr, nullptr, nullptr);
+    QString error;
+    const QVariantMap identity = service.hubObserverIdentity(&error);
+    QVERIFY2(!identity.isEmpty(), qPrintable(error));
+    QVERIFY(identity.value("deviceId").toString().startsWith("hub-"));
+    QVERIFY(identity.value("publicKeyPem").toString().contains("PUBLIC KEY"));
+    const QString stationId = service.configuration().value("stationId").toString();
+    const QString signature = service.signHubObserverChallenge(
+        (stationId + "|pairing-fixture|" + identity.value("deviceId").toString()).toUtf8(), &error);
+    QVERIFY2(!signature.isEmpty(), qPrintable(error));
+    QVERIFY(vault.values.contains("rigweave.remote.hub-observer.signing-key"));
+    const QString serialized = QString::fromUtf8(QJsonDocument::fromVariant(service.configuration()).toJson());
+    QVERIFY(!serialized.contains("PRIVATE KEY"));
+    QVERIFY(service.signHubObserverChallenge("wrong-station|challenge", &error).isEmpty());
+    QVERIFY(!service.observerJournal().isEmpty());
+  }
+
+  void debugNoRadioForcesLoopbackAndDisablesSideChannels() {
+    MemoryVault vault;
+    RemoteStationService service(&vault, nullptr, nullptr, nullptr);
+    QVERIFY(service.restoreConfiguration({{"schema", 1}, {"stationName", "Station"},
+        {"port", 7443}, {"listenAddress", "0.0.0.0"}, {"lanEnabled", true},
+        {"rigctldEnabled", true}, {"tciEnabled", true}}, nullptr));
+    service.setDebugNoRadio(true);
+    const QVariantMap config = service.configuration();
+    QCOMPARE(config.value("listenAddress").toString(), QString("127.0.0.1"));
+    QCOMPARE(config.value("lanEnabled").toBool(), false);
+    QCOMPARE(config.value("rigctldEnabled").toBool(), false);
+    QCOMPARE(config.value("tciEnabled").toBool(), false);
+  }
+
   void rawIqRequiresExplicitHostEnableAndDoesNotAutoRestore() {
     MemoryVault vault;
     RemoteStationService service(&vault, nullptr, nullptr, nullptr);
