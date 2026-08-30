@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   android-ios-core:
+    if: github.ref_name == 'feature/secure-remote-station-v6'
     uses: ./.github/workflows/rigweave-release-candidate.yml
     with:
       allow_descendant_validation: true
