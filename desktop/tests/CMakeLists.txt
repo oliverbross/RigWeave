@@ -19,6 +19,8 @@ add_test(NAME desktop_tci_contract_tests COMMAND desktop_tci_contract_tests)
 
 qt_add_executable(remote_station_service_tests integration/remote_station_service_tests.cpp)
 target_link_libraries(remote_station_service_tests PRIVATE ${RIGWEAVE_TEST_LIBS} Qt6::WebSockets)
+target_compile_definitions(remote_station_service_tests PRIVATE
+    RIGWEAVE_REMOTE_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../fixtures/remote/protocol-v1")
 rigweave_target_warnings(remote_station_service_tests)
 add_test(NAME remote_station_service_tests COMMAND remote_station_service_tests)
 

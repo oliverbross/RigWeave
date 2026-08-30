@@ -1,0 +1,8 @@
+{
+  "kind": "observer.hello",
+  "requestId": "fixture-unsupported-agent",
+  "clientName": "RigWeave Web future fixture",
+  "agentProtocol": { "major": 2, "minor": 0 },
+  "mediaProtocol": { "major": 1, "minor": 0 }
+}
+

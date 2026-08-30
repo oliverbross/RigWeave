@@ -3,6 +3,7 @@
 #include "rigweave/desktop/RemoteStationClient.hpp"
 
 #include <QHash>
+#include <QFile>
 #include <QJsonDocument>
 #include <QTcpServer>
 #include <QtTest>
@@ -26,6 +27,20 @@ public:
 class RemoteStationServiceTests final : public QObject {
   Q_OBJECT
 private slots:
+  void webObserverGoldenFixturesDeclareSupportedAndRefusedAgentVersions() {
+    const auto load = [](const QString &name) {
+      QFile file(QStringLiteral(RIGWEAVE_REMOTE_FIXTURES_DIR) + "/" + name);
+      if (!file.open(QIODevice::ReadOnly)) return QJsonObject{};
+      return QJsonDocument::fromJson(file.readAll()).object();
+    };
+    const QJsonObject supported = load("observer-hello-supported.json");
+    const QJsonObject unsupported = load("observer-hello-unsupported-agent.json");
+    QCOMPARE(supported.value("kind").toString(), QString("observer.hello"));
+    QCOMPARE(supported.value("agentProtocol").toObject().value("major").toInt(), 1);
+    QCOMPARE(supported.value("mediaProtocol").toObject().value("major").toInt(), 1);
+    QCOMPARE(unsupported.value("agentProtocol").toObject().value("major").toInt(), 2);
+  }
+
   void defaultsAreStoppedAndDisarmed() {
     MemoryVault vault;
     RemoteStationService service(&vault, nullptr, nullptr, nullptr);
