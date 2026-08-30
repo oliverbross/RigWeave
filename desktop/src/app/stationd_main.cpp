@@ -7,11 +7,15 @@
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QDir>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QSslSocket>
 #include <QTextStream>
+#include <QTemporaryDir>
+#include <memory>
 
 using namespace rigweave::desktop;
 namespace {
@@ -21,6 +25,10 @@ QJsonObject adminRequest(const QCommandLineParser &parser) {
   if (parser.isSet("status")) return {{"action", "status"}};
   if (parser.isSet("list-clients")) return {{"action", "list-clients"}};
   if (parser.isSet("pairing-offer")) return {{"action", "pairing-offer"}};
+  if (parser.isSet("hub-identity")) return {{"action", "hub-identity"}};
+  if (parser.isSet("hub-sign")) return {{"action", "hub-sign"}, {"challengeBase64", parser.value("hub-sign")}};
+  if (parser.isSet("approve-observer")) return {{"action", "approve-observer"}, {"deviceId", parser.value("approve-observer")}};
+  if (parser.isSet("journal")) return {{"action", "journal"}};
   if (parser.isSet("revoke")) return {{"action", "revoke"}, {"deviceId", parser.value("revoke")}};
   if (parser.isSet("stop")) return {{"action", "stop"}};
   return {};
@@ -47,6 +55,11 @@ int main(int argc, char **argv) {
   parser.addOption(QCommandLineOption({"f", "foreground"}, "Run the explicitly enabled service in the foreground"));
   parser.addOption(QCommandLineOption({"s", "status"}, "Print bounded service status"));
   parser.addOption(QCommandLineOption({"p", "pairing-offer"}, "Create a short-lived pairing offer"));
+  parser.addOption(QCommandLineOption(QStringLiteral("debug-no-radio"), "Run a loopback-only deterministic no-radio Agent source"));
+  parser.addOption(QCommandLineOption(QStringLiteral("hub-identity"), "Return the Local Hub public observer identity"));
+  parser.addOption(QCommandLineOption(QStringLiteral("hub-sign"), "Sign one bounded base64-encoded station challenge in the configured credential vault", "challenge-base64"));
+  parser.addOption(QCommandLineOption(QStringLiteral("approve-observer"), "Approve one pending Local Hub device as OBSERVER", "device-id"));
+  parser.addOption(QCommandLineOption(QStringLiteral("journal"), "Print the bounded observer Agent journal"));
   parser.addOption(QCommandLineOption(QStringLiteral("list-clients"), "List paired public device metadata"));
   parser.addOption(QCommandLineOption(QStringLiteral("revoke"), "Revoke a paired device", "device-id"));
   parser.addOption(QCommandLineOption(QStringLiteral("stop"), "Request station Global Stop and shut down"));
@@ -56,12 +69,34 @@ int main(int argc, char **argv) {
   if (!parser.isSet("foreground") && !requestedAdminAction.isEmpty()) return sendAdminRequest(requestedAdminAction);
   if (!parser.isSet("foreground")) parser.showHelp(1);
 
+  // The cert-only backend can parse identities but cannot terminate TLS. Prefer
+  // OpenSSL when packaged, then require a backend that implements TLS 1.3.
+  if (QSslSocket::availableBackends().contains(QStringLiteral("openssl")) &&
+      QSslSocket::isProtocolSupported(QSsl::TlsV1_3, QStringLiteral("openssl"))) {
+    QSslSocket::setActiveBackend(QStringLiteral("openssl"));
+  }
+  if (!QSslSocket::supportsSsl() || !QSslSocket::isProtocolSupported(QSsl::TlsV1_3)) {
+    QTextStream(stderr) << "A TLS 1.3-capable Qt network backend is required\n";
+    return 2;
+  }
+
+  const bool debugNoRadio = parser.isSet("debug-no-radio");
   DesktopPaths paths;
+  std::unique_ptr<QTemporaryDir> debugRoot;
+  if (debugNoRadio) {
+    debugRoot = std::make_unique<QTemporaryDir>(QDir::tempPath() + QStringLiteral("/rigweave-stationd-debug-XXXXXX"));
+    if (!debugRoot->isValid()) { QTextStream(stderr) << "Could not create isolated debug state\n"; return 2; }
+    paths.setEphemeralRoot(debugRoot->path());
+  }
   QString error;
   if (!paths.create(&error)) { QTextStream(stderr) << error << '\n'; return 2; }
   DesktopConfigurationManager configuration(paths.configuration() + "/desktop-config.json");
   if (!configuration.load(&error)) { QTextStream(stderr) << error << '\n'; return 2; }
-  SystemCredentialVault vault;
+  SystemCredentialVault systemVault;
+  FakeCredentialVault debugVault;
+  DesktopCredentialVault *vault = debugNoRadio
+      ? static_cast<DesktopCredentialVault *>(&debugVault)
+      : static_cast<DesktopCredentialVault *>(&systemVault);
   DesktopRadioController radio;
   DesktopRotatorController rotator;
   DesktopPanadapter panadapter;
@@ -70,10 +105,11 @@ int main(int argc, char **argv) {
       !panadapter.restoreConfiguration(configuration.section("panadapter"), &error)) {
     QTextStream(stderr) << error << '\n'; return 2;
   }
-  RemoteStationService service(&vault, &radio, &rotator, &panadapter);
+  RemoteStationService service(vault, &radio, &rotator, &panadapter);
   if (!service.restoreConfiguration(configuration.section("remoteStation"), &error)) {
     QTextStream(stderr) << error << '\n'; return 2;
   }
+  if (debugNoRadio) service.setDebugNoRadio(true);
   QObject::connect(&service, &RemoteStationService::pairingChanged, &application, [&] {
     configuration.setSection("remoteStation", service.configuration()); configuration.save();
   });
@@ -104,6 +140,17 @@ int main(int argc, char **argv) {
         if (action == "status") response = service.health();
         else if (action == "list-clients") response = service.pairedDevices();
         else if (action == "pairing-offer") response = service.createPairingOffer();
+        else if (action == "hub-identity") response = service.hubObserverIdentity(&error);
+        else if (action == "hub-sign") {
+          const QByteArray challenge = QByteArray::fromBase64(request.value("challengeBase64").toString().toLatin1());
+          const QString signature = service.signHubObserverChallenge(challenge, &error);
+          ok = !signature.isEmpty(); response = ok ? QVariant(signature) : QVariantMap{{"error", error.left(240)}};
+        }
+        else if (action == "approve-observer") {
+          ok = service.approvePendingDevice(request.value("deviceId").toString(), "OBSERVER");
+          response = QVariantMap{{"approved", ok}, {"role", "OBSERVER"}};
+        }
+        else if (action == "journal") response = service.observerJournal();
         else if (action == "revoke") { service.revokeDevice(request.value("deviceId").toString()); response = QVariantMap{{"revoked", true}}; }
         else if (action == "stop") { service.globalStop(); response = QVariantMap{{"stopped", true}}; }
         else { ok = false; response = QVariantMap{{"error", "unknown admin action"}}; }

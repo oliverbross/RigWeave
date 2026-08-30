@@ -56,11 +56,16 @@ public:
   Q_INVOKABLE QVariantList sessions() const;
   Q_INVOKABLE QVariantList pairedDevices() const;
   Q_INVOKABLE QVariantList pendingDevices() const;
+  Q_INVOKABLE QVariantList observerJournal() const;
   Q_INVOKABLE QVariantList radioRoster() const;
   Q_INVOKABLE bool applyLocalSettings(const QVariantMap &settings);
   Q_INVOKABLE bool armThirdPartyWriter(int ttlMs = 30'000);
   Q_INVOKABLE void clearLocalAcceptance();
   void setDebugNonSecureLoopback(bool enabled) { m_debugNonSecureLoopback = enabled; }
+  void setDebugNoRadio(bool enabled);
+  QVariantMap hubObserverIdentity(QString *error = nullptr);
+  QString signHubObserverChallenge(const QByteArray &challenge,
+                                   QString *error = nullptr);
 
 signals:
   void stateChanged();
@@ -84,6 +89,7 @@ private:
   void sendSpectrum(const QString &receiverId);
   void sendAudio(const QString &receiverId, quint32 sampleRate,
                  const QVector<float> &values);
+  void sendDebugMedia();
   void sendIq(const QString &receiverId, quint32 sampleRate,
               const QVector<float> &values);
   void acceptRigctld();
@@ -101,6 +107,7 @@ private:
   remote::RigState rigState() const;
   static remote::Role decodeRole(const QString &role, bool *ok = nullptr);
   static QString fingerprint(const QByteArray &certificatePem);
+  void appendJournal(const QString &event, const QString &detail = {});
   void setState(QString state);
 
   DesktopCredentialVault *m_vault{};
@@ -113,6 +120,7 @@ private:
   QUdpSocket m_discoverySocket;
   QTimer m_stateTimer;
   QTimer m_expiryTimer;
+  QTimer m_debugMediaTimer;
   remote::SessionAuthority m_authority;
   QHash<QWebSocket *, QString> m_socketSessions;
   QHash<QWebSocket *, QString> m_socketChallenges;
@@ -121,6 +129,7 @@ private:
   QSet<QWebSocket *> m_openSockets;
   QHash<QString, PendingDevice> m_pendingDevices;
   QVariantMap m_pairedDevices;
+  QVariantList m_observerJournal;
   QString m_state{"Stopped · remote disconnected · TX disarmed"};
   QString m_stationId;
   QString m_stationName{"RigWeave Station"};
@@ -138,6 +147,11 @@ private:
   quint32 m_rawIqMaxSampleRate{96'000};
   int m_audioChannels{1};
   bool m_debugNonSecureLoopback{};
+  bool m_debugNoRadio{};
+  QString m_hubObserverDeviceId;
+  QString m_hubObserverPublicKeyPem;
+  quint64 m_debugMediaTick{};
+  double m_debugAudioPhase{};
   qint64 m_externalWriterExpiryMs{};
   quint64 m_generation{1};
   quint32 m_mediaSequence{};
@@ -151,6 +165,7 @@ private:
   QVector<float> m_opusPending;
   static constexpr const char *TlsKeyAlias = "rigweave.remote.station.tls-key";
   static constexpr const char *SigningKeyAlias = "rigweave.remote.station.signing-key";
+  static constexpr const char *HubObserverKeyAlias = "rigweave.remote.hub-observer.signing-key";
 };
 
 } // namespace rigweave::desktop

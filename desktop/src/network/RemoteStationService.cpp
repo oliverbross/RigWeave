@@ -129,6 +129,32 @@ bool generateP256(QStringView commonName, QByteArray *privatePem,
   return true;
 }
 
+QByteArray signP256(const QByteArray &privatePem, const QByteArray &message,
+                    QString *error) {
+  using Bio = std::unique_ptr<BIO, decltype(&BIO_free)>;
+  using Pkey = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
+  using MdCtx = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>;
+  Bio bio(BIO_new_mem_buf(privatePem.constData(), privatePem.size()), BIO_free);
+  Pkey key(bio ? PEM_read_bio_PrivateKey(bio.get(), nullptr, nullptr, nullptr) : nullptr,
+           EVP_PKEY_free);
+  MdCtx context(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+  std::size_t size{};
+  if (!key || !context ||
+      EVP_DigestSignInit(context.get(), nullptr, EVP_sha256(), nullptr, key.get()) != 1 ||
+      EVP_DigestSignUpdate(context.get(), message.constData(), static_cast<std::size_t>(message.size())) != 1 ||
+      EVP_DigestSignFinal(context.get(), nullptr, &size) != 1 || size == 0 || size > 4096) {
+    if (error) *error = "Platform-vault observer identity could not sign the challenge";
+    return {};
+  }
+  QByteArray signature(static_cast<qsizetype>(size), Qt::Uninitialized);
+  if (EVP_DigestSignFinal(context.get(), reinterpret_cast<unsigned char *>(signature.data()), &size) != 1) {
+    if (error) *error = "Platform-vault observer identity signature failed";
+    return {};
+  }
+  signature.resize(static_cast<qsizetype>(size));
+  return signature;
+}
+
 QJsonObject availableValue(bool available, const QJsonValue &value) {
   return {{"availability", available ? "AVAILABLE" : "UNAVAILABLE"},
           {"value", available ? value : QJsonValue{}}};
@@ -169,6 +195,9 @@ RemoteStationService::RemoteStationService(DesktopCredentialVault *vault,
     }
     emit sessionsChanged();
   });
+  m_debugMediaTimer.setInterval(20);
+  connect(&m_debugMediaTimer, &QTimer::timeout,
+          this, &RemoteStationService::sendDebugMedia);
   if (m_panadapter)
     connect(m_panadapter, &DesktopPanadapter::receiverFrameReady,
             this, &RemoteStationService::sendSpectrum);
@@ -195,7 +224,10 @@ QVariantMap RemoteStationService::configuration() const {
           {"rawIqEnabled", m_rawIqHostEnabled},
           {"rawIqMaxSampleRate", m_rawIqMaxSampleRate},
           {"audioChannels", m_audioChannels},
-          {"pairedDevices", m_pairedDevices}};
+          {"pairedDevices", m_pairedDevices},
+          {"hubObserverDeviceId", m_hubObserverDeviceId},
+          {"hubObserverPublicKeyPem", m_hubObserverPublicKeyPem},
+          {"observerJournal", m_observerJournal}};
 }
 
 bool RemoteStationService::restoreConfiguration(const QVariantMap &config,
@@ -225,6 +257,9 @@ bool RemoteStationService::restoreConfiguration(const QVariantMap &config,
       config.value("rawIqMaxSampleRate", 96'000).toUInt(), 192'000U);
   m_audioChannels = qBound(1, config.value("audioChannels", 1).toInt(), 2);
   m_pairedDevices = config.value("pairedDevices").toMap();
+  m_hubObserverDeviceId = config.value("hubObserverDeviceId").toString().left(128);
+  m_hubObserverPublicKeyPem = config.value("hubObserverPublicKeyPem").toString().left(4096);
+  m_observerJournal = config.value("observerJournal").toList().mid(0, 256);
   for (auto it = m_pairedDevices.cbegin(); it != m_pairedDevices.cend(); ++it) {
     if (!it.value().canConvert<QVariantMap>()) continue;
     const QVariantMap device = it.value().toMap();
@@ -238,6 +273,58 @@ bool RemoteStationService::restoreConfiguration(const QVariantMap &config,
     }
   }
   return true;
+}
+
+void RemoteStationService::setDebugNoRadio(bool enabled) {
+  m_debugNoRadio = enabled;
+  if (!enabled) return;
+  m_debugNonSecureLoopback = true;
+  m_lanEnabled = false;
+  m_listenAddress = "127.0.0.1";
+  m_rigctldEnabled = false;
+  m_tciEnabled = false;
+  m_remoteTxPolicy = false;
+  m_rotatorPolicy = false;
+  m_rawIqHostEnabled = false;
+}
+
+QVariantMap RemoteStationService::hubObserverIdentity(QString *error) {
+  if (!ensureIdentity(error) || !m_vault) return {};
+  if (m_hubObserverDeviceId.isEmpty() || m_hubObserverPublicKeyPem.isEmpty() ||
+      !m_vault->read(HubObserverKeyAlias).has_value()) {
+    QByteArray privatePem, publicPem;
+    if (!generateP256(QStringLiteral("RigWeave Local Hub observer"), &privatePem,
+                      &publicPem, nullptr, error)) return {};
+    QString vaultError;
+    if (!m_vault->write(HubObserverKeyAlias,
+                        "RigWeave Local Hub observer P-256 key",
+                        QString::fromLatin1(privatePem.toBase64()), &vaultError)) {
+      if (error) *error = vaultError;
+      return {};
+    }
+    m_hubObserverPublicKeyPem = QString::fromLatin1(publicPem);
+    m_hubObserverDeviceId = QStringLiteral("hub-%1").arg(QString::fromLatin1(
+        QCryptographicHash::hash(publicPem, QCryptographicHash::Sha256).toHex().left(24)));
+    appendJournal("HUB_IDENTITY_CREATED", m_hubObserverDeviceId);
+    emit pairingChanged();
+  }
+  return {{"deviceId", m_hubObserverDeviceId},
+          {"publicKeyPem", m_hubObserverPublicKeyPem},
+          {"credentialAlias", HubObserverKeyAlias}};
+}
+
+QString RemoteStationService::signHubObserverChallenge(const QByteArray &challenge,
+                                                        QString *error) {
+  const QVariantMap identity = hubObserverIdentity(error);
+  if (identity.isEmpty() || challenge.isEmpty() || challenge.size() > 512 ||
+      !challenge.startsWith((m_stationId + "|").toUtf8())) {
+    if (error && error->isEmpty()) *error = "Observer challenge is outside the station identity boundary";
+    return {};
+  }
+  const auto secret = m_vault->read(HubObserverKeyAlias, error);
+  if (!secret) return {};
+  return QString::fromLatin1(signP256(QByteArray::fromBase64(secret->toLatin1()),
+                                     challenge, error).toBase64());
 }
 
 bool RemoteStationService::applyLocalSettings(const QVariantMap &settings) {
@@ -314,6 +401,9 @@ bool RemoteStationService::loadTlsConfiguration(QString *error) {
   if (certs.isEmpty() || key.isNull()) { if (error) *error = "Station TLS identity is invalid"; return false; }
   QSslConfiguration tls = QSslConfiguration::defaultConfiguration();
   tls.setProtocol(QSsl::TlsV1_3OrLater);
+  // RigWeave authenticates observers with the signed application-layer
+  // challenge. Do not ask browsers or Local Hubs for a client certificate.
+  tls.setPeerVerifyMode(QSslSocket::VerifyNone);
   tls.setLocalCertificate(certs.first());
   tls.setPrivateKey(key);
   m_webSocketServer.setSslConfiguration(tls);
@@ -344,6 +434,8 @@ bool RemoteStationService::start(QString *error) {
   }
   if (m_lanEnabled && !startDiscovery(error)) { stop(); return false; }
   m_stateTimer.start(); m_expiryTimer.start();
+  if (m_debugNoRadio) m_debugMediaTimer.start();
+  appendJournal("SERVICE_STARTED", m_debugNoRadio ? "DEMO_NO_RADIO" : "CONFIGURED_SOURCE");
   setState(QStringLiteral("Running · %1:%2 · read-only default · TX disarmed")
                .arg(address.toString()).arg(m_port));
   return true;
@@ -357,7 +449,7 @@ bool RemoteStationService::startFromUi() {
 }
 
 void RemoteStationService::stop() {
-  m_stateTimer.stop(); m_expiryTimer.stop();
+  m_stateTimer.stop(); m_expiryTimer.stop(); m_debugMediaTimer.stop();
   globalStop();
   clearLocalAcceptance();
   for (QWebSocket *socket : m_socketSessions.keys()) socket->close(QWebSocketProtocol::CloseCodeGoingAway, "Station service stopped");
@@ -369,6 +461,7 @@ void RemoteStationService::stop() {
   m_openSockets.clear();
   m_webSocketServer.close(); m_rigctldServer.close(); m_tciServer.close();
   stopDiscovery();
+  appendJournal("SERVICE_STOPPED", "CLEAN_SHUTDOWN");
   setState("Stopped · remote disconnected · TX disarmed");
   emit sessionsChanged();
 }
@@ -445,6 +538,7 @@ QVariantMap RemoteStationService::createPairingOffer(const QString &roleValue) {
       QStringLiteral("wss://%1:%2").arg(m_listenAddress).arg(m_port).toStdString(),
       fingerprint(cert.toLatin1()).toStdString(), nonceText.toStdString(), role, expiry};
   if (!m_authority.registerPairingOffer(offer, static_cast<quint64>(QDateTime::currentMSecsSinceEpoch()))) return {};
+  appendJournal("PAIRING_OFFER_CREATED", QString::fromStdString(remote::roleName(role)));
   return {{"version", 1}, {"stationId", m_stationId}, {"stationName", m_stationName},
           {"endpoint", QString::fromStdString(offer.endpoint)},
           {"certificateSha256", QString::fromStdString(offer.certificateSha256)},
@@ -465,7 +559,8 @@ bool RemoteStationService::approvePendingDevice(const QString &deviceId,
   m_pairedDevices[deviceId] = QVariantMap{{"role", roleValue.toUpper()},
       {"publicKeyPem", pending->publicKeyPem}, {"revoked", false},
       {"approvedAtMs", QDateTime::currentMSecsSinceEpoch()}};
-  m_pendingDevices.erase(pending); emit pairingChanged(); return true;
+  m_pendingDevices.erase(pending); appendJournal("PAIRING_APPROVED", deviceId);
+  emit pairingChanged(); return true;
 }
 
 void RemoteStationService::revokeDevice(const QString &deviceId) {
@@ -478,13 +573,15 @@ void RemoteStationService::revokeDevice(const QString &deviceId) {
     if (!live) { it.key()->close(QWebSocketProtocol::CloseCodePolicyViolated, "Device revoked"); it = m_socketSessions.erase(it); }
     else ++it;
   }
+  appendJournal("PAIRING_REVOKED", deviceId);
   emit pairingChanged(); emit sessionsChanged();
 }
 
 bool RemoteStationService::verifySignature(const QString &publicKeyPem,
                                            const QByteArray &message,
                                            const QByteArray &signature) const {
-  BIO *rawBio = BIO_new_mem_buf(publicKeyPem.toLatin1().constData(), publicKeyPem.toLatin1().size());
+  const QByteArray publicKeyBytes = publicKeyPem.toLatin1();
+  BIO *rawBio = BIO_new_mem_buf(publicKeyBytes.constData(), publicKeyBytes.size());
   if (!rawBio) return false;
   EVP_PKEY *rawKey = PEM_read_bio_PUBKEY(rawBio, nullptr, nullptr, nullptr);
   BIO_free(rawBio);
@@ -514,6 +611,7 @@ void RemoteStationService::acceptWebSocket() {
       if (m_rawIqClient == socket) m_rawIqClient = nullptr;
       m_openSockets.remove(socket);
       if (!session.isEmpty()) m_authority.closeSession(session.toStdString());
+      if (!session.isEmpty()) appendJournal("SESSION_CLOSED", session);
       socket->deleteLater(); emit sessionsChanged();
     });
     QByteArray challenge(24, Qt::Uninitialized);
@@ -560,6 +658,7 @@ void RemoteStationService::handleText(QWebSocket *socket, const QString &message
       ++m_rejectedRequests; sendReply(socket, request, false, "SIGNED_CHALLENGE_INVALID"); return;
     }
     m_pendingDevices[deviceId] = {nonce, publicKey, payload.value("requestedRole").toString("OBSERVER")};
+    appendJournal("PAIRING_PENDING", deviceId);
     sendReply(socket, request, true, "LOCAL_APPROVAL_REQUIRED"); emit pairingChanged(); return;
   }
   if (type == "AUTH") {
@@ -577,6 +676,7 @@ void RemoteStationService::handleText(QWebSocket *socket, const QString &message
         m_generation, static_cast<quint64>(QDateTime::currentMSecsSinceEpoch()));
     if (!session) { sendReply(socket, request, false, "SESSION_LIMIT_OR_REVOKED"); return; }
     m_socketSessions[socket] = QString::fromStdString(*session);
+    appendJournal("SESSION_AUTHENTICATED", deviceId);
     sendReply(socket, request, true, "AUTHENTICATED", {{"sessionId", QString::fromStdString(*session)},
         {"role", device.value("role").toString()}, {"radioRoster", QJsonArray::fromVariantList(radioRoster())},
         {"capabilities", QJsonArray{"STATE", "SPOTS", "HEALTH", "AUDIO_RX_OPUS", "AUDIO_RX_PCM16", "SPECTRUM", "WATERFALL", "IQ_OPTIONAL", "DIGI", "KEYER", "VOICE", "ROTATOR"}}});
@@ -677,7 +777,8 @@ remote::RigState RemoteStationService::rigState() const {
 void RemoteStationService::sendState() {
   const QJsonObject base{{"version", 1}, {"type", "STATE"}, {"stationId", m_stationId},
       {"generation", QString::number(m_generation)}, {"timestampMs", QString::number(QDateTime::currentMSecsSinceEpoch())},
-      {"radio", QJsonObject{{"connection", m_radio ? m_radio->state() : "Unavailable"},
+      {"source", m_debugNoRadio ? "DEMO_NO_RADIO" : "CONFIGURED_SOURCE"},
+      {"radio", QJsonObject{{"connection", m_debugNoRadio ? "DEMO · NO RADIO" : m_radio ? m_radio->state() : "Unavailable"},
           {"profile", m_radio ? m_radio->model() : ""}, {"backend", m_radio ? m_radio->backend() : ""},
           {"frequencyHz", m_radio ? QJsonValue(QString::number(m_radio->frequencyHz())) : QJsonValue{}},
           {"mode", m_radio ? m_radio->mode() : ""}, {"ptt", availableValue(false, {})}, {"tune", availableValue(false, {})}}},
@@ -695,6 +796,35 @@ void RemoteStationService::sendState() {
     if (row != rows.end()) state["leases"] = QJsonObject{{"writer", row->writer},
         {"tx", row->transmit}, {"rotator", row->rotator}, {"foreground", row->foreground}};
     it.key()->sendTextMessage(QString::fromUtf8(QJsonDocument(state).toJson(QJsonDocument::Compact)));
+  }
+}
+
+void RemoteStationService::sendDebugMedia() {
+  if (!m_debugNoRadio || m_socketSessions.isEmpty()) return;
+  constexpr quint32 sampleRate = 48'000;
+  QVector<float> samples(960);
+  constexpr double twoPi = 6.28318530717958647692;
+  for (float &sample : samples) {
+    sample = static_cast<float>(std::sin(m_debugAudioPhase) * 0.025);
+    m_debugAudioPhase += twoPi * 440.0 / sampleRate;
+    if (m_debugAudioPhase >= twoPi) m_debugAudioPhase -= twoPi;
+  }
+  sendAudio("debug-no-radio", sampleRate, samples);
+  if (++m_debugMediaTick % 5 != 0) return;
+  std::vector<std::uint8_t> bins(256);
+  for (std::size_t i = 0; i < bins.size(); ++i) {
+    const int distance = std::abs(static_cast<int>(i) - 128);
+    bins[i] = static_cast<std::uint8_t>(qBound(12, 210 - distance * 2, 210));
+  }
+  for (remote::Channel channel : {remote::Channel::Spectrum, remote::Channel::Waterfall}) {
+    remote::MediaFrame media{channel, 1, ++m_mediaSequence,
+        static_cast<quint64>(QDateTime::currentMSecsSinceEpoch()), m_generation, bins};
+    const auto bytes = remote::encodeMedia(media);
+    const QByteArray payload(reinterpret_cast<const char *>(bytes.data()), static_cast<int>(bytes.size()));
+    for (QWebSocket *socket : m_socketSessions.keys()) {
+      if (socket->bytesToWrite() < 256 * 1024) socket->sendBinaryMessage(payload);
+      else ++m_mediaDrops;
+    }
   }
 }
 
@@ -912,6 +1042,7 @@ QVariantList RemoteStationService::pendingDevices() const {
     result.push_back(QVariantMap{{"deviceId", it.key()}, {"requestedRole", it->requestedRole}});
   return result;
 }
+QVariantList RemoteStationService::observerJournal() const { return m_observerJournal; }
 QVariantList RemoteStationService::radioRoster() const {
   QVariantList result;
   if (!m_radio) return result;
@@ -932,12 +1063,19 @@ QVariantMap RemoteStationService::health() const {
       {"rejectedFrames", QVariant::fromValue<qulonglong>(m_rejectedFrames)},
       {"rejectedRequests", QVariant::fromValue<qulonglong>(m_rejectedRequests)},
       {"mediaDrops", QVariant::fromValue<qulonglong>(m_mediaDrops)},
+      {"source", m_debugNoRadio ? "DEMO · NO RADIO" : "CONFIGURED_SOURCE"},
+      {"journalEntries", m_observerJournal.size()},
       {"writerLimit", 1}, {"txLimit", 1}, {"rotatorLimit", 1},
       {"rawIqClientLimit", 1}, {"rawIqHostEnabled", m_rawIqHostEnabled},
       {"rawIqActive", m_rawIqClient != nullptr},
       {"thirdPartyWriterArmed", m_externalWriterExpiryMs > QDateTime::currentMSecsSinceEpoch()},
       {"remoteTx", "Disabled until physical acceptance and explicit session arm"},
       {"audioCodec", "Opus 20 ms adaptive within operator cap; PCM16 LAN/debug fallback"}};
+}
+void RemoteStationService::appendJournal(const QString &event, const QString &detail) {
+  m_observerJournal.prepend(QVariantMap{{"timestampUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+      {"event", event.left(80)}, {"detail", detail.left(160)}});
+  while (m_observerJournal.size() > 256) m_observerJournal.removeLast();
 }
 void RemoteStationService::setState(QString state) { if (m_state == state) return; m_state = std::move(state); emit stateChanged(); }
 
