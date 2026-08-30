@@ -3,7 +3,7 @@ name: RigWeave Secure Remote Station v6
 on:
   workflow_dispatch:
   push:
-    branches: [feature/secure-remote-station-v6]
+    branches: [feature/secure-remote-station-v6, feature/web-observer-agent-m2-v1]
 
 permissions:
   contents: read
