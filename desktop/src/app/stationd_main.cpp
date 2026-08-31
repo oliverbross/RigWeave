@@ -34,9 +34,9 @@ QJsonObject adminRequest(const QCommandLineParser &parser) {
   return {};
 }
 
-int sendAdminRequest(const QJsonObject &request) {
+int sendAdminRequest(const QJsonObject &request, const QString &adminSocket) {
   QLocalSocket socket;
-  socket.connectToServer(AdminSocket, QIODevice::ReadWrite);
+  socket.connectToServer(adminSocket, QIODevice::ReadWrite);
   if (!socket.waitForConnected(2'000)) return 5;
   socket.write(QJsonDocument(request).toJson(QJsonDocument::Compact) + '\n');
   if (!socket.waitForBytesWritten(2'000) || !socket.waitForReadyRead(3'000)) return 6;
@@ -56,6 +56,7 @@ int main(int argc, char **argv) {
   parser.addOption(QCommandLineOption({"s", "status"}, "Print bounded service status"));
   parser.addOption(QCommandLineOption({"p", "pairing-offer"}, "Create a short-lived pairing offer"));
   parser.addOption(QCommandLineOption(QStringLiteral("debug-no-radio"), "Run a loopback-only deterministic no-radio Agent source"));
+  parser.addOption(QCommandLineOption(QStringLiteral("listen-port"), "Override the loopback listener port in debug-no-radio mode", "port"));
   parser.addOption(QCommandLineOption(QStringLiteral("hub-identity"), "Return the Local Hub public observer identity"));
   parser.addOption(QCommandLineOption(QStringLiteral("hub-sign"), "Sign one bounded base64-encoded station challenge in the configured credential vault", "challenge-base64"));
   parser.addOption(QCommandLineOption(QStringLiteral("approve-observer"), "Approve one pending Local Hub device as OBSERVER", "device-id"));
@@ -65,8 +66,19 @@ int main(int argc, char **argv) {
   parser.addOption(QCommandLineOption(QStringLiteral("stop"), "Request station Global Stop and shut down"));
   parser.process(application);
 
+  bool listenPortOk{};
+  const int requestedListenPort = parser.isSet("listen-port")
+      ? parser.value("listen-port").toInt(&listenPortOk)
+      : 0;
+  if (parser.isSet("listen-port") && (!listenPortOk || requestedListenPort < 1 || requestedListenPort > 65535)) {
+    QTextStream(stderr) << "--listen-port requires a port from 1 to 65535\n";
+    return 2;
+  }
+  const QString adminSocket = parser.isSet("listen-port")
+      ? AdminSocket + QStringLiteral("-") + QString::number(requestedListenPort)
+      : AdminSocket;
   const QJsonObject requestedAdminAction = adminRequest(parser);
-  if (!parser.isSet("foreground") && !requestedAdminAction.isEmpty()) return sendAdminRequest(requestedAdminAction);
+  if (!parser.isSet("foreground") && !requestedAdminAction.isEmpty()) return sendAdminRequest(requestedAdminAction, adminSocket);
   if (!parser.isSet("foreground")) parser.showHelp(1);
 
   // The cert-only backend can parse identities but cannot terminate TLS. Prefer
@@ -105,8 +117,16 @@ int main(int argc, char **argv) {
       !panadapter.restoreConfiguration(configuration.section("panadapter"), &error)) {
     QTextStream(stderr) << error << '\n'; return 2;
   }
+  QVariantMap remoteStationConfiguration = configuration.section("remoteStation");
+  if (parser.isSet("listen-port")) {
+    if (!debugNoRadio) {
+      QTextStream(stderr) << "--listen-port requires debug-no-radio for foreground service startup\n";
+      return 2;
+    }
+    remoteStationConfiguration["port"] = requestedListenPort;
+  }
   RemoteStationService service(vault, &radio, &rotator, &panadapter);
-  if (!service.restoreConfiguration(configuration.section("remoteStation"), &error)) {
+  if (!service.restoreConfiguration(remoteStationConfiguration, &error)) {
     QTextStream(stderr) << error << '\n'; return 2;
   }
   if (debugNoRadio) service.setDebugNoRadio(true);
@@ -121,13 +141,13 @@ int main(int argc, char **argv) {
   QLocalServer admin;
   admin.setSocketOptions(QLocalServer::UserAccessOption);
   QLocalSocket existing;
-  existing.connectToServer(AdminSocket);
+  existing.connectToServer(adminSocket);
   if (existing.waitForConnected(250)) {
     QTextStream(stderr) << "Another rigweave-stationd instance already owns local administration\n";
     return 4;
   }
-  QLocalServer::removeServer(AdminSocket);
-  if (!admin.listen(AdminSocket)) { QTextStream(stderr) << admin.errorString() << '\n'; return 4; }
+  QLocalServer::removeServer(adminSocket);
+  if (!admin.listen(adminSocket)) { QTextStream(stderr) << admin.errorString() << '\n'; return 4; }
   if (!service.start(&error)) { QTextStream(stderr) << error << '\n'; return 3; }
   QObject::connect(&admin, &QLocalServer::newConnection, &application, [&] {
     while (QLocalSocket *socket = admin.nextPendingConnection()) {
