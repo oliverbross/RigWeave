@@ -31,6 +31,17 @@ QJsonObject adminRequest(const QCommandLineParser &parser) {
   if (parser.isSet("approve-observer")) return {{"action", "approve-observer"}, {"deviceId", parser.value("approve-observer")}};
   if (parser.isSet("approve-operator")) return {{"action", "approve-operator"}, {"deviceId", parser.value("approve-operator")}};
   if (parser.isSet("safe-control-state")) return {{"action", "safe-control-state"}};
+  if (parser.isSet("workflow-state")) return {{"action", "workflow-state"}};
+  if (parser.isSet("workflow-request")) {
+    const QByteArray encoded = parser.value("workflow-request").toLatin1();
+    if (encoded.size() > 48 * 1024) return {{"action", "invalid-workflow-request"}};
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(
+        QByteArray::fromBase64(encoded, QByteArray::Base64UrlEncoding), &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject())
+      return {{"action", "invalid-workflow-request"}};
+    return {{"action", "workflow-request"}, {"request", document.object()}};
+  }
   if (parser.isSet("safe-control-request")) {
     const QByteArray encoded = parser.value("safe-control-request").toLatin1();
     if (encoded.size() > 48 * 1024) return {{"action", "invalid-safe-control-request"}};
@@ -78,6 +89,8 @@ int main(int argc, char **argv) {
   parser.addOption(QCommandLineOption(QStringLiteral("approve-operator"), "Approve one pending Local Hub device as OPERATOR", "device-id"));
   parser.addOption(QCommandLineOption(QStringLiteral("safe-control-state"), "Print bounded M5 safe-control state"));
   parser.addOption(QCommandLineOption(QStringLiteral("safe-control-request"), "Submit one bounded M5 request through the private Agent admin socket", "base64url-json"));
+  parser.addOption(QCommandLineOption(QStringLiteral("workflow-state"), "Print bounded M6 workflow authority state"));
+  parser.addOption(QCommandLineOption(QStringLiteral("workflow-request"), "Submit one bounded M6 request through the private Agent admin socket", "base64url-json"));
   parser.addOption(QCommandLineOption(QStringLiteral("journal"), "Print the bounded observer Agent journal"));
   parser.addOption(QCommandLineOption(QStringLiteral("domain-journal"), "Print bounded opaque pending/acknowledged Application Service envelopes"));
   parser.addOption(QCommandLineOption(QStringLiteral("list-clients"), "List paired public device metadata"));
@@ -199,6 +212,13 @@ int main(int argc, char **argv) {
         }
         else if (action == "safe-control-state") response = service.safeControlState();
         else if (action == "safe-control-request") response = service.safeControlAdmin(request.value("request").toObject().toVariantMap());
+        else if (action == "workflow-state") response = service.workflowState();
+        else if (action == "workflow-request") {
+          QVariantMap workflowRequest = request.value("request").toObject().toVariantMap();
+          workflowRequest["_trustedOperator"] = debugNoRadio;
+          workflowRequest["_operatorSessionId"] = "stationd-debug-operator";
+          response = service.workflowAdmin(workflowRequest);
+        }
         else if (action == "journal") response = service.observerJournal();
         else if (action == "domain-journal") response = service.domainJournal();
         else if (action == "domain-journal-append") {

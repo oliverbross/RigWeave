@@ -7,6 +7,7 @@
 #include "rigweave/desktop/DesktopRotatorController.hpp"
 #include "rigweave/remote.h"
 #include "rigweave/safe_control.h"
+#include "rigweave/workflow_control.h"
 
 #include <QHash>
 #include <QJsonObject>
@@ -45,6 +46,8 @@ public:
   Q_INVOKABLE QVariantMap health() const;
   Q_INVOKABLE QVariantMap safeControlState() const;
   Q_INVOKABLE QVariantMap safeControlAdmin(const QVariantMap &request);
+  Q_INVOKABLE QVariantMap workflowState() const;
+  Q_INVOKABLE QVariantMap workflowAdmin(const QVariantMap &request);
 
   Q_INVOKABLE bool ensureIdentity(QString *error = nullptr);
   Q_INVOKABLE bool start(QString *error = nullptr);
@@ -134,6 +137,7 @@ private:
   QTimer m_debugMediaTimer;
   remote::SessionAuthority m_authority;
   safe_control::Engine m_safeControl;
+  workflow_control::Engine m_workflows;
   QHash<QWebSocket *, QString> m_socketSessions;
   QHash<QWebSocket *, QString> m_socketChallenges;
   QHash<QWebSocket *, QVariantMap> m_mediaPreferences;

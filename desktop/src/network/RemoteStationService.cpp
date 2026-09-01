@@ -182,7 +182,9 @@ RemoteStationService::RemoteStationService(DesktopCredentialVault *vault,
   connect(&m_stateTimer, &QTimer::timeout, this, &RemoteStationService::sendState);
   m_expiryTimer.setInterval(1'000);
   connect(&m_expiryTimer, &QTimer::timeout, this, [this] {
-    m_authority.expire(static_cast<quint64>(QDateTime::currentMSecsSinceEpoch()));
+    const auto now = static_cast<quint64>(QDateTime::currentMSecsSinceEpoch());
+    m_authority.expire(now);
+    m_workflows.expire(now);
     const auto live = m_authority.sessions();
     for (auto it = m_socketSessions.begin(); it != m_socketSessions.end();) {
       const bool found = std::any_of(live.begin(), live.end(), [&](const auto &row) {
@@ -297,6 +299,7 @@ bool RemoteStationService::restoreConfiguration(const QVariantMap &config,
 void RemoteStationService::setDebugNoRadio(bool enabled) {
   m_debugNoRadio = enabled;
   m_safeControl.setDebugNoRadio(enabled);
+  m_workflows.setDebugNoRadio(enabled);
   if (!enabled) return;
   m_debugNonSecureLoopback = true;
   m_lanEnabled = false;
@@ -699,7 +702,7 @@ void RemoteStationService::handleText(QWebSocket *socket, const QString &message
     appendJournal("SESSION_AUTHENTICATED", deviceId);
     sendReply(socket, request, true, "AUTHENTICATED", {{"sessionId", QString::fromStdString(*session)},
         {"role", device.value("role").toString()}, {"radioRoster", QJsonArray::fromVariantList(radioRoster())},
-        {"capabilities", QJsonArray{"STATE", "SPOTS", "HEALTH", "AUDIO_RX_OPUS", "AUDIO_RX_PCM16", "SPECTRUM", "WATERFALL", "IQ_OPTIONAL", "DIGI", "KEYER", "VOICE", "ROTATOR", "SAFE_CONTROL_1_1"}}});
+        {"capabilities", QJsonArray{"STATE", "SPOTS", "HEALTH", "AUDIO_RX_OPUS", "AUDIO_RX_PCM16", "SPECTRUM", "WATERFALL", "IQ_OPTIONAL", "DIGI", "KEYER", "VOICE", "ROTATOR", "SAFE_CONTROL_1_1", "WORKFLOW_CONTROL_1_2"}}});
     emit sessionsChanged(); return;
   }
   const QString session = m_socketSessions.value(socket);
@@ -742,6 +745,21 @@ void RemoteStationService::handleText(QWebSocket *socket, const QString &message
   }
   if (type == "SAFE_CONTROL_STATE") {
     sendReply(socket, request, true, "SAFE_CONTROL_STATE", QJsonObject::fromVariantMap(safeControlState()));
+    return;
+  }
+  if (type == "WORKFLOW_STATE") {
+    sendReply(socket, request, true, "WORKFLOW_STATE", QJsonObject::fromVariantMap(workflowState()));
+    return;
+  }
+  if (type == "WORKFLOW") {
+    const auto rows = m_authority.sessions();
+    const auto row = std::find_if(rows.begin(), rows.end(), [&](const auto &value) { return value.sessionId == session.toStdString(); });
+    QVariantMap workflowRequest = payload.value("request").toObject().toVariantMap();
+    workflowRequest["_trustedOperator"] = row != rows.end() && row->role != remote::Role::Observer;
+    workflowRequest["_operatorSessionId"] = session;
+    const QVariantMap result = workflowAdmin(workflowRequest);
+    sendReply(socket, request, result.value("accepted").toBool(), result.value("code").toString(),
+              {{"result", QJsonObject::fromVariantMap(result)}});
     return;
   }
   if (type == "CONTROL_LEASE") {
@@ -1115,13 +1133,94 @@ bool RemoteStationService::executeBridgeMutation(const remote::ProtocolReply &re
   return false;
 }
 
-void RemoteStationService::localPreempt() { m_authority.localPreempt(); m_safeControl.localPreempt(); ++m_generation; emit sessionsChanged(); }
+void RemoteStationService::localPreempt() {
+  m_authority.localPreempt();
+  m_safeControl.localPreempt();
+  m_workflows.invalidate("local preempt");
+  ++m_generation;
+  emit sessionsChanged();
+}
 void RemoteStationService::globalStop() {
   m_authority.globalStop(); m_safeControl.globalStop(static_cast<quint64>(QDateTime::currentMSecsSinceEpoch())); ++m_generation;
+  m_workflows.globalStop(static_cast<quint64>(QDateTime::currentMSecsSinceEpoch()));
   clearLocalAcceptance();
   if (m_radio) m_radio->globalStop();
   if (m_rotator) m_rotator->stop();
   emit sessionsChanged();
+}
+
+QVariantMap RemoteStationService::workflowState() const {
+  const auto &context = m_workflows.context();
+  const auto &authority = m_workflows.authority();
+  return {{"protocol", QVariantMap{{"major", 1}, {"minor", 2}}},
+      {"source", m_debugNoRadio ? "DEMO · NO RADIO" : "CONFIGURED_SOURCE"},
+      {"physicalAcceptance", false},
+      {"context", QVariantMap{{"contextGeneration", QString::number(context.contextGeneration)},
+          {"agentGeneration", QString::number(context.agentGeneration)},
+          {"stationId", QString::fromStdString(context.stationId)},
+          {"radioProfileId", QString::fromStdString(context.radioProfileId)},
+          {"receiverId", QString::fromStdString(context.receiverId)},
+          {"radioGeneration", QString::number(context.radioGeneration)},
+          {"frequencyHz", QString::number(context.frequencyHz)},
+          {"band", QString::fromStdString(context.band)}, {"mode", QString::fromStdString(context.mode)},
+          {"audioRoute", QString::fromStdString(context.audioRoute)},
+          {"contestSessionId", QString::fromStdString(context.contestSessionId)},
+          {"portableSessionId", QString::fromStdString(context.portableSessionId)},
+          {"selectedDxId", QString::fromStdString(context.selectedDxId)},
+          {"selectedSatelliteId", QString::fromStdString(context.selectedSatelliteId)},
+          {"rotatorAssignmentId", QString::fromStdString(context.rotatorAssignmentId)},
+          {"connected", context.connected}, {"transmitting", context.transmitting}}},
+      {"authority", QVariantMap{{"txLeaseId", QString::fromStdString(authority.txLeaseId)},
+          {"txArmId", QString::fromStdString(authority.txArmId)},
+          {"rotatorLeaseId", QString::fromStdString(authority.rotatorLeaseId)},
+          {"movementArmId", QString::fromStdString(authority.movementArmId)},
+          {"expiresMs", QString::number(authority.expiresMs)}}},
+      {"txBoundary", "Separate operator capability, lease and short-lived arm; physical acceptance not established"},
+      {"rotatorBoundary", "Separate operator capability, lease and short-lived movement arm; physical acceptance not established"}};
+}
+
+QVariantMap RemoteStationService::workflowAdmin(const QVariantMap &request) {
+  const QString kind = request.value("kind", "command").toString();
+  const quint64 now = static_cast<quint64>(QDateTime::currentMSecsSinceEpoch());
+  if (kind == "state") return workflowState();
+  if (kind == "global.stop") {
+    globalStop();
+    return {{"accepted", true}, {"code", "GLOBAL_STOPPED"}, {"state", workflowState()}};
+  }
+  if (kind != "command") return {{"accepted", false}, {"code", "WORKFLOW_REQUEST_INVALID"}};
+  const QVariantMap envelope = request.value("command").toMap();
+  workflow_control::Command command;
+  const QVariantMap protocol = envelope.value("protocol").toMap();
+  command.protocol.major = static_cast<std::uint16_t>(protocol.value("major", 1).toUInt());
+  command.protocol.minor = static_cast<std::uint16_t>(protocol.value("minor", 2).toUInt());
+  command.requestId = envelope.value("requestId").toString().left(128).toStdString();
+  command.idempotencyKey = envelope.value("idempotencyKey").toString().left(128).toStdString();
+  command.domain = envelope.value("domain").toString().left(96).toStdString();
+  command.action = envelope.value("action").toString().left(96).toStdString();
+  command.operatorSessionId = request.value("_operatorSessionId", envelope.value("operatorSessionId")).toString().left(128).toStdString();
+  command.role = request.value("_trustedOperator").toBool() ? workflow_control::Role::Operator : workflow_control::Role::Observer;
+  if (request.value("_trustedOperator").toBool()) {
+    command.capabilities = workflow_control::Capability::TxOperator |
+        workflow_control::Capability::RotatorOperator |
+        workflow_control::Capability::ProviderAuthor |
+        workflow_control::Capability::GroupsAuthor |
+        workflow_control::Capability::N1mmOperator;
+  }
+  command.contextGeneration = envelope.value("contextGeneration").toULongLong();
+  command.agentGeneration = envelope.value("agentGeneration").toULongLong();
+  command.expiresMs = envelope.value("expiresMs").toULongLong();
+  command.reason = envelope.value("reason").toString().left(240).toStdString();
+  const QVariantMap arguments = envelope.value("arguments").toMap();
+  int count{};
+  for (auto it = arguments.cbegin(); it != arguments.cend() && count < 32; ++it, ++count)
+    command.arguments[it.key().left(96).toStdString()] = it.value().toString().left(512).toStdString();
+  const auto result = m_workflows.execute(command, now);
+  QVariantMap readback;
+  for (const auto &[key, value] : result.readback)
+    readback[QString::fromStdString(key)] = QString::fromStdString(value);
+  return {{"requestId", QString::fromStdString(command.requestId)}, {"accepted", result.accepted},
+      {"code", QString::fromStdString(result.code)}, {"state", QString::fromStdString(result.state)},
+      {"contextGeneration", QString::number(result.contextGeneration)}, {"readback", readback}};
 }
 
 QVariantMap RemoteStationService::safeControlState() const {
@@ -1353,6 +1452,7 @@ QVariantMap RemoteStationService::health() const {
       {"rejectedRequests", QVariant::fromValue<qulonglong>(m_rejectedRequests)},
       {"mediaDrops", QVariant::fromValue<qulonglong>(m_mediaDrops)},
       {"source", m_debugNoRadio ? "DEMO · NO RADIO" : "CONFIGURED_SOURCE"},
+      {"workflowProtocol", "1.2"}, {"workflow", workflowState()},
       {"journalEntries", m_observerJournal.size()},
       {"pendingDomainJournalEntries", std::count_if(m_domainJournal.cbegin(), m_domainJournal.cend(), [](const QVariant &value) {
         return value.toMap().value("acknowledgmentState").toString() == "PENDING";
