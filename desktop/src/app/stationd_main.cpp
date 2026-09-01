@@ -29,6 +29,7 @@ QJsonObject adminRequest(const QCommandLineParser &parser) {
   if (parser.isSet("hub-sign")) return {{"action", "hub-sign"}, {"challengeBase64", parser.value("hub-sign")}};
   if (parser.isSet("approve-observer")) return {{"action", "approve-observer"}, {"deviceId", parser.value("approve-observer")}};
   if (parser.isSet("journal")) return {{"action", "journal"}};
+  if (parser.isSet("domain-journal")) return {{"action", "domain-journal"}};
   if (parser.isSet("revoke")) return {{"action", "revoke"}, {"deviceId", parser.value("revoke")}};
   if (parser.isSet("stop")) return {{"action", "stop"}};
   return {};
@@ -61,6 +62,7 @@ int main(int argc, char **argv) {
   parser.addOption(QCommandLineOption(QStringLiteral("hub-sign"), "Sign one bounded base64-encoded station challenge in the configured credential vault", "challenge-base64"));
   parser.addOption(QCommandLineOption(QStringLiteral("approve-observer"), "Approve one pending Local Hub device as OBSERVER", "device-id"));
   parser.addOption(QCommandLineOption(QStringLiteral("journal"), "Print the bounded observer Agent journal"));
+  parser.addOption(QCommandLineOption(QStringLiteral("domain-journal"), "Print bounded opaque pending/acknowledged Application Service envelopes"));
   parser.addOption(QCommandLineOption(QStringLiteral("list-clients"), "List paired public device metadata"));
   parser.addOption(QCommandLineOption(QStringLiteral("revoke"), "Revoke a paired device", "device-id"));
   parser.addOption(QCommandLineOption(QStringLiteral("stop"), "Request station Global Stop and shut down"));
@@ -133,6 +135,9 @@ int main(int argc, char **argv) {
   QObject::connect(&service, &RemoteStationService::pairingChanged, &application, [&] {
     configuration.setSection("remoteStation", service.configuration()); configuration.save();
   });
+  QObject::connect(&service, &RemoteStationService::domainJournalChanged, &application, [&] {
+    configuration.setSection("remoteStation", service.configuration()); configuration.save();
+  });
   QObject::connect(&application, &QCoreApplication::aboutToQuit, &application, [&] {
     service.globalStop(); service.stop();
     configuration.setSection("remoteStation", service.configuration()); configuration.save();
@@ -171,6 +176,16 @@ int main(int argc, char **argv) {
           response = QVariantMap{{"approved", ok}, {"role", "OBSERVER"}};
         }
         else if (action == "journal") response = service.observerJournal();
+        else if (action == "domain-journal") response = service.domainJournal();
+        else if (action == "domain-journal-append") {
+          ok = service.appendDomainJournalEnvelope(request.value("envelope").toObject().toVariantMap(), &error);
+          response = ok ? QVariantMap{{"accepted", true}} : QVariantMap{{"error", error.left(240)}};
+        }
+        else if (action == "domain-journal-ack") {
+          ok = service.acknowledgeDomainJournalEvent(request.value("eventId").toString(),
+              request.value("hashSha256").toString(), &error);
+          response = ok ? QVariantMap{{"acknowledged", true}} : QVariantMap{{"error", error.left(240)}};
+        }
         else if (action == "revoke") { service.revokeDevice(request.value("deviceId").toString()); response = QVariantMap{{"revoked", true}}; }
         else if (action == "stop") { service.globalStop(); response = QVariantMap{{"stopped", true}}; }
         else { ok = false; response = QVariantMap{{"error", "unknown admin action"}}; }

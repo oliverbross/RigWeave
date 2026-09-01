@@ -57,6 +57,12 @@ public:
   Q_INVOKABLE QVariantList pairedDevices() const;
   Q_INVOKABLE QVariantList pendingDevices() const;
   Q_INVOKABLE QVariantList observerJournal() const;
+  Q_INVOKABLE QVariantList domainJournal() const;
+  Q_INVOKABLE bool appendDomainJournalEnvelope(const QVariantMap &envelope,
+                                                QString *error = nullptr);
+  Q_INVOKABLE bool acknowledgeDomainJournalEvent(const QString &eventId,
+                                                  const QString &hashSha256,
+                                                  QString *error = nullptr);
   Q_INVOKABLE QVariantList radioRoster() const;
   Q_INVOKABLE bool applyLocalSettings(const QVariantMap &settings);
   Q_INVOKABLE bool armThirdPartyWriter(int ttlMs = 30'000);
@@ -71,6 +77,7 @@ signals:
   void stateChanged();
   void sessionsChanged();
   void pairingChanged();
+  void domainJournalChanged();
   void error(QString message);
 
 private:
@@ -108,6 +115,7 @@ private:
   static remote::Role decodeRole(const QString &role, bool *ok = nullptr);
   static QString fingerprint(const QByteArray &certificatePem);
   void appendJournal(const QString &event, const QString &detail = {});
+  void pruneDomainJournal();
   void setState(QString state);
 
   DesktopCredentialVault *m_vault{};
@@ -130,6 +138,7 @@ private:
   QHash<QString, PendingDevice> m_pendingDevices;
   QVariantMap m_pairedDevices;
   QVariantList m_observerJournal;
+  QVariantList m_domainJournal;
   QString m_state{"Stopped · remote disconnected · TX disarmed"};
   QString m_stationId;
   QString m_stationName{"RigWeave Station"};

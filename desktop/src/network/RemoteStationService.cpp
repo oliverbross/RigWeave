@@ -227,7 +227,8 @@ QVariantMap RemoteStationService::configuration() const {
           {"pairedDevices", m_pairedDevices},
           {"hubObserverDeviceId", m_hubObserverDeviceId},
           {"hubObserverPublicKeyPem", m_hubObserverPublicKeyPem},
-          {"observerJournal", m_observerJournal}};
+          {"observerJournal", m_observerJournal},
+          {"domainJournal", m_domainJournal}};
 }
 
 bool RemoteStationService::restoreConfiguration(const QVariantMap &config,
@@ -260,6 +261,24 @@ bool RemoteStationService::restoreConfiguration(const QVariantMap &config,
   m_hubObserverDeviceId = config.value("hubObserverDeviceId").toString().left(128);
   m_hubObserverPublicKeyPem = config.value("hubObserverPublicKeyPem").toString().left(4096);
   m_observerJournal = config.value("observerJournal").toList().mid(0, 256);
+  m_domainJournal.clear();
+  const QVariantList restoredDomainJournal = config.value("domainJournal").toList().mid(0, 256);
+  for (const QVariant &value : restoredDomainJournal) {
+    if (!value.canConvert<QVariantMap>()) continue;
+    QString ignored;
+    if (!appendDomainJournalEnvelope(value.toMap(), &ignored)) continue;
+    const QVariantMap stored = value.toMap();
+    if (stored.value("acknowledgmentState").toString() == "ACKNOWLEDGED") {
+      QVariantMap accepted = m_domainJournal.front().toMap();
+      const QDateTime acknowledged = QDateTime::fromString(stored.value("acknowledgedUtc").toString(), Qt::ISODateWithMs);
+      if (acknowledged.isValid()) {
+        accepted["acknowledgmentState"] = "ACKNOWLEDGED";
+        accepted["acknowledgedUtc"] = acknowledged.toUTC().toString(Qt::ISODateWithMs);
+        m_domainJournal.front() = accepted;
+      }
+    }
+  }
+  pruneDomainJournal();
   for (auto it = m_pairedDevices.cbegin(); it != m_pairedDevices.cend(); ++it) {
     if (!it.value().canConvert<QVariantMap>()) continue;
     const QVariantMap device = it.value().toMap();
@@ -1043,6 +1062,85 @@ QVariantList RemoteStationService::pendingDevices() const {
   return result;
 }
 QVariantList RemoteStationService::observerJournal() const { return m_observerJournal; }
+QVariantList RemoteStationService::domainJournal() const { return m_domainJournal; }
+
+bool RemoteStationService::appendDomainJournalEnvelope(const QVariantMap &envelope,
+                                                       QString *error) {
+  pruneDomainJournal();
+  const QString eventId = envelope.value("eventId").toString();
+  const QString stationId = envelope.value("stationId").toString();
+  const QString applicationId = envelope.value("applicationId").toString();
+  const QString origin = envelope.value("origin").toString();
+  const QString payloadSchema = envelope.value("payloadSchema").toString();
+  const int payloadVersion = envelope.value("payloadVersion").toInt();
+  const QString protection = envelope.value("protection").toString();
+  const QString ciphertextBase64 = envelope.value("ciphertextBase64").toString();
+  const QString suppliedHash = envelope.value("hashSha256").toString().toLower();
+  const QDateTime created = QDateTime::fromString(envelope.value("createdUtc").toString(), Qt::ISODateWithMs).toUTC();
+  const QDateTime expires = QDateTime::fromString(envelope.value("expiresUtc").toString(), Qt::ISODateWithMs).toUTC();
+  const QByteArray ciphertext = QByteArray::fromBase64(ciphertextBase64.toLatin1());
+  const QString actualHash = QString::fromLatin1(QCryptographicHash::hash(ciphertext, QCryptographicHash::Sha256).toHex());
+  const bool malformed = QUuid(eventId).isNull() || stationId.isEmpty() || stationId.size() > 128 ||
+      applicationId.isEmpty() || applicationId.size() > 128 || origin != "APPLICATION_SERVICE_OUTAGE" ||
+      payloadSchema != "rigweave.qso-event" || payloadVersion != 1 ||
+      protection != "APPLICATION_SERVICE_AEAD_V1" || ciphertext.isEmpty() || ciphertext.size() > 16 * 1024 ||
+      ciphertext.toBase64() != ciphertextBase64.toLatin1() || suppliedHash.size() != 64 || suppliedHash != actualHash ||
+      !created.isValid() || !expires.isValid() || expires <= created || created.secsTo(expires) > 7 * 24 * 60 * 60 ||
+      expires <= QDateTime::currentDateTimeUtc();
+  if (malformed) {
+    if (error) *error = "Opaque Agent domain envelope is malformed or outside bounds";
+    return false;
+  }
+  for (const QVariant &value : std::as_const(m_domainJournal)) {
+    const QVariantMap existing = value.toMap();
+    if (existing.value("eventId").toString() != eventId) continue;
+    const bool same = existing.value("hashSha256").toString() == suppliedHash;
+    if (!same && error) *error = "Agent domain event identity already has a different hash";
+    return same;
+  }
+  m_domainJournal.prepend(QVariantMap{{"eventId", eventId}, {"stationId", stationId},
+      {"applicationId", applicationId}, {"origin", origin},
+      {"createdUtc", created.toString(Qt::ISODateWithMs)}, {"expiresUtc", expires.toString(Qt::ISODateWithMs)},
+      {"payloadSchema", payloadSchema}, {"payloadVersion", payloadVersion}, {"protection", protection},
+      {"ciphertextBase64", ciphertextBase64}, {"hashSha256", suppliedHash},
+      {"acknowledgmentState", "PENDING"}, {"acknowledgedUtc", QVariant{}}});
+  while (m_domainJournal.size() > 256) m_domainJournal.removeLast();
+  emit domainJournalChanged();
+  return true;
+}
+
+bool RemoteStationService::acknowledgeDomainJournalEvent(const QString &eventId,
+                                                         const QString &hashSha256,
+                                                         QString *error) {
+  pruneDomainJournal();
+  for (QVariant &value : m_domainJournal) {
+    QVariantMap entry = value.toMap();
+    if (entry.value("eventId").toString() != eventId) continue;
+    if (entry.value("hashSha256").toString() != hashSha256.toLower()) {
+      if (error) *error = "Agent domain event acknowledgment hash mismatch";
+      return false;
+    }
+    if (entry.value("acknowledgmentState").toString() == "ACKNOWLEDGED") return true;
+    entry["acknowledgmentState"] = "ACKNOWLEDGED";
+    entry["acknowledgedUtc"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+    value = entry;
+    emit domainJournalChanged();
+    return true;
+  }
+  if (error) *error = "Agent domain event was not found";
+  return false;
+}
+
+void RemoteStationService::pruneDomainJournal() {
+  const QDateTime now = QDateTime::currentDateTimeUtc();
+  for (qsizetype index = m_domainJournal.size(); index-- > 0;) {
+    const QVariantMap entry = m_domainJournal.at(index).toMap();
+    const QDateTime expiry = QDateTime::fromString(entry.value("expiresUtc").toString(), Qt::ISODateWithMs).toUTC();
+    const QDateTime acknowledged = QDateTime::fromString(entry.value("acknowledgedUtc").toString(), Qt::ISODateWithMs).toUTC();
+    if (!expiry.isValid() || expiry <= now || (acknowledged.isValid() && acknowledged.secsTo(now) >= 24 * 60 * 60))
+      m_domainJournal.removeAt(index);
+  }
+}
 QVariantList RemoteStationService::radioRoster() const {
   QVariantList result;
   if (!m_radio) return result;
@@ -1065,6 +1163,9 @@ QVariantMap RemoteStationService::health() const {
       {"mediaDrops", QVariant::fromValue<qulonglong>(m_mediaDrops)},
       {"source", m_debugNoRadio ? "DEMO · NO RADIO" : "CONFIGURED_SOURCE"},
       {"journalEntries", m_observerJournal.size()},
+      {"pendingDomainJournalEntries", std::count_if(m_domainJournal.cbegin(), m_domainJournal.cend(), [](const QVariant &value) {
+        return value.toMap().value("acknowledgmentState").toString() == "PENDING";
+      })},
       {"writerLimit", 1}, {"txLimit", 1}, {"rotatorLimit", 1},
       {"rawIqClientLimit", 1}, {"rawIqHostEnabled", m_rawIqHostEnabled},
       {"rawIqActive", m_rawIqClient != nullptr},
