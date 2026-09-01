@@ -152,6 +152,48 @@ private slots:
     QCOMPARE(config.value("tciEnabled").toBool(), false);
   }
 
+  void m6WorkflowAuthorityIsGenerationBoundedAndPhysicallyInert() {
+    MemoryVault vault;
+    RemoteStationService service(&vault, nullptr, nullptr, nullptr);
+    service.setDebugNoRadio(true);
+    const QVariantMap state = service.workflowState();
+    QCOMPARE(state.value("protocol").toMap().value("minor").toInt(), 2);
+    QCOMPARE(state.value("source").toString(), QString("DEMO · NO RADIO"));
+    const QVariantMap context = state.value("context").toMap();
+    auto command = [&](QString id, QString domain, QString action, QVariantMap arguments = {}) {
+      return QVariantMap{{"kind", "command"}, {"_trustedOperator", true},
+          {"_operatorSessionId", "stationd-test-operator"}, {"command", QVariantMap{
+          {"protocol", QVariantMap{{"major", 1}, {"minor", 2}}},
+          {"requestId", "request-" + id}, {"idempotencyKey", "idempotency-" + id},
+          {"domain", domain}, {"action", action},
+          {"contextGeneration", context.value("contextGeneration")},
+          {"agentGeneration", context.value("agentGeneration")},
+          {"expiresMs", QString::number(QDateTime::currentMSecsSinceEpoch() + 10'000)},
+          {"reason", "deterministic Qt integration test"}, {"arguments", arguments}}}};
+    };
+    QCOMPARE(service.workflowAdmin(command("tx-arm-01", "digi", "arm.tx")).value("code").toString(),
+             QString("DEMO_TX_ACCEPTANCE_ARMED"));
+    const QVariantMap tx = service.workflowAdmin(command("tx-send-1", "digi", "digi.tx"));
+    QCOMPARE(tx.value("accepted").toBool(), true);
+    QCOMPARE(tx.value("readback").toMap().value("rf").toString(), QString("false"));
+    QCOMPARE(service.workflowAdmin(command("rot-arm1", "rotator", "arm.rotator")).value("accepted").toBool(), true);
+    const QVariantMap movement = service.workflowAdmin(command("rot-move", "rotator", "rotator.move",
+        {{"azimuth", "90"}, {"elevation", "10"}}));
+    QCOMPARE(movement.value("readback").toMap().value("physicalMovement").toString(), QString("false"));
+    service.globalStop();
+    QVERIFY(service.workflowState().value("authority").toMap().value("txArmId").toString().isEmpty());
+
+    RemoteStationService physical(&vault, nullptr, nullptr, nullptr);
+    const QVariantMap physicalContext = physical.workflowState().value("context").toMap();
+    QVariantMap physicalCommand = command("physical", "digi", "arm.tx");
+    QVariantMap envelope = physicalCommand.value("command").toMap();
+    envelope["contextGeneration"] = physicalContext.value("contextGeneration");
+    envelope["agentGeneration"] = physicalContext.value("agentGeneration");
+    physicalCommand["command"] = envelope;
+    QCOMPARE(physical.workflowAdmin(physicalCommand).value("code").toString(),
+             QString("TX_UNAVAILABLE_PHYSICAL_ACCEPTANCE_REQUIRED"));
+  }
+
   void rawIqRequiresExplicitHostEnableAndDoesNotAutoRestore() {
     MemoryVault vault;
     RemoteStationService service(&vault, nullptr, nullptr, nullptr);

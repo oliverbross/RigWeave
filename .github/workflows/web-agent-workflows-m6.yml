@@ -1,0 +1,56 @@
+name: Web Agent workflows M6
+
+on:
+  push:
+    branches: [feature/web-agent-workflows-m6-v1]
+    paths:
+      - 'core/**'
+      - 'desktop/include/rigweave/desktop/RemoteStationService.hpp'
+      - 'desktop/src/network/RemoteStationService.cpp'
+      - 'desktop/src/app/stationd_main.cpp'
+      - 'desktop/tests/integration/remote_station_service_tests.cpp'
+      - 'docs/web-agent/WEB_AGENT_*M6*.md'
+      - '.github/workflows/web-agent-workflows-m6.yml'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  workflow-core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++
+      - name: Build and test workflow core with sanitizers
+        run: >-
+          cmake -S core -B build/m6-core -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          -DRIGWEAVE_CORE_BUILD_TESTS=ON -DRIGWEAVE_ENABLE_ASAN=ON -DRIGWEAVE_ENABLE_UBSAN=ON
+          && cmake --build build/m6-core --parallel 2
+          && ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+          ctest --test-dir build/m6-core --output-on-failure
+
+  station-agent:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libssl-dev pkg-config libglib2.0-dev libsecret-1-dev
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with: {version: '6.11.2', host: linux, target: desktop, arch: linux_gcc_64, modules: 'qtmultimedia qtserialport qtwebsockets qtlocation qtpositioning', cache: true}
+      - name: Build Agent and integration test
+        run: >-
+          cmake -S desktop -B build/m6-agent -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          -DRIGWEAVE_BUILD_TESTS=ON -DRIGWEAVE_BUILD_NATIVE_DIGI=OFF
+          && cmake --build build/m6-agent --target remote_station_service_tests rigweave-stationd --parallel 2
+      - name: Run retained and M6 Station tests
+        env: {QT_QPA_PLATFORM: offscreen}
+        run: ctest --test-dir build/m6-agent -R remote_station_service_tests --output-on-failure
+      - name: Reject unsafe M6 authority defaults
+        run: |
+          git grep -n 'TX_UNAVAILABLE_PHYSICAL_ACCEPTANCE_REQUIRED' -- core desktop
+          git grep -n 'ROTATOR_UNAVAILABLE_PHYSICAL_ACCEPTANCE_REQUIRED' -- core desktop
+          git grep -n 'physicalMovement.*false' -- core
