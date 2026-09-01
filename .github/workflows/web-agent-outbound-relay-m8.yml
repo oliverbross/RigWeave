@@ -1,0 +1,42 @@
+name: Web Agent outbound relay M8
+
+on:
+  push:
+    branches: [feature/web-agent-outbound-relay-m8-v1]
+    paths:
+      - 'desktop/include/rigweave/desktop/OutboundRelayClient.hpp'
+      - 'desktop/src/network/OutboundRelayClient.cpp'
+      - 'desktop/src/app/stationd_main.cpp'
+      - 'desktop/tests/integration/outbound_relay_client_tests.cpp'
+      - 'docs/web-agent/WEB_AGENT_*M8*.md'
+      - '.github/workflows/web-agent-outbound-relay-m8.yml'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  station-agent:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libssl-dev pkg-config libglib2.0-dev libsecret-1-dev
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with: {version: '6.11.2', host: linux, target: desktop, arch: linux_gcc_64, modules: 'qtmultimedia qtserialport qtwebsockets qtlocation qtpositioning', cache: true}
+      - name: Build Agent and retained integration tests
+        run: >-
+          cmake -S desktop -B build/m8-agent -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          -DRIGWEAVE_BUILD_TESTS=ON -DRIGWEAVE_BUILD_NATIVE_DIGI=OFF
+          && cmake --build build/m8-agent --target outbound_relay_client_tests remote_station_service_tests rigweave-stationd --parallel 2
+      - name: Run outbound relay and retained Station tests
+        env: {QT_QPA_PLATFORM: offscreen}
+        run: ctest --test-dir build/m8-agent -R 'outbound_relay_client_tests|remote_station_service_tests' --output-on-failure
+      - name: Verify relay fail-closed boundaries
+        run: |
+          git grep -n 'rigweave.relay.v1' -- desktop
+          git grep -n 'RAW_IQ_DISABLED\|Inbound binary and raw IQ are disabled' -- desktop
+          git grep -n 'No offline command queue' -- desktop
+          git grep -n 'm_vault->read' -- desktop/src/network/OutboundRelayClient.cpp
+          if git grep -nE '(BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|ghp_[A-Za-z0-9]{30,})' -- ':!desktop/tests/**'; then exit 1; fi
