@@ -4,8 +4,11 @@
 
 #include <QHash>
 #include <QFile>
+#include <QCryptographicHash>
+#include <QDateTime>
 #include <QJsonDocument>
 #include <QTcpServer>
+#include <QUuid>
 #include <QtTest>
 
 using namespace rigweave::desktop;
@@ -103,6 +106,36 @@ private slots:
     QVERIFY(!serialized.contains("PRIVATE KEY"));
     QVERIFY(service.signHubObserverChallenge("wrong-station|challenge", &error).isEmpty());
     QVERIFY(!service.observerJournal().isEmpty());
+  }
+
+  void opaqueDomainJournalIsBoundedHashedAndIdempotentlyAcknowledged() {
+    MemoryVault vault;
+    RemoteStationService service(&vault, nullptr, nullptr, nullptr);
+    const QByteArray opaqueCiphertext("authenticated-encrypted-fixture");
+    const QString hash = QString::fromLatin1(QCryptographicHash::hash(opaqueCiphertext, QCryptographicHash::Sha256).toHex());
+    const QDateTime created = QDateTime::currentDateTimeUtc();
+    QVariantMap envelope{{"eventId", QUuid::createUuid().toString(QUuid::WithoutBraces)},
+        {"stationId", "station-fixture"}, {"applicationId", "application-service-fixture"},
+        {"origin", "APPLICATION_SERVICE_OUTAGE"}, {"createdUtc", created.toString(Qt::ISODateWithMs)},
+        {"expiresUtc", created.addDays(2).toString(Qt::ISODateWithMs)}, {"payloadSchema", "rigweave.qso-event"},
+        {"payloadVersion", 1}, {"protection", "APPLICATION_SERVICE_AEAD_V1"},
+        {"ciphertextBase64", QString::fromLatin1(opaqueCiphertext.toBase64())}, {"hashSha256", hash}};
+    QString error;
+    QVERIFY2(service.appendDomainJournalEnvelope(envelope, &error), qPrintable(error));
+    QVERIFY(service.appendDomainJournalEnvelope(envelope, &error));
+    QCOMPARE(service.domainJournal().size(), 1);
+    QCOMPARE(service.domainJournal().front().toMap().value("acknowledgmentState").toString(), QString("PENDING"));
+    QVERIFY(!QString::fromUtf8(QJsonDocument::fromVariant(service.configuration()).toJson()).contains("callsign"));
+    QVERIFY(!service.acknowledgeDomainJournalEvent(envelope.value("eventId").toString(), QString(64, '0'), &error));
+    QVERIFY(service.acknowledgeDomainJournalEvent(envelope.value("eventId").toString(), hash, &error));
+    QVERIFY(service.acknowledgeDomainJournalEvent(envelope.value("eventId").toString(), hash, &error));
+    QCOMPARE(service.domainJournal().front().toMap().value("acknowledgmentState").toString(), QString("ACKNOWLEDGED"));
+    QCOMPARE(service.health().value("pendingDomainJournalEntries").toInt(), 0);
+
+    QVariantMap invalid = envelope;
+    invalid["eventId"] = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    invalid["ciphertextBase64"] = QString::fromLatin1(QByteArray(16 * 1024 + 1, 'x').toBase64());
+    QVERIFY(!service.appendDomainJournalEnvelope(invalid, &error));
   }
 
   void debugNoRadioForcesLoopbackAndDisablesSideChannels() {
