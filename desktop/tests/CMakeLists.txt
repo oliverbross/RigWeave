@@ -24,6 +24,11 @@ target_compile_definitions(remote_station_service_tests PRIVATE
 rigweave_target_warnings(remote_station_service_tests)
 add_test(NAME remote_station_service_tests COMMAND remote_station_service_tests)
 
+qt_add_executable(outbound_relay_client_tests integration/outbound_relay_client_tests.cpp)
+target_link_libraries(outbound_relay_client_tests PRIVATE ${RIGWEAVE_TEST_LIBS} Qt6::WebSockets)
+rigweave_target_warnings(outbound_relay_client_tests)
+add_test(NAME outbound_relay_client_tests COMMAND outbound_relay_client_tests)
+
 qt_add_executable(desktop_platform_safety_tests unit/desktop_platform_safety_tests.cpp)
 target_link_libraries(desktop_platform_safety_tests PRIVATE ${RIGWEAVE_TEST_LIBS})
 rigweave_target_warnings(desktop_platform_safety_tests)

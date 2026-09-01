@@ -3,6 +3,7 @@
 #include "rigweave/desktop/DesktopPlatform.hpp"
 #include "rigweave/desktop/DesktopRadioController.hpp"
 #include "rigweave/desktop/DesktopRotatorController.hpp"
+#include "rigweave/desktop/OutboundRelayClient.hpp"
 #include "rigweave/desktop/RemoteStationService.hpp"
 
 #include <QCommandLineParser>
@@ -15,6 +16,7 @@
 #include <QSslSocket>
 #include <QTextStream>
 #include <QTemporaryDir>
+#include <algorithm>
 #include <memory>
 
 using namespace rigweave::desktop;
@@ -96,6 +98,11 @@ int main(int argc, char **argv) {
   parser.addOption(QCommandLineOption(QStringLiteral("list-clients"), "List paired public device metadata"));
   parser.addOption(QCommandLineOption(QStringLiteral("revoke"), "Revoke a paired device", "device-id"));
   parser.addOption(QCommandLineOption(QStringLiteral("stop"), "Request station Global Stop and shut down"));
+  parser.addOption(QCommandLineOption(QStringLiteral("relay-url"), "Hosted outbound relay WSS endpoint", "wss-url"));
+  parser.addOption(QCommandLineOption(QStringLiteral("relay-station-id"), "Hosted station identifier", "station-id"));
+  parser.addOption(QCommandLineOption(QStringLiteral("relay-registration-id"), "Hosted Agent registration identifier", "registration-id"));
+  parser.addOption(QCommandLineOption(QStringLiteral("relay-public-key-id"), "Hosted public-key identifier", "key-id"));
+  parser.addOption(QCommandLineOption(QStringLiteral("relay-vault-alias"), "Platform-vault alias for the relay signing key", "vault-alias"));
   parser.process(application);
 
   bool listenPortOk{};
@@ -161,6 +168,39 @@ int main(int argc, char **argv) {
   if (!service.restoreConfiguration(remoteStationConfiguration, &error)) {
     QTextStream(stderr) << error << '\n'; return 2;
   }
+  const QStringList relayOptions{"relay-url", "relay-station-id", "relay-registration-id",
+                                 "relay-public-key-id", "relay-vault-alias"};
+  const qsizetype relayOptionCount = std::count_if(relayOptions.cbegin(), relayOptions.cend(),
+      [&](const QString &option) { return parser.isSet(option); });
+  if (relayOptionCount != 0 && relayOptionCount != relayOptions.size()) {
+    QTextStream(stderr) << "Outbound relay configuration is all-or-none\n"; return 2;
+  }
+  OutboundRelayClient relay(vault);
+  if (relayOptionCount == relayOptions.size()) {
+    relay.configure({QUrl(parser.value("relay-url")), parser.value("relay-station-id"),
+                     parser.value("relay-registration-id"), parser.value("relay-public-key-id"),
+                     parser.value("relay-vault-alias"), QStringLiteral(RIGWEAVE_BUILD_SHA)},
+                    [&](const QString &method, const QVariantMap &params) -> QVariantMap {
+      if (method == "station.health" || method == "station.snapshot") return service.health();
+      if (method == "station.sessions") return {{"sessions", service.sessions()}};
+      if (method == "station.globalStop") { service.globalStop(); return {{"stopped", true}}; }
+      if (method == "radio.roster") return {{"radios", service.radioRoster()}};
+      if (method == "workflow.state") return service.workflowState();
+      if (method == "workflow.request") {
+        QVariantMap request = params; request["_trustedOperator"] = true;
+        request["_operatorSessionId"] = "hosted-relay"; return service.workflowAdmin(request);
+      }
+      if (method == "agent.journal") return {{"entries", service.observerJournal()}};
+      if (method.startsWith("radio.") || method.startsWith("audio.") ||
+          method.startsWith("spectrum.") || method.startsWith("scanner.") ||
+          method.startsWith("rotator.")) {
+        QVariantMap request = params; request["operation"] = method;
+        request["_trustedOperator"] = true; request["_operatorSessionId"] = "hosted-relay";
+        return service.safeControlAdmin(request);
+      }
+      return {{"ok", false}, {"code", "AGENT_METHOD_UNAVAILABLE"}, {"method", method}};
+    });
+  }
   if (debugNoRadio) service.setDebugNoRadio(true);
   QObject::connect(&service, &RemoteStationService::pairingChanged, &application, [&] {
     configuration.setSection("remoteStation", service.configuration()); configuration.save();
@@ -169,7 +209,7 @@ int main(int argc, char **argv) {
     configuration.setSection("remoteStation", service.configuration()); configuration.save();
   });
   QObject::connect(&application, &QCoreApplication::aboutToQuit, &application, [&] {
-    service.globalStop(); service.stop();
+    relay.stop(); service.globalStop(); service.stop();
     configuration.setSection("remoteStation", service.configuration()); configuration.save();
   });
 
@@ -184,6 +224,10 @@ int main(int argc, char **argv) {
   QLocalServer::removeServer(adminSocket);
   if (!admin.listen(adminSocket)) { QTextStream(stderr) << admin.errorString() << '\n'; return 4; }
   if (!service.start(&error)) { QTextStream(stderr) << error << '\n'; return 3; }
+  if (relayOptionCount == relayOptions.size() && !relay.start(&error)) {
+    service.globalStop(); service.stop();
+    QTextStream(stderr) << error << '\n'; return 3;
+  }
   QObject::connect(&admin, &QLocalServer::newConnection, &application, [&] {
     while (QLocalSocket *socket = admin.nextPendingConnection()) {
       QObject::connect(socket, &QLocalSocket::readyRead, socket, [&, socket] {
@@ -192,7 +236,9 @@ int main(int argc, char **argv) {
         const QString action = request.value("action").toString();
         QVariant response;
         bool ok = true;
-        if (action == "status") response = service.health();
+        if (action == "status") {
+          QVariantMap status = service.health(); status["outboundRelay"] = relay.health(); response = status;
+        }
         else if (action == "list-clients") response = service.pairedDevices();
         else if (action == "pairing-offer") response = service.createPairingOffer();
         else if (action == "operator-pairing-offer") response = service.createPairingOffer("OPERATOR");

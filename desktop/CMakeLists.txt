@@ -57,6 +57,7 @@ set(RIGWEAVE_DESKTOP_SERVICE_SOURCES
     src/network/ClusterController.cpp
     src/network/RemoteStationService.cpp
     src/network/RemoteStationClient.cpp
+    src/network/OutboundRelayClient.cpp
     src/platform/DesktopPlatform.cpp
     src/platform/DesktopEngagementControllers.cpp
     src/platform/DesktopParityPlatform.cpp
@@ -168,6 +169,7 @@ endif()
 
 qt_add_executable(rigweave-stationd src/app/stationd_main.cpp)
 target_link_libraries(rigweave-stationd PRIVATE rigweave_desktop_services)
+target_compile_definitions(rigweave-stationd PRIVATE RIGWEAVE_BUILD_SHA="$ENV{GITHUB_SHA}")
 rigweave_target_warnings(rigweave-stationd)
 
 file(GLOB_RECURSE RIGWEAVE_QML_FILES CONFIGURE_DEPENDS "qml/*.qml")
