@@ -25,9 +25,22 @@ QJsonObject adminRequest(const QCommandLineParser &parser) {
   if (parser.isSet("status")) return {{"action", "status"}};
   if (parser.isSet("list-clients")) return {{"action", "list-clients"}};
   if (parser.isSet("pairing-offer")) return {{"action", "pairing-offer"}};
+  if (parser.isSet("operator-pairing-offer")) return {{"action", "operator-pairing-offer"}};
   if (parser.isSet("hub-identity")) return {{"action", "hub-identity"}};
   if (parser.isSet("hub-sign")) return {{"action", "hub-sign"}, {"challengeBase64", parser.value("hub-sign")}};
   if (parser.isSet("approve-observer")) return {{"action", "approve-observer"}, {"deviceId", parser.value("approve-observer")}};
+  if (parser.isSet("approve-operator")) return {{"action", "approve-operator"}, {"deviceId", parser.value("approve-operator")}};
+  if (parser.isSet("safe-control-state")) return {{"action", "safe-control-state"}};
+  if (parser.isSet("safe-control-request")) {
+    const QByteArray encoded = parser.value("safe-control-request").toLatin1();
+    if (encoded.size() > 48 * 1024) return {{"action", "invalid-safe-control-request"}};
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(
+        QByteArray::fromBase64(encoded, QByteArray::Base64UrlEncoding), &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject())
+      return {{"action", "invalid-safe-control-request"}};
+    return {{"action", "safe-control-request"}, {"request", document.object()}};
+  }
   if (parser.isSet("journal")) return {{"action", "journal"}};
   if (parser.isSet("domain-journal")) return {{"action", "domain-journal"}};
   if (parser.isSet("revoke")) return {{"action", "revoke"}, {"deviceId", parser.value("revoke")}};
@@ -56,11 +69,15 @@ int main(int argc, char **argv) {
   parser.addOption(QCommandLineOption({"f", "foreground"}, "Run the explicitly enabled service in the foreground"));
   parser.addOption(QCommandLineOption({"s", "status"}, "Print bounded service status"));
   parser.addOption(QCommandLineOption({"p", "pairing-offer"}, "Create a short-lived pairing offer"));
+  parser.addOption(QCommandLineOption(QStringLiteral("operator-pairing-offer"), "Create a short-lived OPERATOR pairing offer"));
   parser.addOption(QCommandLineOption(QStringLiteral("debug-no-radio"), "Run a loopback-only deterministic no-radio Agent source"));
   parser.addOption(QCommandLineOption(QStringLiteral("listen-port"), "Override the loopback listener port in debug-no-radio mode", "port"));
   parser.addOption(QCommandLineOption(QStringLiteral("hub-identity"), "Return the Local Hub public observer identity"));
   parser.addOption(QCommandLineOption(QStringLiteral("hub-sign"), "Sign one bounded base64-encoded station challenge in the configured credential vault", "challenge-base64"));
   parser.addOption(QCommandLineOption(QStringLiteral("approve-observer"), "Approve one pending Local Hub device as OBSERVER", "device-id"));
+  parser.addOption(QCommandLineOption(QStringLiteral("approve-operator"), "Approve one pending Local Hub device as OPERATOR", "device-id"));
+  parser.addOption(QCommandLineOption(QStringLiteral("safe-control-state"), "Print bounded M5 safe-control state"));
+  parser.addOption(QCommandLineOption(QStringLiteral("safe-control-request"), "Submit one bounded M5 request through the private Agent admin socket", "base64url-json"));
   parser.addOption(QCommandLineOption(QStringLiteral("journal"), "Print the bounded observer Agent journal"));
   parser.addOption(QCommandLineOption(QStringLiteral("domain-journal"), "Print bounded opaque pending/acknowledged Application Service envelopes"));
   parser.addOption(QCommandLineOption(QStringLiteral("list-clients"), "List paired public device metadata"));
@@ -165,6 +182,7 @@ int main(int argc, char **argv) {
         if (action == "status") response = service.health();
         else if (action == "list-clients") response = service.pairedDevices();
         else if (action == "pairing-offer") response = service.createPairingOffer();
+        else if (action == "operator-pairing-offer") response = service.createPairingOffer("OPERATOR");
         else if (action == "hub-identity") response = service.hubObserverIdentity(&error);
         else if (action == "hub-sign") {
           const QByteArray challenge = QByteArray::fromBase64(request.value("challengeBase64").toString().toLatin1());
@@ -175,6 +193,12 @@ int main(int argc, char **argv) {
           ok = service.approvePendingDevice(request.value("deviceId").toString(), "OBSERVER");
           response = QVariantMap{{"approved", ok}, {"role", "OBSERVER"}};
         }
+        else if (action == "approve-operator") {
+          ok = debugNoRadio && service.approvePendingDevice(request.value("deviceId").toString(), "OPERATOR");
+          response = QVariantMap{{"approved", ok}, {"role", "OPERATOR"}, {"debugNoRadio", debugNoRadio}};
+        }
+        else if (action == "safe-control-state") response = service.safeControlState();
+        else if (action == "safe-control-request") response = service.safeControlAdmin(request.value("request").toObject().toVariantMap());
         else if (action == "journal") response = service.observerJournal();
         else if (action == "domain-journal") response = service.domainJournal();
         else if (action == "domain-journal-append") {

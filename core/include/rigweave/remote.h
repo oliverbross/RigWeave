@@ -96,6 +96,7 @@ public:
   bool acquire(std::string_view sessionId, Lease lease, std::uint64_t nowMs,
                std::uint64_t ttlMs, bool txPhysicallyAccepted = false,
                bool rotatorPhysicallyAccepted = false);
+  bool release(std::string_view sessionId, Lease lease);
   void closeSession(std::string_view sessionId);
   void revoke(std::string_view deviceId);
   void localPreempt();

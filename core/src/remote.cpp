@@ -171,6 +171,15 @@ bool SessionAuthority::acquire(std::string_view sessionId, Lease lease,
   return true;
 }
 
+bool SessionAuthority::release(std::string_view sessionId, Lease lease) {
+  auto found = m_sessions.find(std::string(sessionId));
+  if (found == m_sessions.end()) return false;
+  if (lease == Lease::Writer) { found->second.state.writer = false; found->second.writerExpiry = 0; }
+  else if (lease == Lease::Transmit) { found->second.state.transmit = false; found->second.txExpiry = 0; }
+  else { found->second.state.rotator = false; found->second.rotatorExpiry = 0; }
+  return true;
+}
+
 void SessionAuthority::clearLeases(Session &session) {
   session.state.writer = session.state.transmit = session.state.rotator = false;
   session.writerExpiry = session.txExpiry = session.rotatorExpiry = 0;

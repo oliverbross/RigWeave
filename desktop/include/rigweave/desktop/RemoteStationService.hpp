@@ -6,6 +6,7 @@
 #include "rigweave/desktop/DesktopRadioController.hpp"
 #include "rigweave/desktop/DesktopRotatorController.hpp"
 #include "rigweave/remote.h"
+#include "rigweave/safe_control.h"
 
 #include <QHash>
 #include <QJsonObject>
@@ -42,6 +43,8 @@ public:
   bool restoreConfiguration(const QVariantMap &configuration,
                             QString *error = nullptr);
   Q_INVOKABLE QVariantMap health() const;
+  Q_INVOKABLE QVariantMap safeControlState() const;
+  Q_INVOKABLE QVariantMap safeControlAdmin(const QVariantMap &request);
 
   Q_INVOKABLE bool ensureIdentity(QString *error = nullptr);
   Q_INVOKABLE bool start(QString *error = nullptr);
@@ -130,6 +133,7 @@ private:
   QTimer m_expiryTimer;
   QTimer m_debugMediaTimer;
   remote::SessionAuthority m_authority;
+  safe_control::Engine m_safeControl;
   QHash<QWebSocket *, QString> m_socketSessions;
   QHash<QWebSocket *, QString> m_socketChallenges;
   QHash<QWebSocket *, QVariantMap> m_mediaPreferences;

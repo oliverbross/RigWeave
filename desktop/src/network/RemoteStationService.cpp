@@ -296,6 +296,7 @@ bool RemoteStationService::restoreConfiguration(const QVariantMap &config,
 
 void RemoteStationService::setDebugNoRadio(bool enabled) {
   m_debugNoRadio = enabled;
+  m_safeControl.setDebugNoRadio(enabled);
   if (!enabled) return;
   m_debugNonSecureLoopback = true;
   m_lanEnabled = false;
@@ -698,7 +699,7 @@ void RemoteStationService::handleText(QWebSocket *socket, const QString &message
     appendJournal("SESSION_AUTHENTICATED", deviceId);
     sendReply(socket, request, true, "AUTHENTICATED", {{"sessionId", QString::fromStdString(*session)},
         {"role", device.value("role").toString()}, {"radioRoster", QJsonArray::fromVariantList(radioRoster())},
-        {"capabilities", QJsonArray{"STATE", "SPOTS", "HEALTH", "AUDIO_RX_OPUS", "AUDIO_RX_PCM16", "SPECTRUM", "WATERFALL", "IQ_OPTIONAL", "DIGI", "KEYER", "VOICE", "ROTATOR"}}});
+        {"capabilities", QJsonArray{"STATE", "SPOTS", "HEALTH", "AUDIO_RX_OPUS", "AUDIO_RX_PCM16", "SPECTRUM", "WATERFALL", "IQ_OPTIONAL", "DIGI", "KEYER", "VOICE", "ROTATOR", "SAFE_CONTROL_1_1"}}});
     emit sessionsChanged(); return;
   }
   const QString session = m_socketSessions.value(socket);
@@ -739,7 +740,92 @@ void RemoteStationService::handleText(QWebSocket *socket, const QString &message
         lease == remote::Lease::Rotator && m_rotatorPolicy);
     sendReply(socket, request, ok, ok ? "LEASE_GRANTED" : "LEASE_DENIED"); emit sessionsChanged(); return;
   }
-  if (type == "GLOBAL_STOP") { globalStop(); sendReply(socket, request, true, "GLOBAL_STOPPED"); return; }
+  if (type == "SAFE_CONTROL_STATE") {
+    sendReply(socket, request, true, "SAFE_CONTROL_STATE", QJsonObject::fromVariantMap(safeControlState()));
+    return;
+  }
+  if (type == "CONTROL_LEASE") {
+    const auto rows = m_authority.sessions();
+    const auto row = std::find_if(rows.begin(), rows.end(), [&](const auto &value) { return value.sessionId == session.toStdString(); });
+    if (row == rows.end() || row->role == remote::Role::Observer) {
+      sendReply(socket, request, false, "OPERATOR_ROLE_REQUIRED"); return;
+    }
+    const QString action = payload.value("action").toString("ACQUIRE").toUpper();
+    const quint64 now = static_cast<quint64>(QDateTime::currentMSecsSinceEpoch());
+    const quint64 ttl = static_cast<quint64>(qBound(1'000, payload.value("ttlMs").toInt(5'000), 30'000));
+    bool ok = false;
+    if (action == "ACQUIRE") {
+      const auto lease = m_safeControl.acquireLease(m_stationId.toStdString(),
+          payload.value("radioProfileId").toString().toStdString(), session.toStdString(),
+          payload.value("controlWindowId").toString().toStdString(), now, ttl,
+          payload.value("reason").toString("Web operator requested control").toStdString());
+      ok = lease.has_value() && m_authority.acquire(session.toStdString(), remote::Lease::Writer, now, ttl);
+      if (!ok && lease) m_safeControl.releaseLease(lease->id);
+    } else if (action == "RENEW") {
+      ok = m_safeControl.renewLease(payload.value("leaseId").toString().toStdString(), session.toStdString(),
+          payload.value("controlWindowId").toString().toStdString(), now, ttl) &&
+          m_authority.acquire(session.toStdString(), remote::Lease::Writer, now, ttl);
+    } else if (action == "RELEASE") {
+      m_safeControl.releaseLease(payload.value("leaseId").toString().toStdString());
+      ok = m_authority.release(session.toStdString(), remote::Lease::Writer);
+    }
+    if (!ok) { sendReply(socket, request, false, "CONTROL_LEASE_DENIED"); return; }
+    QJsonObject leasePayload;
+    if (m_safeControl.lease()) {
+      const auto &lease = *m_safeControl.lease();
+      leasePayload = {{"id", QString::fromStdString(lease.id)}, {"stationId", QString::fromStdString(lease.stationId)},
+          {"radioProfileId", QString::fromStdString(lease.radioProfileId)}, {"operatorSessionId", QString::fromStdString(lease.operatorSessionId)},
+          {"controlWindowId", QString::fromStdString(lease.controlWindowId)}, {"agentGeneration", QString::number(lease.agentGeneration)},
+          {"issuedMs", QString::number(lease.issuedMs)}, {"expiresMs", QString::number(lease.expiresMs)},
+          {"ttlMs", QString::number(lease.ttlMs)}, {"reason", QString::fromStdString(lease.reason)}};
+    }
+    sendReply(socket, request, true, action == "RELEASE" ? "CONTROL_RELEASED" : "CONTROL_GRANTED", {{"lease", leasePayload}});
+    emit sessionsChanged(); return;
+  }
+  if (type == "SAFE_CONTROL") {
+    const auto rows = m_authority.sessions();
+    const auto row = std::find_if(rows.begin(), rows.end(), [&](const auto &value) { return value.sessionId == session.toStdString(); });
+    if (row == rows.end() || row->role == remote::Role::Observer) {
+      sendReply(socket, request, false, "OPERATOR_ROLE_REQUIRED"); return;
+    }
+    const QJsonObject envelope = payload.value("command").toObject();
+    safe_control::Command command;
+    command.commandId = envelope.value("commandId").toString().toStdString();
+    command.idempotencyKey = envelope.value("idempotencyKey").toString().toStdString();
+    command.stationId = envelope.value("stationId").toString().toStdString();
+    command.radioProfileId = envelope.value("radioProfileId").toString().toStdString();
+    command.operatorSessionId = session.toStdString();
+    command.writerLeaseId = envelope.value("writerLeaseId").toString().toStdString();
+    command.controlWindowId = envelope.value("controlWindowId").toString().toStdString();
+    command.agentGeneration = envelope.value("agentGeneration").toVariant().toULongLong();
+    command.expectedRadioGeneration = envelope.value("expectedRadioGeneration").toVariant().toULongLong();
+    command.expiresMs = envelope.value("expiresMs").toVariant().toULongLong();
+    command.operation = envelope.value("operation").toString().toStdString();
+    command.reason = envelope.value("reason").toString().toStdString();
+    const QString className = envelope.value("commandClass").toString();
+    command.commandClass = className == "GLOBAL_STOP" ? safe_control::CommandClass::GlobalStop :
+        className == "CONNECTION" ? safe_control::CommandClass::Connection :
+        className == "AUDIO_PRESENTATION" ? safe_control::CommandClass::AudioPresentation :
+        className == "AGENT_RX_RUNTIME" ? safe_control::CommandClass::AgentRxRuntime : safe_control::CommandClass::SafeReceiveSet;
+    const QJsonObject arguments = envelope.value("arguments").toObject();
+    for (auto it = arguments.begin(); it != arguments.end(); ++it)
+      command.arguments[it.key().toStdString()] = it.value().toVariant().toString().toStdString();
+    const auto result = m_safeControl.execute(command, static_cast<quint64>(QDateTime::currentMSecsSinceEpoch()));
+    QJsonObject readback;
+    for (const auto &[key, value] : result.readback) readback[QString::fromStdString(key)] = QString::fromStdString(value);
+    const QJsonObject resultPayload{{"commandId", envelope.value("commandId")}, {"accepted", result.accepted},
+        {"code", QString::fromStdString(result.code)}, {"state", QString::fromStdString(safe_control::commandStateName(result.state))},
+        {"agentGeneration", QString::number(result.agentGeneration)}, {"radioGeneration", QString::number(result.radioGeneration)},
+        {"readback", readback}, {"partial", result.partial}, {"recovery", QString::fromStdString(result.recovery)}};
+    sendReply(socket, request, result.accepted, QString::fromStdString(result.code), {{"result", resultPayload}});
+    return;
+  }
+  if (type == "GLOBAL_STOP") {
+    globalStop();
+    sendReply(socket, request, true, "GLOBAL_STOPPED", {{"owners", QJsonObject{{"radio", "SAFE_RX_REQUESTED"},
+        {"scanner", "STOPPED"}, {"recording", "STOPPED"}, {"replay", "STOPPED"}, {"localReceivers", "STOPPED"}}}});
+    return;
+  }
   if (type == "MUTATE") {
     QString failure;
     const bool ok = executeMutation(session, payload.value("operation").toString(), payload, &failure);
@@ -1029,13 +1115,118 @@ bool RemoteStationService::executeBridgeMutation(const remote::ProtocolReply &re
   return false;
 }
 
-void RemoteStationService::localPreempt() { m_authority.localPreempt(); ++m_generation; emit sessionsChanged(); }
+void RemoteStationService::localPreempt() { m_authority.localPreempt(); m_safeControl.localPreempt(); ++m_generation; emit sessionsChanged(); }
 void RemoteStationService::globalStop() {
-  m_authority.globalStop(); ++m_generation;
+  m_authority.globalStop(); m_safeControl.globalStop(static_cast<quint64>(QDateTime::currentMSecsSinceEpoch())); ++m_generation;
   clearLocalAcceptance();
   if (m_radio) m_radio->globalStop();
   if (m_rotator) m_rotator->stop();
   emit sessionsChanged();
+}
+
+QVariantMap RemoteStationService::safeControlState() const {
+  const auto &state = m_safeControl.state();
+  QVariantList profiles;
+  for (const auto &profile : m_safeControl.profiles()) {
+    QVariantList capabilities;
+    for (const auto &capability : profile.capabilities) capabilities.push_back(QString::fromStdString(capability));
+    profiles.push_back(QVariantMap{{"id", QString::fromStdString(profile.id)},
+        {"manufacturer", QString::fromStdString(profile.manufacturer)}, {"model", QString::fromStdString(profile.model)},
+        {"backend", QString::fromStdString(profile.backend)}, {"transport", QString::fromStdString(profile.transport)},
+        {"deviceIdentityHash", QString::fromStdString(profile.deviceIdentityHash)},
+        {"acceptance", QString::fromStdString(profile.acceptance)}, {"capabilities", capabilities}});
+  }
+  QVariantMap lease;
+  if (m_safeControl.lease()) {
+    const auto &value = *m_safeControl.lease();
+    lease = {{"id", QString::fromStdString(value.id)}, {"stationId", QString::fromStdString(value.stationId)},
+        {"radioProfileId", QString::fromStdString(value.radioProfileId)},
+        {"operatorSessionId", QString::fromStdString(value.operatorSessionId)},
+        {"controlWindowId", QString::fromStdString(value.controlWindowId)},
+        {"agentGeneration", QString::number(value.agentGeneration)}, {"issuedMs", QString::number(value.issuedMs)},
+        {"expiresMs", QString::number(value.expiresMs)}, {"ttlMs", QString::number(value.ttlMs)}};
+  }
+  return {{"protocol", QVariantMap{{"major", 1}, {"minor", 1}}},
+      {"evidence", m_debugNoRadio ? "DEMO_NO_RADIO" : "AGENT_READBACK"},
+      {"label", m_debugNoRadio ? "DEMO · NO RADIO" : m_stationName}, {"stationId", m_stationId},
+      {"agentGeneration", QString::number(state.agentGeneration)}, {"radioGeneration", QString::number(state.radioGeneration)},
+      {"selectedProfileId", QString::fromStdString(state.selectedProfileId)},
+      {"connection", QString::fromStdString(state.connection)}, {"frequencyHz", QString::number(state.frequencyHz)},
+      {"mode", QString::fromStdString(state.mode)}, {"passbandHz", state.passbandHz},
+      {"vfo", QString::fromStdString(state.vfo)}, {"ritHz", state.ritHz}, {"split", state.split},
+      {"afGain", state.afGain}, {"rfGain", state.rfGain}, {"squelch", state.squelch},
+      {"agc", QString::fromStdString(state.agc)}, {"scanner", QString::fromStdString(state.scanner)},
+      {"recording", QString::fromStdString(state.recording)}, {"timeShift", QString::fromStdString(state.timeShift)},
+      {"replay", QString::fromStdString(state.replay)}, {"receiverCount", static_cast<int>(state.receiverCount)},
+      {"monitorCount", static_cast<int>(state.monitorCount)}, {"calibration", QString::fromStdString(state.calibration)},
+      {"surveyRetentionDays", state.surveyRetentionDays}, {"profiles", profiles}, {"lease", lease}};
+}
+
+QVariantMap RemoteStationService::safeControlAdmin(const QVariantMap &request) {
+  const QString kind = request.value("kind").toString();
+  const quint64 now = static_cast<quint64>(QDateTime::currentMSecsSinceEpoch());
+  const auto leaseMap = [this]() {
+    QVariantMap lease;
+    if (!m_safeControl.lease()) return lease;
+    const auto &value = *m_safeControl.lease();
+    return QVariantMap{{"id", QString::fromStdString(value.id)}, {"stationId", QString::fromStdString(value.stationId)},
+        {"radioProfileId", QString::fromStdString(value.radioProfileId)}, {"operatorSessionId", QString::fromStdString(value.operatorSessionId)},
+        {"controlWindowId", QString::fromStdString(value.controlWindowId)}, {"agentGeneration", QString::number(value.agentGeneration)},
+        {"issuedMs", QString::number(value.issuedMs)}, {"expiresMs", QString::number(value.expiresMs)},
+        {"ttlMs", QString::number(value.ttlMs)}, {"reason", QString::fromStdString(value.reason)}};
+  };
+  if (kind == "state") return safeControlState();
+  if (kind == "global.stop") { globalStop(); return {{"accepted", true}, {"code", "GLOBAL_STOPPED"}, {"state", safeControlState()}}; }
+  if (kind == "lease.acquire") {
+    const quint64 ttl = static_cast<quint64>(qBound(1'000, request.value("ttlMs", 5'000).toInt(), 30'000));
+    const auto lease = m_safeControl.acquireLease(m_stationId.toStdString(), request.value("radioProfileId").toString().toStdString(),
+        request.value("operatorSessionId").toString().toStdString(), request.value("controlWindowId").toString().toStdString(),
+        now, ttl, request.value("reason", "Application Service operator requested control").toString().toStdString());
+    return {{"accepted", lease.has_value()}, {"code", lease ? "CONTROL_GRANTED" : "CONTROL_LEASE_DENIED"}, {"lease", leaseMap()}};
+  }
+  if (kind == "lease.renew") {
+    const quint64 ttl = static_cast<quint64>(qBound(1'000, request.value("ttlMs", 5'000).toInt(), 30'000));
+    const bool ok = m_safeControl.renewLease(request.value("leaseId").toString().toStdString(), request.value("operatorSessionId").toString().toStdString(),
+        request.value("controlWindowId").toString().toStdString(), now, ttl);
+    return {{"accepted", ok}, {"code", ok ? "CONTROL_RENEWED" : "CONTROL_LEASE_DENIED"}, {"lease", leaseMap()}};
+  }
+  if (kind == "lease.release") {
+    m_safeControl.releaseLease(request.value("leaseId").toString().toStdString());
+    return {{"accepted", true}, {"code", "CONTROL_RELEASED"}, {"lease", QVariantMap{}}};
+  }
+  if (kind != "command") return {{"accepted", false}, {"code", "SAFE_CONTROL_REQUEST_INVALID"}};
+
+  const QVariantMap envelope = request.value("command").toMap();
+  safe_control::Command command;
+  command.commandId = envelope.value("commandId").toString().toStdString();
+  command.idempotencyKey = envelope.value("idempotencyKey").toString().toStdString();
+  command.stationId = envelope.value("stationId").toString().toStdString();
+  command.radioProfileId = envelope.value("radioProfileId").toString().toStdString();
+  command.operatorSessionId = envelope.value("operatorSessionId").toString().toStdString();
+  command.writerLeaseId = envelope.value("writerLeaseId").toString().toStdString();
+  command.controlWindowId = envelope.value("controlWindowId").toString().toStdString();
+  command.agentGeneration = envelope.value("agentGeneration").toULongLong();
+  command.expectedRadioGeneration = envelope.value("expectedRadioGeneration").toULongLong();
+  command.expiresMs = envelope.value("expiresMs").toULongLong();
+  command.operation = envelope.value("operation").toString().toStdString();
+  command.reason = envelope.value("reason").toString().left(160).toStdString();
+  const QString commandClass = envelope.value("commandClass").toString();
+  command.commandClass = commandClass == "GLOBAL_STOP" ? safe_control::CommandClass::GlobalStop :
+      commandClass == "CONNECTION" ? safe_control::CommandClass::Connection :
+      commandClass == "AUDIO_PRESENTATION" ? safe_control::CommandClass::AudioPresentation :
+      commandClass == "AGENT_RX_RUNTIME" ? safe_control::CommandClass::AgentRxRuntime :
+      commandClass == "TRANSMIT_UNAVAILABLE" ? safe_control::CommandClass::TransmitUnavailable :
+      commandClass == "ROTATOR_UNAVAILABLE" ? safe_control::CommandClass::RotatorUnavailable : safe_control::CommandClass::SafeReceiveSet;
+  const QVariantMap arguments = envelope.value("arguments").toMap();
+  for (auto it = arguments.cbegin(); it != arguments.cend(); ++it)
+    command.arguments[it.key().toStdString()] = it.value().toString().toStdString();
+  const auto result = m_safeControl.execute(command, now);
+  QVariantMap readback;
+  for (const auto &[key, value] : result.readback) readback[QString::fromStdString(key)] = QString::fromStdString(value);
+  return {{"commandId", QString::fromStdString(command.commandId)}, {"accepted", result.accepted}, {"code", QString::fromStdString(result.code)},
+      {"state", QString::fromStdString(safe_control::commandStateName(result.state))}, {"agentGeneration", QString::number(result.agentGeneration)},
+      {"radioGeneration", QString::number(result.radioGeneration)}, {"readback", readback}, {"partial", result.partial},
+      {"recovery", QString::fromStdString(result.recovery)}, {"completedUtc", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)}};
 }
 
 QVariantList RemoteStationService::sessions() const {
