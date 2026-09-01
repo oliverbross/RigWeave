@@ -181,19 +181,17 @@ int main(int argc, char **argv) {
                      parser.value("relay-registration-id"), parser.value("relay-public-key-id"),
                      parser.value("relay-vault-alias"), QStringLiteral(RIGWEAVE_BUILD_SHA)},
                     [&](const QString &method, const QVariantMap &params) -> QVariantMap {
-      if (method == "station.health" || method == "station.snapshot") return service.health();
-      if (method == "station.sessions") return {{"sessions", service.sessions()}};
-      if (method == "station.globalStop") { service.globalStop(); return {{"stopped", true}}; }
-      if (method == "radio.roster") return {{"radios", service.radioRoster()}};
-      if (method == "workflow.state") return service.workflowState();
-      if (method == "workflow.request") {
+      if (method == "system.health" || method == "system.compatibility" ||
+          method == "station.snapshot" || method == "station.presence") return service.health();
+      if (method == "radio.read") return {{"radios", service.radioRoster()}, {"state", service.safeControlState()}};
+      if (method == "agent.global-stop") { service.globalStop(); return {{"stopped", true}, {"ok", true}}; }
+      if (method == "agent.workflow") {
         QVariantMap request = params; request["_trustedOperator"] = true;
         request["_operatorSessionId"] = "hosted-relay"; return service.workflowAdmin(request);
       }
-      if (method == "agent.journal") return {{"entries", service.observerJournal()}};
-      if (method.startsWith("radio.") || method.startsWith("audio.") ||
-          method.startsWith("spectrum.") || method.startsWith("scanner.") ||
-          method.startsWith("rotator.")) {
+      if (method == "agent.safe-receive" || method == "agent.writer-lease" ||
+          method == "agent.tx-lease" || method == "agent.rotator-lease" ||
+          method == "agent.rotator-stop") {
         QVariantMap request = params; request["operation"] = method;
         request["_trustedOperator"] = true; request["_operatorSessionId"] = "hosted-relay";
         return service.safeControlAdmin(request);

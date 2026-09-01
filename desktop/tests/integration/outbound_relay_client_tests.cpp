@@ -39,15 +39,15 @@ private slots:
     client.configure({QUrl("wss://relay.invalid/agent"), "station", "registration", "key", "relay-key", "sha"},
                      [](const QString &method, const QVariantMap &) { return QVariantMap{{"handled", method}}; });
     const QString challenge = QString::fromLatin1(QByteArray(32, 'x').toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
-    const QJsonObject proof = client.processControlFrame({{"type", "relay.challenge"}, {"challenge", challenge}});
-    QCOMPARE(proof.value("type").toString(), QString("agent.auth"));
+    const QJsonObject proof = client.processControlFrame({{"kind", "relay.challenge"}, {"challengeId", "challenge-1"}, {"challenge", challenge}});
+    QCOMPARE(proof.value("kind").toString(), QString("relay.authenticate"));
     QVERIFY(!proof.value("signature").toString().isEmpty());
-    client.processControlFrame({{"type", "relay.authenticated"}});
-    const QJsonObject accepted = client.processControlFrame({{"type", "rpc.request"}, {"id", "1"}, {"method", "station.health"}, {"params", QJsonObject{}}});
+    client.processControlFrame({{"kind", "relay.accepted"}});
+    const QJsonObject accepted = client.processControlFrame({{"kind", "rpc.request"}, {"requestId", "1"}, {"method", "system.health"}, {"payload", QJsonObject{}}});
     QVERIFY(accepted.value("ok").toBool());
-    const QJsonObject iq = client.processControlFrame({{"type", "rpc.request"}, {"id", "2"}, {"method", "spectrum.rawIq"}, {"params", QJsonObject{}}});
+    const QJsonObject iq = client.processControlFrame({{"kind", "rpc.request"}, {"requestId", "2"}, {"method", "spectrum.rawIq"}, {"payload", QJsonObject{}}});
     QVERIFY(!iq.value("ok").toBool()); QCOMPARE(iq.value("code").toString(), QString("RAW_IQ_DISABLED"));
-    const QJsonObject unknown = client.processControlFrame({{"type", "rpc.request"}, {"id", "3"}, {"method", "proxy.forward"}, {"params", QJsonObject{}}});
+    const QJsonObject unknown = client.processControlFrame({{"kind", "rpc.request"}, {"requestId", "3"}, {"method", "proxy.forward"}, {"payload", QJsonObject{}}});
     QVERIFY(!unknown.value("ok").toBool()); QCOMPARE(unknown.value("code").toString(), QString("METHOD_NOT_ALLOWED"));
     QCOMPARE(client.health().value("offlineQueue").toBool(), false);
   }

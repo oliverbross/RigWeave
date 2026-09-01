@@ -4,6 +4,8 @@
 #include <QJsonDocument>
 #include <QNetworkRequest>
 #include <QSslConfiguration>
+#include <QUuid>
+#include <QWebSocketHandshakeOptions>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <memory>
@@ -11,24 +13,20 @@
 namespace rigweave::desktop {
 namespace {
 const QSet<QString> RpcAllowList{
-    "station.health", "station.snapshot", "station.sessions", "station.globalStop",
-    "radio.state", "radio.roster", "radio.requestControl", "radio.releaseControl",
-    "radio.setFrequency", "radio.setMode", "radio.setSplit", "radio.setFilter",
-    "radio.setGain", "radio.setSquelch", "radio.setPower", "radio.setPreamp",
-    "radio.setAttenuator", "radio.setAgc", "radio.setNoiseBlanker", "radio.setNoiseReduction",
-    "radio.setNotch", "radio.setRit", "radio.setXit", "radio.setAntenna",
-    "audio.subscribe", "audio.unsubscribe", "audio.setMonitorGain", "audio.mute",
-    "spectrum.subscribe", "spectrum.unsubscribe", "spectrum.setSpan", "spectrum.setFps",
-    "scanner.state", "scanner.start", "scanner.stop", "scanner.pause", "scanner.resume",
-    "presets.list", "presets.apply", "measurements.snapshot", "recordings.list",
-    "workflow.state", "workflow.request", "logbook.query", "logbook.createDraft",
-    "logbook.updateDraft", "logbook.commitDraft", "sync.state", "sync.request",
-    "rotator.state", "rotator.requestControl", "rotator.releaseControl", "rotator.stop",
-    "groups.state", "intelligence.snapshot", "hamclock.snapshot", "agent.journal"};
-
-QByteArray fromBase64Url(const QString &value) {
-  return QByteArray::fromBase64(value.toLatin1(), QByteArray::Base64UrlEncoding);
-}
+    "system.health", "system.compatibility", "station.snapshot", "station.presence",
+    "home.read", "radio.read", "band-maps.read", "dx.read", "panadapter.read",
+    "presets.read", "scanner.read", "recordings.read", "measurements.read",
+    "spectrum-intelligence.read", "logbook.list", "logbook.get", "logbook.audit",
+    "logbook.export", "sync.status", "digi.read", "keyer.read", "contest.read",
+    "portable.read", "operations.read", "satellites.read", "rotator.read", "groups.read",
+    "alerts.read", "settings.read", "hamclock.read", "hamclock.layouts.read",
+    "hamclock.history.read", "neural-dx.read", "intelligence.read", "needs.read",
+    "awards.read", "goals.read", "maps.read", "rf-globe.read", "logbook.create",
+    "logbook.update", "logbook.delete", "logbook.restore", "logbook.import",
+    "sync.provider-action", "presets.update", "scanner.update", "hamclock.layout-update",
+    "watchlist.update", "goals.update", "groups.send", "agent.safe-receive",
+    "agent.writer-lease", "agent.workflow", "agent.tx-lease", "agent.rotator-lease",
+    "agent.rotator-stop", "agent.global-stop"};
 QString toBase64Url(const QByteArray &value) {
   return QString::fromLatin1(value.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
 }
@@ -39,9 +37,11 @@ OutboundRelayClient::OutboundRelayClient(DesktopCredentialVault *vault, QObject 
   connect(&m_socket, &QWebSocket::connected, this, [this] {
     m_authenticated = false;
     setState("AUTHENTICATING", "TLS connected; proving station identity");
-    send({{"type", "agent.hello"}, {"protocol", "rigweave.relay.v1"},
+    send({{"kind", "relay.hello"}, {"protocol", QJsonObject{{"major", 1}, {"minor", 0}}},
           {"stationId", m_configuration.stationId}, {"registrationId", m_configuration.registrationId},
-          {"publicKeyId", m_configuration.publicKeyId}, {"buildSha", m_configuration.buildSha},
+          {"publicKeyId", m_configuration.publicKeyId}, {"agentVersion", m_configuration.buildSha},
+          {"compatibility", QJsonObject{{"relay", "1.0"}, {"rpc", "1.0"}, {"rawIq", "DISABLED"}}},
+          {"nonce", QUuid::createUuid().toString(QUuid::WithoutBraces)},
           {"generation", static_cast<qint64>(m_generation)}});
   });
   connect(&m_socket, &QWebSocket::textMessageReceived, this, [this](const QString &text) {
@@ -69,7 +69,7 @@ OutboundRelayClient::OutboundRelayClient(DesktopCredentialVault *vault, QObject 
   });
   m_heartbeat.setInterval(15'000);
   connect(&m_heartbeat, &QTimer::timeout, this, [this] {
-    if (m_authenticated) send({{"type", "agent.heartbeat"}, {"stationId", m_configuration.stationId},
+    if (m_authenticated) send({{"kind", "relay.heartbeat"}, {"stationId", m_configuration.stationId},
                                {"generation", static_cast<qint64>(m_generation)}});
   });
 }
@@ -96,8 +96,11 @@ bool OutboundRelayClient::start(QString *error) {
   m_socket.setSslConfiguration(tls);
   setState("CONNECTING", "Outbound WSS only");
   QNetworkRequest request(m_configuration.relayUrl);
-  request.setRawHeader("Sec-WebSocket-Protocol", "rigweave.relay.v1");
-  m_socket.open(request);
+  QUrl origin = m_configuration.relayUrl; origin.setScheme("https"); origin.setPath(QString()); origin.setQuery(QString()); origin.setFragment(QString());
+  request.setRawHeader("Origin", origin.toString(QUrl::RemovePath | QUrl::RemoveQuery | QUrl::RemoveFragment).toUtf8());
+  QWebSocketHandshakeOptions options;
+  options.setSubprotocols({QStringLiteral("rigweave.relay.v1")});
+  m_socket.open(request, options);
   return true;
 }
 
@@ -120,39 +123,44 @@ bool OutboundRelayClient::allowedMethod(const QString &method) {
 }
 
 QJsonObject OutboundRelayClient::processControlFrame(const QJsonObject &frame) {
-  const QString type = frame.value("type").toString();
-  if (type == "relay.challenge") {
-    const QByteArray challenge = fromBase64Url(frame.value("challenge").toString());
+  const QString kind = frame.value("kind").toString();
+  if (kind == "relay.challenge") {
+    const QByteArray challenge = frame.value("challenge").toString().toUtf8();
     QString error;
     const QByteArray signature = challenge.size() >= 32 && challenge.size() <= 1024
         ? signChallenge(challenge, &error) : QByteArray{};
     if (signature.isEmpty()) {
       ++m_rejected;
-      return {{"type", "agent.auth.reject"}, {"code", error.isEmpty() ? "INVALID_CHALLENGE" : "SIGNING_FAILED"}};
+      return {{"kind", "relay.authenticate.reject"}, {"code", error.isEmpty() ? "INVALID_CHALLENGE" : "SIGNING_FAILED"}};
     }
-    return {{"type", "agent.auth"}, {"stationId", m_configuration.stationId},
-            {"registrationId", m_configuration.registrationId}, {"publicKeyId", m_configuration.publicKeyId},
-            {"challenge", frame.value("challenge")}, {"signature", toBase64Url(signature)},
-            {"generation", static_cast<qint64>(m_generation)}};
+    return {{"kind", "relay.authenticate"}, {"challengeId", frame.value("challengeId")},
+            {"stationId", m_configuration.stationId}, {"publicKeyId", m_configuration.publicKeyId},
+            {"signature", toBase64Url(signature)}};
   }
-  if (type == "relay.authenticated") {
+  if (kind == "relay.accepted") {
     m_authenticated = true; m_heartbeat.start(); setState("LIVE", "Authenticated typed relay; no generic proxy");
     return {};
   }
-  if (type != "rpc.request" || !m_authenticated) {
+  if (kind == "relay.heartbeat.ack") return {};
+  if (kind != "rpc.request" || !m_authenticated) {
     ++m_rejected;
-    return {{"type", "rpc.response"}, {"id", frame.value("id")}, {"ok", false},
-            {"code", m_authenticated ? "UNKNOWN_FRAME" : "NOT_AUTHENTICATED"}};
+    return {{"kind", "rpc.response"}, {"requestId", frame.value("requestId")}, {"ok", false},
+            {"code", m_authenticated ? "UNKNOWN_FRAME" : "NOT_AUTHENTICATED"},
+            {"auditId", QUuid::createUuid().toString(QUuid::WithoutBraces)}};
   }
   const QString method = frame.value("method").toString();
   if (!allowedMethod(method)) {
     ++m_rejected;
-    return {{"type", "rpc.response"}, {"id", frame.value("id")}, {"ok", false},
-            {"code", method.contains("iq", Qt::CaseInsensitive) ? "RAW_IQ_DISABLED" : "METHOD_NOT_ALLOWED"}};
+    return {{"kind", "rpc.response"}, {"requestId", frame.value("requestId")}, {"ok", false},
+            {"code", method.contains("iq", Qt::CaseInsensitive) ? "RAW_IQ_DISABLED" : "METHOD_NOT_ALLOWED"},
+            {"auditId", QUuid::createUuid().toString(QUuid::WithoutBraces)}};
   }
-  const QVariantMap result = m_executor(method, frame.value("params").toObject().toVariantMap());
-  return {{"type", "rpc.response"}, {"id", frame.value("id")}, {"ok", true},
-          {"generation", static_cast<qint64>(m_generation)}, {"result", QJsonObject::fromVariantMap(result)}};
+  const QVariantMap result = m_executor(method, frame.value("payload").toObject().toVariantMap());
+  const bool ok = result.value("ok", true).toBool();
+  return {{"kind", "rpc.response"}, {"requestId", frame.value("requestId")}, {"ok", ok},
+          {"code", ok ? "OK" : result.value("code", "AGENT_METHOD_UNAVAILABLE").toString()},
+          {"payload", QJsonObject::fromVariantMap(result)},
+          {"auditId", QUuid::createUuid().toString(QUuid::WithoutBraces)}};
 }
 
 QByteArray OutboundRelayClient::signChallenge(const QByteArray &challenge, QString *error) const {
