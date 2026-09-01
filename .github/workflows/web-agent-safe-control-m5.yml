@@ -1,0 +1,68 @@
+name: Web Agent safe control M5
+
+on:
+  push:
+    branches: [feature/web-agent-safe-radio-sdr-m5-v1]
+    paths:
+      - 'core/**'
+      - 'desktop/include/rigweave/desktop/RemoteStationService.hpp'
+      - 'desktop/src/network/RemoteStationService.cpp'
+      - 'desktop/src/app/stationd_main.cpp'
+      - 'desktop/tests/integration/remote_station_service_tests.cpp'
+      - 'docs/web-agent/WEB_AGENT_*M5*.md'
+      - '.github/workflows/web-agent-safe-control-m5.yml'
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core-safe-control:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify exact checked-out SHA
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++
+      - name: Build and test deterministic safe-control core
+        run: >-
+          cmake -S core -B build/m5-core -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          -DRIGWEAVE_CORE_BUILD_TESTS=ON -DRIGWEAVE_ENABLE_ASAN=ON -DRIGWEAVE_ENABLE_UBSAN=ON
+          && cmake --build build/m5-core --parallel 2
+          && ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+          ctest --test-dir build/m5-core --output-on-failure
+
+  station-agent:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify exact checked-out SHA
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - run: sudo apt-get update && sudo apt-get install -y cmake ninja-build g++ libssl-dev pkg-config libglib2.0-dev libsecret-1-dev
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: '6.11.2'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          modules: 'qtmultimedia qtserialport qtwebsockets qtlocation qtpositioning'
+          cache: true
+      - name: Build Agent with sanitizers
+        run: >-
+          cmake -S desktop -B build/m5-agent -G Ninja -DCMAKE_BUILD_TYPE=Debug
+          -DRIGWEAVE_BUILD_TESTS=ON -DRIGWEAVE_BUILD_NATIVE_DIGI=OFF
+          -DRIGWEAVE_ENABLE_ASAN=ON -DRIGWEAVE_ENABLE_UBSAN=ON
+          && cmake --build build/m5-agent --target remote_station_service_tests rigweave-stationd --parallel 2
+      - name: Run retained Remote Station tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build/m5-agent -R remote_station_service_tests --output-on-failure
+      - name: Reject unsafe M5 defaults
+        run: |
+          git grep -n 'DEMO_NO_RADIO' -- desktop/src/network/RemoteStationService.cpp
+          git grep -n 'FORBIDDEN_OPERATION' -- core/src/safe_control.cpp
+          ! git grep -nE '(^|[^A-Z])(PTT|TUNE|TX_AUDIO|ROTATOR_MOVE)([^A-Z]|$)' -- core/test/safe_control_tests.cpp
