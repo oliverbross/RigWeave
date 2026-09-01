@@ -58,7 +58,7 @@ OutboundRelayClient::OutboundRelayClient(DesktopCredentialVault *vault, QObject 
   });
   connect(&m_socket, &QWebSocket::binaryMessageReceived, this, [this](const QByteArray &) {
     ++m_rejected;
-    m_socket.close(QWebSocketProtocol::CloseCodeUnsupportedData, "Inbound binary and raw IQ are disabled");
+    m_socket.close(QWebSocketProtocol::CloseCodeDatatypeNotSupported, "Inbound binary and raw IQ are disabled");
   });
   connect(&m_socket, &QWebSocket::disconnected, this, [this] {
     m_authenticated = false; m_heartbeat.stop(); ++m_generation;
@@ -174,15 +174,18 @@ QByteArray OutboundRelayClient::signChallenge(const QByteArray &challenge, QStri
   std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context(EVP_MD_CTX_new(), EVP_MD_CTX_free);
   if (!context || EVP_DigestSignInit(context.get(), nullptr, EVP_sha256(), nullptr, key.get()) != 1 ||
       EVP_DigestSignUpdate(context.get(), challenge.constData(), static_cast<size_t>(challenge.size())) != 1) {
-    if (error) *error = "Could not initialize relay challenge signature"; return {};
+    if (error) *error = "Could not initialize relay challenge signature";
+    return {};
   }
   size_t size{};
   if (EVP_DigestSignFinal(context.get(), nullptr, &size) != 1 || size == 0 || size > 512) {
-    if (error) *error = "Could not size relay challenge signature"; return {};
+    if (error) *error = "Could not size relay challenge signature";
+    return {};
   }
   QByteArray signature(static_cast<qsizetype>(size), Qt::Uninitialized);
   if (EVP_DigestSignFinal(context.get(), reinterpret_cast<unsigned char *>(signature.data()), &size) != 1) {
-    if (error) *error = "Could not sign relay challenge"; return {};
+    if (error) *error = "Could not sign relay challenge";
+    return {};
   }
   signature.resize(static_cast<qsizetype>(size));
   return signature;
