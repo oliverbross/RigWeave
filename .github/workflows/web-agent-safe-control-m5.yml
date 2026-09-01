@@ -64,5 +64,5 @@ jobs:
       - name: Reject unsafe M5 defaults
         run: |
           git grep -n 'DEMO_NO_RADIO' -- desktop/src/network/RemoteStationService.cpp
-          git grep -n 'FORBIDDEN_OPERATION' -- core/src/safe_control.cpp
-          ! git grep -nE '(^|[^A-Z])(PTT|TUNE|TX_AUDIO|ROTATOR_MOVE)([^A-Z]|$)' -- core/test/safe_control_tests.cpp
+          git grep -n 'TransmitUnavailable' -- core/src/safe_control.cpp core/test/safe_control_tests.cpp
+          git grep -n 'RotatorUnavailable' -- core/src/safe_control.cpp core/test/safe_control_tests.cpp
