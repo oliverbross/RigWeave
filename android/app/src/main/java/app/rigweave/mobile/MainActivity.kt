@@ -129,6 +129,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         StabilityDiagnostics.install(this)
+        MobileSyncScheduler.install(this)
         controlSurfaces = ControlSurfaceController(this)
         setContent { RigWeaveTheme { RigWeaveApp(controlSurfaces) } }
     }

@@ -6,6 +6,7 @@ data class FastEntryImportReceipt(val qsoIds: List<String>, val skipped: Int, va
 class QsoMutationCoordinator(
     private val database: QsoDatabase,
     private val store: WavelogSyncStore = WavelogSyncStore(database),
+    private val mobileSync: MobileSyncStore = MobileSyncStore(database),
 ) {
     fun save(qso: Qso, origin: QsoOrigin = QsoOrigin.OPERATOR): Boolean = database.transaction { saveInTransaction(qso, origin) }
 
@@ -43,13 +44,17 @@ class QsoMutationCoordinator(
 
     private fun saveInTransaction(qso: Qso, origin: QsoOrigin): Boolean {
         val inserted = database.save(qso, origin)
-        if (inserted) recordMutation(qso, origin, WavelogOperation.CREATE)
+        if (inserted) {
+            recordMutation(qso, origin, WavelogOperation.CREATE)
+            recordMobileMutation(qso, origin, MobileSyncOperation.CREATE)
+        }
         return inserted
     }
 
     fun update(qso: Qso, origin: QsoOrigin = QsoOrigin.OPERATOR) = database.transaction {
         database.updateLocal(qso)
         recordMutation(qso, origin, WavelogOperation.UPDATE)
+        recordMobileMutation(qso, origin, MobileSyncOperation.UPDATE)
     }
 
     fun delete(id: String, intent: QsoDeleteIntent, origin: QsoOrigin = QsoOrigin.OPERATOR) = database.transaction {
@@ -76,6 +81,7 @@ class QsoMutationCoordinator(
                 }
             }
         }
+        recordMobileMutation(qso, origin, MobileSyncOperation.TOMBSTONE)
         database.deleteLocal(id)
     }
 
@@ -123,6 +129,10 @@ class QsoMutationCoordinator(
             store.enqueue(binding.id, qso.id, operation, canonical, WavelogOutboxState.BLOCKED,
                 "Read-only Wavelog binding; local divergence recorded", WavelogErrorClass.MISSING_SCOPE)
         }
+    }
+
+    private fun recordMobileMutation(qso: Qso, origin: QsoOrigin, operation: MobileSyncOperation) {
+        if (origin != QsoOrigin.REMOTE_SYNC) mobileSync.enqueueQsoMutation(qso, operation)
     }
 
     private fun applies(binding: WavelogBinding, qso: Qso): Boolean =

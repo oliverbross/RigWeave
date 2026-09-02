@@ -80,6 +80,7 @@ fun SyncHubScreen(
     var selected by remember { mutableStateOf<DeliveryRecord?>(null) }
     var catchUp by remember { mutableStateOf(false) }
     var nativeOpen by remember { mutableStateOf(false) }
+    var mobileConvergenceOpen by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { controller.syncNow() }
 
     val visible = controller.records.filter { record ->
@@ -108,6 +109,8 @@ fun SyncHubScreen(
                 leadingIcon = { Icon(Icons.Outlined.Refresh, null) })
             AssistChip({ nativeOpen = true }, { Text("WAVELOG LINK") },
                 leadingIcon = { Icon(Icons.Outlined.Settings, null) })
+            AssistChip({ mobileConvergenceOpen = true }, { Text("MOBILE DATA") },
+                leadingIcon = { Icon(Icons.Outlined.CloudUpload, null) })
         }
         Surface(color = if (wavelog.logMode == LogMode.LOCAL) SyncRaised else Color(0xFF49371E),
             shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
@@ -137,6 +140,7 @@ fun SyncHubScreen(
     selected?.let { DeliveryDialog(database, mutations, controller, it) { selected = null } }
     if (catchUp) CatchUpDialog(database, controller) { catchUp = false }
     if (nativeOpen) WavelogNativeDialog(nativeWavelog, wavelog) { nativeOpen = false }
+    if (mobileConvergenceOpen) MobileConvergenceDialog(database) { mobileConvergenceOpen = false }
 }
 
 @Composable
