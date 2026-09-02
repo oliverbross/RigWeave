@@ -24,6 +24,7 @@ jobs:
         run: |
           rustup toolchain install 1.97.1 --profile minimal
           rustup target add --toolchain 1.97.1 aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+          rustup default 1.97.1
           cargo +1.97.1 install cargo-ndk --version 4.1.2 --locked
       - name: Verify exact source
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
