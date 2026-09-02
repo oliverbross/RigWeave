@@ -1,0 +1,56 @@
+name: M9 mobile sync
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/mobile-sync-hosted-account-m9-v1]
+    paths: ["android/**", "ios/**", "docs/mobile-sync/**", ".github/workflows/m9-mobile-sync.yml"]
+  pull_request:
+    paths: ["android/**", "ios/**", "docs/mobile-sync/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with: {submodules: recursive}
+      - uses: actions/setup-java@v4
+        with: {distribution: temurin, java-version: "17"}
+      - name: Verify exact source
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Unit, migration, crypto and package gates
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest :app:compileDebugAndroidTestKotlin :app:assembleDebug :app:bundleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RigWeave-Android-M9
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/bundle/release/*.aab
+
+  apple:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with: {submodules: recursive}
+      - name: Verify exact source
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Simulator build
+        run: xcodebuild -project ios/RigWeave.xcodeproj -scheme RigWeaveHardware -configuration Debug -destination 'generic/platform=iOS Simulator' ONLY_ACTIVE_ARCH=YES ARCHS=arm64 CODE_SIGNING_ALLOWED=NO build
+      - name: Unsigned archive
+        run: xcodebuild -project ios/RigWeave.xcodeproj -scheme RigWeaveHardware -configuration Release -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/RigWeave-M9.xcarchive" CODE_SIGNING_ALLOWED=NO archive
+      - name: Package retained Apple artifacts
+        run: |
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc "$RUNNER_TEMP/RigWeave-M9.xcarchive" artifacts/RigWeave-iOS-Unsigned-M9.xcarchive.zip
+          find ~/Library/Developer/Xcode/DerivedData -path '*Debug-iphonesimulator/RigWeave.app' -type d -print -quit | xargs -I{} ditto -c -k --sequesterRsrc '{}' artifacts/RigWeave-iOS-Simulator-M9.app.zip
+          shasum -a 256 artifacts/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RigWeave-Apple-M9
+          path: artifacts/*
