@@ -1,0 +1,16 @@
+[Unit]
+Description=RigWeave Station Agent
+After=network.target sound.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/rigweave-stationd
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=%h/.local/share/rigweave %h/.local/state/rigweave
+
+[Install]
+WantedBy=default.target

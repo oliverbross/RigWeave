@@ -1,0 +1,62 @@
+#!/bin/sh
+set -eu
+
+command_name=${1:-status}
+state_dir=${RIGWEAVE_STATE_DIR:-"${XDG_STATE_HOME:-$HOME/.local/state}/rigweave"}
+data_dir=${RIGWEAVE_DATA_DIR:-"${XDG_DATA_HOME:-$HOME/.local/share}/rigweave"}
+agent_bin=${RIGWEAVE_AGENT_BIN:-rigweave-stationd}
+hub_bin=${RIGWEAVE_HUB_BIN:-rigweave-application-service}
+web_url=${RIGWEAVE_WEB_URL:-https://127.0.0.1:8443/home}
+mkdir -p "$state_dir" "$data_dir"
+chmod 700 "$state_dir" "$data_dir"
+
+live_pid() { test -f "$1" && kill -0 "$(sed -n '1p' "$1")" 2>/dev/null; }
+start_one() {
+  name=$1; shift
+  pid_file="$state_dir/$name.pid"
+  if live_pid "$pid_file"; then return 0; fi
+  test ! -f "$pid_file" || rm -f "$pid_file"
+  "$@" >>"$state_dir/$name.log" 2>&1 &
+  pid=$!
+  printf '%s\n' "$pid" >"$pid_file"
+  sleep 1
+  live_pid "$pid_file" || { tail -n 40 "$state_dir/$name.log" >&2; exit 1; }
+}
+stop_one() {
+  pid_file="$state_dir/$1.pid"
+  live_pid "$pid_file" || { rm -f "$pid_file"; return 0; }
+  pid=$(sed -n '1p' "$pid_file")
+  kill "$pid"
+  count=0
+  while kill -0 "$pid" 2>/dev/null && test "$count" -lt 50; do sleep 0.1; count=$((count+1)); done
+  kill -0 "$pid" 2>/dev/null && { echo "$1 did not stop safely" >&2; exit 1; }
+  rm -f "$pid_file"
+}
+
+case "$command_name" in
+  start) start_one agent "$agent_bin"; start_one hub "$hub_bin" ;;
+  stop) stop_one hub; stop_one agent ;;
+  restart) "$0" stop; "$0" start ;;
+  status)
+    for name in agent hub; do if live_pid "$state_dir/$name.pid"; then echo "$name RUNNING"; else echo "$name STOPPED"; fi; done ;;
+  open) case "$(uname -s)" in Darwin) open "$web_url";; *) command -v xdg-open >/dev/null && xdg-open "$web_url" >/dev/null 2>&1 || echo "$web_url";; esac ;;
+  diagnostics)
+    stamp=$(date -u +%Y%m%dT%H%M%SZ); out="$state_dir/rigweave-support-$stamp.tar.gz"
+    tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+    "$0" status >"$tmp/status.txt"; uname -a >"$tmp/platform.txt"
+    for log in "$state_dir"/*.log; do test -f "$log" && sed -E 's#(token|secret|credential|password)=[^ ]+#\1=[REDACTED]#gi' "$log" | tail -n 500 >"$tmp/$(basename "$log")"; done
+    tar -czf "$out" -C "$tmp" .; echo "$out" ;;
+  backup)
+    stamp=$(date -u +%Y%m%dT%H%M%SZ); out="$state_dir/rigweave-backup-$stamp.tar.gz"
+    tar -czf "$out" --exclude='*.key' --exclude='*.pem' --exclude='*credential*' -C "$data_dir" .; echo "$out" ;;
+  restore)
+    archive=${2:-}; apply=${3:-}; test -f "$archive" || { echo "restore archive required" >&2; exit 2; }
+    tar -tzf "$archive"; test "$apply" = "--apply" || { echo "preview only; repeat with --apply"; exit 0; }
+    "$0" status | grep -q RUNNING && { echo "stop RigWeave before restore" >&2; exit 1; }
+    tar -xzf "$archive" -C "$data_dir" ;;
+  update-check)
+    manifest=${2:-}; test -f "$manifest" || { echo "signed/checksummed local update manifest required" >&2; exit 2; }
+    grep -Eq 'sha256|signature' "$manifest" || { echo "unverifiable update metadata" >&2; exit 1; }; echo "update metadata accepted for preview; installation requires quiesce, backup and health rollback" ;;
+  uninstall-preview) echo "Removes installed binaries and opt-in startup entry; preserves $data_dir and platform-vault credentials." ;;
+  *) echo "usage: $0 start|stop|restart|status|open|diagnostics|backup|restore ARCHIVE [--apply]|update-check MANIFEST|uninstall-preview" >&2; exit 2 ;;
+esac
