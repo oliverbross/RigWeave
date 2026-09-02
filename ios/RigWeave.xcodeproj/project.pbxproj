@@ -46,6 +46,8 @@
 		B10000000000000000000009 /* spot.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000009 /* spot.cpp */; };
 		B1000000000000000000000A /* sync_queue.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000000A /* sync_queue.cpp */; };
 		B1000000000000000000000B /* wsjtx_protocol.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B2000000000000000000000B /* wsjtx_protocol.cpp */; };
+		M90000000000000000000001 /* MobileSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = M90000000000000000000003 /* MobileSync.swift */; };
+		M90000000000000000000002 /* Sodium in Frameworks */ = {isa = PBXBuildFile; productRef = M90000000000000000000005 /* Sodium */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -123,6 +125,7 @@
 		B20000000000000000000009 /* spot.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = spot.cpp; path = ../core/portable/src/spot.cpp; sourceTree = SOURCE_ROOT; };
 		B2000000000000000000000A /* sync_queue.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = sync_queue.cpp; path = ../core/portable/src/sync_queue.cpp; sourceTree = SOURCE_ROOT; };
 		B2000000000000000000000B /* wsjtx_protocol.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = wsjtx_protocol.cpp; path = ../core/portable/src/wsjtx_protocol.cpp; sourceTree = SOURCE_ROOT; };
+		M90000000000000000000003 /* MobileSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileSync.swift; sourceTree = "<group>"; };
 		CB568903A8CBD7D417CF32B7 /* RigWeaveHardwareUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RigWeaveHardwareUITests.swift; sourceTree = "<group>"; };
 		D36A9B2BE849B4434F809E20 /* RigWeaveUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RigWeaveUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -140,6 +143,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				M90000000000000000000002 /* Sodium in Frameworks */,
 				A10000000000000000000007 /* libsqlite3.tbd in Frameworks */,
 				A10000000000000000000014 /* IOKit.framework in Frameworks */,
 			);
@@ -172,6 +176,7 @@
 		A30000000000000000000002 /* RigWeave */ = {
 			isa = PBXGroup;
 			children = (
+				M90000000000000000000003 /* MobileSync.swift */,
 				A20000000000000000000001 /* RigWeaveApp.swift */,
 				A20000000000000000000002 /* RadioModel.swift */,
 				A20000000000000000000003 /* QSOStore.swift */,
@@ -289,6 +294,9 @@
 			dependencies = (
 			);
 			name = RigWeave;
+			packageProductDependencies = (
+				M90000000000000000000005 /* Sodium */,
+			);
 			productName = RigWeave;
 			productReference = A20000000000000000000008 /* RigWeave.app */;
 			productType = "com.apple.product-type.application";
@@ -358,6 +366,9 @@
 			);
 			mainGroup = A30000000000000000000001;
 			productRefGroup = A30000000000000000000004 /* Products */;
+			packageReferences = (
+				M90000000000000000000004 /* XCRemoteSwiftPackageReference "swift-sodium" */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -407,6 +418,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				M90000000000000000000001 /* MobileSync.swift in Sources */,
 				A10000000000000000000001 /* RigWeaveApp.swift in Sources */,
 				A10000000000000000000002 /* RadioModel.swift in Sources */,
 				A10000000000000000000003 /* QSOStore.swift in Sources */,
@@ -464,6 +476,25 @@
 			targetProxy = A90000000000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		M90000000000000000000004 /* XCRemoteSwiftPackageReference "swift-sodium" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/jedisct1/swift-sodium.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.11.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		M90000000000000000000005 /* Sodium */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = M90000000000000000000004 /* XCRemoteSwiftPackageReference "swift-sodium" */;
+			productName = Sodium;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		08CFA1DDAFCA439059F656C2 /* Release */ = {

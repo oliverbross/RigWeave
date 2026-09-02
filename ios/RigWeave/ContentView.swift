@@ -211,21 +211,63 @@ struct LogIntelligenceView: View {
 struct SyncCentreView: View {
     @EnvironmentObject private var features: FeatureModel
     @EnvironmentObject private var groupsIo: GroupsIoController
+    @EnvironmentObject private var logbook: QSOStore
+    @State private var mobile = true
+    @State private var dashboard = AppleMobileSyncDashboard.empty
+    private let identity = AppleMobileDeviceIdentity()
     let route: (WorkspaceAction) -> Void
     var body: some View {
         List {
-            Section("Wavelog") {
-                Text(features.wavelog.status)
-                LabeledContent("Pending", value: "\(features.wavelog.pendingCount)")
-                LabeledContent("Cached contacts", value: "\(features.wavelog.contacts.count)")
-                Button("Refresh Wavelog log") { Task { await features.wavelog.fullSync() } }.disabled(features.wavelog.apiKey.isEmpty)
+            Picker("Sync surface",selection:$mobile){Text("Mobile data").tag(true);Text("Providers").tag(false)}.pickerStyle(.segmented)
+            if mobile {
+                Section("M9 · Mobile data convergence") {
+                    LabeledContent("Default mode",value:"Direct Station Sync")
+                    LabeledContent("Canonical authority",value:"Local Hub / Wavelog")
+                    LabeledContent("Encrypted cloud",value:"Not enabled")
+                    Text("Hosted may store encrypted envelopes only after explicit opt-in. Private keys remain in Keychain or Secure Enclave.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Account") {
+                    LabeledContent("Hosted account",value:"Not signed in")
+                    LabeledContent("OAuth",value:"Authorization Code + PKCE")
+                    LabeledContent("Device identity",value:String(identity.deviceId))
+                }
+                Section("Stations and logbooks") {
+                    if dashboard.spaces.isEmpty { ContentUnavailableView("No sync space",systemImage:"link.badge.plus",description:Text("Approve a station link from the Local Hub after previewing counts, duplicates, conflicts and backup state.")) }
+                    ForEach(dashboard.spaces){space in VStack(alignment:.leading,spacing:4){Text(space.stationId).fontWeight(.semibold);Text("\(space.logbookId) · \(space.authority.replacingOccurrences(of:"_",with:" "))").font(.caption).foregroundStyle(.secondary);Text("\(space.mode.replacingOccurrences(of:"_",with:" ")) · key v\(space.keyVersion) · \(space.state)").font(.caption).foregroundStyle(.orange)}}
+                }
+                Section("Devices and keys") {
+                    LabeledContent("Approved peers",value:"\(dashboard.devices)")
+                    LabeledContent("Event crypto",value:"XChaCha20-Poly1305")
+                    LabeledContent("Key envelope",value:"libsodium sealed box")
+                    Text("Revocation rotates the space key. No private identity or encryption key is uploaded.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Sync") {
+                    LabeledContent("Pending",value:"\(dashboard.pending)")
+                    LabeledContent("Enabled domains",value:"\(dashboard.domains)")
+                    LabeledContent("Batch bound",value:"200 events · 4 MiB")
+                    Text("The outbox stores QSO identity, revision, operation and a payload reference—not a second QSO body.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Conflicts") {
+                    LabeledContent("Open",value:"\(dashboard.conflicts)")
+                    Text("No silent winner: keep both, tombstone one, or merge reviewed fields. Wall-clock order never decides canonical truth.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Never synchronized") {
+                    Text("Credentials · refresh tokens · private keys · CAT/PTT/TUNE/TX commands · radio state · audio/media · exact private location · browser sessions · raw provider bodies")
+                }
+            } else {
+                Section("Wavelog") {
+                    Text(features.wavelog.status)
+                    LabeledContent("Pending", value: "\(features.wavelog.pendingCount)")
+                    LabeledContent("Cached contacts", value: "\(features.wavelog.contacts.count)")
+                    Button("Refresh Wavelog log") { Task { await features.wavelog.fullSync() } }.disabled(features.wavelog.apiKey.isEmpty)
+                }
+                Section("Groups.io") {
+                    Text(groupsIo.enabled ? groupsIo.status : "Disabled")
+                    LabeledContent("Cached messages", value: "\(groupsIo.messages.count)")
+                    Button("Open Groups.io") { route(.openGroups) }
+                }
             }
-            Section("Groups.io") {
-                Text(groupsIo.enabled ? groupsIo.status : "Disabled")
-                LabeledContent("Cached messages", value: "\(groupsIo.messages.count)")
-                Button("Open Groups.io") { route(.openGroups) }
-            }
-        }.navigationTitle("Sync")
+        }.navigationTitle("Sync").task{dashboard=logbook.mobileSyncDashboard()}.refreshable{dashboard=logbook.mobileSyncDashboard()}
     }
 }
 
